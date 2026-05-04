@@ -1,4 +1,4 @@
-# src/dkdm/logging.py
+# src/ddssm/logging.py
 from __future__ import annotations
 
 import os
@@ -256,7 +256,7 @@ class MetricStore:
 
 
 class TensorBoardLogger(Logger):
-    def __init__(self, log_dir: str = "runs/dkdm", flush_secs: int = 10):
+    def __init__(self, log_dir: str = "runs/ddssm", flush_secs: int = 10):
         self.writer = SummaryWriter(log_dir=log_dir, flush_secs=flush_secs)
 
     def on_step(self, split: str, step: int, row: Dict[str, float]):

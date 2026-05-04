@@ -215,7 +215,7 @@ def objective_factory(args):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--study_name", type=str, default="dssd_phase1")
+    p.add_argument("--study_name", type=str, default="ddssm_phase1")
     p.add_argument(
         "--storage", type=str, default="sqlite:///runs/optuna/phase1/study.db"
     )

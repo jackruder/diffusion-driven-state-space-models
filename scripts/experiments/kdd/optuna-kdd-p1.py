@@ -81,7 +81,7 @@ def _pick_recon_column(csv_path: Path) -> str | None:
     with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
-    # Prefer the exact distortion/rec key logged by DSSD forward()
+    # Prefer the exact distortion/rec key logged by DDSSM forward()
     for candidate in ("loss/distortion/rec", "loss/total"):
         if candidate in headers:
             return candidate
@@ -293,7 +293,7 @@ def objective_factory(args):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--study_name", type=str, default="dssd_phase1")
+    p.add_argument("--study_name", type=str, default="ddssm_phase1")
     p.add_argument(
         "--storage", type=str, default="sqlite:///runs/optuna/phase1/study.db"
     )

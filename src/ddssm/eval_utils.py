@@ -7,7 +7,7 @@ import yaml
 import ast
 
 from .config import (
-    DSSDConfig,
+    DDSSMConfig,
     deep_merge,
     apply_dot_overrides,
     load_config_from_files,
@@ -63,7 +63,7 @@ def visualize_results(
         # Use a single sample path, never average samples
         z_sample = zs[:, 0, :, :]  # (B, d, T)
 
-        from dssd.net_utils import time_embedding
+        from ddssm.net_utils import time_embedding
 
         time_embed = time_embedding(timepoints, model.emb_time_dim, device=device)
 

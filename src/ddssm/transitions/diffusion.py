@@ -7,7 +7,7 @@ import torch.nn as nn
 from ..windows import WindowBuilder
 
 from ..config import (
-    DSSDConfig,
+    DDSSMConfig,
     DiffusionScheduleConfig,
     DiffusionTransitionConfig,
 )
@@ -17,9 +17,6 @@ from ..net_utils import (
 )
 from .transitions import BaseTransition
 
-"""
-dkdm
-"""
 
 
 @final

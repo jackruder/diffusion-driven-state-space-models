@@ -7,9 +7,9 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from dssd.dssd import DSSD_base
-from dssd.data.synthetic import SyntheticDataset
-from dssd.config import load_config_from_files
+from ddssm.ddssm import DDSSM_base
+from ddssm.data.synthetic import SyntheticDataset
+from ddssm.config import load_config_from_files
 
 EPS = 1e-12
 
@@ -115,7 +115,7 @@ def main():
 
     model = None
     if args.baseline == "model":
-        model = DSSD_base(cfg, device).to(device)
+        model = DDSSM_base(cfg, device).to(device)
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(
             ckpt.get("model_state", ckpt.get("model_state_dict", ckpt)), strict=True

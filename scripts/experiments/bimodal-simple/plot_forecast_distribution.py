@@ -5,9 +5,9 @@ import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
 
-from dssd.dssd import DSSD_base
-from dssd.data.synthetic import SyntheticDataset
-from dssd.eval_utils import load_config_from_files
+from ddssm.ddssm import DDSSM_base
+from ddssm.data.synthetic import SyntheticDataset
+from ddssm.eval_utils import load_config_from_files
 
 
 def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device):
@@ -59,7 +59,7 @@ def main():
     )
     dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
 
-    model = DSSD_base(config, device).to(device)
+    model = DDSSM_base(config, device).to(device)
     load_checkpoint(model, args.resume, device)
     model.eval()
 

@@ -1,15 +1,16 @@
 # tests/test_trainer.py
 import torch
 import pytest
-from dkdm.diffusion import DSSD_base, DSSDTrainer
+from ddssm.dssd import DDSSM_base
+from ddssm.train import DDSSMTrainer
 from torch.utils.data import Dataset, DataLoader
 
-from dkdm.config import (
-    DSSDConfig,
+from ddssm.config import (
+    DDSSMConfig,
     UNetConfig,
     DecoderConfig,
     EncoderConfig,
-    DSSDHyperParams,
+    DDSSMHyperParams,
     ResidualBlockConfig,
     DiffusionScheduleConfig,
     DiffusionEmbeddingConfig,
@@ -49,7 +50,7 @@ class DummyDataset(Dataset):
 
 @pytest.fixture
 def small_model():
-    cfg = DSSDConfig(
+    cfg = DDSSMConfig(
         schedule=DiffusionScheduleConfig(num_steps=3),
         encoder=EncoderConfig(
             history_len=H, emb_feature_dim=6, hidden_dim=32, num_layers=1
@@ -66,23 +67,23 @@ def small_model():
         latent_dim=2,
         latent_history_len=1,
         emb_time_dim=16,
-        hyperparams=DSSDHyperParams(S=2, loss_lambda=1.0, lr=1e-3, wd=1e-4),
+        hyperparams=DDSSMHyperParams(S=2, loss_lambda=1.0, lr=1e-3, wd=1e-4),
     )
-    return DSSD_base(cfg, device="cpu")
+    return DDSSM_base(cfg, device="cpu")
 
 
 def test_trainer_io(tmp_path, small_model):
-    trainer = DSSDTrainer(small_model, device="cpu")
+    trainer = DDSSMTrainer(small_model, device="cpu")
     # config
     cfg_file = tmp_path / "cfg.yaml"
     trainer.save_config(str(cfg_file))
-    loaded = DSSDTrainer.load_from_yaml(str(cfg_file), device="cpu")
-    assert isinstance(loaded, DSSDTrainer)
+    loaded = DDSSMTrainer.load_from_yaml(str(cfg_file), device="cpu")
+    assert isinstance(loaded, DDSSMTrainer)
 
     # checkpoint
     ckpt = tmp_path / "ckpt.pth"
     trainer.save_checkpoint(str(ckpt), epoch=5)
-    trainer2, epoch = DSSDTrainer.load_checkpoint(
+    trainer2, epoch = DDSSMTrainer.load_checkpoint(
         str(ckpt), device="cpu", optimizer=torch.optim.AdamW(small_model.parameters())
     )
     assert epoch == 5
@@ -93,7 +94,7 @@ def test_trainer_io(tmp_path, small_model):
 def test_train_epoch(small_model):
     ds = DummyDataset(B, D, H, P, T)
     dl = DataLoader(ds, batch_size=B)
-    trainer = DSSDTrainer(small_model, device="cpu")
+    trainer = DDSSMTrainer(small_model, device="cpu")
     stats = trainer.train_one_epoch(dl)
     assert set(stats.keys()) == {"loss", "rec", "prior_kl", "diff_kl"}
     for v in stats.values():

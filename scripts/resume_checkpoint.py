@@ -4,9 +4,9 @@ from typing import Literal, Optional
 import torch
 from torch.utils.data import DataLoader
 
-from dkdm.train import DSSDTrainer
-from dkdm.config import DSSDConfig
-from dkdm.dataload import get_solar_loaders
+from ddssm.train import DDSSMTrainer
+from ddssm.config import DDSSMConfig
+from ddssm.data.dataload import get_solar_loaders
 
 
 def resume_training_stage(
@@ -29,14 +29,14 @@ def resume_training_stage(
     )
 
     # Load config/model/trainer
-    trainer = DSSDTrainer.load_from_yaml(
+    trainer = DDSSMTrainer.load_from_yaml(
         config_path,
         device,
         csv_log_path=csv_log_path,
         tensorboard_dir=tensorboard_dir,
     )
 
-    cfg = DSSDConfig.load_yaml(config_path)
+    cfg = DDSSMConfig.load_yaml(config_path)
 
     stage_spec = getattr(cfg.stages, stage_key)
     if not is_new_stage:
@@ -95,7 +95,7 @@ def resume_training_stage(
 if __name__ == "__main__":
     checkpoint_path = "./checkpoints/solar3/ckpt_stage_2_step600.pth"
     config_path = "./configs/solar3.yaml"
-    config = DSSDConfig.load_yaml(config_path)
+    config = DDSSMConfig.load_yaml(config_path)
     train_loader, val_loader, test_loader, (mu_t, stds_t) = get_solar_loaders(
         batch_size=config.hyperparams.batch_size
     )

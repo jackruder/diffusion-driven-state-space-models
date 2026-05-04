@@ -12,16 +12,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 
-from dssd.dssd import DSSD_base
-from dssd.train import DSSDTrainer
-from dssd.config import (
-    DSSDConfig,
+from ddssm.ddssm import DDSSM_base
+from ddssm.train import DDSSMTrainer
+from ddssm.config import (
+    DDSSMConfig,
     deep_merge,
     apply_dot_overrides,
     load_config_from_files,
 )
-from dssd.data.synthetic import SyntheticDataset
-from dssd.eval_utils import (
+from ddssm.data.synthetic import SyntheticDataset
+from ddssm.eval_utils import (
     visualize_results,
 )
 
@@ -129,7 +129,7 @@ def run_verification(args):
             config.model_dump() if hasattr(config, "model_dump") else config.dict()
         )
         config_dict = apply_dot_overrides(config_dict, args.set)
-        config = DSSDConfig.model_validate(config_dict)
+        config = DDSSMConfig.model_validate(config_dict)
 
     # Instantiate the dataset THIRD, dynamically using config.data_dim
     dataset = SyntheticDataset(
@@ -142,11 +142,11 @@ def run_verification(args):
     )
     loader = DataLoader(dataset, batch_size=config.hyperparams.batch_size, shuffle=True)
 
-    model = DSSD_base(config, device)
+    model = DDSSM_base(config, device)
 
     csv_log_path = os.path.join(run_dir, "metrics.csv")
 
-    trainer = DSSDTrainer(
+    trainer = DDSSMTrainer(
         model,
         device=device,
         tensorboard_dir=os.path.join(run_dir, "logs"),
@@ -258,7 +258,7 @@ def run_verification(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Run DSSD verification on synthetic data."
+        description="Run DDSSM verification on synthetic data."
     )
     parser.add_argument(
         "--config",

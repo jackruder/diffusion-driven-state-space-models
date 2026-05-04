@@ -16,9 +16,9 @@ from torch.profiler import (
     tensorboard_trace_handler,
 )
 
-from .dssd import DSSD_base
+from .ddssm import DDSSM_base
 from .config import (
-    DSSDConfig,
+    DDSSMConfig,
 )
 from .logging import (
     CSVLogger,
@@ -56,15 +56,15 @@ class EMA:
 
 
 @final
-class DSSDTrainer:
+class DDSSMTrainer:
     def __init__(
         self,
-        model: "DSSD_base",
+        model: "DDSSM_base",
         device: torch.device,
         optimizer: optim.Optimizer | None = None,
         # clip_grad_norm: bool = True,
         csv_log_path: str | None = None,
-        tensorboard_dir: str = "runs/dkdm",
+        tensorboard_dir: str = "runs/ddssm",
         quiet: bool = False,
     ):
         self.model = model.to(device)
@@ -187,9 +187,9 @@ class DSSDTrainer:
         device: torch.device,
         optimizer: optim.Optimizer | None = None,
         **kwargs,
-    ) -> "DSSDTrainer":
-        config = DSSDConfig.load_yaml(yaml_path)
-        model = DSSD_base(config, device)
+    ) -> "DDSSMTrainer":
+        config = DDSSMConfig.load_yaml(yaml_path)
+        model = DDSSM_base(config, device)
         model.config = config
 
         return cls(model, device, optimizer=optimizer, **kwargs)
@@ -228,7 +228,7 @@ class DSSDTrainer:
             cfg_dict = asdict(self.model.config)
 
         payload = {
-            "_format": "dkdm_ckpt_v1",
+            "_format": "ddssm_ckpt_v1",
             "config": cfg_dict,
             "model_state": self.model.state_dict(),
             "optimizer_state": (

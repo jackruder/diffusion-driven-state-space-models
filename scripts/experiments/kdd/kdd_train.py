@@ -9,11 +9,11 @@ import torch
 import torch._dynamo
 import torch._inductor.config as inductor_config
 
-from dssd.dssd import DSSD_base
-from dssd.train import DSSDTrainer
-from dssd.config import DSSDConfig
-from dssd.data.dataload import build_loaders_for_expt, parse_batch
-from dssd.config import load_config_from_files, apply_dot_overrides
+from ddssm.ddssm import DDSSM_base
+from ddssm.train import DDSSMTrainer
+from ddssm.config import DDSSMConfig
+from ddssm.data.dataload import build_loaders_for_expt, parse_batch
+from ddssm.config import load_config_from_files, apply_dot_overrides
 
 
 def _update_latest_symlink(work_dir: str, run_dir: str) -> None:
@@ -68,7 +68,7 @@ def main(args):
         int(static_covariates[:, 2].max() + 1),
     ]
 
-    config = DSSDConfig.model_validate(config_dict)
+    config = DDSSMConfig.model_validate(config_dict)
 
     L1, L2 = args.split, args.seq_len - args.split
 
@@ -93,8 +93,8 @@ def main(args):
     _update_latest_symlink(args.work_dir, run_dir)
     config.checkpoint_dir = os.path.join(run_dir, "checkpoints")
 
-    model = DSSD_base(config, device)
-    trainer = DSSDTrainer(
+    model = DDSSM_base(config, device)
+    trainer = DDSSMTrainer(
         model,
         device=device,
         tensorboard_dir=os.path.join(run_dir, "logs"),

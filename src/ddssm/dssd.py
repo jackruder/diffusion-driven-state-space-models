@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from .config import (
-    DSSDConfig,
+    DDSSMConfig,
 )
 from .decoder import decoder
 from .encoder import BaseEncoder, BaseInitPrior, GaussianEncoder, GaussianInitPrior
@@ -15,9 +15,6 @@ from .transitions.transitions import GaussianTransition
 from .transitions.diffusion import DiffusionTransition
 from .config import TransitionConfig
 
-"""
-dkdm
-"""
 
 
 def get_transition_model(
@@ -52,10 +49,10 @@ def get_transition_model(
 
 
 @final
-class DSSD_base(nn.Module):
-    """Base wrapper for dkdm, implementing the core ELBO loss."""
+class DDSSM_base(nn.Module):
+    """Base wrapper for ddssm, implementing the core ELBO loss."""
 
-    def __init__(self, config: DSSDConfig, device: torch.device) -> None:
+    def __init__(self, config: DDSSMConfig, device: torch.device) -> None:
         super().__init__()
         self.config = config
         self.device = device

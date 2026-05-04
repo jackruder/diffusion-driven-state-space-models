@@ -269,7 +269,7 @@ class SyntheticDataset(Dataset):
     def __getitem__(self, idx):
         full_seq = self.data[idx]  # (D, T)
 
-        # Standard format for DSSD training
+        # Standard format for DDSSM training
         # observed_data: (D, T)
         # observation_mask: (D, T)
         # timepoints: (T)

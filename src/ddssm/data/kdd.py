@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import torch
 
-from dssd.data.dataload import build_loaders_for_expt
+from ddssm.data.dataload import build_loaders_for_expt
 
 
 def parse_kdd_tsf(filepath: str) -> pd.DataFrame:

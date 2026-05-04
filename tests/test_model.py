@@ -1,20 +1,19 @@
 # tests/test_model.py
 import torch
 import pytest
-from dkdm.diffusion import (
-    diff_DSSD,
-    decode_DSSD,
-    encode_DSSD,
-    get_side_info,
-    time_embedding,
+from ddssm.dssd import (
+    diff_DDSSM,
+    decode_DDSSM,
+    encode_DDSSM,
 )
+from ddssm.net_utils import get_side_info, time_embedding
 
-from dkdm.config import (
-    DSSDConfig,
+from ddssm.config import (
+    DDSSMConfig,
     UNetConfig,
     DecoderConfig,
     EncoderConfig,
-    DSSDHyperParams,
+    DDSSMHyperParams,
     ResidualBlockConfig,
     DiffusionScheduleConfig,
     DiffusionEmbeddingConfig,
@@ -22,7 +21,7 @@ from dkdm.config import (
 
 
 def make_base_config():
-    return DSSDConfig(
+    return DDSSMConfig(
         schedule=DiffusionScheduleConfig(num_steps=3),
         encoder=EncoderConfig(
             history_len=1, emb_feature_dim=4, hidden_dim=8, num_layers=1
@@ -39,7 +38,7 @@ def make_base_config():
         latent_dim=3,
         emb_time_dim=5,
         latent_history_len=1,
-        hyperparams=DSSDHyperParams(S=2, loss_lambda=1.0, lr=1e-3, wd=1e-4),
+        hyperparams=DDSSMHyperParams(S=2, loss_lambda=1.0, lr=1e-3, wd=1e-4),
     )
 
 
@@ -66,7 +65,7 @@ def test_get_side_info_shapes():
 
 
 def test_encode_collect_shapes(base_config):
-    enc = encode_DSSD(
+    enc = encode_DDSSM(
         config=base_config.encoder,
         history_len=base_config.history_len,
         data_dim=base_config.data_dim,
@@ -85,7 +84,7 @@ def test_encode_collect_shapes(base_config):
 
 
 def test_decode_shapes(base_config):
-    dec = decode_DSSD(
+    dec = decode_DDSSM(
         config=base_config.decoder,
         latent_dim=base_config.latent_dim,
         data_dim=base_config.data_dim,
@@ -98,7 +97,7 @@ def test_decode_shapes(base_config):
 
 def test_diffusion_shapes(base_config):
     # instantiate diff
-    diff = diff_DSSD(
+    diff = diff_DDSSM(
         config=base_config.unet,
         history_len=base_config.history_len,
         prediction_len=base_config.prediction_len,

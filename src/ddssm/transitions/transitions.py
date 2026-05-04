@@ -1,4 +1,4 @@
-"""Define different transition functions for use in DSSD models."""
+"""Define different transition functions for use in DDSSM models."""
 
 """
 Pluggable transition modules.

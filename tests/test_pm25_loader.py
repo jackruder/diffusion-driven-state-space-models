@@ -4,8 +4,8 @@ import pytest
 import numpy as np
 import torch
 
-from dssd.data.pm25 import load_tsf_to_series, get_pm25_loaders
-from dssd.data.dataload import parse_gluon_batch
+from ddssm.data.pm25 import load_tsf_to_series, get_pm25_loaders
+from ddssm.data.dataload import parse_gluon_batch
 
 
 @pytest.fixture

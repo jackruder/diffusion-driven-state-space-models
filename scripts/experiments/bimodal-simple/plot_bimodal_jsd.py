@@ -97,7 +97,7 @@ def save_jsd_plot(
     center_coef: float,
 ):
     plt.figure(figsize=(7.2, 4.0))
-    y_labels = ["DKF", "DDSSD", "LOCF"]
+    y_labels = ["DKF", "DDDSSM", "LOCF"]
     y_pos = np.array([0, 1, 2], dtype=float)
     means = np.array([g_jsd_mean, d_jsd_mean, n_jsd_mean], dtype=float)
     sems = np.array([g_jsd_sem, d_jsd_sem, n_jsd_sem], dtype=float)

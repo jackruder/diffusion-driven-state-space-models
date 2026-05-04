@@ -7,7 +7,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 import numpy as np
 import torch
 import pytest
-from dkdm.dataset import MultiSeriesDataset, collate_fixed, compute_masked_mean_std
+from ddssm.dataset import MultiSeriesDataset, collate_fixed, compute_masked_mean_std
 
 
 def make_synthetic_series(T=10, D=3, missing_frac=0.2, irregular=False, seed=0):

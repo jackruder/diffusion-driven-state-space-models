@@ -318,8 +318,8 @@ class REWOConfig(BaseModel):
     tau2: float = 1.0
 
 
-class DSSDHyperParams(BaseModel):
-    """Training hyperparameters for the DSSD model."""
+class DDSSMHyperParams(BaseModel):
+    """Training hyperparameters for the DDSSM model."""
 
     S: int = 1  # Monte Carlo samples
     ema_decay: float = 0.999
@@ -416,8 +416,8 @@ class StagesConfig(BaseModel):
         return self
 
 
-class DSSDConfig(BaseModel):
-    """Top-level DSSD model configuration.
+class DDSSMConfig(BaseModel):
+    """Top-level DDSSM model configuration.
 
     Global Complexity Constants:
         B: Batch size (hyperparams.batch_size)
@@ -449,13 +449,13 @@ class DSSDConfig(BaseModel):
     mask_emb_dim: int = 8
     use_observation_mask: bool = True  # whether to make use of observation mask
     stages: StagesConfig | None = None
-    hyperparams: DSSDHyperParams
+    hyperparams: DDSSMHyperParams
 
     checkpoint_dir: str = "./checkpoints"  # where to save model checkpoints
 
     @classmethod
-    def load_yaml(cls, path: str) -> "DSSDConfig":
-        """Load a DSSDConfig from a YAML file."""
+    def load_yaml(cls, path: str) -> "DDSSMConfig":
+        """Load a DDSSMConfig from a YAML file."""
         with open(path, "r") as f:
             data = yaml.safe_load(f)
         # Pydantic v2: use model_validate; fallback to parse_obj for v1
@@ -511,7 +511,7 @@ def apply_dot_overrides(base_dict: dict, overrides: list[str]) -> dict:
     return base_dict
 
 
-def load_config_from_files(paths: list[str], overrides: list[str] = None) -> DSSDConfig:
+def load_config_from_files(paths: list[str], overrides: list[str] = None) -> DDSSMConfig:
     """Load multiple YAMLs, merge them, and apply CLI overrides."""
 
     # 1. Load base
@@ -528,5 +528,5 @@ def load_config_from_files(paths: list[str], overrides: list[str] = None) -> DSS
     if overrides:
         merged_data = apply_dot_overrides(merged_data, overrides)
 
-    config = DSSDConfig.model_validate(merged_data)
+    config = DDSSMConfig.model_validate(merged_data)
     return config

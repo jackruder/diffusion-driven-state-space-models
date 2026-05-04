@@ -1,7 +1,7 @@
 import math
 
-from .train import DSSDTrainer
-from .config import DSSDConfig
+from .train import DDSSMTrainer
+from .config import DDSSMConfig
 
 
 def make_lambda_cosine(spec, total_steps: int, default_end: float):
@@ -21,7 +21,7 @@ def make_lambda_cosine(spec, total_steps: int, default_end: float):
 
 
 class StageOrchestrator:
-    def __init__(self, trainer: "DSSDTrainer", config: DSSDConfig):
+    def __init__(self, trainer: "DDSSMTrainer", config: DDSSMConfig):
         self.trainer = trainer
         self.cfg = config
 
