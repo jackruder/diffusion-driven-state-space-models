@@ -1,3 +1,20 @@
+"""Optuna hyperparameter search (phase 2) for the bimodal synthetic experiment.
+
+Phase 2 jointly trains the full model (encoder, decoder, transition) and tunes
+transition-model hyperparameters, building on a fixed phase-1 reconstruction
+baseline.
+
+Usage::
+
+    python scripts/experiments/bimodal-simple/optuna-phase2.py \\
+        --config configs/base.yaml \\
+        --storage sqlite:///runs/optuna/phase2/study.db \\
+        --study_name ddssm_phase1 \\
+        --n_trials 50
+
+Requires Optuna; results can be monitored with optuna-dashboard.
+"""
+
 import argparse
 import json
 import math
@@ -217,7 +234,7 @@ def main():
     # set high precision for matmul 32
     torch.set_float32_matmul_precision("high")
     p = argparse.ArgumentParser()
-    p.add_argument("--study_name", type=str, default="dssd_phase1")
+    p.add_argument("--study_name", type=str, default="ddssm_phase1")
     p.add_argument(
         "--storage", type=str, default="sqlite:///runs/optuna/phase1/study.db"
     )

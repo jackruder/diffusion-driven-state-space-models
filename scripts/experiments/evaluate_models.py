@@ -1,3 +1,17 @@
+"""Evaluate one or more trained DDSSM checkpoints on synthetic datasets.
+
+Usage::
+
+    python scripts/experiments/evaluate_models.py \\
+        --config configs/base.yaml \\
+        --ckpts checkpoints/run1/ckpt_latest.pth checkpoints/run2/ckpt_latest.pth \\
+        [--override hyperparams.S=50] \\
+        [--out_csv results/eval.csv]
+
+For each checkpoint the script computes forecast metrics (e.g. MAE) and
+optionally saves per-sample visualisations.
+"""
+
 # filepath: evaluate_models.py
 import os
 import time
@@ -14,11 +28,11 @@ import torch
 from torch.utils.data import DataLoader
 import yaml
 
-from dssd.dssd import DSSD_base
-from dssd.config import DSSDConfig, load_config_from_files, apply_dot_overrides
+from ddssm.ddssm import DDSSM_base
+from ddssm.config import DDSSMConfig, load_config_from_files, apply_dot_overrides
 
-from dssd.data.synthetic import SyntheticDataset
-from dssd.eval_utils import (
+from ddssm.data.synthetic import SyntheticDataset
+from ddssm.eval_utils import (
     visualize_results,
 )
 
@@ -209,7 +223,7 @@ def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device
     state = None
     if isinstance(ckpt, dict):
         if "model_state" in ckpt:
-            state = ckpt["model_state"]  # DSSDTrainer payload format
+            state = ckpt["model_state"]  # DDSSMTrainer payload format
             print("[Checkpoint] Detected trainer payload format (model_state).")
         elif "model_state_dict" in ckpt:
             state = ckpt["model_state_dict"]  # common alt format
@@ -238,7 +252,7 @@ def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device
 def main():
 
     parser = argparse.ArgumentParser(
-        description="Evaluate trained DSSD models (no training)."
+        description="Evaluate trained DDSSM models (no training)."
     )
     parser.add_argument("--config", type=str, nargs="+", required=True)
     parser.add_argument("--set", type=str, nargs="+", default=None)
@@ -304,7 +318,7 @@ def main():
         generator=g,
     )
 
-    model = DSSD_base(config, device).to(device)
+    model = DDSSM_base(config, device).to(device)
     load_checkpoint(model, args.resume, device)
     model.eval()
 

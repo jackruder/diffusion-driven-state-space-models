@@ -1,7 +1,7 @@
 [project]
-name = "dssd"
+name = "ddssm"
 version = "0.1.0"
-description = "Add your description here"
+description = "Diffusion-Driven State Space Models for probabilistic time-series forecasting"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [

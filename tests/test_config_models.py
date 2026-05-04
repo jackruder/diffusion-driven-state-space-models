@@ -1,8 +1,8 @@
 # tests/test_config_models.py
 import pytest
 
-from dkdm.config import (
-    DKDMConfig,
+from ddssm.config import (
+    DDSSMConfig,
 )
 
 EXAMPLE_YAML = """
@@ -49,7 +49,7 @@ hyperparams:
 def test_parse_yaml(tmp_path):
     fn = tmp_path / "cfg.yaml"
     fn.write_text(EXAMPLE_YAML)
-    cfg = DKDMConfig.load_yaml(str(fn))
+    cfg = DDSSMConfig.load_yaml(str(fn))
     # spot checks
     assert cfg.schedule.num_steps == 500
     assert cfg.schedule.schedule == "quad"

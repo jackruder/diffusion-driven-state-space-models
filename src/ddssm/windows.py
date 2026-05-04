@@ -1,3 +1,5 @@
+"""Sliding-window data structures for vectorised reconstruction over (batch, sample, time)."""
+
 from typing import Callable, Iterator
 from dataclasses import dataclass
 

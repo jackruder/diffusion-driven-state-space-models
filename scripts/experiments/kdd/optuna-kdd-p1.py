@@ -1,3 +1,19 @@
+"""Optuna hyperparameter search (phase 1) for the KDD Cup 2018 experiment.
+
+Phase 1 trains only the encoder/decoder/init-prior (``recon_only`` mode) and
+tunes hyperparameters that affect the reconstruction objective.
+
+Usage::
+
+    python scripts/experiments/kdd/optuna-kdd-p1.py \\
+        --storage sqlite:///runs/optuna/kdd/phase1.db \\
+        --study_name ddssm_phase1 \\
+        --n_trials 50 \\
+        --config configs/base.yaml configs/kdd.yaml
+
+Requires Optuna and (optionally) optuna-dashboard for live visualisation.
+"""
+
 import argparse
 import json
 import csv
@@ -81,7 +97,7 @@ def _pick_recon_column(csv_path: Path) -> str | None:
     with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
-    # Prefer the exact distortion/rec key logged by DSSD forward()
+    # Prefer the exact distortion/rec key logged by DDSSM forward()
     for candidate in ("loss/distortion/rec", "loss/total"):
         if candidate in headers:
             return candidate
@@ -293,7 +309,7 @@ def objective_factory(args):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--study_name", type=str, default="dssd_phase1")
+    p.add_argument("--study_name", type=str, default="ddssm_phase1")
     p.add_argument(
         "--storage", type=str, default="sqlite:///runs/optuna/phase1/study.db"
     )

@@ -1,18 +1,19 @@
-"""Define different transition functions for use in DSSD models."""
+"""Pluggable transition modules for DDSSM.
 
-"""
-Pluggable transition modules.
+Defines the ``BaseTransition`` interface and the concrete ``GaussianTransition``
+(non-linear diagonal Gaussian).
 
-Interface:
-- BaseTransition.loss(z_samples, z_hist, ctx=None, hist_valid_len=None, reduction='mean') -> Tensor
-    z_samples: (B, S, d) or (B, d)  -- samples drawn from encoder (S optional)
-    z_hist:    (B, d, j) or (B, j, d) or (B, d) if j==1
-    ctx:       optional dict for extra conditioning (e.g. {'hist_time_emb': tensor})
-    hist_valid_len: (B,) optional ints for masking history when t < j
-    reduction: 'mean'|'sum'|'none'
-- BaseTransition.prior_params and .log_prob are optional helpers for diagnostics.
-
-Concrete: GaussianTransition (non-linear diagonal Gaussian).
+``BaseTransition`` interface:
+    ``loss(zs, time_embed, covariates=None) -> Tensor``
+        Returns the scalar transition loss (mean over batch, mean over S,
+        sum over time).
+    ``log_prob(z, z_hist, ctx=None) -> Tensor``
+        Per-sample log p(z | z_hist, ctx).  Optional; raises NotImplementedError
+        if not supported.
+    ``sample(z_hist, S=1, ctx=None) -> Tensor``
+        Draw S samples from p(z_t | z_hist).  Optional.
+    ``prior_params(z_hist, ctx=None) -> (mu, logvar)``
+        Return Gaussian prior parameters.  Optional diagnostic helper.
 """
 
 import math
@@ -46,20 +47,19 @@ class BaseTransition(nn.Module):
         time_chunk_size: Optional[int] = None,
         covariates: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Compute : sum_{t=j}^{T-1} E_q[ log p_psi(z_t | z_{t-j:t-1}) ]
-        ( or a bound)
-
-        TODO: just compute over the full sequence, caller should specify the
-        time indices, ideally
+        """Compute ``sum_{t=j}^{T-1} E_q[ log p_psi(z_t | z_{t-j:t-1}) ]``
+        (or a bound thereof) over chunks to bound peak memory.
 
         Args:
-            zs: (B, S, d, T) latent samples from encoder
-            time_embed: (B, T, E_t) absolute time embeddings
-            time_chunk_num: number of chunks to split time dimension into
-            time_chunk_size: size of each chunk along time dimension. Overrides time_chunk_num if given.
+            zs: ``(B, S, d, T)`` latent samples from encoder.
+            time_embed: ``(B, T, E_t)`` absolute time embeddings.
+            time_chunk_num: Number of chunks to split the time dimension into.
+            time_chunk_size: Size of each chunk along the time dimension.
+                Overrides ``time_chunk_num`` when provided.
+            covariates: Optional ``(B, V, T)`` time-varying covariates.
 
-
-        Returns: (B,) total log prob per batch element
+        Returns:
+            ``(B,)`` total log-probability per batch element.
         """
         B, S, d, T = zs.shape
         j = self.j
@@ -225,17 +225,21 @@ class BaseTransition(nn.Module):
         self,
         z_hist: torch.Tensor,
         steps: int,
-        S: int = 1,  # num trajs
+        S: int = 1,
         ctx: Optional[Dict[str, Any]] = None,
     ):
-        """Draw samples from p(z_t:t+steps 1 | z_hist, ctx)
+        """Draw autoregressive sample trajectories from the transition prior.
 
         Args:
-         S: number of trajectories to sample
-         steps: length of sampled trajectory
+            z_hist: Initial latent history, shape ``(B, d, j)`` (or equivalent).
+            steps: Number of future steps to generate.
+            S: Number of independent trajectories to sample.
+            ctx: Optional context dict.  Recognised keys:
+                - ``"time_embed"``: ``(B, j+steps, E_t)`` absolute time embeddings.
+                - ``"covariates"``: ``(B, V, j+steps)`` time-varying covariates.
 
-        Return:
-
+        Returns:
+            Sampled latent trajectories, shape ``(B, S, d, steps)``.
         """
 
         z_hist = self._ensure_seq(z_hist)  # (B, d, j)

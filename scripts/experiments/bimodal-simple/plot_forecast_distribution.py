@@ -1,3 +1,17 @@
+"""Plot forecast sample distributions for a trained bimodal DDSSM checkpoint.
+
+Usage::
+
+    python scripts/experiments/bimodal-simple/plot_forecast_distribution.py \\
+        --config configs/base.yaml \\
+        --ckpt checkpoints/bimodal_run/ckpt_latest.pth \\
+        --out_path plots/forecast_dist.png \\
+        [--sample_indices 0 1 2]
+
+Loads a checkpoint, draws forecast sample paths, and overlays them against the
+analytic bimodal density for visual inspection.
+"""
+
 import argparse
 import os
 
@@ -5,9 +19,9 @@ import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
 
-from dssd.dssd import DSSD_base
-from dssd.data.synthetic import SyntheticDataset
-from dssd.eval_utils import load_config_from_files
+from ddssm.ddssm import DDSSM_base
+from ddssm.data.synthetic import SyntheticDataset
+from ddssm.eval_utils import load_config_from_files
 
 
 def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device):
@@ -59,7 +73,7 @@ def main():
     )
     dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
 
-    model = DSSD_base(config, device).to(device)
+    model = DDSSM_base(config, device).to(device)
     load_checkpoint(model, args.resume, device)
     model.eval()
 

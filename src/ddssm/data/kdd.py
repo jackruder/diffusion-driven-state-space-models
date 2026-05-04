@@ -1,10 +1,12 @@
+"""KDD Cup 2018 air-quality (PM2.5) data loading from Monash TSF files."""
+
 import os
 from typing import List, Tuple
 import pandas as pd
 import numpy as np
 import torch
 
-from dssd.data.dataload import build_loaders_for_expt
+from ddssm.data.dataload import build_loaders_for_expt
 
 
 def parse_kdd_tsf(filepath: str) -> pd.DataFrame:

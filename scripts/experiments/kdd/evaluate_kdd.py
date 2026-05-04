@@ -1,15 +1,27 @@
+"""Evaluate a trained DDSSM checkpoint on the KDD Cup 2018 air-quality dataset.
+
+Usage::
+
+    python scripts/experiments/kdd/evaluate_kdd.py \\
+        --config configs/base.yaml configs/kdd.yaml \\
+        --ckpt checkpoints/kdd_run/ckpt_latest.pth \\
+        [--override hyperparams.S=50]
+
+Reports MAE (global and per horizon step) and optionally writes results to JSON.
+"""
+
 import os
 import json
 import argparse
 import torch
 import torch._dynamo
 import torch._inductor.config as inductor_config
-from dssd.dssd import DSSD_base
-from dssd.config import DSSDConfig
-from dssd.data.dataload import build_loaders_for_expt, parse_batch
+from ddssm.ddssm import DDSSM_base
+from ddssm.config import DDSSMConfig
+from ddssm.data.dataload import build_loaders_for_expt, parse_batch
 import numpy as np
 
-from dssd.config import apply_dot_overrides, load_config_from_files
+from ddssm.config import apply_dot_overrides, load_config_from_files
 
 torch.set_float32_matmul_precision("high")
 
@@ -84,7 +96,7 @@ def main():
         int(static_covariates[:, 1].max() + 1),
         int(static_covariates[:, 2].max() + 1),
     ]
-    config = DSSDConfig.model_validate(config_dict)
+    config = DDSSMConfig.model_validate(config_dict)
 
     L1, L2 = args.split, args.seq_len - args.split
 
@@ -104,7 +116,7 @@ def main():
         device=device,
     )
 
-    model = DSSD_base(config, device)
+    model = DDSSM_base(config, device)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if device.type == "cuda":

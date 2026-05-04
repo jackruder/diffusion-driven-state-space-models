@@ -1,3 +1,11 @@
+"""Pydantic configuration models for all DDSSM components.
+
+Provides a single ``DDSSMConfig`` root that is loaded from YAML and validated at
+startup.  All sub-configs follow the same complexity-notation convention used by
+``Mamba2Config`` (documented inline): ``B`` = batch, ``T``/``L`` = sequence
+length, ``d``/``C`` = channel/latent dimension.
+"""
+
 from typing import List, Union, Literal, Optional, Annotated, TypeAlias
 
 import ast
@@ -266,21 +274,37 @@ class InitPriorConfig(BaseModel):
 
 
 class TransitionConfig(BaseModel):
-    """Configuration for Transition model."""
+    """Base configuration shared by all transition models.
+
+    Args:
+        type: Discriminator field (``"gaussian"`` or ``"diffusion"``).
+        hidden_dim: Hidden-layer width used by the transition network.
+    """
 
     type: str
     hidden_dim: int = 64
 
 
 class GaussianTransitionConfig(TransitionConfig):
-    # should assert that type is gaussian
-    type: Literal["gaussian"] = "gaussian"
+    """Configuration for the non-linear Gaussian transition.
+
+    Args:
+        type: Fixed to ``"gaussian"``.
+        context: ContextProducer config for processing the latent history window.
+        gaussian_head: Parameterisation head config for the Gaussian output.
+    """
     context: ContextProducerConfig = ContextProducerConfig()
     gaussian_head: GaussianHeadConfig = GaussianHeadConfig()
 
 
 class DiffusionTransitionConfig(TransitionConfig):
-    type: Literal["diffusion"] = "diffusion"
+    """Configuration for the diffusion-based transition model.
+
+    Args:
+        type: Fixed to ``"diffusion"``.
+        unet: U-Net architecture config (``UNetConfig``).
+        schedule: Diffusion noise schedule config (``DiffusionScheduleConfig``).
+    """
     unet: UNetConfig
     schedule: DiffusionScheduleConfig
 
@@ -309,7 +333,18 @@ class DecoderConfig(BaseModel):
 
 
 class REWOConfig(BaseModel):
-    """Configuration for REWO"""
+    """Configuration for the REWO (Rate-adaptive ELBO Weighting Objective) λ controller.
+
+    REWO adaptively adjusts the KL weight λ to drive distortion toward a target
+    level ``D0`` using an exponential update rule.
+
+    Args:
+        D0: Target distortion threshold.
+        nu: Step size for the multiplicative λ update.
+        alpha: EMA decay for the running distortion estimate.
+        tau1: Controls the magnitude of the push-up term when distortion > D0.
+        tau2: Controls the magnitude of the push-down term when distortion ≤ D0.
+    """
 
     D0: float = 0.1  # Target distortion
     nu: float = 1e-3  # Learning rate for lambda
@@ -318,8 +353,8 @@ class REWOConfig(BaseModel):
     tau2: float = 1.0
 
 
-class DSSDHyperParams(BaseModel):
-    """Training hyperparameters for the DSSD model."""
+class DDSSMHyperParams(BaseModel):
+    """Training hyperparameters for the DDSSM model."""
 
     S: int = 1  # Monte Carlo samples
     ema_decay: float = 0.999
@@ -346,35 +381,77 @@ class DSSDHyperParams(BaseModel):
 
 
 class LambdaRamp(BaseModel):
-    # lambda at the beginning of the stage (and during delay)
-    start: float = 0.05
+    """λ cosine-ramp schedule within a training stage.
+
+    Args:
+        start: λ value at the beginning of the stage (and during ``delay``).
+        end: λ value at the end of the ramp; if ``None``, uses a
+            caller-supplied default.
+        delay: Number of flat steps at ``start`` before the ramp begins.
+        steps: Ramp duration in steps; if ``None``, uses the stage's total steps.
+    """
     end: float | None = 1.0
     delay: int = 0  # flat steps at 'start' before ramp begins
     steps: int | None = None  # ramp duration in steps; if None, use stage.steps
 
 
 class StageTrainable(BaseModel):
-    encoder: bool = True
+    """Which model components have gradients enabled during a stage.
+
+    Args:
+        encoder: Whether to train the encoder.
+        decoder: Whether to train the decoder.
+        z_init: Whether to train the initialisation prior.
+        transition: Whether to train the transition model.
+    """
     decoder: bool = True
     z_init: bool = True
     transition: bool = False
 
 
 class StageLrs(BaseModel):
-    enc_lr: float = 5e-4
+    """Per-component learning rates for a training stage.
+
+    Args:
+        enc_lr: Encoder learning rate.
+        dec_lr: Decoder learning rate.
+        zinit_lr: Initialisation-prior learning rate.
+        trans_lr: Transition model learning rate (often 0 during recon-only stages).
+    """
     dec_lr: float = 5e-4
     zinit_lr: float = 5e-4
     trans_lr: float = 0.0
 
 
 class StageScheduler(BaseModel):
-    type: Literal["none", "cosine"] = "none"
+    """LR scheduler settings within a training stage.
+
+    Args:
+        type: Scheduler type (``"none"`` or ``"cosine"``).
+        warmup_steps: Linear warm-up steps before the main schedule.
+        final_lr_scale: Fraction of base LR at the end of cosine decay.
+    """
     warmup_steps: int = 0
     final_lr_scale: float = 1.0
 
 
 class StageSpec(BaseModel):
-    mode: Literal["recon_only", "trans_only", "joint"]
+    """Full specification for one training stage.
+
+    Args:
+        mode: Training objective — ``"recon_only"`` (encoder/decoder ELBO),
+            ``"trans_only"`` (transition likelihood only), or ``"joint"`` (both).
+        steps: Total optimiser steps for this stage.
+        trainable: Which model components receive gradients.
+        lrs: Per-component learning rates.
+        scheduler: Optional LR scheduler.
+        carry_diff_moments: If ``True``, carry over diffusion moment buffers
+            from the previous stage.
+        lambda_ramp: Cosine ramp schedule for the ELBO λ weight.
+        log_every: Log metrics every this many steps.
+        val_every: Run validation every this many steps.
+        checkpoint_every: Save a checkpoint every this many steps.
+    """
     steps: int
     trainable: StageTrainable
     lrs: StageLrs
@@ -387,7 +464,15 @@ class StageSpec(BaseModel):
 
 
 class StagesConfig(BaseModel):
-    stage_1: StageSpec | None = None
+    """Collection of up to three named training stages and their execution order.
+
+    Args:
+        stage_1: First stage spec, or ``None`` to skip.
+        stage_2: Second stage spec, or ``None`` to skip.
+        stage_3: Third stage spec, or ``None`` to skip.
+        run: Ordered list of stage names to execute (subset of
+            ``["stage_1", "stage_2", "stage_3"]``).
+    """
     stage_2: StageSpec | None = None
     stage_3: StageSpec | None = None
 
@@ -416,8 +501,8 @@ class StagesConfig(BaseModel):
         return self
 
 
-class DSSDConfig(BaseModel):
-    """Top-level DSSD model configuration.
+class DDSSMConfig(BaseModel):
+    """Top-level DDSSM model configuration.
 
     Global Complexity Constants:
         B: Batch size (hyperparams.batch_size)
@@ -449,13 +534,13 @@ class DSSDConfig(BaseModel):
     mask_emb_dim: int = 8
     use_observation_mask: bool = True  # whether to make use of observation mask
     stages: StagesConfig | None = None
-    hyperparams: DSSDHyperParams
+    hyperparams: DDSSMHyperParams
 
     checkpoint_dir: str = "./checkpoints"  # where to save model checkpoints
 
     @classmethod
-    def load_yaml(cls, path: str) -> "DSSDConfig":
-        """Load a DSSDConfig from a YAML file."""
+    def load_yaml(cls, path: str) -> "DDSSMConfig":
+        """Load a DDSSMConfig from a YAML file."""
         with open(path, "r") as f:
             data = yaml.safe_load(f)
         # Pydantic v2: use model_validate; fallback to parse_obj for v1
@@ -511,7 +596,7 @@ def apply_dot_overrides(base_dict: dict, overrides: list[str]) -> dict:
     return base_dict
 
 
-def load_config_from_files(paths: list[str], overrides: list[str] = None) -> DSSDConfig:
+def load_config_from_files(paths: list[str], overrides: list[str] = None) -> DDSSMConfig:
     """Load multiple YAMLs, merge them, and apply CLI overrides."""
 
     # 1. Load base
@@ -528,5 +613,5 @@ def load_config_from_files(paths: list[str], overrides: list[str] = None) -> DSS
     if overrides:
         merged_data = apply_dot_overrides(merged_data, overrides)
 
-    config = DSSDConfig.model_validate(merged_data)
+    config = DDSSMConfig.model_validate(merged_data)
     return config

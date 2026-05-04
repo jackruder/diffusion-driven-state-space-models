@@ -1,3 +1,5 @@
+"""Gaussian distribution helpers: log-probability, entropy, and parameterisation heads."""
+
 import math
 from typing import TypedDict
 

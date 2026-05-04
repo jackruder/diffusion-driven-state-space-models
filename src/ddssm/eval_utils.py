@@ -1,3 +1,5 @@
+"""Evaluation helpers and visualisation utilities for DDSSM models."""
+
 import math
 
 import torch
@@ -7,7 +9,7 @@ import yaml
 import ast
 
 from .config import (
-    DSSDConfig,
+    DDSSMConfig,
     deep_merge,
     apply_dot_overrides,
     load_config_from_files,
@@ -26,6 +28,25 @@ def visualize_results(
     show_title: bool = False,
     time_start_at_zero: bool = False,
 ):
+    """Plot reconstruction and forecast for a batch of samples.
+
+    For 1-D data, draws observed vs reconstructed time series and overlays
+    forecast sample paths and the forecast mean beyond ``T_split``.  For 2-D
+    spatial data, plots X-vs-Y trajectories with sample-path forecasts.
+
+    Args:
+        model: Trained ``DDSSM_base`` model (put in eval mode internally).
+        loader: ``DataLoader`` whose first batch (or ``sample_indices``) is used.
+        device: Device for inference tensors.
+        T_split: Index separating the context window from the forecast horizon.
+        save_path: File path for the saved figure (PNG).
+        sample_indices: Optional list of dataset indices to plot; if ``None``,
+            the first batch from ``loader`` is used (up to 8 samples).
+        font_size: Base font size for labels and legends.
+        tick_font_size: Font size for axis tick labels.
+        show_title: Whether to add a per-subplot title with the sample index.
+        time_start_at_zero: If ``True``, the time axis starts at 0; otherwise at 1.
+    """
     model.eval()
 
     # Grab specific samples if requested, otherwise take the first batch
@@ -63,7 +84,7 @@ def visualize_results(
         # Use a single sample path, never average samples
         z_sample = zs[:, 0, :, :]  # (B, d, T)
 
-        from dssd.net_utils import time_embedding
+        from ddssm.net_utils import time_embedding
 
         time_embed = time_embedding(timepoints, model.emb_time_dim, device=device)
 

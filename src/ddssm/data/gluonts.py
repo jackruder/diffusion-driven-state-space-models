@@ -1,5 +1,8 @@
+"""GluonTS repository dataset loaders (solar, electricity, traffic, taxi, wiki)."""
+
 from typing import Dict, List, Tuple, Optional
 
+import numpy as np
 import pandas as pd
 from gluonts.dataset.repository.datasets import get_dataset
 from .dataload import build_loaders_for_expt
@@ -33,18 +36,23 @@ def _repo_to_series_list(repo_name: str, expected_k: Optional[int] = None, force
     unique, seen, idx = {}, set(), 0
 
     for entry in repo.test:
-        item_id = entry.get("item_id", None)float32")
-        unique[key] = pd.Series(target, index=pd.date_range(start=start, periods=len(target), freq=freq))
-        seen.add(key)
-        if item_id is None: idx += 1
-        if expected_k
+        item_id = entry.get("item_id", None)
         key = item_id if item_id is not None else idx
         if key in seen:
-            if item_id is None: idx += 1
+            if item_id is None:
+                idx += 1
             continue
 
         start = _period_to_timestamp(entry["start"])
-        target = entry["target"].astype(" and len(unique) >= expected_k: break
+        target = entry["target"].astype("float32")
+        unique[key] = pd.Series(
+            target, index=pd.date_range(start=start, periods=len(target), freq=freq)
+        )
+        seen.add(key)
+        if item_id is None:
+            idx += 1
+        if expected_k is not None and len(unique) >= expected_k:
+            break
 
     return list(unique.values()), freq
 

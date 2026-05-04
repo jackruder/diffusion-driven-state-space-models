@@ -1,3 +1,16 @@
+"""Preprocess KDD Cup 2018 PM2.5 data from Monash TSF format to a NumPy/CSV file.
+
+Usage::
+
+    python scripts/experiments/kdd/preprocess_kdd.py \\
+        --input data/kdd_2018_no_missing_values.tsf \\
+        --output data/kdd_processed.npy \\
+        [--station_name aotizhongxin --city beijing --measurement PM2.5]
+
+Parses the raw TSF file, aligns multivariate series, optionally filters by
+station/city/measurement, and writes a (K, T) float32 array.
+"""
+
 import argparse
 import pandas as pd
 import numpy as np

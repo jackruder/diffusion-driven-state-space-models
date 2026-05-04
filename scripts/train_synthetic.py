@@ -1,3 +1,15 @@
+"""Train a DDSSM model on synthetic datasets via the StageOrchestrator.
+
+Usage::
+
+    python scripts/train_synthetic.py \\
+        --config configs/base.yaml configs/synthetic.yaml \\
+        [--override hyperparams.batch_size=32 data.mode=lgssm]
+
+Constructs train/val loaders from a ``SyntheticDataset``, builds the model from
+the merged YAML configs, and executes all configured training stages.
+"""
+
 from pathlib import Path
 
 import torch
@@ -7,14 +19,14 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision("high")  # PyTorch 2.x
 
-from dkdm.synthetic_serialize import (
+from ddssm.synthetic_serialize import (
     SeriesConfig,
     make_dataloaders,
     generate_and_serialize_dataset,
 )
 
-from dkdm.train import DSSDTrainer
-from dkdm.stages import StageOrchestrator
+from ddssm.train import DDSSMTrainer
+from ddssm.stages import StageOrchestrator
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -22,7 +34,7 @@ TEST_DS_ROOT = "./data/synthetic0"
 DS_CONFIG = "./configs/synth0.yaml"
 TEST_CONFIG = "./configs/base.yaml"
 
-model = DSSDTrainer.load_from_yaml(TEST_CONFIG, device)
+model = DDSSMTrainer.load_from_yaml(TEST_CONFIG, device)
 
 # generate synthetic data, override necessary params as needed by the model
 sconf = SeriesConfig.load(Path(DS_CONFIG))
