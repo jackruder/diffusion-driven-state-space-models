@@ -1,0 +1,13 @@
+# @package _global_
+# KDD Cup 2018 air-quality dataset parameters.
+# Overrides the defaults in conf/config.yaml for KDD experiments.
+
+dataset:
+  # Path to the preprocessed tensor payload produced by preprocess_kdd.py.
+  # Relative paths are resolved against the original working directory.
+  data_path: data/kdd_processed.pt
+
+# Sensible defaults for KDD full-length training (override at CLI as needed)
+steps: 5000
+seq_len: 120
+split: 72

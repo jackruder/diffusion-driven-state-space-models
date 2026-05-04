@@ -1,0 +1,80 @@
+# @package _global_
+#
+# Top-level Hydra configuration for DDSSM training.
+# Compose datasets and model configs; override any key at the CLI.
+#
+# Single run (local):
+#   python train.py dataset=kdd steps=5000
+#
+# SLURM sweep (phase 1):
+#   python train.py --multirun \
+#     +sweep=kdd_p1 \
+#     hydra/launcher=submitit_slurm \
+#     "++hydra.sweeper.storage=sqlite:///runs/optuna/kdd_p1.db"
+
+defaults:
+  - dataset: kdd
+  - _self_
+
+# ---------------------------------------------------------------------------
+# Model architecture: paths to YAML files merged left-to-right.
+# Each file must be a valid partial or full DDSSMConfig YAML.
+# Overrides are applied on top of the merged result.
+# ---------------------------------------------------------------------------
+model_configs:
+  - configs/kdd_gauss_single.yaml
+
+# ---------------------------------------------------------------------------
+# Training run parameters
+# ---------------------------------------------------------------------------
+steps: 1000
+seq_len: 32
+split: 16
+profile_steps: 0
+quiet: true
+
+# ---------------------------------------------------------------------------
+# Hyperparameter overrides applied on top of model_configs.
+# null (or ~) means "keep the value from model_configs".
+# vae_lr is a shorthand that sets enc_lr, dec_lr, and zinit_lr together
+# (individual keys take precedence if also set).
+# ---------------------------------------------------------------------------
+hp:
+  batch_size: ~
+  lambda_schedule: ~
+  lambda_warmup_steps: ~
+  lambda_end: ~
+  vae_lr: ~       # shorthand: enc_lr = dec_lr = zinit_lr = vae_lr
+  enc_lr: ~
+  dec_lr: ~
+  zinit_lr: ~
+  trans_lr: ~
+  weight_decay: ~
+  S: ~
+  S_k: ~
+  k_chunk: ~
+
+# ---------------------------------------------------------------------------
+# Evaluation (set do_eval=true to run after training; required for sweeps)
+# ---------------------------------------------------------------------------
+do_eval: false
+forecast_samples: 20
+eval_seed: 123
+
+# ---------------------------------------------------------------------------
+# Divergence pruning (only active when do_eval=true and Optuna is available)
+# ---------------------------------------------------------------------------
+prune_spike_factor: 5.0
+prune_tail_fraction: 0.2
+
+# ---------------------------------------------------------------------------
+# Hydra output / sweep directory layout
+# ---------------------------------------------------------------------------
+hydra:
+  run:
+    dir: runs/${hydra.job.name}/${now:%Y%m%d_%H%M%S}
+  sweep:
+    dir: runs/sweep/${now:%Y%m%d_%H%M%S}
+    subdir: trial_${hydra.job.num}
+  job:
+    chdir: true
