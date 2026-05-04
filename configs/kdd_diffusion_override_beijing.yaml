@@ -1,0 +1,33 @@
+mask_emb_dim: &mask 8
+hidden_dim: &hid 128 # 64 to 128 is a big increase in memory, 5GB
+channels: &chan 32 # 14G at 32.
+  
+transition:
+  type: "diffusion"
+  hidden_dim: *hid
+  unet:
+    embedding:
+      embedding_dim: 128
+      projection_dim: 256
+    block:
+      channels: *chan
+      layers: 4
+      time:
+        type: "conv"
+        kernel_size: 2
+      feature:
+        type: "transformer"
+        nheads: 8
+        layers: 2
+        
+  schedule:
+    S_k: 1
+    k_chunk: 1
+    num_steps: 256
+    schedule: "linear"
+    sigma_min: 2e-3
+    sigma_max: 80.0
+    rho: 7.0
+    k_sampling_mode: "uniform"
+    pk_gamma: 1.0
+    pk_floor: 1e-12
