@@ -1,3 +1,5 @@
+"""Synthetic time-series datasets for controlled DDSSM experiments (IID, LGSSM, etc.)."""
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset

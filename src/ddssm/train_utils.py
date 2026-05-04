@@ -1,9 +1,9 @@
+"""Optimizer construction utilities: per-component AdamW param groups and LR schedules."""
+
 import math
 
 import torch
 import torch.nn as nn
-
-# train_utils.py
 
 
 def param_groups_for_adamw(
@@ -14,6 +14,23 @@ def param_groups_for_adamw(
     zinit_lr: float,
     weight_decay: float = 0.01,
 ):
+    """Build per-component AdamW parameter groups with selective weight decay.
+
+    Norm layers, bias parameters, embeddings, and log-variance raw parameters
+    are placed in a zero-weight-decay group; all other parameters receive the
+    full ``weight_decay``.
+
+    Args:
+        model: The ``DDSSM_base`` model.
+        enc_lr: Learning rate for encoder parameters.
+        dec_lr: Learning rate for decoder parameters.
+        trans_lr: Learning rate for transition model parameters.
+        zinit_lr: Learning rate for the initialisation prior parameters.
+        weight_decay: L2 regularisation coefficient for decay groups.
+
+    Returns:
+        List of parameter-group dicts ready to pass to ``torch.optim.AdamW``.
+    """
     groups = []
 
     def add_module(module, lr: float, tag: str):
@@ -85,6 +102,17 @@ def param_groups_for_adamw(
 
 
 def make_warmup_cosine(optimizer, total_steps, warmup_steps=500, final_scale=0.05):
+    """Build a linear-warmup + cosine-decay LR scheduler.
+
+    Args:
+        optimizer: The ``torch.optim.Optimizer`` to schedule.
+        total_steps: Total number of training steps.
+        warmup_steps: Number of linear-ramp-up steps from 0 to base LR.
+        final_scale: Fraction of base LR at the end of the cosine decay.
+
+    Returns:
+        A ``torch.optim.lr_scheduler.LambdaLR`` scheduler.
+    """
     warmup_steps = max(1, int(warmup_steps))
     total_steps = max(warmup_steps + 1, int(total_steps))
 

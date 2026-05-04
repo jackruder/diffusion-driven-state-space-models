@@ -1,3 +1,17 @@
+"""Compute Jensen–Shannon divergence between the model's forecast distribution and the ground truth for a single checkpoint.
+
+Usage::
+
+    python scripts/experiments/bimodal-simple/eval_single_jsd.py \\
+        --config configs/base.yaml \\
+        --ckpt checkpoints/bimodal_run/ckpt_latest.pth \\
+        [--n_samples 500 --out_json results/jsd.json]
+
+Loads a checkpoint of a model trained on the bimodal synthetic dataset, draws
+forecast samples, bins them into a histogram, and reports the JSD against the
+analytic mixture distribution.
+"""
+
 import argparse
 import csv
 import os

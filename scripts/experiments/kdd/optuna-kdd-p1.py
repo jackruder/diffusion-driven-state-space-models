@@ -1,3 +1,19 @@
+"""Optuna hyperparameter search (phase 1) for the KDD Cup 2018 experiment.
+
+Phase 1 trains only the encoder/decoder/init-prior (``recon_only`` mode) and
+tunes hyperparameters that affect the reconstruction objective.
+
+Usage::
+
+    python scripts/experiments/kdd/optuna-kdd-p1.py \\
+        --storage sqlite:///runs/optuna/kdd/phase1.db \\
+        --study_name ddssm_phase1 \\
+        --n_trials 50 \\
+        --config configs/base.yaml configs/kdd.yaml
+
+Requires Optuna and (optionally) optuna-dashboard for live visualisation.
+"""
+
 import argparse
 import json
 import csv

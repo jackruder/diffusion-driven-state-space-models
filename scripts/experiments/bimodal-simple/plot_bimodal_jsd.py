@@ -1,3 +1,15 @@
+"""Plot JSD scores from eval_single_jsd.py output across multiple checkpoints or seeds.
+
+Usage::
+
+    python scripts/experiments/bimodal-simple/plot_bimodal_jsd.py \\
+        --results results/jsd_*.json \\
+        --out_path plots/bimodal_jsd.png
+
+Reads per-checkpoint JSD JSON files produced by ``eval_single_jsd.py`` and
+produces a comparison bar or line chart.
+"""
+
 import argparse
 import math
 import os

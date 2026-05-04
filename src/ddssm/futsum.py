@@ -1,7 +1,8 @@
-"""Goals of this file:
-- Implement future summarization, including data + time covariates
-- Properly handle masking of hidden features.
--
+"""Future-summary modules (F_ϕ) that summarise an observed sequence into a fixed-dimension context vector.
+
+Supports pluggable time-mixing backbones (Mamba, GRU, Conv, Identity, Transformer)
+and handles missing-data masking.  The summary is consumed by the encoder to
+produce latent distributions q_ϕ(z_t | ·).
 """
 
 import torch

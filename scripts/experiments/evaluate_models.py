@@ -1,3 +1,17 @@
+"""Evaluate one or more trained DDSSM checkpoints on synthetic datasets.
+
+Usage::
+
+    python scripts/experiments/evaluate_models.py \\
+        --config configs/base.yaml \\
+        --ckpts checkpoints/run1/ckpt_latest.pth checkpoints/run2/ckpt_latest.pth \\
+        [--override hyperparams.S=50] \\
+        [--out_csv results/eval.csv]
+
+For each checkpoint the script computes forecast metrics (e.g. MAE) and
+optionally saves per-sample visualisations.
+"""
+
 # filepath: evaluate_models.py
 import os
 import time

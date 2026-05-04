@@ -1,3 +1,5 @@
+"""DDSSMTrainer: training loop, checkpointing, and config I/O for DDSSM models."""
+
 import os
 import math
 from typing import Callable, final
@@ -33,6 +35,18 @@ from .train_utils import (
 
 
 class EMA:
+    """Exponential moving average of a module's parameters.
+
+    Maintains a shadow copy of all parameter tensors and blends them toward
+    the live weights after each update step.  The ``swap`` context manager
+    temporarily applies the EMA weights for inference, then restores the live
+    weights on exit.
+
+    Args:
+        module: The ``nn.Module`` whose parameters to track.
+        decay: EMA decay factor (closer to 1 → slower update).
+    """
+
     def __init__(self, module: torch.nn.Module, decay: float = 0.999):
         self.decay = decay
         self.shadow = {k: p.detach().clone() for k, p in module.state_dict().items()}
@@ -57,19 +71,34 @@ class EMA:
 
 @final
 class DDSSMTrainer:
+    """Training harness for ``DDSSM_base``.
+
+    Handles the full training lifecycle: gradient accumulation, optional AMP,
+    EMA tracking, REWO / scheduled λ weighting, step-level metric logging to
+    CSV and TensorBoard, and atomic checkpoint save/restore.
+
+    Args:
+        model: The ``DDSSM_base`` model to train.
+        device: Device on which the model and batches live.
+        optimizer: Optional pre-built optimizer.  If ``None``, an AdamW
+            optimizer with per-component learning rates is created from the
+            model config.
+        csv_log_path: If given, step metrics are appended to this CSV file.
+        tensorboard_dir: Directory for TensorBoard ``SummaryWriter`` output.
+        quiet: If ``True``, suppress console logging.
+    """
+
     def __init__(
         self,
         model: "DDSSM_base",
         device: torch.device,
         optimizer: optim.Optimizer | None = None,
-        # clip_grad_norm: bool = True,
         csv_log_path: str | None = None,
         tensorboard_dir: str = "runs/ddssm",
         quiet: bool = False,
     ):
         self.model = model.to(device)
         self.device = device
-        # self.clip_grad_norm = clip_grad_norm
 
         self.global_step = 0
 
@@ -97,7 +126,6 @@ class DDSSMTrainer:
         self.weight_decay = self.config.hyperparams.weight_decay
 
         self.grad_accum_steps = self.config.hyperparams.grad_accum_steps
-        # self.clip_grad_norm = self.config.hyperparams.clip_grad_norm
 
         self.ema_decay = self.config.hyperparams.ema_decay
         # EMA on the denoiser (used at sampling time)
@@ -567,7 +595,6 @@ class DDSSMTrainer:
 
         device = self.device
         self.model.to(device)
-        # self.model = torch.compile(self.model)
 
         # --- REWO Initialization ---
         rewo = self.model.config.hyperparams.rewo if self.rewo else None

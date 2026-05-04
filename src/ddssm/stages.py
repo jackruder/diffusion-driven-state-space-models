@@ -1,10 +1,23 @@
+"""Multi-stage training orchestration via StageOrchestrator."""
+
 import math
 
 from .train import DDSSMTrainer
 from .config import DDSSMConfig
 
 
-def make_lambda_cosine(spec, total_steps: int, default_end: float):
+def make_lambda_cosine(spec, total_steps: int, default_end: float) -> callable:
+    """Build a cosine λ-ramp schedule from a ``LambdaRamp`` spec.
+
+    Args:
+        spec: ``LambdaRamp`` config with ``start``, ``end``, ``delay``, and ``steps``.
+        total_steps: Fallback total step count when ``spec.steps`` is ``None``.
+        default_end: Fallback end value when ``spec.end`` is ``None``.
+
+    Returns:
+        A callable ``f(step_idx: int) -> float`` that returns the λ value at
+        a given (1-based) step index.
+    """
     end = spec.end if spec.end is not None else default_end
     ramp_T = spec.steps if spec.steps is not None else total_steps
     delay = max(0, int(spec.delay))
@@ -21,6 +34,17 @@ def make_lambda_cosine(spec, total_steps: int, default_end: float):
 
 
 class StageOrchestrator:
+    """Runs a sequence of training stages defined in ``DDSSMConfig.stages``.
+
+    Each stage can target different subsets of model parameters, use
+    independent learning rates, and apply its own λ-ramp schedule.  Stages
+    are executed in the order specified by ``config.stages.run``.
+
+    Args:
+        trainer: The ``DDSSMTrainer`` instance to drive.
+        config: The top-level model config containing ``stages``.
+    """
+
     def __init__(self, trainer: "DDSSMTrainer", config: DDSSMConfig):
         self.trainer = trainer
         self.cfg = config
@@ -33,10 +57,21 @@ class StageOrchestrator:
         resume_path: str | None = None,
         batch_transform=None,
     ):
+        """Execute all stages in sequence.
+
+        Args:
+            train_loader: Training ``DataLoader``.
+            val_loader: Optional validation ``DataLoader``.
+            amp: Whether to use automatic mixed precision.
+            resume_path: Optional checkpoint path to restore at the start of the
+                first matching stage.  Cleared after first use so subsequent
+                stages start from scratch.
+            batch_transform: Optional callable applied to each batch before the
+                model forward pass.
+        """
         stages = self.cfg.stages
         assert stages is not None
 
-        prev_opt = None
         for key in stages.run:
             stage = getattr(stages, key)
             print(f"\n=== Running {key} ({stage.mode}) for {stage.steps} steps ===")
@@ -66,5 +101,3 @@ class StageOrchestrator:
                 stage_mode=stage.mode,
                 batch_transform=batch_transform,
             )
-
-            prev_opt = self.trainer.optimizer

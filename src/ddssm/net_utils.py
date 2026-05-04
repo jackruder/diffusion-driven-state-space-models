@@ -1,3 +1,5 @@
+"""Shared neural-network utilities: time embeddings, side-info construction, and common layers."""
+
 import torch
 import torch.nn as nn
 

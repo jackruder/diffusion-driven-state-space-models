@@ -1,3 +1,5 @@
+"""KDD Cup 2018 air-quality (PM2.5) data loading from Monash TSF files."""
+
 import os
 from typing import List, Tuple
 import pandas as pd

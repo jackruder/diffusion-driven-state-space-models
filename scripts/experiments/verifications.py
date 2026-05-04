@@ -1,3 +1,18 @@
+"""Verify and visualise reconstruction/forecast on synthetic or real data.
+
+Usage::
+
+    python scripts/experiments/verifications.py \\
+        --config configs/base.yaml \\
+        [--override hyperparams.batch_size=8] \\
+        [--ckpt checkpoints/my_run/ckpt_latest.pth] \\
+        [--save_path plots/verify.png]
+
+The script loads a trained DDSSM checkpoint, runs the model on a dataset split,
+and saves a multi-panel figure comparing observed data, posterior reconstruction,
+and forecast sample paths.
+"""
+
 import os
 import csv
 from datetime import datetime

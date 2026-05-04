@@ -1,3 +1,5 @@
+"""Core DDSSM model: ELBO forward pass, encoder/decoder/transition dispatch, and forecast rollout."""
+
 from typing import Dict, final
 
 import torch
@@ -50,7 +52,18 @@ def get_transition_model(
 
 @final
 class DDSSM_base(nn.Module):
-    """Base wrapper for ddssm, implementing the core ELBO loss."""
+    """Diffusion-Driven State Space Model (DDSSM).
+
+    Implements the full variational model: encoder q_ϕ, decoder p_θ,
+    initialisation prior p_η, and a pluggable transition p_ψ (Gaussian or
+    diffusion-based).  The ``forward`` method returns the ELBO loss and its
+    components; ``forecast`` autoregressively rolls out future latent states
+    and decodes them.
+
+    Args:
+        config: Top-level model configuration (``DDSSMConfig``).
+        device: PyTorch device on which parameters are placed.
+    """
 
     def __init__(self, config: DDSSMConfig, device: torch.device) -> None:
         super().__init__()
@@ -296,7 +309,7 @@ class DDSSM_base(nn.Module):
         # We only compute loss for t = 1 ... j
         steps = min(j, T)
 
-        assert steps == j  # TODO:  eventually handle this
+        assert steps == j
 
         # Slice inputs to init window
         zs_init = zs[..., :steps]
@@ -356,12 +369,27 @@ class DDSSM_base(nn.Module):
         compute_trans: bool = True,  # compute transition likelihood
         report_scaled: bool = True,
     ):
-        """Returns:
-        -------
-        loss : torch.Tensor, scalar
-        distortion : torch.Tensor, scalar
-        rate : torch.Tensor, scalar
-        metrics : dict of scalars for logging
+        """Compute ELBO loss and its components for a batch.
+
+        Args:
+            observed_data: Observed time-series, shape ``(B, D, T)``.
+            observation_mask: Binary mask (1 = observed, 0 = missing), shape ``(B, D, T)``.
+            timepoints: Integer or real timestamps, shape ``(B, T)``.
+            covariates: Optional time-varying covariates, shape ``(B, V, T)``.
+            static_covariates: Optional static categorical features, shape ``(B, D, V_s)``.
+            train: If ``False``, also returns posterior samples/stats in ``stats``.
+            compute_recon: Whether to compute reconstruction and init-KL terms.
+            compute_trans: Whether to compute the transition likelihood term.
+            report_scaled: If ``True``, also emit dimension-normalised variants of
+                each loss component under ``"<key>_scaled"`` keys in ``metrics``.
+
+        Returns:
+            loss: Scalar ELBO loss (distortion + rate).
+            distortion: Reconstruction term L_rec.
+            rate: KL/prior term L_init + L_trans.
+            metrics: Dict of scalar tensors for logging.
+            stats: Empty dict during training; contains ``zs``, ``mus``,
+                ``logvars`` when ``train=False``.
         """
         j = self.j
 

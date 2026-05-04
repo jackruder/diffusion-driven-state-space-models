@@ -1,10 +1,22 @@
+"""Train a DDSSM model on the KDD Cup 2018 air-quality dataset.
+
+Usage::
+
+    python scripts/experiments/kdd/kdd_train.py \\
+        --config configs/base.yaml configs/kdd.yaml \\
+        [--override hyperparams.batch_size=32 transition.type=diffusion]
+
+The script loads data from the KDD TSF files, initialises a ``DDSSMTrainer``
+from the merged YAML configs, and runs multi-stage training via
+``StageOrchestrator``.  Checkpoints and logs are written under the run directory.
+"""
+
 import os
 import argparse
 from pathlib import Path
 import yaml
 from datetime import datetime
 
-import yaml
 import torch
 import torch._dynamo
 import torch._inductor.config as inductor_config

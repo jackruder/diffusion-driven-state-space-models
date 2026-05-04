@@ -1,3 +1,20 @@
+"""Optuna hyperparameter search (phase 1) for the bimodal synthetic experiment.
+
+Phase 1 optimises encoder/decoder/init-prior hyperparameters using the
+``recon_only`` training mode and evaluates forecast quality via JSD on the
+bimodal mixture distribution.
+
+Usage::
+
+    python scripts/experiments/bimodal-simple/optuna-phase1.py \\
+        --config configs/base.yaml \\
+        --storage sqlite:///runs/optuna/phase1/study.db \\
+        --study_name ddssm_phase1 \\
+        --n_trials 50
+
+Requires Optuna; results can be monitored with optuna-dashboard.
+"""
+
 import argparse
 import json
 import math

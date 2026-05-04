@@ -1,3 +1,16 @@
+"""Resume training a DDSSM model from a saved checkpoint.
+
+Usage::
+
+    python scripts/resume_checkpoint.py \\
+        --ckpt checkpoints/my_run/ckpt_latest.pth \\
+        --config configs/base.yaml \\
+        [--stage stage_2]
+
+Restores model weights, optimizer state, global step, and EMA shadow from the
+checkpoint, then continues training from the specified stage.
+"""
+
 import math
 from typing import Literal, Optional
 

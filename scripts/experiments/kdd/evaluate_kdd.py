@@ -1,3 +1,15 @@
+"""Evaluate a trained DDSSM checkpoint on the KDD Cup 2018 air-quality dataset.
+
+Usage::
+
+    python scripts/experiments/kdd/evaluate_kdd.py \\
+        --config configs/base.yaml configs/kdd.yaml \\
+        --ckpt checkpoints/kdd_run/ckpt_latest.pth \\
+        [--override hyperparams.S=50]
+
+Reports MAE (global and per horizon step) and optionally writes results to JSON.
+"""
+
 import os
 import json
 import argparse

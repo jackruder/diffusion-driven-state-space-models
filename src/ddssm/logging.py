@@ -1,4 +1,5 @@
-# src/ddssm/logging.py
+"""CSV and TensorBoard logging utilities for tracking training metrics."""
+
 from __future__ import annotations
 
 import os

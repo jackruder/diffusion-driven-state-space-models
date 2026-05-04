@@ -1,3 +1,5 @@
+"""GluonTS-based data loading utilities: sliding-window loaders, batch parsing, and z-score scaling."""
+
 from dataclasses import dataclass
 from typing import List
 

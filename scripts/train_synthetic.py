@@ -1,3 +1,15 @@
+"""Train a DDSSM model on synthetic datasets via the StageOrchestrator.
+
+Usage::
+
+    python scripts/train_synthetic.py \\
+        --config configs/base.yaml configs/synthetic.yaml \\
+        [--override hyperparams.batch_size=32 data.mode=lgssm]
+
+Constructs train/val loaders from a ``SyntheticDataset``, builds the model from
+the merged YAML configs, and executes all configured training stages.
+"""
+
 from pathlib import Path
 
 import torch

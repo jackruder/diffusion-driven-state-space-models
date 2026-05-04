@@ -1,3 +1,5 @@
+"""Diffusion-based transition model wrapping CSDIUnet for use in DDSSM."""
+
 import math
 from typing import Any, Dict, Optional, final
 
@@ -44,9 +46,7 @@ class DiffusionTransition(BaseTransition):
         self.emb_time_dim = emb_time_dim
         self.covariate_dim = covariate_dim
 
-        # TODO : change if we remove feature embeddings
-        # TODO: unsure about feature embedding at the moment, so
-        # quick hardcode to avoid another parameter
+        # Feature embedding dimension mirrors the time embedding dimension.
         self.emb_feature_dim = emb_time_dim
         self.side_dim = (
             self.emb_time_dim + self.covariate_dim + self.emb_feature_dim + 1
@@ -162,26 +162,6 @@ class DiffusionTransition(BaseTransition):
             raise ValueError(
                 "DiffusionTransition.log_prob requires time embeddings in ctx"
             )
-
-        # # --- DIAGNOSTIC: Monitor Latent Scale ---
-        # if not hasattr(self, "_diag_counter"):
-        #     self._diag_counter = 0
-        # self._diag_counter += 1
-        #
-        # if self._diag_counter % 20 == 0:
-        #     z_std = z.std()
-        #     z_mean = z.mean()
-        #     z_max = z.abs().max()
-        #     print(f"\n[DIAGNOSTIC Step {self._diag_counter}]")
-        #     print(
-        #         f"  Latent z: mean={z_mean:.3f}, std={z_std:.3f}, max_abs={z_max:.3f}"
-        #     )
-        #     print(f"  Schedule: [{self.schedule.sigma_min}, {self.schedule.sigma_max}]")
-        #     if z_std > 2.0:
-        #         print(
-        #             "  [WARNING] Latent space is expanding. Diffusion schedule expects std~1.0."
-        #         )
-        # # ----------------------------------------
 
         hist_time = ctx["hist_time_emb"]
         tgt_time = ctx["target_time_emb"]

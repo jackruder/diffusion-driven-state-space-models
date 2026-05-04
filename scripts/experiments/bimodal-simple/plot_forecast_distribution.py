@@ -1,3 +1,17 @@
+"""Plot forecast sample distributions for a trained bimodal DDSSM checkpoint.
+
+Usage::
+
+    python scripts/experiments/bimodal-simple/plot_forecast_distribution.py \\
+        --config configs/base.yaml \\
+        --ckpt checkpoints/bimodal_run/ckpt_latest.pth \\
+        --out_path plots/forecast_dist.png \\
+        [--sample_indices 0 1 2]
+
+Loads a checkpoint, draws forecast sample paths, and overlays them against the
+analytic bimodal density for visual inspection.
+"""
+
 import argparse
 import os
 
