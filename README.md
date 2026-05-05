@@ -70,10 +70,12 @@ conf/
   config.yaml            ← top-level defaults; all keys are overrideable
   dataset/
     kdd.yaml             ← KDD data path and sensible seq_len/split defaults
+    synthetic.yaml       ← in-memory synthetic data; no data file needed
   hydra/launcher/
     submitit_slurm.yaml  ← SLURM resource requests (partition, GPUs, memory …)
   sweep/
-    kdd_p1.yaml          ← Optuna phase-1 sweep search space
+    kdd_p1.yaml          ← Optuna phase-1 sweep for KDD
+    synthetic_p1.yaml    ← Optuna phase-1 sweep for synthetic data (fast, CPU-ok)
 ```
 
 Key config keys:
@@ -81,7 +83,7 @@ Key config keys:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `model_configs` | `[configs/kdd_gauss_single.yaml]` | Model YAML files merged left-to-right |
-| `steps` | 1 000 (5 000 for `dataset=kdd`) | Optimizer steps |
+| `steps` | 1,000 (5,000 for `dataset=kdd`) | Optimizer steps |
 | `seq_len` / `split` | 32 / 16 (120 / 72) | Total window length and encoder horizon |
 | `hp.vae_lr` | *(from model config)* | Shorthand LR for encoder, decoder, z-init |
 | `hp.trans_lr` | *(from model config)* | Transition model learning rate |
@@ -91,6 +93,62 @@ Key config keys:
 Any key in `hp.*` is applied on top of the loaded model config YAMLs.
 Individual keys (`hp.enc_lr`, `hp.dec_lr`, `hp.zinit_lr`) take precedence
 over the `hp.vae_lr` shorthand when both are provided.
+
+### Synthetic data — getting started immediately
+
+No data download needed.  Sequences are generated in-memory by
+`SyntheticDataset` covering eight modes (`iid`, `lgssm`, `nonlinear`,
+`harmonic`, `bimodal`, `bimodal-block`, …).
+
+**Option A — `verifications.py` (standalone argparse, quickest)**
+
+Trains on synthetic data and produces a multi-panel forecast plot.
+
+```bash
+# 500-step joint run on LGSSM data, Gaussian transition
+python scripts/experiments/verifications.py \
+    --config configs/synthetic_gauss.yaml \
+    --mode lgssm --training_mode joint --steps 500
+
+# Harder bimodal task
+python scripts/experiments/verifications.py \
+    --config configs/synthetic_gauss.yaml \
+    --mode bimodal --training_mode joint --steps 1000
+
+# Recon-only stage to validate encoder/decoder before training transition
+python scripts/experiments/verifications.py \
+    --config configs/synthetic_gauss.yaml \
+    --mode harmonic --training_mode recon_only --steps 300
+```
+
+Output goes to `runs/verify/<mode>/<timestamp>/` and includes a checkpoint
+and a `verify_<mode>_<stage>.png` forecast plot.
+
+**Option B — Hydra `train.py` (reproducible, sweepable)**
+
+```bash
+# Quick smoke-test (500 steps, D=1 LGSSM, CPU-friendly)
+python train.py dataset=synthetic
+
+# Switch to bimodal mode and run longer
+python train.py dataset=synthetic dataset.mode=bimodal steps=1000
+
+# Evaluate after training (returns CRPS-sum)
+python train.py dataset=synthetic dataset.mode=harmonic steps=500 do_eval=true
+
+# Local Optuna sweep over 20 trials (~10 min on CPU)
+python train.py --multirun \
+    dataset=synthetic dataset.mode=lgssm \
+    +sweep=synthetic_p1 \
+    hydra/sweeper=optuna \
+    "++hydra.sweeper.storage=sqlite:///runs/optuna/synthetic_p1.db"
+```
+
+TensorBoard logs land at `runs/<job-name>/<timestamp>/tb_logs/`; view with:
+
+```bash
+tensorboard --logdir runs/
+```
 
 ### Hyperparameter sweep on SLURM
 
@@ -160,6 +218,22 @@ python scripts/experiments/kdd/kdd_train.py \
 ```
 
 ## Development
+
+### Logging and monitoring
+
+Metrics are logged to two places by default:
+
+| Sink | Path | View with |
+|------|------|-----------|
+| **TensorBoard** | `<run_dir>/tb_logs/` | `tensorboard --logdir runs/` |
+| **CSV** | `<run_dir>/csv_logs/train_metrics.csv` | any spreadsheet / pandas |
+
+> **W&B / self-hosted tracking servers** — the codebase currently uses
+> TensorBoard only.  To add Weights & Biases, implement a `WandbLogger`
+> in `src/ddssm/logging.py` (mirror the `TensorBoardLogger` interface:
+> `on_step` / `on_epoch`) and append it to the `loggers` list in
+> `DDSSMTrainer.__init__`.  Point at your own server by setting the
+> `WANDB_BASE_URL` environment variable before running.
 
 Run tests:
 

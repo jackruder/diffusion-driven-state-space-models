@@ -1,0 +1,22 @@
+# @package _global_
+# Synthetic dataset configuration for DDSSM Hydra experiments.
+# No external data file required — sequences are generated in-memory.
+#
+# Available modes (SyntheticDataset.mode):
+#   iid, lgssm, nonlinear, nongaussian, student_t,
+#   harmonic, harmonic-noisy, bimodal, bimodal-block, robot-basis-pursuit
+
+dataset:
+  type: synthetic      # sentinel used by train.py to select the data-loading path
+  mode: lgssm          # synthetic data mode (override at CLI: dataset.mode=harmonic)
+  N_per_split: 1024    # sequences per split (train / val / test)
+  dataset_seed: 123    # RNG seed for data generation
+
+# Sensible defaults for a quick synthetic smoke-test
+steps: 500
+seq_len: 32
+split: 16
+
+# Use the small synthetic model config by default
+model_configs:
+  - configs/synthetic_gauss.yaml

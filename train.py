@@ -34,9 +34,12 @@ import torch._dynamo
 import torch._inductor.config as inductor_config
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import DataLoader
+from typing import cast
 
 from ddssm.config import DDSSMConfig, load_config_from_files
 from ddssm.data.dataload import build_loaders_for_expt, parse_batch
+from ddssm.data.synthetic import SyntheticDataset
 from ddssm.ddssm import DDSSM_base
 from ddssm.train import DDSSMTrainer
 
@@ -154,7 +157,7 @@ def _collect_overrides(cfg: DictConfig) -> list[str]:
         "S_k": "transition.schedule.S_k",
         "k_chunk": "transition.schedule.k_chunk",
     }
-    hp: dict = OmegaConf.to_container(cfg.hp, resolve=True) if cfg.get("hp") else {}  # type: ignore[assignment]
+    hp: dict = cast(dict, OmegaConf.to_container(cfg.hp, resolve=True)) if cfg.get("hp") else {}
     overrides: list[str] = []
 
     for key, path in hp_map.items():
@@ -175,6 +178,96 @@ def _collect_overrides(cfg: DictConfig) -> list[str]:
                 overrides.append(f"{lr_path}={vae_lr}")
 
     return overrides
+
+
+# ---------------------------------------------------------------------------
+# Dataset loader builders
+# ---------------------------------------------------------------------------
+
+
+def _build_synthetic_loaders(
+    cfg: DictConfig,
+    config: DDSSMConfig,
+    device: torch.device,
+) -> tuple[DataLoader, DataLoader]:
+    """Build train and val DataLoaders from SyntheticDataset."""
+    ds_cfg = cfg.dataset
+    common = dict(
+        mode=ds_cfg.mode,
+        N_per_split=ds_cfg.N_per_split,
+        T=cfg.seq_len,
+        D=config.data_dim,
+        dataset_seed=ds_cfg.dataset_seed,
+    )
+    train_ds = SyntheticDataset(split="train", **common)
+    val_ds = SyntheticDataset(split="val", **common)
+
+    batch_size = config.hyperparams.batch_size
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        pin_memory=(device.type == "cuda"),
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=(device.type == "cuda"),
+    )
+    print(
+        f"[Synthetic] mode={ds_cfg.mode}  N_train={len(train_ds)}  "
+        f"N_val={len(val_ds)}  T={cfg.seq_len}  D={config.data_dim}"
+    )
+    return train_loader, val_loader
+
+
+def _build_kdd_loaders(
+    cfg: DictConfig,
+    config: DDSSMConfig,
+    device: torch.device,
+    L1: int,
+    L2: int,
+) -> tuple[DataLoader, DataLoader, DDSSMConfig]:
+    """Build train and val DataLoaders from a preprocessed KDD .pt file.
+
+    Returns ``(train_loader, val_loader, updated_config)`` where
+    ``updated_config`` has ``data_dim``, ``covariate_dim``, and
+    ``num_classes_per_static`` set from the data file.
+    """
+    data_path = to_absolute_path(cfg.dataset.data_path)
+    print(f"[KDD] Loading data from {data_path}...")
+    data_payload = torch.load(data_path, weights_only=False)
+    series_list = data_payload["series_list"]
+    covariates_list = data_payload["covariates_list"]
+    static_covariates = data_payload["static_covariates"]
+
+    config_dict = config.model_dump()
+    config_dict["data_dim"] = len(series_list)
+    config_dict["covariate_dim"] = covariates_list[0].shape[0]
+    config_dict["num_classes_per_static"] = [
+        int(static_covariates[:, 0].max() + 1),
+        int(static_covariates[:, 1].max() + 1),
+        int(static_covariates[:, 2].max() + 1),
+    ]
+    updated_config = DDSSMConfig.model_validate(config_dict)
+
+    train_loader, val_loader, _, _ = build_loaders_for_expt(
+        series_list=series_list,
+        L1=L1,
+        L2=L2,
+        val_windows=24,
+        test_windows=27,
+        eval_step_size=24,
+        batch_size=updated_config.hyperparams.batch_size,
+        num_train_batches_per_epoch=None,
+        covariates_list=covariates_list,
+        static_covariates=static_covariates,
+        backend="torch",
+        normalize=True,
+        device=device,
+    )
+    return train_loader, val_loader, updated_config
 
 
 # ---------------------------------------------------------------------------
@@ -207,56 +300,25 @@ def main(cfg: DictConfig) -> float | None:
 
     print(f"--- DDSSM Training | device={device} ---")
 
-    # Resolve model-config and data paths against the *original* working
-    # directory (Hydra changes cwd to the job output dir).
-    data_path = to_absolute_path(cfg.dataset.data_path)
     model_configs = [to_absolute_path(p) for p in cfg.model_configs]
-
-    # --- Load and merge model architecture configs, then apply hp overrides ---
     overrides = _collect_overrides(cfg)
     config = load_config_from_files(model_configs, overrides)
 
-    # --- Load preprocessed data ---
-    print(f"Loading data from {data_path}...")
-    data_payload = torch.load(data_path, weights_only=False)
-    series_list = data_payload["series_list"]
-    covariates_list = data_payload["covariates_list"]
-    static_covariates = data_payload["static_covariates"]
-
-    # Inject dataset-derived constants into the config
-    config_dict = config.model_dump()
-    config_dict["data_dim"] = len(series_list)
-    config_dict["covariate_dim"] = covariates_list[0].shape[0]
-    config_dict["num_classes_per_static"] = [
-        int(static_covariates[:, 0].max() + 1),
-        int(static_covariates[:, 1].max() + 1),
-        int(static_covariates[:, 2].max() + 1),
-    ]
-    config = DDSSMConfig.model_validate(config_dict)
-
     L1, L2 = cfg.split, cfg.seq_len - cfg.split
+    dataset_type = cfg.dataset.get("type", "kdd")
 
-    train_loader, val_loader, _, _ = build_loaders_for_expt(
-        series_list=series_list,
-        L1=L1,
-        L2=L2,
-        val_windows=24,
-        test_windows=27,
-        eval_step_size=24,
-        batch_size=config.hyperparams.batch_size,
-        num_train_batches_per_epoch=None,
-        covariates_list=covariates_list,
-        static_covariates=static_covariates,
-        backend="torch",
-        normalize=True,
-        device=device,
-    )
+    # -----------------------------------------------------------------------
+    # Data loading — two paths: synthetic (no file) vs. KDD (.pt file)
+    # -----------------------------------------------------------------------
+    if dataset_type == "synthetic":
+        train_loader, val_loader = _build_synthetic_loaders(cfg, config, device)
+    else:
+        train_loader, val_loader, config = _build_kdd_loaders(cfg, config, device, L1, L2)
 
     # Hydra sets cwd to the job output directory, which becomes the run dir.
     run_dir = Path(os.getcwd())
     config.checkpoint_dir = str(run_dir / "checkpoints")
 
-    # Persist the resolved model config alongside the Hydra-generated config.
     with open(run_dir / "model_config.yaml", "w") as f:
         yaml.safe_dump(config.model_dump(), f)
 
@@ -269,14 +331,14 @@ def main(cfg: DictConfig) -> float | None:
         quiet=cfg.quiet,
     )
 
-    print(f"[Training] steps={cfg.steps}")
+    print(f"[Training] dataset={dataset_type} steps={cfg.steps}")
     trainer.fit(
         train_loader=train_loader,
         val_loader=None,
         total_steps=cfg.steps,
         validate_every=0,
         log_every=10,
-        amp=True,
+        amp=device.type == "cuda",
         checkpoint_every=50,
         batch_transform=parse_batch,
         compute_recon=True,
