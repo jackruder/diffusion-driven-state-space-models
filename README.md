@@ -221,19 +221,69 @@ python scripts/experiments/kdd/kdd_train.py \
 
 ### Logging and monitoring
 
-Metrics are logged to two places by default:
+Metrics are logged to **three** sinks (TensorBoard and CSV are always on;
+W&B is opt-in):
 
-| Sink | Path | View with |
-|------|------|-----------|
-| **TensorBoard** | `<run_dir>/tb_logs/` | `tensorboard --logdir runs/` |
-| **CSV** | `<run_dir>/csv_logs/train_metrics.csv` | any spreadsheet / pandas |
+| Sink | Path / target | Enable with |
+|------|---------------|-------------|
+| **TensorBoard** | `<run_dir>/tb_logs/` | always on — `tensorboard --logdir runs/` |
+| **CSV** | `<run_dir>/csv_logs/train_metrics.csv` | always on |
+| **W&B** | your W&B project | see below |
 
-> **W&B / self-hosted tracking servers** — the codebase currently uses
-> TensorBoard only.  To add Weights & Biases, implement a `WandbLogger`
-> in `src/ddssm/logging.py` (mirror the `TensorBoardLogger` interface:
-> `on_step` / `on_epoch`) and append it to the `loggers` list in
-> `DDSSMTrainer.__init__`.  Point at your own server by setting the
-> `WANDB_BASE_URL` environment variable before running.
+#### Enabling W&B logging
+
+**`train.py` (Hydra)**
+
+```bash
+# Cloud W&B
+python train.py dataset=synthetic wandb.enabled=true wandb.project=ddssm
+
+# Self-hosted server
+python train.py dataset=synthetic \
+    wandb.enabled=true \
+    wandb.project=ddssm \
+    wandb.base_url=https://wandb.example.com
+
+# With entity and run name
+python train.py dataset=kdd \
+    wandb.enabled=true wandb.project=ddssm \
+    wandb.entity=my-team wandb.name=kdd-baseline-run1
+```
+
+**`verifications.py` (argparse)**
+
+```bash
+# Minimal: just supply --wandb_project to activate W&B
+python scripts/experiments/verifications.py \
+    --config configs/synthetic_gauss.yaml \
+    --mode lgssm \
+    --wandb_project ddssm
+
+# Self-hosted server
+python scripts/experiments/verifications.py \
+    --config configs/synthetic_gauss.yaml \
+    --mode bimodal \
+    --wandb_project ddssm \
+    --wandb_base_url https://wandb.example.com
+```
+
+#### Self-hosted W&B server
+
+Set **one** of these — they are equivalent:
+
+```bash
+# Option A: environment variable (applies process-wide)
+export WANDB_BASE_URL=https://wandb.example.com
+
+# Option B: CLI flag (Hydra)
+python train.py wandb.enabled=true wandb.base_url=https://wandb.example.com
+
+# Option C: CLI flag (verifications.py)
+python scripts/experiments/verifications.py --wandb_base_url https://wandb.example.com
+```
+
+W&B is a soft dependency — if `wandb` is not installed the logger silently
+becomes a no-op and training continues with TensorBoard + CSV only.
 
 Run tests:
 

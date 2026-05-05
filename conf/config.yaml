@@ -68,6 +68,19 @@ prune_spike_factor: 5.0
 prune_tail_fraction: 0.2
 
 # ---------------------------------------------------------------------------
+# Weights & Biases logging.
+# Set wandb.enabled=true to activate.  Point wandb.base_url at your own
+# server for self-hosted W&B (equivalent to WANDB_BASE_URL env var).
+# ---------------------------------------------------------------------------
+wandb:
+  enabled: false
+  project: ddssm
+  entity: ~          # null → use W&B default entity / env var WANDB_ENTITY
+  name: ~            # null → W&B auto-generates a name
+  tags: []
+  base_url: ~        # e.g. "https://wandb.example.com" for a self-hosted server
+
+# ---------------------------------------------------------------------------
 # Hydra output / sweep directory layout
 # ---------------------------------------------------------------------------
 hydra:

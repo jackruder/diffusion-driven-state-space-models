@@ -323,11 +323,35 @@ def main(cfg: DictConfig) -> float | None:
         yaml.safe_dump(config.model_dump(), f)
 
     model = DDSSM_base(config, device)
+
+    # Build W&B config dict from Hydra cfg.wandb (only when enabled).
+    wandb_cfg = cfg.get("wandb", {})
+    wandb_config: dict | None = None
+    if wandb_cfg.get("enabled", False):
+        hp_dict = OmegaConf.to_container(cfg.get("hp", {}), resolve=True) or {}
+        wandb_config = {
+            "project": wandb_cfg.get("project", "ddssm"),
+            "entity": wandb_cfg.get("entity") or None,
+            "name": wandb_cfg.get("name") or None,
+            "tags": list(wandb_cfg.get("tags", [])),
+            "base_url": wandb_cfg.get("base_url") or None,
+            "enabled": True,
+            # Store resolved hyperparams and dataset info with the run.
+            "config": {
+                "dataset": dataset_type,
+                "steps": cfg.steps,
+                "seq_len": cfg.seq_len,
+                "split": cfg.split,
+                **hp_dict,
+            },
+        }
+
     trainer = DDSSMTrainer(
         model,
         device=device,
         tensorboard_dir=str(run_dir / "tb_logs"),
         csv_log_path=str(run_dir / "csv_logs" / "train_metrics.csv"),
+        wandb_config=wandb_config,
         quiet=cfg.quiet,
     )
 
