@@ -8,12 +8,7 @@ import numpy as np
 import yaml
 import ast
 
-from .config import (
-    DDSSMConfig,
-    deep_merge,
-    apply_dot_overrides,
-    load_config_from_files,
-)
+from .conf import build_model
 
 
 def visualize_results(

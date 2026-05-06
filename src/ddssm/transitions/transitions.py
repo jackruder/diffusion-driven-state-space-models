@@ -23,7 +23,8 @@ import torch
 import torch.nn as nn
 
 
-from ..config import TransitionConfig
+from hydra_zen import builds
+
 from ..encoder import GaussianHead, ContextProducer
 
 
@@ -359,55 +360,67 @@ class GaussianTransition(BaseTransition):
 
     def __init__(
         self,
-        transition_config: TransitionConfig,
         latent_dim: int,
         j: int,
         emb_time_dim: int,
         covariate_dim: int = 0,
+        hidden_dim: int = 64,
+        # context producer params
+        context_channels: int = 8,
+        context_num_layers: int = 2,
+        context_nheads: int = 8,
+        context_time_type: str = "conv",
+        context_time_kernel_size: int = 3,
+        context_time_gru_layers: int = 1,
+        context_feature_type: str = "transformer",
+        context_feature_nheads: int = 8,
+        context_feature_n_layers: int = 2,
+        # gaussian head params
+        gaussian_init_logvar: float = 0.0,
+        gaussian_var_min: float = 1e-6,
+        gaussian_clamp_min: float = -9.0,
+        gaussian_clamp_max: float = 6.0,
     ) -> None:
-        """Args:
-        latent_dim: latent dimension d
-        j: history length
-        transition_config: TransitionConfig to set hidden_dim/context/gaussian_head
-        emb_time_dim: time embedding dimension E_t
-        covariate_dim: covariate dimension V
-        """
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.j = int(j)
         self.emb_time_dim = int(emb_time_dim)
         self.covariate_dim = int(covariate_dim)
 
-        self.hidden_dim = transition_config.hidden_dim  # H
-
-        # We reuse the same Gaussian head config defined for the transition
-        self.gaussian_head_config = transition_config.gaussian_head
+        self.hidden_dim = hidden_dim  # H
 
         # Project z history: d -> H
         self.z_hist_proj = nn.Linear(self.latent_dim, self.hidden_dim)
 
-        self.config = transition_config
-
         # ContextProducer over length j, with no explicit mask features
-        # (mask_tot_dim=0, but ContextProducer still expects some tensor)
         self.context_producer = ContextProducer(
-            config=transition_config.context,
+            channels=context_channels,
+            num_layers=context_num_layers,
+            nheads=context_nheads,
             combined_dim=self.hidden_dim,
             mask_tot_dim=0,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,
+            time_type=context_time_type,
+            time_kernel_size=context_time_kernel_size,
+            time_gru_layers=context_time_gru_layers,
+            feature_type=context_feature_type,
+            feature_nheads=context_feature_nheads,
+            feature_n_layers=context_feature_n_layers,
         )
 
         self.context_producer = torch.compile(self.context_producer, dynamic=True)
 
         # Gaussian head over flattened context
-        # tot_dim = H + E_t + 0
-        head_in_dim = self.config.context.channels * self.hidden_dim
+        head_in_dim = context_channels * self.hidden_dim
 
         self.gaussian_head = GaussianHead(
             in_features=int(head_in_dim),
             out_features=self.latent_dim,
-            config=self.gaussian_head_config,
+            init_logvar=gaussian_init_logvar,
+            var_min=gaussian_var_min,
+            clamp_logvar_min=gaussian_clamp_min,
+            clamp_logvar_max=gaussian_clamp_max,
         )
 
     # --------- helpers ----------
@@ -555,3 +568,11 @@ class GaussianTransition(BaseTransition):
         B, d = mu.shape
         eps = torch.randn(B, S, d, device=mu.device, dtype=mu.dtype)
         return mu.unsqueeze(1) + sigma.unsqueeze(1) * eps
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen config for GaussianTransition
+# ---------------------------------------------------------------------------
+
+GaussianTransitionConf = builds(GaussianTransition, populate_full_signature=True)
+

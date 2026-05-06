@@ -1,0 +1,16 @@
+# transition/gaussian.yaml – Gaussian transition config group option
+
+transition:
+  _target_: ddssm.transitions.transitions.GaussianTransition
+  latent_dim: ${latent_dim}
+  j: ${j}
+  emb_time_dim: ${emb_time_dim}
+  covariate_dim: ${covariate_dim}
+  hidden_dim: 64
+  context_channels: 8
+  context_num_layers: 2
+  context_nheads: 8
+  context_time_type: conv
+  context_feature_type: transformer
+  context_feature_nheads: 8
+  context_feature_n_layers: 2

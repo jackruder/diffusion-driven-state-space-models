@@ -3,7 +3,6 @@
 import math
 
 from .train import DDSSMTrainer
-from .config import DDSSMConfig
 
 
 def make_lambda_cosine(spec, total_steps: int, default_end: float) -> callable:
@@ -45,7 +44,7 @@ class StageOrchestrator:
         config: The top-level model config containing ``stages``.
     """
 
-    def __init__(self, trainer: "DDSSMTrainer", config: DDSSMConfig):
+    def __init__(self, trainer: "DDSSMTrainer", config):
         self.trainer = trainer
         self.cfg = config
 

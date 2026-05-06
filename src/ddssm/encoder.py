@@ -12,7 +12,8 @@ from typing import Dict, Tuple, Optional
 import torch
 import torch.nn as nn
 
-from .config import EncoderConfig, InitPriorConfig
+from hydra_zen import builds
+
 from .futsum import FutureSummary, build_future_summary
 from .diffnets import ContextProducer
 from .gaussians import (
@@ -159,28 +160,48 @@ class GaussianEncoder(BaseEncoder):
 
     def __init__(
         self,
-        config: EncoderConfig,
         data_dim: int,  # D
         latent_dim: int,  # d
         j: int,  # latent history length
         emb_time_dim: int,  # E_t
-        use_mask: bool,  # whether to mask future observed data
+        use_mask: bool,  # whether to use observation mask
+        hidden_dim: int = 64,  # H
+        fut_mask_emb_dim: int = 8,
+        pad_mask_emb_dim: int = 8,
         covariate_dim: int = 0,
         static_covariate_dim: int = 0,
+        # context producer params
+        context_channels: int = 8,
+        context_num_layers: int = 2,
+        context_nheads: int = 8,
+        context_time_type: str = "conv",
+        context_time_kernel_size: int = 3,
+        context_time_gru_layers: int = 1,
+        context_feature_type: str = "transformer",
+        context_feature_nheads: int = 8,
+        context_feature_n_layers: int = 2,
+        # future summary params
+        summary_dim: int = 64,
+        summary_num_layers: int = 2,
+        summary_type: str = "gru",
+        summary_gru_layers: int = 1,
+        # gaussian head params
+        gaussian_init_logvar: float = 0.0,
+        gaussian_var_min: float = 1e-6,
+        gaussian_clamp_min: float = -10.0,
+        gaussian_clamp_max: float = 6.0,
     ) -> None:
         super().__init__()
-        self.summary_dim = config.summary_config.summary_dim
-        self.gauss_head_config = config.gaussian_head
-        self.latent_gauss_head_config = config.latent_init_head
-        self.hidden_dim = config.hidden_dim  # H
+        self.summary_dim = summary_dim
+        self.hidden_dim = hidden_dim  # H
         self.data_dim = data_dim
         self.latent_dim = latent_dim
         self.covariate_dim = covariate_dim
         self.j = j
         self.emb_time_dim = emb_time_dim
-        self.fut_mask_emb_dim = config.fut_mask_emb_dim
-        self.pad_mask_emb_dim = config.pad_mask_emb_dim
-        self.mask_emb_dim = self.fut_mask_emb_dim + self.pad_mask_emb_dim
+        self.fut_mask_emb_dim = fut_mask_emb_dim
+        self.pad_mask_emb_dim = pad_mask_emb_dim
+        self.mask_emb_dim = fut_mask_emb_dim + pad_mask_emb_dim
         self.use_mask = use_mask
         self.eps = 1e-8
 
@@ -194,24 +215,34 @@ class GaussianEncoder(BaseEncoder):
             self.static_proj_context = None
 
         # -- context summarizer --
-
         combined_dim = self.hidden_dim
         self.context_producer = ContextProducer(
-            config=config.context,
+            channels=context_channels,
+            num_layers=context_num_layers,
+            nheads=context_nheads,
             combined_dim=combined_dim,
-            mask_tot_dim=self.mask_emb_dim,  # TODO times 2, when we add real/fake mask
+            mask_tot_dim=self.mask_emb_dim,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j + 1,
+            time_type=context_time_type,
+            time_kernel_size=context_time_kernel_size,
+            time_gru_layers=context_time_gru_layers,
+            feature_type=context_feature_type,
+            feature_nheads=context_feature_nheads,
+            feature_n_layers=context_feature_n_layers,
             static_emb_dim=self.total_static_dim,
         )
 
         # -- future summary module --
         self.fut_sum_module = build_future_summary(
-            config.summary_config,
+            summary_type=summary_type,
             data_dim=data_dim,
             emb_time_dim=emb_time_dim + self.covariate_dim,
             use_mask=use_mask,
             static_embed_dim=self.total_static_dim,
+            summary_dim=summary_dim,
+            num_layers=summary_num_layers,
+            gru_layers=summary_gru_layers,
         )
 
         # -- projection layers --
@@ -227,11 +258,14 @@ class GaussianEncoder(BaseEncoder):
         self.pad_mask_embed = nn.Linear(1, self.pad_mask_emb_dim)
 
         # heads: take flattened context (c * (h + e_t)) -> latent_dim
-        head_in_dim = config.context.channels * self.hidden_dim
+        head_in_dim = context_channels * self.hidden_dim
         self.gaussian_head = GaussianHead(
             in_features=head_in_dim,
             out_features=self.latent_dim,
-            config=self.gauss_head_config,
+            init_logvar=gaussian_init_logvar,
+            var_min=gaussian_var_min,
+            clamp_logvar_min=gaussian_clamp_min,
+            clamp_logvar_max=gaussian_clamp_max,
         )
 
         self.fut_sum_module = torch.compile(self.fut_sum_module, dynamic=True)
@@ -564,6 +598,13 @@ class GaussianEncoder(BaseEncoder):
         return H_per_bs.mean()  # Mean over B, S
 
 
+# ---------------------------------------------------------------------------
+# Hydra-zen config for GaussianEncoder
+# ---------------------------------------------------------------------------
+
+GaussianEncoderConf = builds(GaussianEncoder, populate_full_signature=True)
+
+
 # ---- Initial Prior Interface ---- ####
 
 
@@ -685,40 +726,85 @@ class GaussianInitPrior(BaseInitPrior):
 
     def __init__(
         self,
-        config: InitPriorConfig,
         latent_dim: int,  # d
         j: int,  # latent history length
         emb_time_dim: int,  # E_t
         covariate_dim: int = 0,
+        hidden_dim: int = 64,
+        pad_mask_emb_dim: int = 8,
+        # context producer (init) params
+        context_channels: int = 8,
+        context_num_layers: int = 2,
+        context_nheads: int = 8,
+        context_time_type: str = "conv",
+        context_time_kernel_size: int = 3,
+        context_time_gru_layers: int = 1,
+        context_feature_type: str = "transformer",
+        context_feature_nheads: int = 8,
+        context_feature_n_layers: int = 2,
+        # aux context producer params
+        aux_context_channels: int = 8,
+        aux_context_num_layers: int = 2,
+        aux_context_nheads: int = 8,
+        aux_context_time_type: str = "conv",
+        aux_context_time_kernel_size: int = 3,
+        aux_context_time_gru_layers: int = 1,
+        aux_context_feature_type: str = "transformer",
+        aux_context_feature_nheads: int = 8,
+        aux_context_feature_n_layers: int = 2,
+        # gaussian head params
+        gaussian_init_logvar: float = 0.0,
+        gaussian_var_min: float = 1e-6,
+        gaussian_clamp_min: float = -10.0,
+        gaussian_clamp_max: float = 6.0,
+        # latent init head params
+        latent_init_logvar: float = 0.0,
+        latent_var_min: float = 1e-6,
+        latent_clamp_min: float = -10.0,
+        latent_clamp_max: float = 6.0,
     ) -> None:
 
         super().__init__()
-        self.hidden_dim = config.hidden_dim  # H
+        self.hidden_dim = hidden_dim  # H
         self.latent_dim = latent_dim
         self.j = j
         self.emb_time_dim = emb_time_dim
         self.covariate_dim = covariate_dim
-        self.pad_mask_emb_dim = config.pad_mask_emb_dim
+        self.pad_mask_emb_dim = pad_mask_emb_dim
         self.mask_emb_dim = self.pad_mask_emb_dim  # only pad mask here
-        self.gaussian_head_config = config.gaussian_head
-        self.latent_init_head_config = config.latent_init_head
 
         combined_dim = self.hidden_dim
         self.context_producer_init = ContextProducer(
-            config=config.context,
+            channels=context_channels,
+            num_layers=context_num_layers,
+            nheads=context_nheads,
             combined_dim=combined_dim,
             mask_tot_dim=self.mask_emb_dim,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,  # length j
+            time_type=context_time_type,
+            time_kernel_size=context_time_kernel_size,
+            time_gru_layers=context_time_gru_layers,
+            feature_type=context_feature_type,
+            feature_nheads=context_feature_nheads,
+            feature_n_layers=context_feature_n_layers,
         )
 
         self.context_producer_aux = ContextProducer(
-            config=config.aux_context,
+            channels=aux_context_channels,
+            num_layers=aux_context_num_layers,
+            nheads=aux_context_nheads,
             combined_dim=combined_dim,
             mask_tot_dim=0,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,  # length j
             skip_mask=True,
+            time_type=aux_context_time_type,
+            time_kernel_size=aux_context_time_kernel_size,
+            time_gru_layers=aux_context_time_gru_layers,
+            feature_type=aux_context_feature_type,
+            feature_nheads=aux_context_feature_nheads,
+            feature_n_layers=aux_context_feature_n_layers,
         )
 
         self.latent_init = GaussLatentInit(
@@ -731,12 +817,15 @@ class GaussianInitPrior(BaseInitPrior):
         # Pad mask embedding only
         self.pad_mask_embed = nn.Linear(1, self.pad_mask_emb_dim)
 
-        head_in_dim = config.context.channels * self.hidden_dim
+        head_in_dim = context_channels * self.hidden_dim
 
         self.gaussian_head = GaussianHead(
             in_features=head_in_dim,
             out_features=self.latent_dim,
-            config=self.gaussian_head_config,
+            init_logvar=gaussian_init_logvar,
+            var_min=gaussian_var_min,
+            clamp_logvar_min=gaussian_clamp_min,
+            clamp_logvar_max=gaussian_clamp_max,
         )
 
         # --- var posterior q_Φ(z_{-j+1:0} | z_{1:j}) ---
@@ -746,12 +835,15 @@ class GaussianInitPrior(BaseInitPrior):
         aux_hidden_dim = self.hidden_dim
 
         self.aux_proj = nn.Linear(aux_input_dim, aux_hidden_dim)
-        aux_head_in_dim = config.aux_context.channels * aux_hidden_dim
+        aux_head_in_dim = aux_context_channels * aux_hidden_dim
 
         self.aux_posterior_head = GaussianHead(
             in_features=aux_head_in_dim,
             out_features=self.latent_dim * self.j,
-            config=self.latent_init_head_config,
+            init_logvar=latent_init_logvar,
+            var_min=latent_var_min,
+            clamp_logvar_min=latent_clamp_min,
+            clamp_logvar_max=latent_clamp_max,
         )
 
         self.context_producer_init = torch.compile(
@@ -1186,3 +1278,11 @@ class GaussianInitPrior(BaseInitPrior):
             "entropy": L_ent,
             "vhp": L_vhp,
         }
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen config for GaussianInitPrior
+# ---------------------------------------------------------------------------
+
+GaussianInitPriorConf = builds(GaussianInitPrior, populate_full_signature=True)
+

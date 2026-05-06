@@ -1,0 +1,112 @@
+# Main Hydra configuration file for DDSSM.
+# Defaults list: selects one option from each config group.
+
+defaults:
+  - transition: gaussian  # config group: transition/gaussian.yaml | transition/diffusion.yaml
+  - experiment: null       # optional experiment override (e.g. experiment/kdd_gauss_beijing.yaml)
+  - _self_
+
+# ---- global dims (set per experiment) ----
+j: 1
+data_dim: 1
+latent_dim: 4
+emb_time_dim: 16
+covariate_dim: 0
+static_embed_dim: 0
+use_observation_mask: true
+checkpoint_dir: ./checkpoints
+
+# ---- encoder (GaussianEncoder flat params) ----
+encoder:
+  _target_: ddssm.encoder.GaussianEncoder
+  data_dim: ${data_dim}
+  latent_dim: ${latent_dim}
+  j: ${j}
+  emb_time_dim: ${emb_time_dim}
+  use_mask: ${use_observation_mask}
+  hidden_dim: 64
+  fut_mask_emb_dim: 8
+  pad_mask_emb_dim: 8
+  covariate_dim: ${covariate_dim}
+  context_channels: 8
+  context_num_layers: 2
+  context_nheads: 8
+  context_time_type: conv
+  context_feature_type: transformer
+  context_feature_nheads: 8
+  context_feature_n_layers: 2
+  summary_dim: 64
+  summary_num_layers: 2
+  summary_type: gru
+
+# ---- decoder ----
+decoder:
+  _target_: ddssm.decoder.Decoder
+  latent_dim: ${latent_dim}
+  data_dim: ${data_dim}
+  j: ${j}
+  emb_time_dim: ${emb_time_dim}
+  covariate_dim: ${covariate_dim}
+  hidden_dim: 64
+  mask_emb_dim: 8
+  context_channels: 8
+  context_num_layers: 2
+  context_nheads: 8
+  context_time_type: conv
+  context_feature_type: transformer
+  context_feature_nheads: 8
+  context_feature_n_layers: 2
+
+# ---- initialisation prior ----
+z_init:
+  _target_: ddssm.encoder.GaussianInitPrior
+  latent_dim: ${latent_dim}
+  j: ${j}
+  emb_time_dim: ${emb_time_dim}
+  covariate_dim: ${covariate_dim}
+  hidden_dim: 64
+  context_channels: 8
+  context_num_layers: 2
+  context_nheads: 8
+  context_time_type: conv
+  context_feature_type: transformer
+  aux_context_channels: 8
+  aux_context_num_layers: 2
+  aux_context_nheads: 8
+  aux_context_time_type: conv
+  aux_context_feature_type: transformer
+
+# ---- hyperparameters ----
+hyperparams:
+  S: 1
+  ema_decay: 0.999
+  weight_decay: 0.01
+  batch_size: 16
+  grad_accum_steps: 4
+  t_chunk: 16
+  enc_lr: 5e-4
+  dec_lr: 5e-4
+  zinit_lr: 5e-4
+  trans_lr: 5e-4
+  logvar_min: -7.0
+  logvar_max: 7.0
+  lambda_schedule: none
+  lambda_start: 0.001
+  lambda_end: 1.0
+  lambda_warmup_steps: 10
+
+# ---- model wrapper ----
+model:
+  _target_: ddssm.dssd.DDSSM_base
+  encoder: ${encoder}
+  decoder: ${decoder}
+  z_init: ${z_init}
+  transition: ${transition}
+  j: ${j}
+  data_dim: ${data_dim}
+  latent_dim: ${latent_dim}
+  emb_time_dim: ${emb_time_dim}
+  covariate_dim: ${covariate_dim}
+  use_observation_mask: ${use_observation_mask}
+  hyperparams: ${hyperparams}
+  checkpoint_dir: ${checkpoint_dir}

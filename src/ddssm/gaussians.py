@@ -7,7 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .config import GaussianHeadConfig
+from hydra_zen import builds
+
 from .net_utils import softplus_inv
 
 
@@ -86,17 +87,20 @@ class GaussianHead(nn.Module):
 
     def __init__(
         self,
-        config: GaussianHeadConfig,
         in_features: int,
         out_features: int,
+        init_logvar: float = 0.0,
+        var_min: float = 1e-6,
+        clamp_logvar_min: float = -9.0,
+        clamp_logvar_max: float = 6.0,
     ) -> None:
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.var_min = float(config.var_min)
-        self.clamp_logvar_min = float(config.clamp_logvar_min)
-        self.clamp_logvar_max = float(config.clamp_logvar_max)
-        self.init_logvar = float(config.init_logvar)
+        self.var_min = float(var_min)
+        self.clamp_logvar_min = float(clamp_logvar_min)
+        self.clamp_logvar_max = float(clamp_logvar_max)
+        self.init_logvar = float(init_logvar)
 
         # Mean head
         self.mu_head = nn.Linear(in_features, out_features)
@@ -143,3 +147,13 @@ class GaussianHead(nn.Module):
         logvar = logvar.clamp(self.clamp_logvar_min, self.clamp_logvar_max)
 
         return mu, logvar
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen config (auto-generated from constructor signature)
+# ---------------------------------------------------------------------------
+
+GaussianHeadConf = builds(
+    GaussianHead,
+    populate_full_signature=True,
+)

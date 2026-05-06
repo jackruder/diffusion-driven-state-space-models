@@ -6,13 +6,14 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
-from .config import DecoderConfig
+from hydra_zen import builds
+
 from .diffnets import ContextProducer
 from .gaussians import GaussianHead
 from .net_utils import hist_abs_time_tokens
 
 
-class decoder(nn.Module):
+class Decoder(nn.Module):
     """Decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history.
 
     - Treats z_{t-j+1:t} as a short sequence of length j.
@@ -22,13 +23,29 @@ class decoder(nn.Module):
 
     def __init__(
         self,
-        config: DecoderConfig,
         latent_dim: int,  # d
         data_dim: int,  # D
         j: int = 1,
         emb_time_dim: int = 64,
         covariate_dim: int = 0,
         static_covariate_dim: int = 0,
+        hidden_dim: int = 64,
+        mask_emb_dim: int = 8,
+        # context producer params
+        context_channels: int = 8,
+        context_num_layers: int = 2,
+        context_nheads: int = 8,
+        context_time_type: str = "conv",
+        context_time_kernel_size: int = 3,
+        context_time_gru_layers: int = 1,
+        context_feature_type: str = "transformer",
+        context_feature_nheads: int = 8,
+        context_feature_n_layers: int = 2,
+        # gaussian head params
+        gaussian_init_logvar: float = 0.0,
+        gaussian_var_min: float = 1e-6,
+        gaussian_clamp_min: float = -9.0,
+        gaussian_clamp_max: float = 6.0,
     ) -> None:
         super().__init__()
         self.data_dim = data_dim
@@ -36,11 +53,11 @@ class decoder(nn.Module):
         self.j = j
         self.emb_time_dim = emb_time_dim
         self.covariate_dim = covariate_dim
-        self.mask_emb_dim = config.mask_emb_dim
-        self.hidden_dim = config.hidden_dim
+        self.mask_emb_dim = mask_emb_dim
+        self.hidden_dim = hidden_dim
 
         self.total_static_dim = static_covariate_dim
-        head_in_dim = config.context.channels * self.hidden_dim
+        head_in_dim = context_channels * self.hidden_dim
 
         if self.total_static_dim > 0:
             # Project spatial dimension from D (data) -> hidden_dim (latent seq spatial dim)
@@ -62,26 +79,36 @@ class decoder(nn.Module):
 
         # -- context producer --
         self.context_producer = ContextProducer(
-            config=config.context,
+            channels=context_channels,
+            num_layers=context_num_layers,
+            nheads=context_nheads,
             combined_dim=self.hidden_dim,
             mask_tot_dim=self.mask_emb_dim,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,
+            time_type=context_time_type,
+            time_kernel_size=context_time_kernel_size,
+            time_gru_layers=context_time_gru_layers,
+            feature_type=context_feature_type,
+            feature_nheads=context_feature_nheads,
+            feature_n_layers=context_feature_n_layers,
             static_emb_dim=self.total_static_dim,
         )
 
         # -- Gaussian output head --
-        head_in_dim = config.context.channels * self.hidden_dim
         self.gaussian_head = GaussianHead(
-            config=config.gaussian_head,
             in_features=head_in_dim,
             out_features=self.data_dim,
+            init_logvar=gaussian_init_logvar,
+            var_min=gaussian_var_min,
+            clamp_logvar_min=gaussian_clamp_min,
+            clamp_logvar_max=gaussian_clamp_max,
         )
 
         self.context_producer = torch.compile(self.context_producer, dynamic=True)
 
         # Variance prior parameters
-        self.logvar_prior_mean = config.gaussian_head.init_logvar
+        self.logvar_prior_mean = gaussian_init_logvar
         self.logvar_prior_std = 1.0
 
     def forward_unpadded(
@@ -311,3 +338,11 @@ class decoder(nn.Module):
         obs_count_t = m_t.sum(dim=1).clamp_min(1.0)  # (B,)
 
         return logp_t, mu_x, logvar_x, obs_count_t
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen config for Decoder
+# ---------------------------------------------------------------------------
+
+DecoderConf = builds(Decoder, populate_full_signature=True)
+

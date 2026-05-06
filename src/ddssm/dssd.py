@@ -1,53 +1,19 @@
 """Core DDSSM model: ELBO forward pass, encoder/decoder/transition dispatch, and forecast rollout."""
 
-from typing import Dict, final
+from dataclasses import dataclass, field
+from types import SimpleNamespace
+from typing import Dict, List, final
 
 import torch
 import torch.nn as nn
 
-from .config import (
-    DDSSMConfig,
-)
-from .decoder import decoder
+from .decoder import Decoder
 from .encoder import BaseEncoder, BaseInitPrior, GaussianEncoder, GaussianInitPrior
 from .net_utils import (
     time_embedding,
 )
 from .transitions.transitions import GaussianTransition
 from .transitions.diffusion import DiffusionTransition
-from .config import TransitionConfig
-
-
-
-def get_transition_model(
-    config: TransitionConfig,
-    latent_dim: int,
-    j: int,
-    emb_time_dim: int,
-    device: torch.device,
-    covariate_dim: int = 0,
-    static_covariate_dim: int = 0,
-    num_classes_per_static: list[int] | None = None,
-):
-    if config.type == "gaussian":
-        return GaussianTransition(
-            config,
-            latent_dim,
-            j,
-            emb_time_dim,
-            covariate_dim,
-        )
-    elif config.type == "diffusion":
-        return DiffusionTransition(
-            config,
-            latent_dim,
-            j,
-            emb_time_dim,
-            device,
-            covariate_dim,
-        )
-    else:
-        raise ValueError(f"Unknown transition type: {config.type}")
 
 
 @final
@@ -61,27 +27,63 @@ class DDSSM_base(nn.Module):
     and decodes them.
 
     Args:
-        config: Top-level model configuration (``DDSSMConfig``).
-        device: PyTorch device on which parameters are placed.
+        encoder: Instantiated encoder module.
+        decoder: Instantiated decoder module.
+        z_init: Instantiated initialisation prior module.
+        transition: Instantiated transition module.
+        j: Number of history steps used by each module.
+        data_dim: Observed data dimension D.
+        latent_dim: Latent dimension d.
+        emb_time_dim: Time embedding dimension.
+        covariate_dim: Dimension of time-varying covariates (0 = none).
+        static_embed_dim: Per-feature categorical embedding size.
+        num_classes_per_static: Vocabulary size per static categorical feature.
+        use_observation_mask: Whether to use the observation mask in the encoder.
+        mask_emb_dim: Mask embedding dimension (stored for reference).
+        logvar_min: Min clamp for decoder/encoder log-variance.
+        logvar_max: Max clamp for decoder/encoder log-variance.
+        S: Number of Monte Carlo encoder samples.
+        hyperparams: Namespace-like object with training hyperparameters.
+        stages: Optional stages config; passed through to config namespace.
+        checkpoint_dir: Directory for checkpoints.
     """
 
-    def __init__(self, config: DDSSMConfig, device: torch.device) -> None:
+    def __init__(
+        self,
+        encoder: BaseEncoder,
+        decoder: Decoder,
+        z_init: BaseInitPrior,
+        transition: nn.Module,
+        j: int,
+        data_dim: int,
+        latent_dim: int,
+        emb_time_dim: int = 16,
+        covariate_dim: int = 0,
+        static_embed_dim: int = 0,
+        num_classes_per_static: List[int] | None = None,
+        use_observation_mask: bool = True,
+        mask_emb_dim: int = 8,
+        logvar_min: float = -7.0,
+        logvar_max: float = 7.0,
+        S: int = 1,
+        hyperparams=None,
+        stages=None,
+        checkpoint_dir: str = "./checkpoints",
+    ) -> None:
         super().__init__()
-        self.config = config
-        self.device = device
-        self.j = config.j  # number of history steps
-        self.data_dim = config.data_dim
-        self.latent_dim = config.latent_dim
 
-        self.emb_time_dim = config.emb_time_dim
+        self.j = j
+        self.data_dim = data_dim
+        self.latent_dim = latent_dim
+        self.emb_time_dim = emb_time_dim
 
-        self.logvar_min = config.hyperparams.logvar_min  # logvar clamps
-        self.logvar_max = config.hyperparams.logvar_max
-        self.S = config.hyperparams.S  # number of monte Carlo samples for encoder draws
+        self.logvar_min = logvar_min
+        self.logvar_max = logvar_max
+        self.S = S
 
         # Top level model parameters
-        self.static_embed_dim = getattr(config, "static_embed_dim", 0)
-        self.num_classes_list = getattr(config, "num_classes_per_static", [])
+        self.static_embed_dim = static_embed_dim
+        self.num_classes_list = num_classes_per_static or []
         self.static_embeddings = nn.ModuleList()
 
         if self.static_embed_dim > 0 and self.num_classes_list:
@@ -93,43 +95,21 @@ class DDSSM_base(nn.Module):
         else:
             self.total_static_dim = 0
 
-        # Encoders and priors (Gaussian implementations for now)
-        self.encoder: BaseEncoder = GaussianEncoder(
-            config=config.encoder,
-            data_dim=self.data_dim,
-            latent_dim=self.latent_dim,
-            j=self.j,
-            emb_time_dim=self.emb_time_dim,
-            use_mask=config.use_observation_mask,
-            covariate_dim=config.covariate_dim,
-            static_covariate_dim=self.total_static_dim,
-        )
+        # Sub-modules (already instantiated)
+        self.encoder: BaseEncoder = encoder
+        self.decoder = decoder
+        self.zinit: BaseInitPrior = z_init
+        self.transition = transition
 
-        self.decoder = decoder(
-            config.decoder,
-            latent_dim=self.latent_dim,
-            data_dim=self.data_dim,
-            j=self.j,
-            emb_time_dim=self.emb_time_dim,
-            covariate_dim=config.covariate_dim,
-            static_covariate_dim=self.total_static_dim,
-        )
-
-        self.zinit: BaseInitPrior = GaussianInitPrior(
-            config=config.z_init,
-            latent_dim=self.latent_dim,
-            j=self.j,
-            emb_time_dim=self.emb_time_dim,
-            covariate_dim=config.covariate_dim,
-        )
-
-        self.transition = get_transition_model(
-            config=config.transition,
-            latent_dim=self.latent_dim,
-            j=self.j,
-            emb_time_dim=self.emb_time_dim,
-            device=device,
-            covariate_dim=config.covariate_dim,
+        # Build a config namespace so that DDSSMTrainer can access
+        # model.config.hyperparams.*, model.config.stages, model.config.checkpoint_dir
+        # without changes.
+        if hyperparams is None:
+            hyperparams = _default_hyperparams()
+        self.config = SimpleNamespace(
+            hyperparams=hyperparams,
+            stages=stages,
+            checkpoint_dir=checkpoint_dir,
         )
 
     def _encode_latents(
@@ -724,3 +704,35 @@ class DDSSM_base(nn.Module):
         pred_mean = x_future.mean(dim=1)  # (B, D, L2)
 
         return {"pred_mean": pred_mean, "pred_samples": x_future}
+
+
+# ---------------------------------------------------------------------------
+# Default hyperparams namespace (used when no hyperparams object is provided)
+# ---------------------------------------------------------------------------
+
+def _default_hyperparams():
+    """Return a SimpleNamespace with default training hyperparameters.
+
+    This is used when ``DDSSM_base`` is constructed without an explicit
+    ``hyperparams`` argument (e.g. in tests or interactive use).
+    """
+    return SimpleNamespace(
+        S=1,
+        ema_decay=0.999,
+        weight_decay=1e-2,
+        batch_size=16,
+        grad_accum_steps=4,
+        t_chunk=16,
+        clip_grad_norm=None,
+        lambda_schedule="none",
+        lambda_start=0.001,
+        lambda_end=1.0,
+        lambda_warmup_steps=10,
+        enc_lr=5e-4,
+        dec_lr=5e-4,
+        zinit_lr=5e-4,
+        trans_lr=5e-4,
+        logvar_min=-7.0,
+        logvar_max=7.0,
+        rewo=SimpleNamespace(D0=0.1, nu=1e-3, alpha=0.99, tau1=1.0, tau2=1.0),
+    )
