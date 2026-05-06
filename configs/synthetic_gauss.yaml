@@ -1,0 +1,131 @@
+# Small model config for D=1 synthetic dataset experiments.
+# Designed to train in minutes on a laptop CPU.
+#
+# Usage with verifications.py (argparse):
+#   python scripts/experiments/verifications.py \
+#       --config configs/synthetic_gauss.yaml \
+#       --mode lgssm --training_mode joint --steps 500
+#
+# Usage with Hydra train.py:
+#   python train.py dataset=synthetic model_configs=[configs/synthetic_gauss.yaml]
+
+data_dim: 1
+latent_dim: 4
+j: 1
+emb_time_dim: &time 16
+mask_emb_dim: &mask 8
+use_observation_mask: false
+covariate_dim: 0
+static_embed_dim: 0
+num_classes_per_static: []
+
+hidden_dim: &hid 32
+channels: &chan 8
+
+hyperparams:
+  batch_size: 64
+  grad_accum_steps: 1
+  lambda_schedule: "cosine"
+  lambda_start: 0.001
+  lambda_end: 1.0
+  lambda_warmup_steps: 200
+  enc_lr: 5e-4
+  dec_lr: 5e-4
+  zinit_lr: 5e-4
+  trans_lr: 5e-4
+  S: 1
+  logvar_min: -7.0
+  logvar_max: 7.0
+
+encoder:
+  fut_mask_emb_dim: *mask
+  pad_mask_emb_dim: *mask
+  hidden_dim: *hid
+  summary_config:
+    summary_dim: 32
+    num_layers: 2
+    time:
+      type: "gru"
+      hidden_dim: 32
+  context:
+    channels: *chan
+    num_layers: 2
+    time:
+      type: "conv"
+      kernel_size: 2
+    feature:
+      type: "identity"
+  gaussian_head:
+    init_logvar: 0.0
+    var_min: 1e-6
+    clamp_logvar_max: 6.0
+    clamp_logvar_min: -10.0
+  latent_init_head:
+    init_logvar: 0.0
+    var_min: 1e-6
+    clamp_logvar_max: 6.0
+    clamp_logvar_min: -10.0
+
+decoder:
+  mask_emb_dim: *mask
+  hidden_dim: *hid
+  context:
+    channels: *chan
+    num_layers: 2
+    time:
+      type: "conv"
+      kernel_size: 2
+    feature:
+      type: "identity"
+  gaussian_head:
+    init_logvar: 0.0
+    var_min: 1e-6
+    clamp_logvar_max: 6.0
+    clamp_logvar_min: -10.0
+
+z_init:
+  pad_mask_emb_dim: *mask
+  hidden_dim: *hid
+  context:
+    channels: *chan
+    num_layers: 2
+    time:
+      type: "conv"
+      kernel_size: 2
+    feature:
+      type: "identity"
+  aux_context:
+    channels: *chan
+    num_layers: 2
+    time:
+      type: "conv"
+      kernel_size: 2
+    feature:
+      type: "identity"
+  gaussian_head:
+    init_logvar: 0.0
+    var_min: 1e-6
+    clamp_logvar_max: 6.0
+    clamp_logvar_min: -10.0
+  latent_init_head:
+    init_logvar: 0.0
+    var_min: 1e-6
+    clamp_logvar_max: 6.0
+    clamp_logvar_min: -10.0
+
+transition:
+  type: "gaussian"
+  hidden_dim: *hid
+  context:
+    channels: *chan
+    num_layers: 2
+    time:
+      type: "conv"
+      kernel_size: 2
+    feature:
+      type: "identity"
+  gaussian_head:
+    init_logvar: 0.0
+    var_min: 1e-6
+    clamp_logvar_max: 6.0
+    clamp_logvar_min: -10.0

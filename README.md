@@ -27,8 +27,9 @@ src/ddssm/
   transitions/       # Transition models (Gaussian + diffusion)
   diffnets.py        # CSDIUnet and related networks
   net_utils.py       # Shared utilities (time embeddings, side info)
-  logging.py         # CSV + TensorBoard logging helpers
-  eval_utils.py      # Evaluation and visualisation utilities
+  logging.py         # CSV + TensorBoard + W&B logging helpers
+  eval_utils.py      # Visualisation utilities
+  eval_metrics.py    # MAE / CRPS-sum metrics + recon-divergence detection
   data/              # Dataset loaders (GluonTS, PM2.5, KDD, synthetic)
 ```
 
@@ -50,6 +51,42 @@ python scripts/experiments/kdd/kdd_train.py \
     --config configs/base.yaml \
     --override hyperparams.batch_size=32
 ```
+
+## Logging
+
+Metrics are written to TensorBoard and CSV by default; **W&B is opt-in**.
+
+```bash
+pip install -e .[wandb]
+```
+
+Pass a ``wandb_config`` dict to ``DDSSMTrainer`` to activate it, or use the
+``--wandb_project`` flag on the argparse-based ``verifications.py`` script:
+
+```bash
+# Cloud W&B
+python scripts/experiments/verifications.py \
+    --config configs/synthetic_gauss.yaml \
+    --mode lgssm \
+    --wandb_project ddssm
+
+# Self-hosted W&B server
+python scripts/experiments/verifications.py \
+    --config configs/synthetic_gauss.yaml \
+    --mode bimodal \
+    --wandb_project ddssm \
+    --wandb_base_url https://wandb.example.com
+```
+
+W&B is a *soft dependency*: if the ``wandb`` package isn't installed the
+logger silently no-ops and training continues with TensorBoard + CSV.
+
+## SLURM (preview)
+
+A ready-to-use submitit launcher config lives at
+``conf/hydra/launcher/submitit_slurm.yaml``. It will be wired up to a real
+entry point in the upcoming `hydra-zen` migration; the YAML is checked in
+now so resource-request defaults can be reviewed alongside this PR.
 
 ## Development
 

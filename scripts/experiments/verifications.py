@@ -161,11 +161,32 @@ def run_verification(args):
 
     csv_log_path = os.path.join(run_dir, "metrics.csv")
 
+    # Build optional W&B config dict (only when --wandb_project is supplied).
+    wandb_config = None
+    if getattr(args, "wandb_project", None):
+        wandb_config = {
+            "project": args.wandb_project,
+            "entity": getattr(args, "wandb_entity", None),
+            "name": getattr(args, "wandb_name", None),
+            "tags": list(getattr(args, "wandb_tags", []) or []),
+            "base_url": getattr(args, "wandb_base_url", None),
+            "enabled": True,
+            "config": {
+                "mode": args.mode,
+                "training_mode": args.training_mode,
+                "steps": args.steps,
+                "seq_len": args.seq_len,
+                "split": args.split,
+                "dataset_seed": args.dataset_seed,
+            },
+        }
+
     trainer = DDSSMTrainer(
         model,
         device=device,
         tensorboard_dir=os.path.join(run_dir, "logs"),
         csv_log_path=csv_log_path,
+        wandb_config=wandb_config,
         quiet=args.quiet,
     )
 
@@ -367,5 +388,42 @@ if __name__ == "__main__":
         default=123,
         help="Random seed for synthetic dataset generation.",
     )
+
+    # ---- Weights & Biases ----
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default=None,
+        help="W&B project name.  If set, W&B logging is enabled for this run.",
+    )
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default=None,
+        help="W&B entity (user or team).  Defaults to your W&B default entity.",
+    )
+    parser.add_argument(
+        "--wandb_name",
+        type=str,
+        default=None,
+        help="Display name for the W&B run.  Auto-generated when omitted.",
+    )
+    parser.add_argument(
+        "--wandb_tags",
+        type=str,
+        nargs="*",
+        default=[],
+        help="Space-separated list of tags for the W&B run.",
+    )
+    parser.add_argument(
+        "--wandb_base_url",
+        type=str,
+        default=None,
+        help=(
+            "URL of a self-hosted W&B server, e.g. https://wandb.example.com. "
+            "Overrides the WANDB_BASE_URL environment variable."
+        ),
+    )
+
     args = parser.parse_args()
     run_verification(args)
