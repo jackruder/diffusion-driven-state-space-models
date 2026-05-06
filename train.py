@@ -36,7 +36,6 @@ import torch._inductor.config as inductor_config
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
-from typing import cast
 
 from ddssm.config import DDSSMConfig, load_config_from_files
 from ddssm.data.dataload import build_loaders_for_expt, parse_batch
@@ -160,7 +159,7 @@ def _collect_overrides(cfg: DictConfig) -> list[str]:
         "S_k": "transition.schedule.S_k",
         "k_chunk": "transition.schedule.k_chunk",
     }
-    hp: dict = cast(dict, OmegaConf.to_container(cfg.hp, resolve=True)) if cfg.get("hp") else {}
+    hp: dict = OmegaConf.to_container(cfg.hp, resolve=True) if cfg.get("hp") else {}  # type: ignore[assignment]
     overrides: list[str] = []
 
     for key, val in hp.items():
@@ -173,31 +172,23 @@ def _collect_overrides(cfg: DictConfig) -> list[str]:
     vae_lr = hp.get("vae_lr")
     if vae_lr is not None:
         already_set = {o.split("=")[0] for o in overrides}
+        lr_paths = ("hyperparams.enc_lr", "hyperparams.dec_lr", "hyperparams.zinit_lr")
         # Warn if vae_lr conflicts with individually-set LR keys
-        conflicting = [
-            lr_path.split(".")[-1]
-            for lr_path in ("hyperparams.enc_lr", "hyperparams.dec_lr", "hyperparams.zinit_lr")
-            if lr_path in already_set
-        ]
-        if conflicting:
+        conflicting_paths = [p for p in lr_paths if p in already_set]
+        if conflicting_paths:
+            conflicting_keys = [p.split(".")[-1] for p in conflicting_paths]
             warnings.warn(
                 f"[hp] vae_lr={vae_lr} was set alongside individual LR key(s) "
-                f"{conflicting}. The individual key(s) take precedence; "
+                f"{conflicting_keys}. The individual key(s) take precedence; "
                 "vae_lr will be ignored for those components.",
                 stacklevel=2,
             )
-        for lr_path in (
-            "hyperparams.enc_lr",
-            "hyperparams.dec_lr",
-            "hyperparams.zinit_lr",
-        ):
+        for lr_path in lr_paths:
             if lr_path not in already_set:
                 overrides.append(f"{lr_path}={vae_lr}")
 
     # arch.* keys → forwarded verbatim as dot-notation overrides
-    arch: dict = (
-        cast(dict, OmegaConf.to_container(cfg.arch, resolve=True)) if cfg.get("arch") else {}
-    )
+    arch: dict = OmegaConf.to_container(cfg.arch, resolve=True) if cfg.get("arch") else {}  # type: ignore[assignment]
     for key, val in arch.items():
         if val is not None:
             overrides.append(f"{key}={val}")
