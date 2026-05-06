@@ -83,15 +83,15 @@ class DDSSM_base(nn.Module):
 
         # Top level model parameters
         self.static_embed_dim = static_embed_dim
-        self.num_classes_list = num_classes_per_static or []
+        self.num_classes_per_static = num_classes_per_static or []
         self.static_embeddings = nn.ModuleList()
 
-        if self.static_embed_dim > 0 and self.num_classes_list:
-            for num_classes in self.num_classes_list:
+        if self.static_embed_dim > 0 and self.num_classes_per_static:
+            for num_classes in self.num_classes_per_static:
                 self.static_embeddings.append(
                     nn.Embedding(num_classes, self.static_embed_dim)
                 )
-            self.total_static_dim = len(self.num_classes_list) * self.static_embed_dim
+            self.total_static_dim = len(self.num_classes_per_static) * self.static_embed_dim
         else:
             self.total_static_dim = 0
 

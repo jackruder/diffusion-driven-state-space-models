@@ -26,7 +26,7 @@ import torch
 log = logging.getLogger(__name__)
 
 
-@hydra.main(config_path="../conf", config_name="config", version_base="1.3")
+@hydra.main(config_path="../../conf", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     """Build the DDSSM model from config and start training."""
     log.info("Resolved config:\n%s", OmegaConf.to_yaml(cfg))

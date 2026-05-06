@@ -238,7 +238,9 @@ class DDSSMTrainer:
                 cfg_dict = asdict(cfg)
             except Exception:
                 cfg_dict = {}
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(path, "w") as f:
             yaml.safe_dump(cfg_dict, f)
 
