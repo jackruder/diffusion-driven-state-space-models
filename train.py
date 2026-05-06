@@ -27,12 +27,16 @@ import math
 import os
 import warnings
 from pathlib import Path
+from typing import Iterator
 
 import hydra
 import numpy as np
 import torch
 import torch._dynamo
 import torch._inductor.config as inductor_config
+import yaml
+from hydra.core.hydra_config import HydraConfig
+from hydra.errors import HydraException
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
@@ -141,6 +145,16 @@ def _crps_sum_metrics(
     return crps.mean(), crps.mean(dim=0)
 
 
+def _flatten_to_dot(d: dict, prefix: str = "") -> Iterator[tuple[str, object]]:
+    """Yield (dot.path, leaf_value) pairs from a nested dict, skipping None leaves."""
+    for k, v in d.items():
+        path = f"{prefix}.{k}" if prefix else str(k)
+        if isinstance(v, dict):
+            yield from _flatten_to_dot(v, path)
+        elif v is not None:
+            yield path, v
+
+
 def _collect_overrides(cfg: DictConfig) -> list[str]:
     """Translate ``cfg.hp.*`` and ``cfg.arch.*`` keys into dot-notation DDSSMConfig overrides.
 
@@ -150,9 +164,9 @@ def _collect_overrides(cfg: DictConfig) -> list[str]:
     ``conf/config.yaml``'s ``hp:`` block is sufficient — no change to this
     function is needed.
 
-    ``arch.*`` keys are forwarded verbatim as dot-notation overrides, allowing
-    direct architecture fields to be set from the CLI or sweep configs without
-    maintaining separate model YAML files (e.g. ``arch.encoder.hidden_dim=128``).
+    ``arch.*`` keys are recursively flattened to dot-notation overrides, so a
+    nested override like ``arch.encoder.hidden_dim=128`` becomes the DDSSMConfig
+    override ``encoder.hidden_dim=128``.
     """
     # Keys whose DDSSMConfig path differs from the obvious "hyperparams.<key>"
     special_hp_map: dict[str, str] = {
@@ -187,11 +201,10 @@ def _collect_overrides(cfg: DictConfig) -> list[str]:
             if lr_path not in already_set:
                 overrides.append(f"{lr_path}={vae_lr}")
 
-    # arch.* keys → forwarded verbatim as dot-notation overrides
+    # arch.* keys → recursively flattened to dot-notation overrides
     arch: dict = OmegaConf.to_container(cfg.arch, resolve=True) if cfg.get("arch") else {}  # type: ignore[assignment]
-    for key, val in arch.items():
-        if val is not None:
-            overrides.append(f"{key}={val}")
+    for path, val in _flatten_to_dot(arch):
+        overrides.append(f"{path}={val}")
 
     return overrides
 
@@ -298,8 +311,6 @@ def main(cfg: DictConfig) -> float | None:
     Returns the validation CRPS-sum when ``cfg.do_eval=true`` so that the
     Optuna sweeper can use it as the minimization objective.
     """
-    import yaml  # local import keeps top-level clean
-
     torch.set_float32_matmul_precision("high")
     torch._dynamo.config.cache_size_limit = 64
     torch._dynamo.config.accumulated_cache_size_limit = 64
@@ -346,31 +357,26 @@ def main(cfg: DictConfig) -> float | None:
     if wandb_cfg.get("enabled", False):
         hp_dict = OmegaConf.to_container(cfg.get("hp", {}), resolve=True) or {}
 
-        # Pain point 7: link the W&B run name to the Hydra job so the two are
-        # trivially correlated.  Explicit wandb.name takes precedence; otherwise
-        # fall back to the Hydra override dirname (unique per trial in a sweep).
+        # Try to read job/sweeper info from HydraConfig once. This will fail
+        # outside a Hydra-managed run (e.g. unit tests), in which case the
+        # auto-derived run_name/group simply stay None.
+        hc = None
+        try:
+            hc = HydraConfig.get()
+        except (HydraException, ValueError):
+            pass
+
+        # Run name: explicit wandb.name wins; otherwise use the Hydra override
+        # dirname so each sweep trial gets a unique, traceable name.
         run_name: str | None = wandb_cfg.get("name") or None
-        if run_name is None:
-            try:
-                from hydra.core.hydra_config import HydraConfig
+        if run_name is None and hc is not None:
+            run_name = hc.job.override_dirname or None
 
-                hc = HydraConfig.get()
-                run_name = hc.job.override_dirname or None
-            except Exception:
-                pass
-
-        # Pain point 4: propagate the Optuna study name as the W&B group so all
-        # sweep trials are visible together in the W&B UI.
+        # Group: explicit wandb.group wins; otherwise propagate the Optuna
+        # study name so sweep trials are visible together in the W&B UI.
         group: str | None = wandb_cfg.get("group") or None
-        if group is None:
-            try:
-                from hydra.core.hydra_config import HydraConfig
-
-                hc = HydraConfig.get()
-                # hc.sweeper is an OmegaConf DictConfig; use OmegaConf.select for safety.
-                group = OmegaConf.select(hc.sweeper, "study_name") or None
-            except Exception:
-                pass
+        if group is None and hc is not None:
+            group = OmegaConf.select(hc.sweeper, "study_name") or None
 
         wandb_config = {
             "project": wandb_cfg.get("project", "ddssm"),
@@ -380,14 +386,13 @@ def main(cfg: DictConfig) -> float | None:
             "tags": list(wandb_cfg.get("tags", [])),
             "base_url": wandb_cfg.get("base_url") or None,
             "enabled": True,
-            # Store resolved hyperparams, architecture, and dataset info with the run.
+            # Store resolved hyperparams, architecture, and dataset info so
+            # runs with different architectures are distinguishable in the UI.
             "config": {
                 "dataset": dataset_type,
                 "steps": cfg.steps,
                 "seq_len": cfg.seq_len,
                 "split": cfg.split,
-                # Pain point 3: include model architecture files so different
-                # architecture runs are distinguishable in the W&B UI.
                 "model_configs": list(cfg.model_configs),
                 **hp_dict,
             },

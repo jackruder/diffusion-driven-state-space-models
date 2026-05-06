@@ -275,22 +275,22 @@ python train.py dataset=kdd \
     wandb.entity=my-team wandb.name=kdd-baseline-run1
 ```
 
-**Run name auto-linking (pain point 7):** when `wandb.name` is not set,
-the run name is automatically derived from the Hydra override dirname
-(e.g. `hp.vae_lr=3e-4,hp.trans_lr=1e-4`), which makes it trivial to find
-the matching Hydra output directory from a W&B run.
+**Run name auto-linking:** when `wandb.name` is not set, the run name is
+automatically derived from the Hydra override dirname (e.g.
+`hp.vae_lr=3e-4,hp.trans_lr=1e-4`), which makes it trivial to find the
+matching Hydra output directory from a W&B run.
 
-**Sweep grouping (pain point 4):** when running an Optuna sweep, all trial
-runs are automatically placed in a W&B group named after the Optuna study
-(e.g. `ddssm_kdd_p1`).  You can also set `wandb.group` explicitly:
+**Sweep grouping:** when running an Optuna sweep, all trial runs are
+automatically placed in a W&B group named after the Optuna study (e.g.
+`ddssm_kdd_p1`).  You can also set `wandb.group` explicitly:
 
 ```bash
 python train.py --multirun +sweep=kdd_p1 wandb.enabled=true wandb.group=my-sweep
 ```
 
-**Architecture in run config (pain point 3):** the `model_configs` list is
-stored in every W&B run's config so runs with different architectures are
-distinguishable in the UI without needing manual tags.
+**Architecture in run config:** the `model_configs` list is stored in every
+W&B run's config so runs with different architectures are distinguishable in
+the UI without needing manual tags.
 
 **`verifications.py` (argparse)**
 

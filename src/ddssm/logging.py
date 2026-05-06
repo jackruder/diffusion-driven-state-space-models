@@ -289,6 +289,8 @@ class WandbLogger(Logger):
         project: W&B project name.
         entity: W&B entity (user or team).  ``None`` uses the default entity.
         name: Display name for the run.  ``None`` lets W&B auto-generate one.
+        group: Optional group name; useful for collecting all trials of a
+            sweep under a single grouping in the W&B UI.
         tags: List of string tags attached to the run.
         config: Arbitrary dict of hyperparameters to store with the run.
         base_url: URL of a self-hosted W&B server, e.g.
@@ -304,6 +306,7 @@ class WandbLogger(Logger):
         project: str = "ddssm",
         entity: Optional[str] = None,
         name: Optional[str] = None,
+        group: Optional[str] = None,
         tags: Optional[list[str]] = None,
         config: Optional[Dict[str, Any]] = None,
         base_url: Optional[str] = None,
@@ -323,17 +326,16 @@ class WandbLogger(Logger):
             return
 
         if base_url:
-            from os import environ  # noqa: PLC0415
-
-            environ.setdefault("WANDB_BASE_URL", base_url)
+            os.environ["WANDB_BASE_URL"] = base_url
 
         wandb.init(
             project=project,
             entity=entity,
             name=name,
+            group=group,
             tags=tags or [],
             config=config or {},
-            reinit=True,
+            reinit="finish_previous",
         )
         self._wandb = wandb
         self._active = True

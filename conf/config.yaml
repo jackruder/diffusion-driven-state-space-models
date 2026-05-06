@@ -61,10 +61,10 @@ hp:
   k_chunk: ~
 
 # ---------------------------------------------------------------------------
-# Architecture overrides (pain point 2).
-# Keys are forwarded as dot-notation overrides directly to DDSSMConfig so that
-# model architecture fields can be set from the CLI or Optuna sweep configs
-# without maintaining separate YAML files.
+# Architecture overrides.
+# Keys are recursively flattened to dot-notation overrides on DDSSMConfig so
+# that model architecture fields can be set from the CLI or Optuna sweep
+# configs without maintaining separate YAML files.
 #
 # Examples:
 #   python train.py arch.encoder.hidden_dim=128
