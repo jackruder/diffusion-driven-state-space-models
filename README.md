@@ -92,7 +92,32 @@ Key config keys:
 
 Any key in `hp.*` is applied on top of the loaded model config YAMLs.
 Individual keys (`hp.enc_lr`, `hp.dec_lr`, `hp.zinit_lr`) take precedence
-over the `hp.vae_lr` shorthand when both are provided.
+over the `hp.vae_lr` shorthand when both are provided (a warning is emitted
+when both are set simultaneously).
+
+**Adding a new hyperparameter** only requires adding it to the `hp:` block in
+`conf/config.yaml` (and any sweep YAMLs).  No change to `train.py` is needed
+— all `hp.*` keys are automatically forwarded to `DDSSMConfig.hyperparams.*`
+unless they have a special mapping (currently `S_k` and `k_chunk`).
+
+#### Architecture overrides
+
+Use `arch.*` to override individual DDSSMConfig fields directly from the CLI or
+sweep configs, without creating a separate model YAML file:
+
+```bash
+# Change encoder hidden dim and latent dim in a one-off run
+python train.py dataset=kdd arch.encoder.hidden_dim=128 arch.latent_dim=4
+
+# Sweep over architecture choices with Optuna
+python train.py --multirun dataset=kdd \
+    +sweep=kdd_p1 hydra/sweeper=optuna \
+    "++hydra.sweeper.params.arch.encoder.hidden_dim=choice(64,128)" \
+    "++hydra.sweeper.params.arch.latent_dim=choice(2,4,8)"
+```
+
+Keys must use the full DDSSMConfig dot-path (e.g. `encoder.hidden_dim`,
+`transition.schedule.num_steps`).
 
 ### Synthetic data — getting started immediately
 
@@ -244,11 +269,28 @@ python train.py dataset=synthetic \
     wandb.project=ddssm \
     wandb.base_url=https://wandb.example.com
 
-# With entity and run name
+# With entity and explicit run name
 python train.py dataset=kdd \
     wandb.enabled=true wandb.project=ddssm \
     wandb.entity=my-team wandb.name=kdd-baseline-run1
 ```
+
+**Run name auto-linking (pain point 7):** when `wandb.name` is not set,
+the run name is automatically derived from the Hydra override dirname
+(e.g. `hp.vae_lr=3e-4,hp.trans_lr=1e-4`), which makes it trivial to find
+the matching Hydra output directory from a W&B run.
+
+**Sweep grouping (pain point 4):** when running an Optuna sweep, all trial
+runs are automatically placed in a W&B group named after the Optuna study
+(e.g. `ddssm_kdd_p1`).  You can also set `wandb.group` explicitly:
+
+```bash
+python train.py --multirun +sweep=kdd_p1 wandb.enabled=true wandb.group=my-sweep
+```
+
+**Architecture in run config (pain point 3):** the `model_configs` list is
+stored in every W&B run's config so runs with different architectures are
+distinguishable in the UI without needing manual tags.
 
 **`verifications.py` (argparse)**
 

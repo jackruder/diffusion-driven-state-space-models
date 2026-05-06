@@ -37,7 +37,13 @@ quiet: true
 # Hyperparameter overrides applied on top of model_configs.
 # null (or ~) means "keep the value from model_configs".
 # vae_lr is a shorthand that sets enc_lr, dec_lr, and zinit_lr together
-# (individual keys take precedence if also set).
+# (individual keys take precedence if also set; a warning is emitted when both
+# are provided simultaneously).
+#
+# Adding a new HP here is sufficient — no change to _collect_overrides() in
+# train.py is required, because all hp.* keys are auto-forwarded to
+# DDSSMConfig.hyperparams.<key> unless they appear in the special-case list
+# (currently only S_k and k_chunk, which map to transition.schedule.*).
 # ---------------------------------------------------------------------------
 hp:
   batch_size: ~
@@ -53,6 +59,21 @@ hp:
   S: ~
   S_k: ~
   k_chunk: ~
+
+# ---------------------------------------------------------------------------
+# Architecture overrides (pain point 2).
+# Keys are forwarded as dot-notation overrides directly to DDSSMConfig so that
+# model architecture fields can be set from the CLI or Optuna sweep configs
+# without maintaining separate YAML files.
+#
+# Examples:
+#   python train.py arch.encoder.hidden_dim=128
+#   python train.py arch.transition.hidden_dim=64 arch.latent_dim=4
+#
+# Entries must use the full DDSSMConfig dot-path (e.g. "encoder.hidden_dim",
+# "transition.schedule.num_steps").  Use ~ to leave a field unchanged.
+# ---------------------------------------------------------------------------
+arch: {}
 
 # ---------------------------------------------------------------------------
 # Evaluation (set do_eval=true to run after training; required for sweeps)
@@ -76,7 +97,8 @@ wandb:
   enabled: false
   project: ddssm
   entity: ~          # null → use W&B default entity / env var WANDB_ENTITY
-  name: ~            # null → W&B auto-generates a name
+  name: ~            # null → derived from Hydra override dirname; W&B auto-generates if empty
+  group: ~           # null → derived from Optuna study_name when running a sweep
   tags: []
   base_url: ~        # e.g. "https://wandb.example.com" for a self-hosted server
 

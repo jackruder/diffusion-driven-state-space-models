@@ -25,6 +25,7 @@ import csv
 import json
 import math
 import os
+import warnings
 from pathlib import Path
 
 import hydra
@@ -142,33 +143,49 @@ def _crps_sum_metrics(
 
 
 def _collect_overrides(cfg: DictConfig) -> list[str]:
-    """Translate ``cfg.hp.*`` keys into dot-notation DDSSMConfig overrides."""
-    hp_map: dict[str, str] = {
-        "batch_size": "hyperparams.batch_size",
-        "lambda_schedule": "hyperparams.lambda_schedule",
-        "lambda_warmup_steps": "hyperparams.lambda_warmup_steps",
-        "lambda_end": "hyperparams.lambda_end",
-        "enc_lr": "hyperparams.enc_lr",
-        "dec_lr": "hyperparams.dec_lr",
-        "zinit_lr": "hyperparams.zinit_lr",
-        "trans_lr": "hyperparams.trans_lr",
-        "weight_decay": "hyperparams.weight_decay",
-        "S": "hyperparams.S",
+    """Translate ``cfg.hp.*`` and ``cfg.arch.*`` keys into dot-notation DDSSMConfig overrides.
+
+    ``hp.*`` keys are forwarded to DDSSMConfig.  Keys with non-obvious paths
+    (``S_k``, ``k_chunk``) use an explicit mapping; all other ``hp.*`` keys are
+    auto-forwarded to ``hyperparams.<key>``.  This means that adding a new HP to
+    ``conf/config.yaml``'s ``hp:`` block is sufficient — no change to this
+    function is needed.
+
+    ``arch.*`` keys are forwarded verbatim as dot-notation overrides, allowing
+    direct architecture fields to be set from the CLI or sweep configs without
+    maintaining separate model YAML files (e.g. ``arch.encoder.hidden_dim=128``).
+    """
+    # Keys whose DDSSMConfig path differs from the obvious "hyperparams.<key>"
+    special_hp_map: dict[str, str] = {
         "S_k": "transition.schedule.S_k",
         "k_chunk": "transition.schedule.k_chunk",
     }
     hp: dict = cast(dict, OmegaConf.to_container(cfg.hp, resolve=True)) if cfg.get("hp") else {}
     overrides: list[str] = []
 
-    for key, path in hp_map.items():
-        val = hp.get(key)
-        if val is not None:
-            overrides.append(f"{path}={val}")
+    for key, val in hp.items():
+        if key == "vae_lr" or val is None:
+            continue
+        path = special_hp_map.get(key, f"hyperparams.{key}")
+        overrides.append(f"{path}={val}")
 
     # vae_lr shorthand → enc_lr, dec_lr, zinit_lr (individual keys take precedence)
     vae_lr = hp.get("vae_lr")
     if vae_lr is not None:
         already_set = {o.split("=")[0] for o in overrides}
+        # Warn if vae_lr conflicts with individually-set LR keys
+        conflicting = [
+            lr_path.split(".")[-1]
+            for lr_path in ("hyperparams.enc_lr", "hyperparams.dec_lr", "hyperparams.zinit_lr")
+            if lr_path in already_set
+        ]
+        if conflicting:
+            warnings.warn(
+                f"[hp] vae_lr={vae_lr} was set alongside individual LR key(s) "
+                f"{conflicting}. The individual key(s) take precedence; "
+                "vae_lr will be ignored for those components.",
+                stacklevel=2,
+            )
         for lr_path in (
             "hyperparams.enc_lr",
             "hyperparams.dec_lr",
@@ -176,6 +193,14 @@ def _collect_overrides(cfg: DictConfig) -> list[str]:
         ):
             if lr_path not in already_set:
                 overrides.append(f"{lr_path}={vae_lr}")
+
+    # arch.* keys → forwarded verbatim as dot-notation overrides
+    arch: dict = (
+        cast(dict, OmegaConf.to_container(cfg.arch, resolve=True)) if cfg.get("arch") else {}
+    )
+    for key, val in arch.items():
+        if val is not None:
+            overrides.append(f"{key}={val}")
 
     return overrides
 
@@ -329,19 +354,50 @@ def main(cfg: DictConfig) -> float | None:
     wandb_config: dict | None = None
     if wandb_cfg.get("enabled", False):
         hp_dict = OmegaConf.to_container(cfg.get("hp", {}), resolve=True) or {}
+
+        # Pain point 7: link the W&B run name to the Hydra job so the two are
+        # trivially correlated.  Explicit wandb.name takes precedence; otherwise
+        # fall back to the Hydra override dirname (unique per trial in a sweep).
+        run_name: str | None = wandb_cfg.get("name") or None
+        if run_name is None:
+            try:
+                from hydra.core.hydra_config import HydraConfig
+
+                hc = HydraConfig.get()
+                run_name = hc.job.override_dirname or None
+            except Exception:
+                pass
+
+        # Pain point 4: propagate the Optuna study name as the W&B group so all
+        # sweep trials are visible together in the W&B UI.
+        group: str | None = wandb_cfg.get("group") or None
+        if group is None:
+            try:
+                from hydra.core.hydra_config import HydraConfig
+
+                hc = HydraConfig.get()
+                # hc.sweeper is an OmegaConf DictConfig; use OmegaConf.select for safety.
+                group = OmegaConf.select(hc.sweeper, "study_name") or None
+            except Exception:
+                pass
+
         wandb_config = {
             "project": wandb_cfg.get("project", "ddssm"),
             "entity": wandb_cfg.get("entity") or None,
-            "name": wandb_cfg.get("name") or None,
+            "name": run_name,
+            "group": group,
             "tags": list(wandb_cfg.get("tags", [])),
             "base_url": wandb_cfg.get("base_url") or None,
             "enabled": True,
-            # Store resolved hyperparams and dataset info with the run.
+            # Store resolved hyperparams, architecture, and dataset info with the run.
             "config": {
                 "dataset": dataset_type,
                 "steps": cfg.steps,
                 "seq_len": cfg.seq_len,
                 "split": cfg.split,
+                # Pain point 3: include model architecture files so different
+                # architecture runs are distinguishable in the W&B UI.
+                "model_configs": list(cfg.model_configs),
                 **hp_dict,
             },
         }
