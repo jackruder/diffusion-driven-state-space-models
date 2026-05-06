@@ -28,6 +28,7 @@ from .logging import (
     MetricStore,
     ConsoleLogger,
     TensorBoardLogger,
+    WandbLogger,
 )
 from .train_utils import (
     param_groups_for_adamw,
@@ -85,6 +86,18 @@ class DDSSMTrainer:
             model config.
         csv_log_path: If given, step metrics are appended to this CSV file.
         tensorboard_dir: Directory for TensorBoard ``SummaryWriter`` output.
+        wandb_config: When provided, a :class:`WandbLogger` is added to the
+            metric store.  Pass a dict with any subset of the keyword
+            arguments accepted by :class:`WandbLogger` (``project``,
+            ``entity``, ``name``, ``tags``, ``config``, ``base_url``,
+            ``enabled``).  Example::
+
+                wandb_config={
+                    "project": "ddssm",
+                    "entity": "my-team",
+                    "base_url": "https://wandb.example.com",
+                }
+
         quiet: If ``True``, suppress console logging.
     """
 
@@ -95,6 +108,7 @@ class DDSSMTrainer:
         optimizer: optim.Optimizer | None = None,
         csv_log_path: str | None = None,
         tensorboard_dir: str = "runs/ddssm",
+        wandb_config: dict | None = None,
         quiet: bool = False,
     ):
         self.model = model.to(device)
@@ -136,6 +150,8 @@ class DDSSMTrainer:
         ]  # epoch-only by default
         if csv_log_path:
             loggers.append(CSVLogger(path=csv_log_path))
+        if wandb_config is not None:
+            loggers.append(WandbLogger(**wandb_config))
         if not quiet:
             loggers.append(
                 ConsoleLogger(every_steps=0),

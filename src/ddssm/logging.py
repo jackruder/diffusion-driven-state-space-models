@@ -1,4 +1,4 @@
-"""CSV and TensorBoard logging utilities for tracking training metrics."""
+"""CSV, TensorBoard, and Weights & Biases logging utilities for tracking training metrics."""
 
 from __future__ import annotations
 
@@ -272,3 +272,90 @@ class TensorBoardLogger(Logger):
 
     def close(self):
         self.writer.close()
+
+
+class WandbLogger(Logger):
+    """Weights & Biases logger.
+
+    Logs step metrics via ``wandb.log`` and epoch metrics with an
+    ``"epoch/"`` prefix.  All metric keys are namespaced by split so they
+    appear as ``train/loss/total``, ``val/loss/total``, etc. in the W&B UI.
+
+    The logger is *soft-optional*: if ``wandb`` is not installed or
+    ``enabled=False`` it silently becomes a no-op so that the rest of the
+    training code need not be guarded.
+
+    Args:
+        project: W&B project name.
+        entity: W&B entity (user or team).  ``None`` uses the default entity.
+        name: Display name for the run.  ``None`` lets W&B auto-generate one.
+        group: Optional group name; useful for collecting all trials of a
+            sweep under a single grouping in the W&B UI.
+        tags: List of string tags attached to the run.
+        config: Arbitrary dict of hyperparameters to store with the run.
+        base_url: URL of a self-hosted W&B server, e.g.
+            ``"https://wandb.example.com"``.  When set it overrides the
+            ``WANDB_BASE_URL`` environment variable for this process.
+        enabled: If ``False`` the logger is a no-op regardless of whether
+            ``wandb`` is installed (useful for quick local runs where you
+            don't want any W&B traffic).
+    """
+
+    def __init__(
+        self,
+        project: str = "ddssm",
+        entity: Optional[str] = None,
+        name: Optional[str] = None,
+        group: Optional[str] = None,
+        tags: Optional[list[str]] = None,
+        config: Optional[Dict[str, Any]] = None,
+        base_url: Optional[str] = None,
+        enabled: bool = True,
+    ):
+        self._active = False
+        if not enabled:
+            return
+
+        try:
+            import wandb  # noqa: PLC0415
+        except ImportError:
+            print(
+                "[WandbLogger] wandb not installed — logging disabled. "
+                "Run `pip install wandb` to enable."
+            )
+            return
+
+        if base_url:
+            os.environ["WANDB_BASE_URL"] = base_url
+
+        wandb.init(
+            project=project,
+            entity=entity,
+            name=name,
+            group=group,
+            tags=tags or [],
+            config=config or {},
+            reinit="finish_previous",
+        )
+        self._wandb = wandb
+        self._active = True
+
+    # ------------------------------------------------------------------
+    def _log(self, prefix: str, step: int, row: Dict[str, float]) -> None:
+        if not self._active:
+            return
+        self._wandb.log(
+            {f"{prefix}/{k}": v for k, v in row.items()},
+            step=step,
+        )
+
+    def on_step(self, split: str, step: int, row: Dict[str, float]) -> None:
+        self._log(split, step, row)
+
+    def on_epoch(self, split: str, epoch: int, row: Dict[str, float]) -> None:
+        self._log(f"epoch/{split}", epoch, row)
+
+    def close(self) -> None:
+        if self._active:
+            self._wandb.finish()
+            self._active = False
