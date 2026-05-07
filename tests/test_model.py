@@ -174,6 +174,86 @@ def test_diffusion_transition_builds():
 
 
 # ---------------------------------------------------------------------------
+# transition_kl: dict contract for both transitions
+# ---------------------------------------------------------------------------
+
+def _make_inputs(B=2, S=2, T=5):
+    torch.manual_seed(0)
+    zs = torch.randn(B, S, LATENT_DIM, T)
+    logq = torch.randn(B, S, T)
+    mus = torch.randn(B, S, LATENT_DIM, T)
+    logvars = torch.randn(B, S, LATENT_DIM, T) * 0.1 - 1.0
+    time_emb = torch.randn(B, T, EMB_TIME)
+    return zs, logq, mus, logvars, time_emb
+
+
+def test_gaussian_transition_kl_closed_form():
+    trans = make_gaussian_transition()
+    zs, logq, mus, logvars, time_emb = _make_inputs()
+    enc_stats = {"mus": mus, "logvars": logvars}
+    out = trans.transition_kl(
+        enc_stats=enc_stats, zs=zs, logq_paths=logq, time_embed=time_emb,
+    )
+    # Closed-form path returns only "kl" (no L_p / L_q sub-components)
+    assert set(out.keys()) == {"kl"}
+    assert out["kl"].ndim == 0
+    # KL of diagonal Gaussians is non-negative
+    assert out["kl"].item() >= -1e-5
+
+
+def test_gaussian_transition_kl_mc_fallback():
+    trans = make_gaussian_transition()
+    zs, logq, _mus, _lv, time_emb = _make_inputs()
+    out = trans.transition_kl(
+        enc_stats={}, zs=zs, logq_paths=logq, time_embed=time_emb,
+    )
+    assert set(out.keys()) == {"kl", "L_p", "L_q"}
+    for v in out.values():
+        assert v.ndim == 0
+    # kl == L_p - L_q
+    assert torch.allclose(out["kl"], out["L_p"] - out["L_q"])
+
+
+def _make_diffusion_transition():
+    return DiffusionTransition(
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        unet=partial(
+            CSDIUnet,
+            channels=CHANNELS,
+            n_layers=1,
+            embedding_dim=CHANNELS,
+            residual_block=DiffResidualBlockConfig(
+                feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+            ),
+        ),
+        schedule=DiffusionScheduleConfig(num_steps=4, S_k=1, k_chunk=1),
+    )
+
+
+def test_diffusion_transition_kl_closed_form_entropy():
+    trans = _make_diffusion_transition()
+    zs, logq, _mus, logvars, time_emb = _make_inputs()
+    enc_stats = {"logvars": logvars}
+    out = trans.transition_kl(
+        enc_stats=enc_stats, zs=zs, logq_paths=logq, time_embed=time_emb,
+    )
+    assert set(out.keys()) == {"kl", "L_p", "L_q"}
+    for v in out.values():
+        assert v.ndim == 0
+    assert torch.allclose(out["kl"], out["L_p"] - out["L_q"])
+
+
+def test_diffusion_transition_kl_mc_entropy():
+    trans = _make_diffusion_transition()
+    zs, logq, _mus, _lv, time_emb = _make_inputs()
+    out = trans.transition_kl(
+        enc_stats={}, zs=zs, logq_paths=logq, time_embed=time_emb,
+    )
+    assert set(out.keys()) == {"kl", "L_p", "L_q"}
+    assert torch.allclose(out["kl"], out["L_p"] - out["L_q"])
+
+
+# ---------------------------------------------------------------------------
 # DDSSM_base forward pass
 # ---------------------------------------------------------------------------
 
@@ -186,3 +266,10 @@ def test_ddssm_forward(model):
     loss, distortion, rate, metrics, stats = result
     assert loss.ndim == 0  # scalar
     assert distortion.ndim == 0
+    # New transition KL metric key (replaces former trans/total, trans/diff,
+    # trans/entropy).  GaussianTransition + Gaussian encoder uses closed-form
+    # KL so no L_p/L_q sub-component keys are emitted.
+    assert "loss/rate/trans/kl" in metrics
+    assert "loss/rate/trans/total" not in metrics
+    assert "loss/rate/trans/diff" not in metrics
+    assert "loss/rate/trans/entropy" not in metrics

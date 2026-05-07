@@ -317,22 +317,26 @@ class DDSSM_base(nn.Module):
             covariates=covariates,
         )
 
-    def _compute_transition_loss(
+    def _compute_transition_kl(
         self,
         zs: torch.Tensor,  # (B, S, d, T)
+        logq_paths: torch.Tensor,  # (B, S, T)
+        enc_stats,
         time_embed: torch.Tensor,  # (B, T, E_t)
         covariates: torch.Tensor | None = None,
         static_covariates: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Compute transition loss term (L_diff).
+    ) -> dict:
+        """Compute transition KL term and any optional sub-components.
 
-        For Gaussian: -log p(z_t | z_{t-j:t-1})
-        For Diffusion: EDM training loss
+        Returns the dict produced by ``self.transition.transition_kl(...)``,
+        which must contain ``"kl"`` and may include implementation-specific
+        sub-components such as ``"L_p"``/``"L_q"`` for logging.
         """
-        # BaseTransition.loss returns -seq_log_prob (minimization objective)
-        return self.transition.loss(
-            zs,
-            time_embed,
+        return self.transition.transition_kl(
+            enc_stats=enc_stats,
+            zs=zs,
+            logq_paths=logq_paths,
+            time_embed=time_embed,
             covariates=covariates,
         )
 
@@ -410,9 +414,10 @@ class DDSSM_base(nn.Module):
         L_rec = L_init = L_rec_calib = torch.tensor(0.0, device=observed_data.device)
         L_vhp = L_ent_init = torch.tensor(0.0, device=observed_data.device)
 
-        # If non-diffusion loss, L_fwd stays 0 and L_diff is the appropriate term
-        L_diff = torch.tensor(0.0, device=observed_data.device)
-        L_ent = torch.tensor(0.0, device=observed_data.device)
+        # Transition KL term and any optional sub-components reported by the
+        # transition (e.g. L_p / L_q).  Empty when compute_trans is False.
+        L_trans = torch.tensor(0.0, device=observed_data.device)
+        trans_subterms: dict[str, torch.Tensor] = {}
 
         if compute_recon:
             L_rec, L_rec_calib = self._reconstruction_loss(
@@ -441,21 +446,15 @@ class DDSSM_base(nn.Module):
             )
 
         if compute_trans:
-            L_diff = self._compute_transition_loss(
-                zs,
-                time_embed,
-                covariates,
+            trans_terms = self._compute_transition_kl(
+                zs=zs,
+                logq_paths=logq_paths,
+                enc_stats=enc_stats,
+                time_embed=time_embed,
+                covariates=covariates,
             )
-
-        if compute_trans and compute_recon:
-            if self.encoder.is_gaussian_family and logvars is not None:
-                # Closed-form Gaussian entropy
-                L_ent = self.encoder.entropy_transition(enc_stats, j)
-            else:
-                # Generic Monte Carlo entropy over t=j+1..T
-                L_ent = self.encoder.mc_entropy_transition(logq_paths, j)
-
-        L_trans = L_diff - L_ent
+            L_trans = trans_terms["kl"]
+            trans_subterms = {k: v for k, v in trans_terms.items() if k != "kl"}
 
         distortion = L_rec
         rate = L_init + L_trans
@@ -477,12 +476,14 @@ class DDSSM_base(nn.Module):
             "loss/rate/init/tot": L_init.detach(),
             "loss/rate/init/vhp": L_vhp.detach(),
             "loss/rate/init/entropy": L_ent_init.detach(),
-            "loss/rate/trans/total": L_trans.detach(),
-            "loss/rate/trans/diff": L_diff.detach(),
-            "loss/rate/trans/entropy": L_ent.detach(),
+            "loss/rate/trans/kl": L_trans.detach(),
             "loss/rate/total": rate.detach(),
             "calib/ratio_res2_to_sigma2": L_rec_calib.detach(),
         }
+        # Surface any optional transition sub-components (e.g. L_p, L_q) under
+        # transition-driven keys.
+        for key, val in trans_subterms.items():
+            metrics[f"loss/rate/trans/{key}"] = val.detach()
 
         if report_scaled:
             rescale = lambda key, factor: metrics.update({
@@ -494,9 +495,9 @@ class DDSSM_base(nn.Module):
             rescale("loss/rate/init/tot", D_dim * j)
             rescale("loss/rate/init/vhp", D_dim * j)
             rescale("loss/rate/init/entropy", D_dim * j)
-            rescale("loss/rate/trans/total", DTk)
-            rescale("loss/rate/trans/diff", DTk)
-            rescale("loss/rate/trans/entropy", DTk)
+            rescale("loss/rate/trans/kl", DTk)
+            for key in trans_subterms:
+                rescale(f"loss/rate/trans/{key}", DTk)
             rescale("loss/rate/total", DT)
             rescale("calib/ratio_res2_to_sigma2", 1.0)
 
