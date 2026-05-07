@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
 import math
+import os
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -37,6 +38,7 @@ class EvalContext:
     csv_path: str | None = None
     T_split: int | None = None
     num_samples: int = 1
+    run_dir: str | None = None
 
 
 MetricFn = Callable[[EvalContext], Dict[str, Any]]
@@ -209,6 +211,181 @@ def eval_recon_mse(ctx: EvalContext) -> Dict[str, Any]:
             sums += float(err.sum().item())
 
     return {"recon_mse": sums / max(counts, 1)}
+
+
+# ---------------------------------------------------------------------------
+# Bimodal JSD: per-sample one-step JSD against the analytic bimodal truth.
+#
+# Specific to the synthetic ``bimodal`` mode (z_t = 0.9 z_{t-1} + 4 s_t,
+# s_t ∈ {-1, +1}, x_t = z_t + N(0, 0.2)). The analytic conditional one-step
+# distribution centred at -a*x_prev is a 50/50 mixture of N(-step_size, sigma)
+# and N(+step_size, sigma).
+# ---------------------------------------------------------------------------
+
+_JSD_EPS = 1e-12
+
+
+def _normal_pdf(x: np.ndarray, mu: float, sigma: float) -> np.ndarray:
+    z = (x - mu) / sigma
+    return np.exp(-0.5 * z * z) / (sigma * math.sqrt(2.0 * math.pi))
+
+
+def _jsd_discrete(p: np.ndarray, q: np.ndarray) -> float:
+    p = np.clip(p, _JSD_EPS, None); p = p / p.sum()
+    q = np.clip(q, _JSD_EPS, None); q = q / q.sum()
+    m = 0.5 * (p + q)
+    return float(0.5 * np.sum(p * np.log(p / m)) + 0.5 * np.sum(q * np.log(q / m)))
+
+
+def _hist_mass(vals: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    h, _ = np.histogram(vals, bins=edges, density=False)
+    h = h.astype(np.float64)
+    return np.ones_like(h) / h.size if h.sum() <= 0 else h / h.sum()
+
+
+def _bimodal_truth_mass(centers: np.ndarray, x_prev: float, *,
+                        a: float, step_size: float, sigma: float,
+                        center_coef: float) -> np.ndarray:
+    """Discretised analytic one-step truth, centred at ``-center_coef * x_prev``."""
+    shift = (a - center_coef) * x_prev
+    pdf = 0.5 * _normal_pdf(centers, shift - step_size, sigma) \
+        + 0.5 * _normal_pdf(centers, shift + step_size, sigma)
+    pdf = np.clip(pdf, _JSD_EPS, None)
+    return pdf / pdf.sum()
+
+
+@register_metric("bimodal_jsd")
+def eval_bimodal_jsd(
+    ctx: EvalContext,
+    *,
+    npz_path: str | None = None,
+    edges_min: float = -10.0,
+    edges_max: float = 10.0,
+    n_bins: int = 300,
+    step_size: float = 4.0,
+    sigma: float = 0.2,
+    a: float = 0.9,
+    center_coef: float = 0.9,
+) -> Dict[str, Any]:
+    """Per-sample one-step Jensen–Shannon divergence vs analytic bimodal truth.
+
+    Specific to ``mode="bimodal"`` synthetic data. For each batch element the
+    metric takes the FIRST future timestep's forecast samples
+    (``pred_samples[:, :, 0, 0]``), centres them at ``-center_coef * x_prev``,
+    bins into a histogram, and compares against the analytic 50/50 mixture
+    of Gaussians at the same centring.
+
+    Note: only the t+1 horizon is scored regardless of ``L2``. To run a strict
+    one-step analysis (matching the legacy ``bimodal_jsd.py`` script), override
+    ``T_split=T-1`` in the EvalSpec.
+
+    Args:
+        npz_path: If set (relative or absolute), write per-sample data
+            (x_prev, forecast samples, model_mass, truth_mass) to this NPZ
+            for downstream comparison plotting (``plot_bimodal_compare.py``).
+        edges_min, edges_max, n_bins: Histogram bin definition.
+        step_size, sigma, a: Bimodal DGP constants (defaults match
+            ``SyntheticDataset(mode="bimodal")``).
+        center_coef: Centring coefficient. ``0.9`` removes the AR drift exactly.
+
+    Returns:
+        ``bimodal_jsd_mean / std / sem / median`` plus
+        ``bimodal_jsd_best_idx / worst_idx / median_idx_1 / median_idx_2``.
+    """
+    if ctx.model is None or ctx.loader is None or ctx.T_split is None:
+        raise ValueError("bimodal_jsd requires model, loader, and T_split.")
+    model, device = ctx.model, ctx.device
+    L1 = int(ctx.T_split)
+    transform = ctx.batch_transform
+
+    edges = np.linspace(edges_min, edges_max, n_bins + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    jsds: list[float] = []
+    x_prevs: list[float] = []
+    sample_buf: list[np.ndarray] = []
+    model_mass_buf: list[np.ndarray] = []
+    truth_mass_buf: list[np.ndarray] = []
+
+    with torch.no_grad():
+        for batch in ctx.loader:
+            if transform is not None:
+                batch = transform(batch, device)
+
+            obs = batch["observed_data"]
+            mask = batch["observation_mask"]
+            past_time = batch["timepoints"][:, :L1]
+            future_time = batch["timepoints"][:, L1:]
+
+            out = model.forecast(
+                x_hist=obs[..., :L1],
+                x_mask=mask[..., :L1],
+                past_time=past_time,
+                future_time=future_time,
+                num_samples=int(ctx.num_samples),
+            )
+            pred_samples = out["pred_samples"]  # (B, S, D, L2)
+            B = pred_samples.shape[0]
+            x_prev = obs[:, 0, L1 - 1].detach().cpu().numpy()
+            xhat = pred_samples[:, :, 0, 0].detach().cpu().numpy()  # (B, S)
+
+            for b in range(B):
+                ctr = xhat[b] - center_coef * x_prev[b]
+                p = _hist_mass(ctr, edges)
+                q = _bimodal_truth_mass(centers, float(x_prev[b]),
+                                        a=a, step_size=step_size, sigma=sigma,
+                                        center_coef=center_coef)
+                jsds.append(_jsd_discrete(p, q))
+                x_prevs.append(float(x_prev[b]))
+                sample_buf.append(xhat[b].astype(np.float32, copy=True))
+                model_mass_buf.append(p.astype(np.float32, copy=True))
+                truth_mass_buf.append(q.astype(np.float32, copy=True))
+
+    jsd_arr = np.asarray(jsds, dtype=np.float64)
+    n = int(jsd_arr.size)
+    if n == 0:
+        return {"bimodal_jsd_mean": float("nan"), "bimodal_jsd_n": 0}
+
+    order = np.argsort(jsd_arr)
+    if n == 1:
+        median_idx_1 = median_idx_2 = 0
+    elif n % 2 == 0:
+        median_idx_1, median_idx_2 = int(order[n // 2 - 1]), int(order[n // 2])
+    else:
+        median_idx_1 = int(order[n // 2])
+        median_idx_2 = int(order[min(n // 2 + 1, n - 1)])
+
+    if npz_path is not None:
+        out_path = npz_path
+        if not os.path.isabs(out_path) and ctx.run_dir is not None:
+            out_path = os.path.join(ctx.run_dir, out_path)
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        np.savez_compressed(
+            out_path,
+            sample_idx=np.arange(n, dtype=np.int64),
+            x_prev=np.asarray(x_prevs, dtype=np.float32),
+            xhat_samples=np.stack(sample_buf, axis=0),
+            edges=edges.astype(np.float32),
+            centers=centers.astype(np.float32),
+            model_mass=np.stack(model_mass_buf, axis=0),
+            truth_mass=np.stack(truth_mass_buf, axis=0),
+            center_coef=np.float32(center_coef),
+            step_size=np.float32(step_size),
+            sigma=np.float32(sigma),
+            a=np.float32(a),
+        )
+
+    return {
+        "bimodal_jsd_n": n,
+        "bimodal_jsd_mean": float(jsd_arr.mean()),
+        "bimodal_jsd_std": float(jsd_arr.std()),
+        "bimodal_jsd_sem": float(jsd_arr.std() / math.sqrt(n)),
+        "bimodal_jsd_median": float(np.median(jsd_arr)),
+        "bimodal_jsd_best_idx": int(order[0]),
+        "bimodal_jsd_worst_idx": int(order[-1]),
+        "bimodal_jsd_median_idx_1": median_idx_1,
+        "bimodal_jsd_median_idx_2": median_idx_2,
+    }
 
 
 # ---------------------------------------------------------------------------

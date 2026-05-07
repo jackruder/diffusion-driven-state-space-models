@@ -40,6 +40,9 @@ class EvalSpec:
             if that is also ``None`` the metrics that need it raise.
         output_filename: File name (relative to the run dir) for the
             JSON dump.
+        kwargs: Per-metric keyword overrides keyed by metric name. The
+            inner dict is forwarded as ``**kwargs`` to that metric.
+            Example: ``{"bimodal_jsd": {"npz_path": "out.npz"}}``.
     """
 
     metrics: list[str] = field(default_factory=lambda: ["loss_tail"])
@@ -47,6 +50,8 @@ class EvalSpec:
     num_samples: int = 1
     T_split: int | None = None
     output_filename: str = "metrics.json"
+    # Bare ``dict`` so OmegaConf accepts arbitrarily-nested per-metric kwargs.
+    kwargs: dict = field(default_factory=dict)
 
 
 def _select_loader(experiment, split: str):
@@ -105,6 +110,7 @@ def evaluate(
         csv_path=csv_path,
         T_split=T_split,
         num_samples=int(spec.num_samples),
+        run_dir=run_dir,
     )
 
     results: dict[str, Any] = {}
@@ -114,8 +120,9 @@ def evaluate(
                 f"Unknown metric {name!r}. Registered metrics: "
                 f"{sorted(METRIC_REGISTRY)}"
             )
-        log.info("Computing metric %s", name)
-        results.update(METRIC_REGISTRY[name](ctx))
+        metric_kwargs = dict(spec.kwargs.get(name, {})) if spec.kwargs else {}
+        log.info("Computing metric %s (kwargs=%s)", name, metric_kwargs)
+        results.update(METRIC_REGISTRY[name](ctx, **metric_kwargs))
 
     os.makedirs(run_dir, exist_ok=True)
     out_path = os.path.join(run_dir, spec.output_filename)

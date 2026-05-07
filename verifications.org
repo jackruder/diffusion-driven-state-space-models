@@ -343,6 +343,108 @@ python -m ddssm.visualize experiment=bimodal_diff \
 - Diffusion samples span both modes; energy score is substantially lower.
 - Forecast panel should visually show the two-mode fan-out for diffusion.
 
+*** JSD analysis (one-step distribution match)
+
+The bimodal DGP has a closed-form one-step conditional density (50/50 mixture
+of two Gaussians at ~±step_size~ around ~a·xₜ₋₁~). We compare each model's
+one-step forecast distribution against this analytic truth using the
+Jensen–Shannon divergence (JSD), and contrast against an LOCF baseline that
+predicts ~xₜ = xₜ₋₁~ (the worst-case unimodal-collapse scenario).
+
+This recovers the analysis previously done in the legacy ~bimodal_jsd.py~ /
+~plot_bimodal_jsd.py~ scripts.
+
+**** 1. Compute per-model JSD (writes ~bimodal_jsd.npz~ as a side-file)
+
+The ~bimodal_jsd~ metric is registered in the eval registry; override the
+existing ~bimodal_*~ eval spec at the CLI to add it. Use ~T_split=T-1~ so the
+forecast horizon is strictly one step (the analytic truth is a one-step density).
+
+#+BEGIN_SRC sh
+# Gaussian
+python -m ddssm.evaluate experiment=bimodal_gauss \
+    +checkpoint=runs/bimodal/gauss/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/gauss/metrics.csv \
+    'experiment.eval.metrics=[bimodal_jsd]' \
+    'experiment.eval.num_samples=1024' \
+    'experiment.eval.T_split=63' \
+    'experiment.eval.kwargs={bimodal_jsd: {npz_path: bimodal_jsd.npz}}' \
+    hydra.run.dir=runs/bimodal/gauss
+
+# Diffusion
+python -m ddssm.evaluate experiment=bimodal_diff \
+    +checkpoint=runs/bimodal/diff/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff/metrics.csv \
+    'experiment.eval.metrics=[bimodal_jsd]' \
+    'experiment.eval.num_samples=1024' \
+    'experiment.eval.T_split=63' \
+    'experiment.eval.kwargs={bimodal_jsd: {npz_path: bimodal_jsd.npz}}' \
+    hydra.run.dir=runs/bimodal/diff
+#+END_SRC
+
+The ~kwargs={bimodal_jsd: {...}}~ override is per-metric — the runner forwards
+that nested dict as ~**kwargs~ when it calls ~eval_bimodal_jsd~. Each run
+writes its own ~bimodal_jsd.npz~ next to ~metrics.json~.
+
+**** 2. LOCF baseline (no model required)
+
+#+BEGIN_SRC sh
+python scripts/experiments/bimodal_locf.py \
+    --out runs/bimodal/locf/bimodal_jsd.npz \
+    --T 64 --T_split 63 --n_per_split 1024 --num_samples 1024
+#+END_SRC
+
+The script writes an NPZ with the same schema as the metric output so it can
+be fed straight into the comparison plot.
+
+**** 3. Cross-model comparison plots
+
+#+BEGIN_SRC sh
+python scripts/experiments/plot_bimodal_compare.py \
+    --runs gauss=runs/bimodal/gauss/bimodal_jsd.npz \
+           diff=runs/bimodal/diff/bimodal_jsd.npz \
+           locf=runs/bimodal/locf/bimodal_jsd.npz \
+    --out_jsd     runs/bimodal/compare/jsd.png \
+    --out_density runs/bimodal/compare/density.png \
+    --center_coefs 0.9 1.0
+#+END_SRC
+
+Produces:
+- ~jsd_a0p9.png~, ~jsd_a1p0.png~: errorbar plot of mean JSD ± 1 SEM per run.
+- ~density_a0p9.png~, ~density_a1p0.png~: avg forecast density per run vs analytic truth.
+
+**** 4. Median-trajectory inspection
+
+The metric also logs the indices of the two median-JSD samples
+(~bimodal_jsd_median_idx_1/2~ in ~metrics.json~). Plot those two trajectories
+using the existing ~forecast_1d~ plot:
+
+#+BEGIN_SRC sh
+# Replace [948, 742] with the indices read from runs/bimodal/diff/metrics.json
+python -m ddssm.visualize experiment=bimodal_diff \
+    +checkpoint=runs/bimodal/diff/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff/metrics.csv \
+    'experiment.viz.plots=[{name: forecast_1d, save_filename: median.png, kwargs: {sample_indices: [948, 742]}}]' \
+    hydra.run.dir=runs/bimodal/diff
+#+END_SRC
+
+**** 5. Single-point forecast distribution histogram
+
+To inspect the predictive density at one ~(series, dim, t_future)~ point use
+the new ~forecast_distribution~ plot:
+
+#+BEGIN_SRC sh
+python -m ddssm.visualize experiment=bimodal_diff \
+    +checkpoint=runs/bimodal/diff/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff/metrics.csv \
+    'experiment.viz.plots=[{name: forecast_distribution, save_filename: dist.png, kwargs: {series_idx: 0, dim_idx: 0, t_future_idx: 0}}]' \
+    'experiment.viz.num_samples=1024' \
+    hydra.run.dir=runs/bimodal/diff
+#+END_SRC
+
+The histogram should show two well-separated modes for the diffusion model and
+a single mode (collapsed Gaussian) for the Gaussian transition.
+
 ** Robot Navigation 2D
 
 A 2-D agent navigates around a square obstacle, producing spatial ~(x, y)~

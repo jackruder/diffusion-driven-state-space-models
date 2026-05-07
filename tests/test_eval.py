@@ -86,6 +86,45 @@ def test_evaluate_runner_writes_metrics_json(tmp_path):
     assert written == out
 
 
+def test_evalspec_per_metric_kwargs_forwarded(tmp_path):
+    """EvalSpec.kwargs[name] must be forwarded as **kwargs to that metric.
+
+    Uses ``loss_tail`` because it accepts a ``column`` kwarg we can verify
+    indirectly: pointing it at a column that exists vs one that doesn't
+    changes the resulting key in the output.
+    """
+    csv_path = tmp_path / "m.csv"
+    rows = [{"split": "train", "step": str(i), "metric_a": str(0.7)} for i in range(10)]
+    _write_csv(csv_path, rows)
+
+    class _StubData:
+        batch_transform = staticmethod(lambda b, d: b)
+        metadata = type("_M", (), {"forecast_split": None})()
+        def train_loader(self): return None
+        def val_loader(self): return None
+        def test_loader(self): return None
+
+    class _StubModel(torch.nn.Module):
+        def __init__(self): super().__init__(); self.lin = torch.nn.Linear(1, 1)
+        def to(self, d): return self
+
+    class _StubExpt:
+        def __init__(self):
+            self.data = _StubData()
+            self.model = _StubModel()
+
+    spec = EvalSpec(
+        metrics=["loss_tail"], split="val",
+        kwargs={"loss_tail": {"column": "metric_a"}},
+        output_filename="m.json",
+    )
+    out = evaluate(_StubExpt(), spec, device=torch.device("cpu"),
+                   run_dir=str(tmp_path), checkpoint_path=None,
+                   csv_path=str(csv_path))
+    assert "metric_a_tail" in out  # not "loss_total_tail"
+    assert abs(out["metric_a_tail"] - 0.7) < 1e-6
+
+
 # ---------------------------------------------------------------------------
 # energy_score unit tests.
 #

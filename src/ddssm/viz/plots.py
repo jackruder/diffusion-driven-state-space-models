@@ -265,7 +265,67 @@ def plot_forecast_2d_spatial(
 
 
 # ---------------------------------------------------------------------------
-# Plot 3: training-metric curves from CSV (no model needed).
+# Plot 3: forecast-distribution histogram at one (series, dim, t_future) point.
+# ---------------------------------------------------------------------------
+
+
+@register_plot("forecast_distribution")
+def plot_forecast_distribution(
+    ctx: PlotContext,
+    save_path: str,
+    *,
+    series_idx: int = 0,
+    dim_idx: int = 0,
+    t_future_idx: int = 0,
+    n_bins: int = 50,
+    title: str | None = None,
+) -> None:
+    """Histogram of forecast samples at one ``(series, dim, t_future)`` point.
+
+    Picks a single batch element + dimension + future timestep and draws a
+    density histogram of the ``num_samples`` forecast draws, plus vertical
+    lines for the truth and the forecast mean. Useful for inspecting whether
+    the predictive distribution is unimodal/multimodal at a specific horizon
+    (the canonical bimodal-diff vs bimodal-gauss inspection).
+    """
+    if ctx.T_split is None:
+        raise ValueError("plot_forecast_distribution requires PlotContext.T_split.")
+    batch = _gather_batch(ctx, sample_indices=None)
+    arrs = _run_recon_and_forecast(ctx, batch, int(ctx.T_split), ctx.num_samples)
+
+    pred_samples = arrs["pred_samples"]   # (B, S, D, L2)
+    pred_mean = arrs["pred_mean"]         # (B, D, L2)
+    observed = arrs["observed"]           # (B, D, T_total)
+    T_split = int(ctx.T_split)
+
+    if not (0 <= series_idx < pred_samples.shape[0]):
+        raise IndexError(f"series_idx={series_idx} out of range [0, {pred_samples.shape[0]})")
+    if not (0 <= dim_idx < pred_samples.shape[2]):
+        raise IndexError(f"dim_idx={dim_idx} out of range [0, {pred_samples.shape[2]})")
+    if not (0 <= t_future_idx < pred_samples.shape[3]):
+        raise IndexError(f"t_future_idx={t_future_idx} out of range [0, {pred_samples.shape[3]})")
+
+    vals = pred_samples[series_idx, :, dim_idx, t_future_idx]
+    mu = float(pred_mean[series_idx, dim_idx, t_future_idx])
+    y = float(observed[series_idx, dim_idx, T_split + t_future_idx])
+
+    fig = plt.figure(figsize=(7, 4))
+    plt.hist(vals, bins=n_bins, density=True, alpha=0.6, label="forecast samples")
+    plt.axvline(y, color="red", linestyle="--", linewidth=2, label=f"truth={y:.3f}")
+    plt.axvline(mu, color="black", linestyle="-", linewidth=2, label=f"mean={mu:.3f}")
+    if title is None:
+        title = f"series={series_idx} dim={dim_idx} t+{t_future_idx + 1}"
+    plt.title(title)
+    plt.xlabel("value")
+    plt.ylabel("density")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Plot 4: training-metric curves from CSV (no model needed).
 # ---------------------------------------------------------------------------
 
 
