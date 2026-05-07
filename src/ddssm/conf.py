@@ -283,7 +283,7 @@ store(KDDDiffusionExperimentConf, group="experiment", name="kdd_diffusion")
 # Eval/viz defaults for synthetic verification experiments.
 # ---------------------------------------------------------------------------
 
-HarmonicEvalConf = EvalSpecConf(metrics=["mae", "crps_sum"], split="val", num_samples=32)
+HarmonicEvalConf = EvalSpecConf(metrics=["mae", "crps_sum"], split="val", num_samples=32, T_split=32)
 HarmonicVizConf = VizSpecConf(
     plots=[
         PlotSpecConf(name="forecast_1d", save_filename="forecast.png",
@@ -296,7 +296,7 @@ HarmonicVizConf = VizSpecConf(
     T_split=32,
 )
 
-BimodalEvalConf = EvalSpecConf(metrics=["energy_score", "crps_sum"], split="val", num_samples=64)
+BimodalEvalConf = EvalSpecConf(metrics=["energy_score", "crps_sum"], split="val", num_samples=64, T_split=32)
 BimodalVizConf = VizSpecConf(
     plots=[
         PlotSpecConf(name="forecast_1d", save_filename="forecast.png",
@@ -309,7 +309,7 @@ BimodalVizConf = VizSpecConf(
     T_split=32,
 )
 
-Robot2DEvalConf = EvalSpecConf(metrics=["energy_score", "crps_sum"], split="val", num_samples=32)
+Robot2DEvalConf = EvalSpecConf(metrics=["energy_score", "crps_sum"], split="val", num_samples=32, T_split=32)
 Robot2DVizConf = VizSpecConf(
     plots=[
         PlotSpecConf(name="forecast_2d_spatial", save_filename="forecast_2d.png",

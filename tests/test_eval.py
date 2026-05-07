@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import torch
 
 from ddssm.eval import EvalContext, EvalSpec, METRIC_REGISTRY, evaluate
-from ddssm.eval.metrics import eval_loss_tail
+from ddssm.eval.metrics import eval_loss_tail, eval_energy_score
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
@@ -21,7 +23,7 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 
 
 def test_registry_has_core_metrics():
-    for name in ("mae", "crps_sum", "recon_mse", "loss_tail"):
+    for name in ("mae", "crps_sum", "recon_mse", "loss_tail", "energy_score"):
         assert name in METRIC_REGISTRY
 
 
@@ -82,6 +84,87 @@ def test_evaluate_runner_writes_metrics_json(tmp_path):
     assert "loss_total_tail" in out
     written = json.loads((tmp_path / "m.json").read_text())
     assert written == out
+
+
+# ---------------------------------------------------------------------------
+# energy_score unit tests.
+#
+# We mock _iter_forecast_batches so these tests run without a real model or
+# data loader. The mock returns a single (pred_samples, pred_mean, y_future)
+# tuple with analytically known values so we can verify the formula exactly.
+# ---------------------------------------------------------------------------
+
+_MOCK_PATH = "ddssm.eval.metrics._iter_forecast_batches"
+
+
+def test_energy_score_in_registry():
+    assert "energy_score" in METRIC_REGISTRY
+
+
+def test_energy_score_zero_for_perfect_prediction():
+    """ES = 0 when every sample equals the truth: E[||X-y||]=0, E[||X-X'||]=0."""
+    B, S, D, L2 = 2, 4, 1, 3
+    y = torch.randn(B, D, L2)
+    pred_samples = y.unsqueeze(1).expand(B, S, D, L2).contiguous()
+    ctx = EvalContext(model=None, loader=None, device=torch.device("cpu"), T_split=4, num_samples=S)
+    with patch(_MOCK_PATH, return_value=[(pred_samples, None, y)]):
+        result = eval_energy_score(ctx)
+    assert abs(result["energy_score"]) < 1e-5
+
+
+def test_energy_score_known_value_point_mass():
+    """S identical samples at +1, truth at 0 → E[||X-y||]=1, E[||X-X'||]=0 → ES=1."""
+    B, S, D, L2 = 1, 4, 1, 1
+    pred_samples = torch.ones(B, S, D, L2)
+    y = torch.zeros(B, D, L2)
+    ctx = EvalContext(model=None, loader=None, device=torch.device("cpu"), T_split=1, num_samples=S)
+    with patch(_MOCK_PATH, return_value=[(pred_samples, None, y)]):
+        result = eval_energy_score(ctx)
+    assert abs(result["energy_score"] - 1.0) < 1e-5
+
+
+def test_energy_score_nan_for_empty_loader():
+    """Empty iterator must produce NaN, not raise."""
+    ctx = EvalContext(model=None, loader=None, device=torch.device("cpu"), T_split=4)
+    with patch(_MOCK_PATH, return_value=[]):
+        result = eval_energy_score(ctx)
+    assert math.isnan(result["energy_score"])
+
+
+def test_energy_score_diverse_samples_lower_than_collapsed():
+    """Diverse samples near the truth must score lower than a collapsed mass far away.
+
+    This is the key proper-scoring property motivating the use of energy score for
+    multimodal evaluation (bimodal / robot presets): a collapsed Gaussian prediction
+    will be penalised more than a spread that covers both modes.
+    """
+    B, S, D, L2 = 1, 10, 1, 1
+    y = torch.zeros(B, D, L2)
+    # Collapsed far from truth (ES ≈ 3.0, since all samples at 3.0, no diversity discount)
+    collapsed = torch.full((B, S, D, L2), 3.0)
+    # Diverse near truth (half at -0.5, half at +0.5)
+    half = S // 2
+    diverse = torch.cat([
+        torch.full((B, half, D, L2), -0.5),
+        torch.full((B, half, D, L2), 0.5),
+    ], dim=1)
+    ctx = EvalContext(model=None, loader=None, device=torch.device("cpu"), T_split=1, num_samples=S)
+    with patch(_MOCK_PATH, return_value=[(collapsed, None, y)]):
+        es_collapsed = eval_energy_score(ctx)["energy_score"]
+    with patch(_MOCK_PATH, return_value=[(diverse, None, y)]):
+        es_diverse = eval_energy_score(ctx)["energy_score"]
+    assert es_diverse < es_collapsed
+
+
+def test_energy_score_accumulates_across_batches():
+    """Result is the mean of per-batch scores, not just the last batch."""
+    B, S, D, L2 = 1, 4, 1, 1
+    batch_a = (torch.ones(B, S, D, L2), None, torch.zeros(B, D, L2))   # ES ≈ 1.0
+    batch_b = (torch.full((B, S, D, L2), 2.0), None, torch.zeros(B, D, L2))  # ES ≈ 2.0
+    ctx = EvalContext(model=None, loader=None, device=torch.device("cpu"), T_split=1, num_samples=S)
+    with patch(_MOCK_PATH, return_value=[batch_a, batch_b]):
+        result = eval_energy_score(ctx)
+    assert abs(result["energy_score"] - 1.5) < 1e-4
 
 
 def test_unknown_metric_raises():

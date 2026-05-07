@@ -95,3 +95,51 @@ def test_datamodule_protocol_runtime_check():
         SyntheticDataModule(mode="lgssm", T=8, D=1, N_per_split=4, batch_size=2),
         DDSSMDataModule,
     )
+
+
+# ---------------------------------------------------------------------------
+# Parametrized smoke-tests for every SyntheticDataModule mode used by the
+# verification presets (harmonic, harmonic-noisy, bimodal, robot-basis-pursuit).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("mode,D", [
+    ("harmonic",              1),
+    ("harmonic-noisy",        1),
+    ("bimodal",               1),
+    ("robot-basis-pursuit",   2),
+])
+def test_synthetic_datamodule_mode_shapes(mode: str, D: int) -> None:
+    """Every verification mode must produce canonical (B, D, T) batches without NaNs."""
+    T, N, B = 16, 8, 4
+    dm = SyntheticDataModule(mode=mode, T=T, D=D, N_per_split=N, batch_size=B)
+    assert isinstance(dm, DDSSMDataModule)
+    assert dm.metadata.data_dim == D
+    assert dm.metadata.T == T
+    # forecast_split is always None for synthetic data (no canonical split)
+    assert dm.metadata.forecast_split is None
+
+    batch = next(iter(dm.train_loader()))
+    _assert_canonical_batch(batch, expect_covariates=False)
+    assert batch["observed_data"].shape == (B, D, T)
+    assert not torch.isnan(batch["observed_data"]).any(), (
+        f"mode={mode!r} produced NaN values in observed_data"
+    )
+    # Mask should be all-ones (no structured missingness in synthetic data)
+    assert batch["observation_mask"].all()
+
+
+def test_synthetic_datamodule_robot_requires_d_ge_2() -> None:
+    """robot-basis-pursuit with D=1 must not silently produce wrong-shaped data."""
+    dm = SyntheticDataModule(mode="robot-basis-pursuit", T=16, D=2, N_per_split=8, batch_size=2)
+    batch = next(iter(dm.train_loader()))
+    # X and Y coordinates must both be present
+    assert batch["observed_data"].shape[1] == 2
+
+
+def test_synthetic_datamodule_bimodal_has_variance() -> None:
+    """Bimodal data should have non-trivial variance (the two modes are well-separated)."""
+    dm = SyntheticDataModule(mode="bimodal", T=64, D=1, N_per_split=128, batch_size=64)
+    batch = next(iter(dm.train_loader()))
+    # Variance across batch and time should be well above noise floor
+    std = batch["observed_data"].std().item()
+    assert std > 0.5, f"bimodal std={std:.3f} suspiciously low — modes may have collapsed"
