@@ -1,8 +1,13 @@
 # Project default for Hydra multiruns backed by Optuna.
 #
-# This config intentionally only contains reusable sweeper defaults. Keep
-# concrete study/search-space definitions in external experiment files or CLI
-# overrides rather than adding hundreds of per-experiment configs under conf/.
+# Reusable defaults only; concrete search spaces live in ``conf/sweep/*``
+# or are passed as CLI overrides.
+#
+# IMPORTANT: ``storage`` defaults to an absolute path under ``$PWD``.
+# Relative ``sqlite:///...`` URLs are resolved from each trial's runtime
+# working directory, which silently fragments the study (each trial
+# opens its own DB). Override with an absolute path or a network URL
+# for shared / CI studies.
 
 _target_: hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper
 
@@ -10,11 +15,12 @@ defaults:
   - sampler: tpe
 
 direction: minimize
-# Relative SQLite URLs are resolved from Hydra's runtime working directory.
-# Override this with an absolute sqlite:/// path for shared or CI studies.
-storage: sqlite:///ddssm_default_study.db
+storage: sqlite:///${oc.env:PWD,.}/runs/optuna/${hydra:sweeper.study_name}.db
 study_name: ddssm
 n_trials: 20
+# n_jobs > 1 spawns Optuna workers via joblib threads in one process;
+# wandb.init is not thread-safe, so use the SLURM/Submitit launcher for
+# real parallelism instead.
 n_jobs: 1
 max_failure_rate: 0.0
 search_space: null

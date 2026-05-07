@@ -1,16 +1,14 @@
 # @package _global_
 #
-# Optuna search-space preset for the KDD phase-1 (recon-only) experiment.
-# This mirrors the search space used by ``scripts/experiments/kdd/optuna-kdd-p1.py``
-# so that switching to the Hydra-native sweep path (once KDD dataset wiring
-# is added to ``ddssm.app``) requires no semantic changes::
+# Optuna search-space preset for the KDD recon-focused sweep. Mirrors
+# the ranges used by ``scripts/experiments/kdd/optuna-kdd-p1.py`` so
+# the Hydra-native path produces equivalent search behaviour::
 #
 #     python -m ddssm.app --multirun \
-#         +experiment=kdd_gauss \
+#         experiment=kdd_gauss \
 #         +sweep=kdd_phase1 \
 #         hydra.sweeper.n_trials=50 \
-#         hydra.sweeper.study_name=ddssm_kdd_phase1 \
-#         hydra.sweeper.storage=sqlite:///ddssm_kdd_phase1.db
+#         hydra.sweeper.study_name=ddssm_kdd_recon
 
 defaults:
   - override /hydra/sweeper: ddssm_optuna
@@ -19,11 +17,11 @@ hydra:
   sweeper:
     direction: minimize
     params:
-      hyperparams.enc_lr: interval(1e-5, 1e-3)
-      hyperparams.dec_lr: interval(1e-5, 1e-3)
-      hyperparams.zinit_lr: interval(1e-5, 1e-3)
-      hyperparams.trans_lr: interval(1e-5, 3e-4)
-      hyperparams.lambda_warmup_steps: range(50, 4000, step=50)
-      hyperparams.lambda_end: interval(0.7, 2.0)
-      hyperparams.weight_decay: interval(1e-5, 1e-2)
-      hyperparams.batch_size: choice(32, 64, 128)
+      experiment.hyperparams.enc_lr: interval(1e-5, 1e-3)
+      experiment.hyperparams.dec_lr: interval(1e-5, 1e-3)
+      experiment.hyperparams.zinit_lr: interval(1e-5, 1e-3)
+      experiment.hyperparams.trans_lr: interval(1e-5, 3e-4)
+      experiment.hyperparams.lambda_warmup_steps: range(50, 4000, step=50)
+      experiment.hyperparams.lambda_end: interval(0.7, 2.0)
+      experiment.hyperparams.weight_decay: interval(1e-5, 1e-2)
+      experiment.hyperparams.batch_size: choice(32, 64, 128)

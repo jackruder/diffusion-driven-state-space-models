@@ -1,15 +1,14 @@
 # @package _global_
 #
-# Optuna search-space preset: small learning-rate / lambda sweep for the
-# synthetic experiments. This preset also activates the ``ddssm_optuna``
-# sweeper so it can be composed standalone with ``+sweep=synthetic_lr``::
+# Optuna search-space preset: learning-rate / lambda sweep for the
+# synthetic experiments. Activates the ``ddssm_optuna`` sweeper so it
+# composes standalone with ``+sweep=synthetic_lr``::
 #
 #     python -m ddssm.app --multirun \
-#         +experiment=synthetic_gauss \
+#         experiment=synthetic_gauss \
 #         +sweep=synthetic_lr \
 #         hydra.sweeper.n_trials=20 \
-#         hydra.sweeper.study_name=ddssm_synth_lr \
-#         hydra.sweeper.storage=sqlite:///ddssm_synth_lr.db
+#         hydra.sweeper.study_name=ddssm_synth_lr
 
 defaults:
   - override /hydra/sweeper: ddssm_optuna
@@ -18,10 +17,10 @@ hydra:
   sweeper:
     direction: minimize
     params:
-      hyperparams.enc_lr: interval(1e-5, 1e-3)
-      hyperparams.dec_lr: interval(1e-5, 1e-3)
-      hyperparams.trans_lr: interval(1e-5, 1e-3)
-      hyperparams.zinit_lr: interval(1e-5, 1e-3)
-      hyperparams.lambda_warmup_steps: range(50, 400, step=50)
-      hyperparams.lambda_end: interval(0.5, 2.0)
-      hyperparams.batch_size: choice(16, 32, 64)
+      experiment.hyperparams.enc_lr: interval(1e-5, 1e-3)
+      experiment.hyperparams.dec_lr: interval(1e-5, 1e-3)
+      experiment.hyperparams.trans_lr: interval(1e-5, 1e-3)
+      experiment.hyperparams.zinit_lr: interval(1e-5, 1e-3)
+      experiment.hyperparams.lambda_warmup_steps: range(50, 400, step=50)
+      experiment.hyperparams.lambda_end: interval(0.5, 2.0)
+      experiment.hyperparams.batch_size: choice(16, 32, 64)
