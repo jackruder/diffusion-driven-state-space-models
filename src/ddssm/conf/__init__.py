@@ -65,20 +65,13 @@ from ._eval_viz import (
 
 # 3. Experiment presets (triggers all store(...) registrations)
 from .experiments import (
-    BimodalDiffExperimentConf,
-    BimodalGaussExperimentConf,
-    HarmonicDiffExperimentConf,
-    HarmonicDiffJ2ExperimentConf,
-    HarmonicGaussExperimentConf,
-    HarmonicGaussJ2ExperimentConf,
-    HarmonicNoisyDiffExperimentConf,
-    HarmonicNoisyGaussExperimentConf,
     KDDDiffusionExperimentConf,
     KDDGaussExperimentConf,
-    RobotDiff2DExperimentConf,
-    RobotGauss2DExperimentConf,
     SyntheticDiffusionExperimentConf,
     SyntheticGaussExperimentConf,
+    HarmonicExperimentConf,
+    BimodalExperimentConf,
+    Robot2DExperimentConf,
 )
 
 # 4. Materialise all registered configs into Hydra's ConfigStore.
@@ -124,20 +117,10 @@ __all__ = [
     # KDD experiments
     "KDDGaussExperimentConf",
     "KDDDiffusionExperimentConf",
-    # Harmonic experiments
-    "HarmonicGaussExperimentConf",
-    "HarmonicDiffExperimentConf",
-    "HarmonicGaussJ2ExperimentConf",
-    "HarmonicDiffJ2ExperimentConf",
-    # Harmonic-noisy experiments
-    "HarmonicNoisyGaussExperimentConf",
-    "HarmonicNoisyDiffExperimentConf",
-    # Bimodal experiments
-    "BimodalGaussExperimentConf",
-    "BimodalDiffExperimentConf",
-    # Robot navigation experiments
-    "RobotGauss2DExperimentConf",
-    "RobotDiff2DExperimentConf",
+    # synthetic confs
+    "HarmonicExperimentConf",
+    "BimodalExperimentConf",
+    "Robot2DExperimentConf",
     # Stages dataclasses
     "StageLrsConf",
     "StageTrainableConf",

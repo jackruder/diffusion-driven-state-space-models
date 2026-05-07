@@ -18,37 +18,17 @@ from . import component, kdd, synthetic
 from .component import SyntheticDiffusionExperimentConf, SyntheticGaussExperimentConf
 from .kdd import KDDDiffusionExperimentConf, KDDGaussExperimentConf
 from .synthetic import (
-    BimodalDiffExperimentConf,
-    BimodalGaussExperimentConf,
-    HarmonicDiffExperimentConf,
-    HarmonicDiffJ2ExperimentConf,
-    HarmonicGaussExperimentConf,
-    HarmonicGaussJ2ExperimentConf,
-    HarmonicNoisyDiffExperimentConf,
-    HarmonicNoisyGaussExperimentConf,
-    RobotDiff2DExperimentConf,
-    RobotGauss2DExperimentConf,
+    HarmonicExperimentConf,
+    BimodalExperimentConf,
+    Robot2DExperimentConf,
 )
 
 __all__ = [
-    # Component / smoke-test
-    "SyntheticGaussExperimentConf",
     "SyntheticDiffusionExperimentConf",
-    # KDD Cup 2018
-    "KDDGaussExperimentConf",
+    "SyntheticGaussExperimentConf",
     "KDDDiffusionExperimentConf",
-    # Harmonic
-    "HarmonicGaussExperimentConf",
-    "HarmonicDiffExperimentConf",
-    "HarmonicGaussJ2ExperimentConf",
-    "HarmonicDiffJ2ExperimentConf",
-    # Harmonic-noisy
-    "HarmonicNoisyGaussExperimentConf",
-    "HarmonicNoisyDiffExperimentConf",
-    # Bimodal
-    "BimodalGaussExperimentConf",
-    "BimodalDiffExperimentConf",
-    # Robot navigation 2D
-    "RobotGauss2DExperimentConf",
-    "RobotDiff2DExperimentConf",
+    "KDDGaussExperimentConf",
+    "HarmonicExperimentConf",
+    "BimodalExperimentConf",
+    "Robot2DExperimentConf",
 ]
