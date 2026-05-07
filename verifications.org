@@ -594,14 +594,28 @@ Trials write checkpoints and CSV logs independently under
 
 * Appendix
 
-** Adding a new synthetic mode
+** Adding a new experiment
 
-1. Implement the data-generating process in ~src/ddssm/data/synthetic.py~
-   (add a branch to the ~mode~ dispatch in ~SyntheticDataset.__init__~).
-2. Add a ~SyntheticDataModuleConf(mode="my_mode", ...)~ and a corresponding
-   experiment conf in ~src/ddssm/conf.py~, wiring eval/viz confs as shown
-   for the harmonic/bimodal presets.
-3. Register with ~store(..., group="experiment", name="my_mode_gauss")~.
+The configuration package lives at ~src/ddssm/conf/~ and mirrors the
+section structure of this document:
+
+| ~experiments/component.py~ | Component Tests (synthetic\_gauss, synthetic\_diffusion) |
+| ~experiments/synthetic.py~ | Synthetic Experiments (harmonic\_*, bimodal\_*, robot\_*) |
+| ~experiments/kdd.py~       | Real-Data Experiment: KDD Cup 2018                       |
+
+To add a new experiment:
+
+1. Choose the appropriate file above (or create a new one under
+   ~src/ddssm/conf/experiments/~ and import it in
+   ~src/ddssm/conf/experiments/__init__.py~).
+2. Add the data-generating process to ~src/ddssm/data/synthetic.py~
+   if it is a new synthetic mode.
+3. Build the config with ~_experiment_conf(...)~ as shown in the
+   existing presets, using the shared eval/viz defaults from
+   ~src/ddssm/conf/_eval_viz.py~ (or define new ones there).
+4. Register with ~store(..., group="experiment", name="my_preset")~.
+5. Add the preset to the table in the ~Overview~ section above and
+   to ~tests/test_experiment_configs.py~.
 
 ** Adding a new metric
 
