@@ -27,5 +27,5 @@ def maybe_compile(module: nn.Module, *, dynamic: bool = False) -> nn.Module:
     try:
         return torch.compile(module, dynamic=dynamic)
     except Exception as e:  # pragma: no cover - defensive fallback
-        log.warning("torch.compile disabled after failure: %s", e)
+        log.warning("torch.compile disabled after failure: %s", e, exc_info=True)
         return module
