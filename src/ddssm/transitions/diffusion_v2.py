@@ -197,7 +197,11 @@ class DiffusionV2Transition(BaseTransition):
         self.gfloor = float(schedule.pk_floor)
         ismode = schedule.k_sampling_mode
         if ismode == "importance":
-            p_k = self.dsigma2_tilde_dtau.detach().to(dtype=torch.float32)
+            # `dsigma2_tilde_dtau` is already a float32 buffer with no grad.
+            # The leading clamp_min guards against ``0**gamma`` for gamma <= 0;
+            # the pk_floor is applied *after* the power to floor the final
+            # density, matching the V1 pattern.
+            p_k = self.dsigma2_tilde_dtau.clone()
             p_k = p_k.clamp_min(1e-12).pow(self.gamma)
             p_k = p_k.clamp_min(self.gfloor)
             p_k = p_k / p_k.sum()
