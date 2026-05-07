@@ -13,11 +13,12 @@ from hydra_zen import builds
 from ..windows import WindowBuilder
 
 from ..diffnets import CSDIUnet, CSDIUnetConf
+from ..gaussians import GaussianStats, gaussian_entropy
 from ..torch_compile import maybe_compile
 from ..net_utils import (
     get_side_info,
 )
-from .transitions import BaseTransition
+from .transitions import BaseTransition, _mc_entropy_from_logq
 
 
 
@@ -278,6 +279,43 @@ class DiffusionTransition(BaseTransition):
 
         # Return negative loss (since seq_log_prob sums log probs)
         return -(avg_loss + fwd_kl)
+
+    def transition_kl(
+        self,
+        enc_stats: GaussianStats,
+        zs: torch.Tensor,  # (B, S, d, T)
+        logq_paths: torch.Tensor,  # (B, S, T)
+        time_embed: torch.Tensor,  # (B, T, E_t)
+        covariates: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Diffusion transition KL = EDM regression loss minus encoder entropy.
+
+        ``L_p`` is the EDM training loss (``-seq_log_prob`` averaged over B/S).
+        ``L_q`` is the encoder entropy over ``t = j..T-1``: closed-form Gaussian
+        entropy when ``enc_stats["logvars"]`` is available, otherwise an MC
+        estimate from ``logq_paths``.
+        """
+        B, S, d, T = zs.shape
+        j = self.j
+
+        L_p = -self.seq_log_prob(
+            zs=zs, time_embed=time_embed, covariates=covariates
+        ).mean()
+
+        if "logvars" in enc_stats and enc_stats["logvars"] is not None:
+            logvars = enc_stats["logvars"]  # (B, S, d, T)
+            if j >= T:
+                L_q = torch.zeros(
+                    (), device=logvars.device, dtype=logvars.dtype
+                )
+            else:
+                lv = logvars[:, :, :, j:]  # (B, S, d, T-j)
+                H_per_bs = gaussian_entropy(lv)  # (B, S)
+                L_q = H_per_bs.mean()
+        else:
+            L_q = _mc_entropy_from_logq(logq_paths, j)
+
+        return {"kl": L_p - L_q, "L_p": L_p, "L_q": L_q}
 
     def sample(
         self,

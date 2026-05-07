@@ -4,9 +4,13 @@ Defines the ``BaseTransition`` interface and the concrete ``GaussianTransition``
 (non-linear diagonal Gaussian).
 
 ``BaseTransition`` interface:
-    ``loss(zs, time_embed, covariates=None) -> Tensor``
-        Returns the scalar transition loss (mean over batch, mean over S,
-        sum over time).
+    ``transition_kl(enc_stats, zs, logq_paths, time_embed, covariates=None) -> dict``
+        Returns ``{"kl": L_trans, ...}`` containing the scalar KL term and any
+        optional sub-components the implementation chooses to expose for
+        logging (e.g. ``"L_p"``, ``"L_q"``).
+    ``seq_log_prob(zs, time_embed, ...) -> Tensor``
+        Per-batch ``sum_t E_q[log p_psi(z_t | z_{t-j:t-1})]``; lower-level
+        building block used internally by some transitions.
     ``log_prob(z, z_hist, ctx=None) -> Tensor``
         Per-sample log p(z | z_hist, ctx).  Optional; raises NotImplementedError
         if not supported.
@@ -18,7 +22,7 @@ Defines the ``BaseTransition`` interface and the concrete ``GaussianTransition``
 
 import math
 from functools import partial
-from typing import Any, Callable, Dict, Tuple, Optional
+from typing import Any, Callable, Dict, Iterator, Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -28,8 +32,26 @@ from hydra_zen import builds
 
 from ..encoder import GaussianHead, ContextProducer
 from ..diffnets import ContextProducerConf
-from ..gaussians import GaussianHeadConf
+from ..gaussians import GaussianHeadConf, GaussianStats, gaussian_kl_divergence
 from ..torch_compile import maybe_compile
+
+
+def _mc_entropy_from_logq(
+    logq_paths: torch.Tensor,  # (B, S, T)
+    j: int,
+) -> torch.Tensor:
+    """Monte-Carlo encoder entropy over ``t = j..T-1``.
+
+    Returns the scalar ``-E_q[ sum_{t=j}^{T-1} log q(z_t|·) ]`` averaged over
+    sample paths and batch.  Mirrors ``BaseEncoder.mc_entropy_transition``
+    semantics so transitions can compute it without holding an encoder ref.
+    """
+    B, S, T = logq_paths.shape
+    if j >= T:
+        return torch.zeros((), device=logq_paths.device, dtype=logq_paths.dtype)
+    logs = logq_paths[:, :, j:]  # (B, S, T-j)
+    neg_entropy = logs.mean(dim=1).sum(dim=1)  # (B,)
+    return -neg_entropy.mean()
 
 
 class BaseTransition(nn.Module):
@@ -43,6 +65,115 @@ class BaseTransition(nn.Module):
         Optional helper for diagnostics. Implementors may raise NotImplementedError.
         """
         raise NotImplementedError
+
+    def _iter_window_chunks(
+        self,
+        zs: torch.Tensor,  # (B, S, d, T)
+        time_embed: torch.Tensor,  # (B, T, E_t)
+        time_chunk_num: Optional[int] = None,
+        time_chunk_size: Optional[int] = None,
+        covariates: Optional[torch.Tensor] = None,
+    ) -> Iterator[Tuple[int, int, int, int, int, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]]:
+        """Yield per-chunk window tensors + context for the time loop.
+
+        Yields tuples ``(B, S, current_chunk_len, t_start, t_end, z_target_flat,
+        z_hist_flat, ctx)`` where ``z_target_flat`` has shape ``(N, d)`` and
+        ``z_hist_flat`` has shape ``(N, d, j)`` with ``N = B*S*chunk_len``.
+        """
+        B, S, d, T = zs.shape
+        j = self.j
+        device = zs.device
+
+        total_steps = T - j
+        if total_steps <= 0:
+            return
+
+        if time_chunk_size is not None and time_chunk_size > 0:
+            chunk_size = time_chunk_size
+        elif time_chunk_num is not None and time_chunk_num > 0:
+            chunk_size = math.ceil(total_steps / time_chunk_num)
+        else:
+            chunk_size = 1
+
+        for start_rel in range(0, total_steps, chunk_size):
+            end_rel = min(start_rel + chunk_size, total_steps)
+
+            t_start = j + start_rel
+            t_end = j + end_rel
+            current_chunk_len = t_end - t_start
+
+            z_target_chunk = zs[..., t_start:t_end]  # (B, S, d, chunk_len)
+            BS_chunk = B * S * z_target_chunk.size(-1)
+
+            zs_source = zs[..., t_start - j : t_end]  # (B, S, d, chunk_len + j)
+            z_hist_chunk = zs_source.unfold(dimension=-1, size=j, step=1)
+            z_hist_chunk = z_hist_chunk[..., :current_chunk_len, :]
+
+            t_emb_source = time_embed[:, t_start - j : t_end, :]
+            t_hist_chunk = t_emb_source.unfold(dimension=1, size=j, step=1)
+            t_hist_chunk = t_hist_chunk[:, :current_chunk_len, :, :]
+
+            z_target_flat = z_target_chunk.permute(0, 1, 3, 2).reshape(-1, d)
+            z_hist_flat = z_hist_chunk.permute(0, 1, 3, 2, 4).reshape(-1, d, j)
+
+            t_hist_chunk = t_hist_chunk.permute(0, 1, 3, 2)  # (B, chunk_len, j, E)
+            t_hist_flat = (
+                t_hist_chunk
+                .unsqueeze(1)
+                .expand(-1, S, -1, -1, -1)
+                .reshape(BS_chunk, j, self.emb_time_dim)
+            )
+
+            if covariates is not None:
+                c_emb_source = covariates[:, :, t_start - j : t_end]
+                c_hist_chunk = c_emb_source.unfold(dimension=2, size=j, step=1)
+                c_hist_chunk = c_hist_chunk[:, :, :current_chunk_len, :]
+                c_hist_chunk = c_hist_chunk.permute(0, 2, 3, 1)  # (B, chunk_len, j, V)
+                c_hist_flat = (
+                    c_hist_chunk
+                    .unsqueeze(1)
+                    .expand(-1, S, -1, -1, -1)
+                    .reshape(BS_chunk, j, covariates.size(1))
+                )
+
+                c_target_chunk = covariates[:, :, t_start:t_end].permute(0, 2, 1)
+                c_target_flat = (
+                    c_target_chunk
+                    .unsqueeze(1)
+                    .expand(-1, S, -1, -1)
+                    .reshape(BS_chunk, 1, covariates.size(1))
+                )
+            else:
+                c_hist_flat = None
+                c_target_flat = None
+
+            t_target_chunk = time_embed[:, t_start:t_end, :]
+            t_target_flat = (
+                t_target_chunk
+                .unsqueeze(1)
+                .expand(-1, S, -1, -1)
+                .reshape(BS_chunk, 1, self.emb_time_dim)
+            )
+
+            ctx: Dict[str, torch.Tensor] = {
+                "hist_time_emb": t_hist_flat,
+                "target_time_emb": t_target_flat,
+            }
+            if c_hist_flat is not None:
+                ctx["hist_covariates"] = c_hist_flat
+            if c_target_flat is not None:
+                ctx["target_covariates"] = c_target_flat
+
+            yield (
+                B,
+                S,
+                current_chunk_len,
+                t_start,
+                t_end,
+                z_target_flat,
+                z_hist_flat,
+                ctx,
+            )
 
     def seq_log_prob(
         self,
@@ -74,133 +205,51 @@ class BaseTransition(nn.Module):
         if total_steps <= 0:
             return torch.zeros(B, device=device)
 
-        # determine chunk size
-        if time_chunk_size is not None and time_chunk_size > 0:
-            chunk_size = time_chunk_size
-        elif time_chunk_num is not None and time_chunk_num > 0:
-            chunk_size = math.ceil(total_steps / time_chunk_num)
-        else:
-            chunk_size = 1
+        total_nll = torch.zeros(B, device=device)
 
-        total_nll = torch.zeros(B, device=zs.device)
-
-        # Iterate over chunks
-        for start_rel in range(0, total_steps, chunk_size):
-            end_rel = min(start_rel + chunk_size, total_steps)
-
-            # Absolute time indices for targets
-            t_start = j + start_rel
-            t_end = j + end_rel
-            current_chunk_len = t_end - t_start
-
-            # (B, S, d, chunk_len)
-            z_target_chunk = zs[..., t_start:t_end]
-
-            BS_chunk = B * S * z_target_chunk.size(-1)
-
-            # We need a sliding window view of zs.
-            # Source range needed: [t_start - j, t_end - 1]
-            # Length needed: (t_end - 1) - (t_start - j) + 1 = t_end - t_start + j = chunk_len + j
-
-            zs_source = zs[..., t_start - j : t_end]  # (B, S, d, chunk_len + j)
-
-            # Unfold to get sliding windows of size j
-            # (B, S, d, num_windows, j)
-            # num_windows should be chunk_len + 1, we take the first chunk_len
-            z_hist_chunk = zs_source.unfold(dimension=-1, size=j, step=1)
-            z_hist_chunk = z_hist_chunk[..., :current_chunk_len, :]
-
-            # Source range: [t_start - j, t_end - 1]
-            t_emb_source = time_embed[
-                :, t_start - j : t_end, :
-            ]  # (B, chunk_len + j, E)
-            # need (B, num_windows, E, j)
-            t_hist_chunk = t_emb_source.unfold(dimension=1, size=j, step=1)
-            t_hist_chunk = t_hist_chunk[:, :current_chunk_len, :, :]
-
-            # treat (B * S * chunk_len) as the batch dimension
-
-            # z_target: (B, S, d, chunk_len) -> (B, S, chunk_len, d) -> (N, d)
-            z_target_flat = z_target_chunk.permute(0, 1, 3, 2).reshape(-1, d)
-
-            # z_hist: (B, S, d, chunk_len, j) -> (B, S, chunk_len, d, j) -> (N, d, j)
-            z_hist_flat = z_hist_chunk.permute(0, 1, 3, 2, 4).reshape(-1, d, j)
-
-            # t_hist: (B, chunk_len, E, j) -> (B, chunk_len, j, E) -> expand S -> (N, j, E)
-            # Note: BaseTransition.prior_params expects ctx["hist_time_emb"] as (N, j, E)
-            t_hist_chunk = t_hist_chunk.permute(0, 1, 3, 2)  # (B, chunk_len, j, E)
-            t_hist_flat = (
-                t_hist_chunk
-                .unsqueeze(1)
-                .expand(-1, S, -1, -1, -1)
-                .reshape(BS_chunk, j, self.emb_time_dim)
-            )
-
-            if covariates is not None:
-                c_emb_source = covariates[
-                    :, :, t_start - j : t_end
-                ]  # (B, V, chunk_len + j)
-                c_hist_chunk = c_emb_source.unfold(dimension=2, size=j, step=1)
-                c_hist_chunk = c_hist_chunk[:, :, :current_chunk_len, :]
-                c_hist_chunk = c_hist_chunk.permute(0, 2, 3, 1)  # (B, chunk_len, j, V)
-                c_hist_flat = (
-                    c_hist_chunk
-                    .unsqueeze(1)
-                    .expand(-1, S, -1, -1, -1)
-                    .reshape(BS_chunk, j, covariates.size(1))
-                )
-
-                c_target_chunk = covariates[:, :, t_start:t_end]  # (B, V, chunk_len)
-                c_target_chunk = c_target_chunk.permute(0, 2, 1)  # (B, chunk_len, V)
-                c_target_flat = (
-                    c_target_chunk
-                    .unsqueeze(1)
-                    .expand(-1, S, -1, -1)
-                    .reshape(BS_chunk, 1, covariates.size(1))
-                )
-            else:
-                c_hist_flat = None
-                c_target_flat = None
-
-            t_target_chunk = time_embed[:, t_start:t_end, :]  # (B, chunk_len, E)
-            t_target_flat = (
-                t_target_chunk
-                .unsqueeze(1)
-                .expand(-1, S, -1, -1)
-                .reshape(BS_chunk, 1, self.emb_time_dim)
-            )
-
-            ctx = {"hist_time_emb": t_hist_flat, "target_time_emb": t_target_flat}
-            if c_hist_flat is not None:
-                ctx["hist_covariates"] = c_hist_flat
-            if c_target_flat is not None:
-                ctx["target_covariates"] = c_target_flat
-
+        for (
+            B_,
+            S_,
+            current_chunk_len,
+            _t_start,
+            _t_end,
+            z_target_flat,
+            z_hist_flat,
+            ctx,
+        ) in self._iter_window_chunks(
+            zs,
+            time_embed,
+            time_chunk_num=time_chunk_num,
+            time_chunk_size=time_chunk_size,
+            covariates=covariates,
+        ):
             log_p_flat = self.log_prob(z=z_target_flat, z_hist=z_hist_flat, ctx=ctx)
-            # Reshape to (B, S, chunk_len)
-            log_p = log_p_flat.view(B, S, current_chunk_len)
+            log_p = log_p_flat.view(B_, S_, current_chunk_len)
 
             # Sum over time in chunk, Mean over S
-            # (B,)
             chunk_nll = log_p.sum(dim=2).mean(dim=1)
             total_nll += chunk_nll
 
         return total_nll
 
-    def loss(
+    def transition_kl(
         self,
+        enc_stats: GaussianStats,
         zs: torch.Tensor,  # (B, S, d, T)
+        logq_paths: torch.Tensor,  # (B, S, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
-        reduction: str = "mean",
         covariates: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """Compute transition loss over sequence:
-        E_q[ sum_{t=j}^{T-1} -log p_psi(z_t | z_{t-j:t-1}) ]
-        Returns: scalar (mean over B, mean over S, sum over T)
+    ) -> Dict[str, torch.Tensor]:
+        """Compute the transition KL contribution to the ELBO rate.
+
+        Implementations must return a dict containing at least ``"kl"`` (the
+        scalar ``L_trans`` term, summed over ``t = j..T-1`` and averaged over
+        ``B`` and ``S``).  Implementations may additionally include sub-component
+        scalars (e.g. ``"L_p"`` for the prior log-density / regression loss and
+        ``"L_q"`` for the encoder entropy / log-density contribution) which the
+        caller will surface as logging metrics.
         """
-        return -self.seq_log_prob(
-            zs=zs, time_embed=time_embed, covariates=covariates
-        ).mean()
+        raise NotImplementedError
 
     def log_prob(
         self,
@@ -537,6 +586,89 @@ class GaussianTransition(BaseTransition):
         if squeeze_result:
             return log_p.squeeze(1)  # (B,)
         return log_p  # (B, S)
+
+    def transition_kl(
+        self,
+        enc_stats: GaussianStats,
+        zs: torch.Tensor,  # (B, S, d, T)
+        logq_paths: torch.Tensor,  # (B, S, T)
+        time_embed: torch.Tensor,  # (B, T, E_t)
+        covariates: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Transition KL term for the Gaussian prior.
+
+        Two paths:
+          * Closed-form (when ``enc_stats`` provides Gaussian ``mus``/``logvars``):
+            compute ``KL(q(z_t|x) || p_psi(z_t|z_{t-j:t-1}))`` per time step
+            using :func:`gaussian_kl_divergence`.  Returned dict contains only
+            ``"kl"`` since the closed-form quantity does not naturally split
+            into separately loggable ``L_p``/``L_q`` parts.
+          * Monte-Carlo fallback: KL = ``-E_q[log p_psi] - H[q]`` estimated from
+            ``zs`` and ``logq_paths``.  Returned dict contains ``"kl"``,
+            ``"L_p"`` (negative prior log-prob) and ``"L_q"`` (encoder MC entropy).
+        """
+        B, S, d, T = zs.shape
+        j = self.j
+        device = zs.device
+        dtype = zs.dtype
+
+        if (
+            "mus" in enc_stats
+            and "logvars" in enc_stats
+            and enc_stats["mus"] is not None
+            and enc_stats["logvars"] is not None
+        ):
+            mus = enc_stats["mus"]  # (B, S, d, T)
+            logvars = enc_stats["logvars"]  # (B, S, d, T)
+            assert mus.shape == logvars.shape == (B, S, d, T)
+
+            total_kl = torch.zeros(B, device=device, dtype=dtype)
+            total_steps = T - j
+            if total_steps > 0:
+                for (
+                    B_,
+                    S_,
+                    current_chunk_len,
+                    t_start,
+                    t_end,
+                    _z_target_flat,
+                    z_hist_flat,
+                    ctx,
+                ) in self._iter_window_chunks(
+                    zs, time_embed, covariates=covariates,
+                ):
+                    # prior params for the chunk's targets, shape (N, d) where
+                    # N = B*S*chunk_len
+                    p_mu, p_logvar = self.prior_params(z_hist_flat, ctx=ctx)
+
+                    # encoder stats slices for the same targets:
+                    # (B, S, d, chunk_len) -> (B, S, chunk_len, d) -> (N, d)
+                    q_mu = (
+                        mus[..., t_start:t_end]
+                        .permute(0, 1, 3, 2)
+                        .reshape(-1, d)
+                    )
+                    q_logvar = (
+                        logvars[..., t_start:t_end]
+                        .permute(0, 1, 3, 2)
+                        .reshape(-1, d)
+                    )
+
+                    kl_flat = gaussian_kl_divergence(
+                        q_mu, q_logvar, p_mu, p_logvar
+                    )  # (N,)
+                    kl = kl_flat.view(B_, S_, current_chunk_len)
+                    chunk_kl = kl.sum(dim=2).mean(dim=1)  # (B,)
+                    total_kl = total_kl + chunk_kl
+
+            return {"kl": total_kl.mean()}
+
+        # MC fallback
+        L_p = -self.seq_log_prob(
+            zs=zs, time_embed=time_embed, covariates=covariates
+        ).mean()
+        L_q = _mc_entropy_from_logq(logq_paths, j)
+        return {"kl": L_p - L_q, "L_p": L_p, "L_q": L_q}
 
     def sample(
         self,
