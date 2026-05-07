@@ -139,6 +139,7 @@ class Experiment:
     training: TrainingScalars = field(default_factory=TrainingScalars)
     objective: ObjectiveSpec | None = None
     seed: int | None = 0
+    wandb_config: dict | None = None
 
     # Shape / wiring fields consumed by Hydra interpolation. These are
     # not used directly by ``run`` — they exist so ``DDSSMConf`` and the
@@ -161,11 +162,13 @@ class Experiment:
         tensorboard_dir = os.path.join(run_dir, "tb_logs")
 
         log.info("Model: %d parameters", sum(p.numel() for p in self.model.parameters()))
+        wandb_kwargs = self._wandb_kwargs(run_dir)
         trainer = self.build_trainer(
             model=self.model,
             device=device,
             csv_log_path=csv_log_path,
             tensorboard_dir=tensorboard_dir,
+            wandb_config=wandb_kwargs,
         )
 
         train_loader = self.data.train_loader()
@@ -197,6 +200,23 @@ class Experiment:
             self.objective.split, self.objective.metric, self.objective.tail_frac, value,
         )
         return value
+
+    def _wandb_kwargs(self, run_dir: str) -> dict | None:
+        """Resolve ``wandb_config`` into kwargs for :class:`WandbLogger`.
+
+        Returns ``None`` when wandb is disabled or unset (the trainer
+        then skips constructing a ``WandbLogger``). Auto-fills the run
+        directory so wandb artefacts colocate with TB / CSV under
+        Hydra's per-run output dir.
+        """
+        cfg = self.wandb_config
+        if cfg is None:
+            return None
+        if not bool(cfg.get("enabled", True)):
+            return None
+        kwargs = dict(cfg)
+        kwargs.setdefault("run_dir", run_dir)
+        return kwargs
 
 
 __all__ = [

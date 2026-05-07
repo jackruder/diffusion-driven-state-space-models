@@ -8,4 +8,5 @@
 
 defaults:
   - experiment: synthetic_gauss
+  - wandb: disabled
   - _self_
