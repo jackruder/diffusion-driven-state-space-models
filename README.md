@@ -56,6 +56,8 @@ python scripts/experiments/kdd/kdd_train.py \
 
 Hydra-based sweeps use Optuna through the pinned plugin dependency
 `hydra-optuna-sweeper @ git+https://github.com/dahlem/hydra.git@feature/upgrade-optuna-4.2.1#subdirectory=plugins/hydra_optuna_sweeper`.
+This intentionally tracks the requested fork branch until an equivalent tagged
+or official release is available.
 The repo provides one reusable sweeper preset at
 `conf/hydra/sweeper/ddssm_optuna.yaml`:
 
@@ -68,6 +70,9 @@ python -m ddssm.app --multirun \
     'hydra.sweeper.params.hyperparams.enc_lr=interval(1e-5,1e-3)' \
     'hydra.sweeper.params.hyperparams.batch_size=choice(32,64,128)'
 ```
+
+Relative SQLite storage URLs are resolved from Hydra's runtime working
+directory. Use an absolute `sqlite:///...` path for shared studies or CI.
 
 Keep concrete study definitions and large search-space lists outside `conf/`
 (for example under `experiments/` or in command files). The checked-in

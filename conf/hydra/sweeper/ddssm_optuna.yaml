@@ -10,6 +10,8 @@ defaults:
   - sampler: tpe
 
 direction: minimize
+# Relative SQLite URLs are resolved from Hydra's runtime working directory.
+# Override this with an absolute sqlite:/// path for shared or CI studies.
 storage: sqlite:///ddssm_optuna.db
 study_name: ddssm
 n_trials: 20
