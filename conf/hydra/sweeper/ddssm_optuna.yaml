@@ -10,7 +10,7 @@ defaults:
   - sampler: tpe
 
 direction: minimize
-storage: sqlite:///runs/optuna/hydra/sweeps.db
+storage: sqlite:///ddssm_optuna.db
 study_name: ddssm
 n_trials: 20
 n_jobs: 1
