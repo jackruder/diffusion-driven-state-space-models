@@ -43,22 +43,34 @@ cluster correctly in the W&B UI.
 
 ** Experiment presets quick-reference
 
-| Preset                 | Mode              | D | latent\_dim | j | Transition | Steps |
-|------------------------+-------------------+---+-------------+---+------------+-------|
-| synthetic\_gauss       | lgssm             | 1 |           4 | 1 | Gaussian   |   500 |
-| synthetic\_diffusion   | lgssm             | 1 |           4 | 1 | Diffusion  |  1000 |
-| harmonic\_gauss        | harmonic          | 1 |           4 | 1 | Gaussian   |  1000 |
-| harmonic\_diff         | harmonic          | 1 |           4 | 1 | Diffusion  |  2000 |
-| harmonic\_gauss\_j2    | harmonic          | 1 |           4 | 2 | Gaussian   |  1000 |
-| harmonic\_diff\_j2     | harmonic          | 1 |           4 | 2 | Diffusion  |  2000 |
-| harmonic\_noisy\_gauss | harmonic-noisy    | 1 |           4 | 1 | Gaussian   |  1000 |
-| harmonic\_noisy\_diff  | harmonic-noisy    | 1 |           4 | 1 | Diffusion  |  2000 |
-| bimodal\_gauss         | bimodal           | 1 |           4 | 1 | Gaussian   |  1000 |
-| bimodal\_diff          | bimodal           | 1 |           4 | 1 | Diffusion  |  2000 |
-| robot\_gauss\_2d       | robot-basis-purs. | 2 |           6 | 2 | Gaussian   |  2000 |
-| robot\_diff\_2d        | robot-basis-purs. | 2 |           6 | 2 | Diffusion  |  4000 |
-| kdd\_gauss             | KDD Cup 2018      | 6 |           8 | 1 | Gaussian   |  5000 |
-| kdd\_diffusion         | KDD Cup 2018      | 6 |           8 | 1 | Diffusion  |  8000 |
+Three base presets cover all synthetic verification experiments.  Switch
+the transition and training budget via CLI overrides (see each section below).
+
+| Base preset  | Mode               | D | latent\_dim | j | Default transition | Default steps |
+|--------------+--------------------+---+-------------+---+--------------------+---------------|
+| harmonic     | harmonic           | 1 |           4 | 1 | gaussian           |          1000 |
+| bimodal      | bimodal            | 1 |           4 | 1 | gaussian           |          1000 |
+| robot\_2d    | robot-basis-purs.  | 2 |           6 | 2 | gaussian           |          2000 |
+| kdd\_gauss   | KDD Cup 2018       | 6 |           8 | 1 | gaussian (baked)   |          5000 |
+| kdd\_diffusion | KDD Cup 2018     | 6 |           8 | 1 | diffusion (baked)  |          8000 |
+
+Component-test smoke tests:
+
+| Preset               | Mode  | D | Transition | Steps |
+|----------------------+-------+---+------------+-------|
+| synthetic\_gauss     | lgssm | 1 | gaussian   |   500 |
+| synthetic\_diffusion | lgssm | 1 | diffusion  |  1000 |
+
+*Diffusion override* (applies to ~harmonic~, ~bimodal~, ~robot_2d~):
+
+#+BEGIN_SRC sh
+transition=diffusion \
+    'experiment.training.steps=N' \
+    'experiment.training.checkpoint_every=500' \
+    'experiment.hyperparams.lambda_warmup_steps=W'
+#+END_SRC
+
+where ~N~ and ~W~ are family-specific (documented per-section below).
 
 * Component Tests
 
@@ -151,10 +163,13 @@ Clean sine waves: ~x_t = sin(ω t + φ) + ε~, ~ε ~ N(0, 0.05)~. Random
 amplitude, frequency, and phase per sequence.  This is the simplest structured
 signal for checking that the latent dynamics capture periodic structure.
 
+*Diffusion overrides*: ~transition=diffusion 'experiment.training.steps=2000'~
+~'experiment.training.checkpoint_every=500' 'experiment.hyperparams.lambda_warmup_steps=400'~
+
 *** Gaussian transition
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=harmonic_gauss \
+python -m ddssm.app experiment=harmonic \
     hydra.run.dir=runs/harmonic/gauss
 #+END_SRC
 
@@ -162,7 +177,7 @@ python -m ddssm.app experiment=harmonic_gauss \
 :
 
 #+BEGIN_SRC sh
-python -m ddssm.evaluate experiment=harmonic_gauss \
+python -m ddssm.evaluate experiment=harmonic \
     +checkpoint=runs/harmonic/gauss/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic/gauss/metrics.csv \
     hydra.run.dir=runs/harmonic/gauss
@@ -172,7 +187,7 @@ python -m ddssm.evaluate experiment=harmonic_gauss \
 :
 
 #+BEGIN_SRC sh
-python -m ddssm.visualize experiment=harmonic_gauss \
+python -m ddssm.visualize experiment=harmonic \
     +checkpoint=runs/harmonic/gauss/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic/gauss/metrics.csv \
     hydra.run.dir=runs/harmonic/gauss
@@ -181,19 +196,25 @@ python -m ddssm.visualize experiment=harmonic_gauss \
 *** Diffusion transition
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=harmonic_diff \
+python -m ddssm.app experiment=harmonic \
+    transition=diffusion \
+    'experiment.training.steps=2000' \
+    'experiment.training.checkpoint_every=500' \
+    'experiment.hyperparams.lambda_warmup_steps=400' \
     hydra.run.dir=runs/harmonic/diff
 #+END_SRC
 
 #+BEGIN_SRC sh
-python -m ddssm.evaluate experiment=harmonic_diff \
+python -m ddssm.evaluate experiment=harmonic \
+    transition=diffusion \
     +checkpoint=runs/harmonic/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic/diff/metrics.csv \
     hydra.run.dir=runs/harmonic/diff
 #+END_SRC
 
 #+BEGIN_SRC sh
-python -m ddssm.visualize experiment=harmonic_diff \
+python -m ddssm.visualize experiment=harmonic \
+    transition=diffusion \
     +checkpoint=runs/harmonic/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic/diff/metrics.csv \
     hydra.run.dir=runs/harmonic/diff
@@ -206,21 +227,30 @@ giving the model an explicit second-order memory.  This helps periodic signals
 where the transition benefit from knowing both position and velocity.
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=harmonic_gauss_j2 \
+python -m ddssm.app experiment=harmonic \
+    'experiment.j=2' \
     hydra.run.dir=runs/harmonic/gauss_j2
 #+END_SRC
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=harmonic_diff_j2 \
+python -m ddssm.app experiment=harmonic \
+    'experiment.j=2' \
+    transition=diffusion \
+    'experiment.training.steps=2000' \
+    'experiment.training.checkpoint_every=500' \
+    'experiment.hyperparams.lambda_warmup_steps=400' \
     hydra.run.dir=runs/harmonic/diff_j2
 #+END_SRC
 
 #+BEGIN_SRC sh
-python -m ddssm.evaluate experiment=harmonic_gauss_j2 \
+python -m ddssm.evaluate experiment=harmonic \
+    'experiment.j=2' \
     +checkpoint=runs/harmonic/gauss_j2/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic/gauss_j2/metrics.csv \
     hydra.run.dir=runs/harmonic/gauss_j2
-python -m ddssm.evaluate experiment=harmonic_diff_j2 \
+python -m ddssm.evaluate experiment=harmonic \
+    'experiment.j=2' \
+    transition=diffusion \
     +checkpoint=runs/harmonic/diff_j2/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic/diff_j2/metrics.csv \
     hydra.run.dir=runs/harmonic/diff_j2
@@ -235,32 +265,44 @@ python -m ddssm.evaluate experiment=harmonic_diff_j2 \
 
 Same periodic structure as harmonic but with ~ε ~ N(0, 0.2)~, a four-fold
 increase in observation noise. Tests robustness of posterior inference under
-higher uncertainty.
+higher uncertainty.  Override ~experiment.data.mode~ from the ~harmonic~ base.
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=harmonic_noisy_gauss \
+python -m ddssm.app experiment=harmonic \
+    'experiment.data.mode=harmonic-noisy' \
     hydra.run.dir=runs/harmonic_noisy/gauss
-python -m ddssm.app experiment=harmonic_noisy_diff \
+python -m ddssm.app experiment=harmonic \
+    'experiment.data.mode=harmonic-noisy' \
+    transition=diffusion \
+    'experiment.training.steps=2000' \
+    'experiment.training.checkpoint_every=500' \
+    'experiment.hyperparams.lambda_warmup_steps=400' \
     hydra.run.dir=runs/harmonic_noisy/diff
 #+END_SRC
 
 #+BEGIN_SRC sh
-python -m ddssm.evaluate experiment=harmonic_noisy_gauss \
+python -m ddssm.evaluate experiment=harmonic \
+    'experiment.data.mode=harmonic-noisy' \
     +checkpoint=runs/harmonic_noisy/gauss/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic_noisy/gauss/metrics.csv \
     hydra.run.dir=runs/harmonic_noisy/gauss
-python -m ddssm.evaluate experiment=harmonic_noisy_diff \
+python -m ddssm.evaluate experiment=harmonic \
+    'experiment.data.mode=harmonic-noisy' \
+    transition=diffusion \
     +checkpoint=runs/harmonic_noisy/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic_noisy/diff/metrics.csv \
     hydra.run.dir=runs/harmonic_noisy/diff
 #+END_SRC
 
 #+BEGIN_SRC sh
-python -m ddssm.visualize experiment=harmonic_noisy_gauss \
+python -m ddssm.visualize experiment=harmonic \
+    'experiment.data.mode=harmonic-noisy' \
     +checkpoint=runs/harmonic_noisy/gauss/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic_noisy/gauss/metrics.csv \
     hydra.run.dir=runs/harmonic_noisy/gauss
-python -m ddssm.visualize experiment=harmonic_noisy_diff \
+python -m ddssm.visualize experiment=harmonic \
+    'experiment.data.mode=harmonic-noisy' \
+    transition=diffusion \
     +checkpoint=runs/harmonic_noisy/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/harmonic_noisy/diff/metrics.csv \
     hydra.run.dir=runs/harmonic_noisy/diff
@@ -287,7 +329,7 @@ included as a secondary metric.
 *** Gaussian transition
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=bimodal_gauss \
+python -m ddssm.app experiment=bimodal \
     hydra.run.dir=runs/bimodal/gauss
 #+END_SRC
 
@@ -295,7 +337,7 @@ python -m ddssm.app experiment=bimodal_gauss \
 :
 
 #+BEGIN_SRC sh
-python -m ddssm.evaluate experiment=bimodal_gauss \
+python -m ddssm.evaluate experiment=bimodal \
     +checkpoint=runs/bimodal/gauss/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/gauss/metrics.csv \
     hydra.run.dir=runs/bimodal/gauss
@@ -305,7 +347,7 @@ python -m ddssm.evaluate experiment=bimodal_gauss \
 :
 
 #+BEGIN_SRC sh
-python -m ddssm.visualize experiment=bimodal_gauss \
+python -m ddssm.visualize experiment=bimodal \
     +checkpoint=runs/bimodal/gauss/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/gauss/metrics.csv \
     hydra.run.dir=runs/bimodal/gauss
@@ -314,7 +356,11 @@ python -m ddssm.visualize experiment=bimodal_gauss \
 *** Diffusion transition
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=bimodal_diff \
+python -m ddssm.app experiment=bimodal \
+    transition=diffusion \
+    'experiment.training.steps=2000' \
+    'experiment.training.checkpoint_every=500' \
+    'experiment.hyperparams.lambda_warmup_steps=400' \
     hydra.run.dir=runs/bimodal/diff
 #+END_SRC
 
@@ -322,7 +368,8 @@ python -m ddssm.app experiment=bimodal_diff \
 :
 
 #+BEGIN_SRC sh
-python -m ddssm.evaluate experiment=bimodal_diff \
+python -m ddssm.evaluate experiment=bimodal \
+    transition=diffusion \
     +checkpoint=runs/bimodal/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff/metrics.csv \
     hydra.run.dir=runs/bimodal/diff
@@ -332,7 +379,8 @@ python -m ddssm.evaluate experiment=bimodal_diff \
 :
 
 #+BEGIN_SRC sh
-python -m ddssm.visualize experiment=bimodal_diff \
+python -m ddssm.visualize experiment=bimodal \
+    transition=diffusion \
     +checkpoint=runs/bimodal/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff/metrics.csv \
     hydra.run.dir=runs/bimodal/diff
@@ -362,7 +410,7 @@ forecast horizon is strictly one step (the analytic truth is a one-step density)
 
 #+BEGIN_SRC sh
 # Gaussian
-python -m ddssm.evaluate experiment=bimodal_gauss \
+python -m ddssm.evaluate experiment=bimodal \
     +checkpoint=runs/bimodal/gauss/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/gauss/metrics.csv \
     'experiment.eval.metrics=[bimodal_jsd]' \
@@ -372,7 +420,8 @@ python -m ddssm.evaluate experiment=bimodal_gauss \
     hydra.run.dir=runs/bimodal/gauss
 
 # Diffusion
-python -m ddssm.evaluate experiment=bimodal_diff \
+python -m ddssm.evaluate experiment=bimodal \
+    transition=diffusion \
     +checkpoint=runs/bimodal/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff/metrics.csv \
     'experiment.eval.metrics=[bimodal_jsd]' \
@@ -421,7 +470,8 @@ using the existing ~forecast_1d~ plot:
 
 #+BEGIN_SRC sh
 # Replace [948, 742] with the indices read from runs/bimodal/diff/metrics.json
-python -m ddssm.visualize experiment=bimodal_diff \
+python -m ddssm.visualize experiment=bimodal \
+    transition=diffusion \
     +checkpoint=runs/bimodal/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff/metrics.csv \
     'experiment.viz.plots=[{name: forecast_1d, save_filename: median.png, kwargs: {sample_indices: [948, 742]}}]' \
@@ -434,7 +484,8 @@ To inspect the predictive density at one ~(series, dim, t_future)~ point use
 the new ~forecast_distribution~ plot:
 
 #+BEGIN_SRC sh
-python -m ddssm.visualize experiment=bimodal_diff \
+python -m ddssm.visualize experiment=bimodal \
+    transition=diffusion \
     +checkpoint=runs/bimodal/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff/metrics.csv \
     'experiment.viz.plots=[{name: forecast_distribution, save_filename: dist.png, kwargs: {series_idx: 0, dim_idx: 0, t_future_idx: 0}}]' \
@@ -458,7 +509,7 @@ which plots X-vs-Y trajectories rather than time series.
 *** Gaussian transition
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=robot_gauss_2d \
+python -m ddssm.app experiment=robot_2d \
     hydra.run.dir=runs/robot_2d/gauss
 #+END_SRC
 
@@ -466,14 +517,14 @@ python -m ddssm.app experiment=robot_gauss_2d \
 :
 
 #+BEGIN_SRC sh
-python -m ddssm.evaluate experiment=robot_gauss_2d \
+python -m ddssm.evaluate experiment=robot_2d \
     +checkpoint=runs/robot_2d/gauss/checkpoints/ckpt_latest.pth \
     +csv_path=runs/robot_2d/gauss/metrics.csv \
     hydra.run.dir=runs/robot_2d/gauss
 #+END_SRC
 
 #+BEGIN_SRC sh
-python -m ddssm.visualize experiment=robot_gauss_2d \
+python -m ddssm.visualize experiment=robot_2d \
     +checkpoint=runs/robot_2d/gauss/checkpoints/ckpt_latest.pth \
     +csv_path=runs/robot_2d/gauss/metrics.csv \
     hydra.run.dir=runs/robot_2d/gauss
@@ -482,7 +533,10 @@ python -m ddssm.visualize experiment=robot_gauss_2d \
 *** Diffusion transition
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=robot_diff_2d \
+python -m ddssm.app experiment=robot_2d \
+    transition=diffusion \
+    'experiment.training.steps=4000' \
+    'experiment.hyperparams.lambda_warmup_steps=800' \
     hydra.run.dir=runs/robot_2d/diff
 #+END_SRC
 
@@ -490,14 +544,16 @@ python -m ddssm.app experiment=robot_diff_2d \
 :
 
 #+BEGIN_SRC sh
-python -m ddssm.evaluate experiment=robot_diff_2d \
+python -m ddssm.evaluate experiment=robot_2d \
+    transition=diffusion \
     +checkpoint=runs/robot_2d/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/robot_2d/diff/metrics.csv \
     hydra.run.dir=runs/robot_2d/diff
 #+END_SRC
 
 #+BEGIN_SRC sh
-python -m ddssm.visualize experiment=robot_diff_2d \
+python -m ddssm.visualize experiment=robot_2d \
+    transition=diffusion \
     +checkpoint=runs/robot_2d/diff/checkpoints/ckpt_latest.pth \
     +csv_path=runs/robot_2d/diff/metrics.csv \
     hydra.run.dir=runs/robot_2d/diff
@@ -555,18 +611,18 @@ python -m ddssm.visualize experiment=kdd_diffusion \
 Fill in after running all experiments.  Numbers are mean ± std over three seeds
 (~seed=0,1,2~; pass ~experiment.seed=N~ to override).
 
-| Experiment             | MAE     | CRPS    | Energy Score |
-|------------------------+---------+---------+--------------|
-| harmonic\_gauss        |         |         | —            |
-| harmonic\_diff         |         |         | —            |
-| harmonic\_gauss\_j2    |         |         | —            |
-| harmonic\_diff\_j2     |         |         | —            |
-| harmonic\_noisy\_gauss |         |         | —            |
-| harmonic\_noisy\_diff  |         |         | —            |
-| bimodal\_gauss         | —       |         |              |
-| bimodal\_diff          | —       |         |              |
-| robot\_gauss\_2d       | —       |         |              |
-| robot\_diff\_2d        | —       |         |              |
+| Experiment                    | MAE     | CRPS    | Energy Score |
+|-------------------------------+---------+---------+--------------|
+| harmonic (gauss)              |         |         | —            |
+| harmonic (diff)               |         |         | —            |
+| harmonic (gauss, j=2)         |         |         | —            |
+| harmonic (diff, j=2)          |         |         | —            |
+| harmonic (gauss, noisy)       |         |         | —            |
+| harmonic (diff, noisy)        |         |         | —            |
+| bimodal (gauss)               | —       |         |              |
+| bimodal (diff)                | —       |         |              |
+| robot\_2d (gauss)             | —       |         |              |
+| robot\_2d (diff)              | —       |         |              |
 
 ** KDD Cup 2018
 
@@ -581,7 +637,11 @@ Optuna sweeps use the ~hydra/sweeper/ddssm_optuna.yaml~ configuration.
 Example: sweep learning rates for the bimodal experiment.
 
 #+BEGIN_SRC sh
-python -m ddssm.app --multirun experiment=bimodal_diff \
+python -m ddssm.app --multirun experiment=bimodal \
+    transition=diffusion \
+    'experiment.training.steps=2000' \
+    'experiment.training.checkpoint_every=500' \
+    'experiment.hyperparams.lambda_warmup_steps=400' \
     'experiment.hyperparams.enc_lr=tag(log, interval(1e-5, 1e-3))' \
     'experiment.hyperparams.trans_lr=tag(log, interval(1e-5, 1e-3))' \
     hydra/sweeper=ddssm_optuna \
@@ -599,23 +659,26 @@ Trials write checkpoints and CSV logs independently under
 The configuration package lives at ~src/ddssm/conf/~ and mirrors the
 section structure of this document:
 
-| ~experiments/component.py~ | Component Tests (synthetic\_gauss, synthetic\_diffusion) |
-| ~experiments/synthetic.py~ | Synthetic Experiments (harmonic\_*, bimodal\_*, robot\_*) |
-| ~experiments/kdd.py~       | Real-Data Experiment: KDD Cup 2018                       |
+| ~experiments/component.py~ | Component Tests (synthetic\_gauss, synthetic\_diffusion)                        |
+| ~experiments/synthetic.py~ | Synthetic Experiments (harmonic, bimodal, robot\_2d base presets) |
+| ~experiments/kdd.py~       | Real-Data Experiment: KDD Cup 2018                                              |
 
 To add a new experiment:
 
-1. Choose the appropriate file above (or create a new one under
-   ~src/ddssm/conf/experiments/~ and import it in
-   ~src/ddssm/conf/experiments/__init__.py~).
-2. Add the data-generating process to ~src/ddssm/data/synthetic.py~
-   if it is a new synthetic mode.
-3. Build the config with ~_experiment_conf(...)~ as shown in the
-   existing presets, using the shared eval/viz defaults from
-   ~src/ddssm/conf/_eval_viz.py~ (or define new ones there).
-4. Register with ~store(..., group="experiment", name="my_preset")~.
-5. Add the preset to the table in the ~Overview~ section above and
-   to ~tests/test_experiment_configs.py~.
+1. **For a new synthetic family**: add the data-generating process to
+   ~src/ddssm/data/synthetic.py~, define eval/viz defaults in
+   ~src/ddssm/conf/_eval_viz.py~, and register a single base preset in
+   ~experiments/synthetic.py~ with ~_experiment_conf(...)~ (no
+   ~transition_conf~).  All transition and training-budget variants are
+   then expressed as CLI overrides in this file.
+2. **For a new real-data dataset**: follow the pattern in
+   ~experiments/kdd.py~.  Since dataset-specific hyper-parameters
+   (batch size, steps) differ between Gaussian and Diffusion variants,
+   registering one preset per transition is reasonable.
+3. Register with ~store(..., group="experiment", name="my_preset")~ and
+   add any new eval/viz families to ~src/ddssm/conf/_eval_viz.py~.
+4. Add coverage to ~tests/test_experiment_configs.py~ and an entry in
+   the Results table above.
 
 ** Adding a new metric
 

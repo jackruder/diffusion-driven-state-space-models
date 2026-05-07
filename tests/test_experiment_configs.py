@@ -30,6 +30,9 @@ EXPERIMENTS = [
     "synthetic_diffusion",
     "kdd_gauss",
     "kdd_diffusion",
+    "harmonic",
+    "bimodal",
+    "robot_2d",
 ]
 
 SWEEPS = ["synthetic_lr", "kdd_phase1"]
@@ -72,7 +75,6 @@ def test_default_experiment_is_synthetic_gauss() -> None:
     assert cfg.experiment.data._target_.endswith("SyntheticDataModule")
     assert cfg.experiment.model.transition._target_.endswith("GaussianTransition")
 
-
 def test_objective_returns_inf_on_missing_csv(tmp_path) -> None:
     obj = ObjectiveSpec(metric="loss/total", split="train", tail_frac=0.1)
     assert obj.read(str(tmp_path / "missing.csv")) == float("inf")
@@ -103,26 +105,27 @@ def test_experiment_and_sweep_combine() -> None:
     assert "optuna" in cfg.hydra.sweeper._target_.lower()
 
 
+
 # ---------------------------------------------------------------------------
-# New synthetic verification presets (harmonic / bimodal / robot).
+# Synthetic verification: base presets + transition/override combos.
+#
+# Each preset uses transition=${transition} (top-level group, default:
+# gaussian).  Override with transition=diffusion plus the extra training
+# scalars shown in verifications.org.
 # ---------------------------------------------------------------------------
 
-NEW_SYNTH_EXPERIMENTS = [
-    "harmonic_gauss",
-    "harmonic_diff",
-    "harmonic_gauss_j2",
-    "harmonic_diff_j2",
-    "harmonic_noisy_gauss",
-    "harmonic_noisy_diff",
-    "bimodal_gauss",
-    "bimodal_diff",
-    "robot_gauss_2d",
-    "robot_diff_2d",
+SYNTH_BASE_PRESETS = ["harmonic", "bimodal", "robot_2d"]
+
+SYNTH_DIFFUSION_OVERRIDES = [
+    "transition=diffusion",
+    "experiment.training.steps=2000",
+    "experiment.training.checkpoint_every=500",
+    "experiment.hyperparams.lambda_warmup_steps=400",
 ]
 
 
-@pytest.mark.parametrize("name", NEW_SYNTH_EXPERIMENTS)
-def test_new_experiment_preset_composes(name: str) -> None:
+@pytest.mark.parametrize("name", SYNTH_BASE_PRESETS)
+def test_synth_base_preset_composes(name: str) -> None:
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config", overrides=[f"experiment={name}"])
     assert cfg.experiment.training.steps > 0
@@ -130,9 +133,9 @@ def test_new_experiment_preset_composes(name: str) -> None:
     assert cfg.experiment.data._target_.endswith("SyntheticDataModule")
 
 
-@pytest.mark.parametrize("name", NEW_SYNTH_EXPERIMENTS)
-def test_new_experiment_instantiates(name: str) -> None:
-    """Model builds, shapes are wired correctly, eval/viz specs are present."""
+@pytest.mark.parametrize("name", SYNTH_BASE_PRESETS)
+def test_synth_base_preset_instantiates(name: str) -> None:
+    """Model builds and eval/viz specs are present for every base preset."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config", overrides=[f"experiment={name}"])
     expt = instantiate(cfg.experiment)
@@ -146,55 +149,60 @@ def test_new_experiment_instantiates(name: str) -> None:
     assert n_params > 0
 
 
-@pytest.mark.parametrize("name,expected_data_dim,expected_j", [
-    ("harmonic_gauss",    1, 1),
-    ("harmonic_gauss_j2", 1, 2),
-    ("harmonic_diff_j2",  1, 2),
-    ("bimodal_diff",      1, 1),
-    ("robot_gauss_2d",    2, 2),
-    ("robot_diff_2d",     2, 2),
+@pytest.mark.parametrize("name", SYNTH_BASE_PRESETS)
+def test_synth_diffusion_override_composes(name: str) -> None:
+    """transition=diffusion override must resolve cleanly on every base preset."""
+    with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
+        cfg = compose(
+            config_name="config",
+            overrides=[f"experiment={name}"] + SYNTH_DIFFUSION_OVERRIDES,
+        )
+    assert cfg.experiment.transition._target_.endswith("DiffusionTransition")
+    assert cfg.experiment.training.steps == 2000
+
+
+@pytest.mark.parametrize("expected_data_dim,expected_j,overrides", [
+    (1, 1, ["experiment=harmonic"]),
+    (1, 2, ["experiment=harmonic", "experiment.j=2"]),
+    (1, 1, ["experiment=bimodal"]),
+    (2, 2, ["experiment=robot_2d"]),
 ])
-def test_new_experiment_shape_fields(name: str, expected_data_dim: int, expected_j: int) -> None:
+def test_synth_shape_fields(
+    expected_data_dim: int, expected_j: int, overrides: list
+) -> None:
     """Shape fields in the composed config must match what the model will be built with."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
-        cfg = compose(config_name="config", overrides=[f"experiment={name}"])
-    assert cfg.experiment.data_dim == expected_data_dim, (
-        f"{name}: data_dim={cfg.experiment.data_dim} != {expected_data_dim}"
-    )
-    assert cfg.experiment.j == expected_j, (
-        f"{name}: j={cfg.experiment.j} != {expected_j}"
-    )
+        cfg = compose(config_name="config", overrides=overrides)
+    assert cfg.experiment.data_dim == expected_data_dim
+    assert cfg.experiment.j == expected_j
 
 
-@pytest.mark.parametrize("name,expected_metrics", [
-    ("harmonic_gauss",      ["mae", "crps_sum"]),
-    ("harmonic_noisy_diff", ["mae", "crps_sum"]),
-    ("bimodal_gauss",       ["energy_score", "crps_sum"]),
-    ("bimodal_diff",        ["energy_score", "crps_sum"]),
-    ("robot_gauss_2d",      ["energy_score", "crps_sum"]),
-    ("robot_diff_2d",       ["energy_score", "crps_sum"]),
+@pytest.mark.parametrize("overrides,expected_metrics", [
+    (["experiment=harmonic"],  ["mae", "crps_sum"]),
+    (["experiment=harmonic", "experiment.data.mode=harmonic-noisy"], ["mae", "crps_sum"]),
+    (["experiment=bimodal"],   ["energy_score", "crps_sum"]),
+    (["experiment=robot_2d"],  ["energy_score", "crps_sum"]),
 ])
-def test_new_experiment_eval_metrics(name: str, expected_metrics: list) -> None:
+def test_synth_eval_metrics(overrides: list, expected_metrics: list) -> None:
     """Eval metric list must match the family spec (harmonic→mae, bimodal/robot→energy_score)."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
-        cfg = compose(config_name="config", overrides=[f"experiment={name}"])
+        cfg = compose(config_name="config", overrides=overrides)
     assert list(cfg.experiment.eval.metrics) == expected_metrics
 
 
-@pytest.mark.parametrize("name,expected_first_plot", [
-    ("harmonic_gauss",  "forecast_1d"),
-    ("bimodal_diff",    "forecast_1d"),
-    ("robot_gauss_2d",  "forecast_2d_spatial"),
-    ("robot_diff_2d",   "forecast_2d_spatial"),
+@pytest.mark.parametrize("overrides,expected_first_plot", [
+    (["experiment=harmonic"],  "forecast_1d"),
+    (["experiment=bimodal"],   "forecast_1d"),
+    (["experiment=robot_2d"],  "forecast_2d_spatial"),
 ])
-def test_new_experiment_viz_first_plot(name: str, expected_first_plot: str) -> None:
-    """Robot presets must use the 2D spatial plot; all others use forecast_1d."""
+def test_synth_viz_first_plot(overrides: list, expected_first_plot: str) -> None:
+    """Robot preset must use the 2D spatial plot; all others use forecast_1d."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
-        cfg = compose(config_name="config", overrides=[f"experiment={name}"])
+        cfg = compose(config_name="config", overrides=overrides)
     assert cfg.experiment.viz.plots[0].name == expected_first_plot
 
 
-@pytest.mark.parametrize("name", ["harmonic_gauss", "bimodal_diff", "robot_gauss_2d"])
+@pytest.mark.parametrize("name", SYNTH_BASE_PRESETS)
 def test_synth_eval_conf_has_explicit_t_split(name: str) -> None:
     """Synthetic eval confs with forecasting metrics MUST carry an explicit T_split.
 
