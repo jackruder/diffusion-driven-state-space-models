@@ -34,7 +34,7 @@ override.
 
 #+BEGIN_SRC sh
 # Enable W&B (opt-in)
-python -m ddssm.app experiment=PRESET wandb=enabled wandb.project=ddssm
+python -m ddssm.app experiment=PRESET wandb=enabled experiment.wandb_config.project=ddssm
 #+END_SRC
 
 W&B is disabled by default (~conf/wandb/disabled.yaml~). Use ~wandb=enabled~ to
@@ -331,8 +331,8 @@ included as a secondary metric.
 #+BEGIN_SRC sh
 python -m ddssm.app experiment=bimodal \
     wandb=enabled \
-    wandb.group=bimodal_v1_v2 \
-    'wandb.tags=[bimodal,gaussian]' \
+    experiment.wandb_config.group=bimodal_v1_v2 \
+    'experiment.wandb_config.tags=[bimodal,gaussian]' \
     hydra.run.dir=runs/bimodal/gauss
 #+END_SRC
 
@@ -365,8 +365,8 @@ python -m ddssm.app experiment=bimodal \
     'experiment.training.checkpoint_every=500' \
     'experiment.hyperparams.lambda_warmup_steps=400' \
     wandb=enabled \
-    wandb.group=bimodal_v1_v2 \
-    'wandb.tags=[bimodal,diffusion_v1]' \
+    experiment.wandb_config.group=bimodal_v1_v2 \
+    'experiment.wandb_config.tags=[bimodal,diffusion_v1]' \
     hydra.run.dir=runs/bimodal/diff
 #+END_SRC
 
@@ -527,12 +527,12 @@ Use the *same* ~lambda_warmup_steps~ as the V1 baseline so the rate term
 ramps in identically.
 
 All training commands in this section pass ~wandb=enabled
-wandb.group=bimodal_v1_v2~ so the per-step losses (~loss/total~, ~loss/recon~,
+experiment.wandb_config.group=bimodal_v1_v2~ so the per-step losses (~loss/total~, ~loss/recon~,
 ~loss/trans~, ~loss/zinit~, ~loss/L_p~, ~loss/L_q~, etc.) for V1, V2-LSGM, and
 V2-uniform all show up in the same W&B group and can be overlaid.  Eval and
 visualize stages do not need W&B; the training metrics live in the W&B run for
 each ~hydra.run.dir~.  If you want to retrain the V1 / Gaussian baselines under
-the same group, prepend ~wandb=enabled wandb.group=bimodal_v1_v2~ to those
+the same group, prepend ~wandb=enabled experiment.wandb_config.group=bimodal_v1_v2~ to those
 commands too (re-run the bimodal section above with that override).
 
 **** 1. Train V2 (LSGM importance sampling) — W&B enabled
@@ -545,8 +545,8 @@ python -m ddssm.app experiment=bimodal \
     'experiment.training.checkpoint_every=500' \
     'experiment.hyperparams.lambda_warmup_steps=400' \
     wandb=enabled \
-    wandb.group=bimodal_v1_v2 \
-    'wandb.tags=[bimodal,diffusion_v2,lsgm_is]' \
+    experiment.wandb_config.group=bimodal_v1_v2 \
+    'experiment.wandb_config.tags=[bimodal,diffusion_v2,lsgm_is]' \
     hydra.run.dir=runs/bimodal/diff_v2
 #+END_SRC
 
@@ -601,8 +601,8 @@ python -m ddssm.app experiment=bimodal \
     'experiment.training.checkpoint_every=500' \
     'experiment.hyperparams.lambda_warmup_steps=400' \
     wandb=enabled \
-    wandb.group=bimodal_v1_v2 \
-    'wandb.tags=[bimodal,diffusion_v2,uniform_is]' \
+    experiment.wandb_config.group=bimodal_v1_v2 \
+    'experiment.wandb_config.tags=[bimodal,diffusion_v2,uniform_is]' \
     hydra.run.dir=runs/bimodal/diff_v2_uniform
 
 python -m ddssm.evaluate experiment=bimodal \
