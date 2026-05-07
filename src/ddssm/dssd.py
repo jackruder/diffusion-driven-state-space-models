@@ -825,5 +825,5 @@ DDSSMConf = builds(
         emb_time_dim="${emb_time_dim}",
         covariate_dim="${covariate_dim}",
     ),
-    hyperparams=DDSSMHyperParamsConf(),
+    hyperparams="${hyperparams}",
 )

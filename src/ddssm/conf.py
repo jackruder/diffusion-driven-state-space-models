@@ -73,6 +73,7 @@ store = ZenStore(name="ddssm")
 
 store(TransitionGaussianConf, group="transition", name="gaussian")
 store(TransitionDiffusionConf, group="transition", name="diffusion")
+store(DDSSMHyperParamsConf, group="hyperparams", name="default")
 store(DDSSMConf, group="model", name="default")
 store(DDSSMTrainerConf, group="trainer", name="default")
 

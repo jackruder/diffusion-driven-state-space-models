@@ -7,6 +7,7 @@
 defaults:
   - model: default              # DDSSMConf, registered in ddssm.conf
   - transition: gaussian        # TransitionGaussianConf | TransitionDiffusionConf
+  - hyperparams: default        # DDSSMHyperParamsConf -- override at cfg.hyperparams.*
   - trainer: default            # DDSSMTrainerConf
   - _self_
 
