@@ -7,7 +7,7 @@ from ddssm.encoder import GaussianEncoder, GaussianInitPrior
 from ddssm.decoder import Decoder
 from ddssm.transitions.transitions import GaussianTransition
 from ddssm.conf import DDSSMHyperParamsConf
-from ddssm.diffnets import ContextProducerConfig
+from ddssm.diffnets import ContextProducerConfig, FeatureMixerConfig, ResidualBlockConfig
 from ddssm.gaussians import GaussianHeadConfig
 from ddssm.futsum import FutureSummaryConfig
 from torch.utils.data import Dataset, DataLoader
@@ -20,7 +20,13 @@ EMB_TIME = 8
 CHANNELS = 8
 NHEADS = 4
 
-_CTX = ContextProducerConfig(channels=CHANNELS, num_layers=1, nheads=NHEADS, feature_nheads=NHEADS)
+_CTX = ContextProducerConfig(
+    channels=CHANNELS,
+    num_layers=1,
+    residual_block=ResidualBlockConfig(
+        feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+    ),
+)
 _GH = GaussianHeadConfig()
 _FS = FutureSummaryConfig(summary_dim=CHANNELS, num_layers=1)
 
@@ -63,4 +69,3 @@ def make_small_model():
 @pytest.fixture
 def small_model():
     return make_small_model()
-

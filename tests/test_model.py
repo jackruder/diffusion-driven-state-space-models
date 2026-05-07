@@ -7,7 +7,13 @@ from ddssm.decoder import Decoder
 from ddssm.transitions.transitions import GaussianTransition
 from ddssm.transitions.diffusion import DiffusionTransition
 from ddssm.dssd import DDSSM_base
-from ddssm.diffnets import ContextProducerConfig, CSDIUnetConfig
+from ddssm.diffnets import (
+    ContextProducerConfig,
+    CSDIUnetConfig,
+    DiffResidualBlockConfig,
+    FeatureMixerConfig,
+    ResidualBlockConfig,
+)
 from ddssm.gaussians import GaussianHeadConfig
 from ddssm.futsum import FutureSummaryConfig
 from ddssm.transitions.diffusion import DiffusionScheduleConfig
@@ -26,7 +32,13 @@ CHANNELS = 8
 NHEADS = 4
 
 # Small architectural configs reused across tests
-_CTX = ContextProducerConfig(channels=CHANNELS, num_layers=1, nheads=NHEADS, feature_nheads=NHEADS)
+_CTX = ContextProducerConfig(
+    channels=CHANNELS,
+    num_layers=1,
+    residual_block=ResidualBlockConfig(
+        feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+    ),
+)
 _GH = GaussianHeadConfig()
 _FS = FutureSummaryConfig(summary_dim=CHANNELS, num_layers=1)
 
@@ -144,7 +156,14 @@ def test_diffusion_transition_builds():
     """DiffusionTransition should build with config objects and register expected buffers."""
     dt = DiffusionTransition(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        unet=CSDIUnetConfig(channels=CHANNELS, n_layers=1, embedding_dim=CHANNELS, feature_nheads=NHEADS),
+        unet=CSDIUnetConfig(
+            channels=CHANNELS,
+            n_layers=1,
+            embedding_dim=CHANNELS,
+            residual_block=DiffResidualBlockConfig(
+                feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+            ),
+        ),
         schedule=DiffusionScheduleConfig(num_steps=10),
     )
     for buf in ("alpha_bar", "wtilde", "sigma", "c_noise", "p_k"):
@@ -164,4 +183,3 @@ def test_ddssm_forward(model):
     loss, distortion, rate, metrics, stats = result
     assert loss.ndim == 0  # scalar
     assert distortion.ndim == 0
-

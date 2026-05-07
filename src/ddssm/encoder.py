@@ -210,17 +210,11 @@ class GaussianEncoder(BaseEncoder):
         self.context_producer = ContextProducer(
             channels=context.channels,
             num_layers=context.num_layers,
-            nheads=context.nheads,
             combined_dim=combined_dim,
             mask_tot_dim=self.mask_emb_dim,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j + 1,
-            time_type=context.time_type,
-            time_kernel_size=context.time_kernel_size,
-            time_gru_layers=context.time_gru_layers,
-            feature_type=context.feature_type,
-            feature_nheads=context.feature_nheads,
-            feature_n_layers=context.feature_n_layers,
+            residual_block=context.residual_block,
             static_emb_dim=self.total_static_dim,
         )
 
@@ -761,34 +755,22 @@ class GaussianInitPrior(BaseInitPrior):
         self.context_producer_init = ContextProducer(
             channels=context.channels,
             num_layers=context.num_layers,
-            nheads=context.nheads,
             combined_dim=combined_dim,
             mask_tot_dim=self.mask_emb_dim,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,  # length j
-            time_type=context.time_type,
-            time_kernel_size=context.time_kernel_size,
-            time_gru_layers=context.time_gru_layers,
-            feature_type=context.feature_type,
-            feature_nheads=context.feature_nheads,
-            feature_n_layers=context.feature_n_layers,
+            residual_block=context.residual_block,
         )
 
         self.context_producer_aux = ContextProducer(
             channels=aux_context.channels,
             num_layers=aux_context.num_layers,
-            nheads=aux_context.nheads,
             combined_dim=combined_dim,
             mask_tot_dim=0,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,  # length j
             skip_mask=True,
-            time_type=aux_context.time_type,
-            time_kernel_size=aux_context.time_kernel_size,
-            time_gru_layers=aux_context.time_gru_layers,
-            feature_type=aux_context.feature_type,
-            feature_nheads=aux_context.feature_nheads,
-            feature_n_layers=aux_context.feature_n_layers,
+            residual_block=aux_context.residual_block,
         )
 
         self.latent_init = GaussLatentInit(
@@ -1276,4 +1258,3 @@ GaussianInitPriorConf = builds(
     aux_posterior_head=GaussianHeadConfig(clamp_logvar_min=-10.0),
     populate_full_signature=True,
 )
-

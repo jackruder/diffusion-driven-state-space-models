@@ -79,12 +79,7 @@ class DiffusionTransition(BaseTransition):
             n_layers=unet.n_layers,
             embedding_dim=unet.embedding_dim,
             projection_dim=unet.projection_dim,
-            time_type=unet.time_type,
-            time_kernel_size=unet.time_kernel_size,
-            time_gru_layers=unet.time_gru_layers,
-            feature_type=unet.feature_type,
-            feature_nheads=unet.feature_nheads,
-            feature_n_layers=unet.feature_n_layers,
+            residual_block=unet.residual_block,
         )
 
         self.diffmodel = torch.compile(self.diffmodel)
@@ -754,4 +749,3 @@ DiffusionTransitionConf = builds(
     schedule=DiffusionScheduleConfig(),
     populate_full_signature=True,
 )
-

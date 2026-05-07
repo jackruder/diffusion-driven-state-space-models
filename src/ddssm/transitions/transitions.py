@@ -390,17 +390,11 @@ class GaussianTransition(BaseTransition):
         self.context_producer = ContextProducer(
             channels=context.channels,
             num_layers=context.num_layers,
-            nheads=context.nheads,
             combined_dim=self.hidden_dim,
             mask_tot_dim=0,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,
-            time_type=context.time_type,
-            time_kernel_size=context.time_kernel_size,
-            time_gru_layers=context.time_gru_layers,
-            feature_type=context.feature_type,
-            feature_nheads=context.feature_nheads,
-            feature_n_layers=context.feature_n_layers,
+            residual_block=context.residual_block,
         )
 
         self.context_producer = torch.compile(self.context_producer, dynamic=True)
@@ -574,4 +568,3 @@ GaussianTransitionConf = builds(
     gaussian_head=GaussianHeadConfig(clamp_logvar_min=-9.0),
     populate_full_signature=True,
 )
-

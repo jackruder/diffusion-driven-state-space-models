@@ -1,7 +1,7 @@
 """This file implements common conditional diffusion models for timeseries."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, final
 
 import torch
@@ -242,6 +242,42 @@ GRUTimeLayerConf = builds(GRUTimeLayer, populate_full_signature=True)
 TransformerFeatureLayerConf = builds(TransformerFeatureLayer, populate_full_signature=True)
 ConvFeatureLayerConf = builds(ConvFeatureLayer, populate_full_signature=True)
 
+
+@dataclass
+class TimeMixerConfig:
+    """Config for time-mixing layers used inside residual blocks."""
+
+    type: str = "conv"
+    kernel_size: int = 3
+    gru_layers: int = 1
+
+
+@dataclass
+class FeatureMixerConfig:
+    """Config for feature-mixing layers used inside residual blocks."""
+
+    type: str = "transformer"
+    nheads: int = 8
+    n_layers: int = 1
+
+
+@dataclass
+class ResidualBlockConfig:
+    """Config for ``ResidualBlock`` internals."""
+
+    time: TimeMixerConfig = field(default_factory=TimeMixerConfig)
+    feature: FeatureMixerConfig = field(
+        default_factory=lambda: FeatureMixerConfig(n_layers=2)
+    )
+
+
+@dataclass
+class DiffResidualBlockConfig:
+    """Config for ``DiffResidualBlock`` internals."""
+
+    time: TimeMixerConfig = field(default_factory=TimeMixerConfig)
+    feature: FeatureMixerConfig = field(default_factory=FeatureMixerConfig)
+
 class DiffusionEmbedding(nn.Module):
     """Continuous EDM conditioning: embeds c_noise scalars into vectors.
 
@@ -385,14 +421,11 @@ class CSDIUnet(nn.Module):
         n_layers: int = 4,
         embedding_dim: int = 128,
         projection_dim: int | None = None,
-        time_type: str = "conv",
-        time_kernel_size: int = 3,
-        time_gru_layers: int = 1,
-        feature_type: str = "transformer",
-        feature_nheads: int = 8,
-        feature_n_layers: int = 1,
+        residual_block: DiffResidualBlockConfig | None = None,
     ) -> None:
         super().__init__()
+        if residual_block is None:
+            residual_block = DiffResidualBlockConfig()
         self.output_len = output_len
         self.latent_dim = latent_dim
         self.latent_history_len = latent_history_len
@@ -413,22 +446,24 @@ class CSDIUnet(nn.Module):
         self.input_projection = Conv1d_with_init(2, self.channels, 1)
 
         self.residual_layers = nn.ModuleList([
-            DiffResidualBlock(
-                side_dim=self.side_dim,
-                channels=self.channels,
-                diffusion_embedding_dim=self.diffusion_projection_dim,
-                time_layer=build_time_layer(
-                    time_type, channels,
-                    kernel_size=time_kernel_size,
-                    gru_layers=time_gru_layers,
-                ),
-                feature_layer=build_feature_layer(
-                    feature_type, channels,
-                    nheads=feature_nheads,
-                    n_layers=feature_n_layers,
-                ),
-            )
-            for _ in range(self.n_layers)
+                DiffResidualBlock(
+                    side_dim=self.side_dim,
+                    channels=self.channels,
+                    diffusion_embedding_dim=self.diffusion_projection_dim,
+                    time_layer=build_time_layer(
+                        residual_block.time.type,
+                        channels,
+                        kernel_size=residual_block.time.kernel_size,
+                        gru_layers=residual_block.time.gru_layers,
+                    ),
+                    feature_layer=build_feature_layer(
+                        residual_block.feature.type,
+                        channels,
+                        nheads=residual_block.feature.nheads,
+                        n_layers=residual_block.feature.n_layers,
+                    ),
+                )
+                for _ in range(self.n_layers)
         ])
         self.output_projection1 = Conv1d_with_init(self.channels, self.channels, 1)
         self.output_projection2 = Conv1d_with_init(self.channels, 1, 1)
@@ -506,12 +541,9 @@ class CSDIUnetConfig:
     n_layers: int = 4
     embedding_dim: int = 128
     projection_dim: Optional[int] = None
-    time_type: str = "conv"
-    time_kernel_size: int = 3
-    time_gru_layers: int = 1
-    feature_type: str = "transformer"
-    feature_nheads: int = 8
-    feature_n_layers: int = 1
+    residual_block: DiffResidualBlockConfig = field(
+        default_factory=DiffResidualBlockConfig
+    )
 
 
 CSDIUnetConf = builds(CSDIUnet, populate_full_signature=True)
@@ -588,21 +620,17 @@ class ContextProducer(nn.Module):
         self,
         channels: int,  # C
         num_layers: int,
-        nheads: int,
         combined_dim: int,  # H_seq
         mask_tot_dim: int,  # H_mask
         emb_time_dim: int,  # H_time
         combined_len: int,  # L
-        time_type: str = "conv",
-        time_kernel_size: int = 3,
-        time_gru_layers: int = 1,
-        feature_type: str = "transformer",
-        feature_nheads: int = 8,
-        feature_n_layers: int = 1,
+        residual_block: ResidualBlockConfig | None = None,
         skip_mask: bool = False,
         static_emb_dim: int = 0,
     ) -> None:
         super().__init__()
+        if residual_block is None:
+            residual_block = ResidualBlockConfig()
         self.channels = channels  # C
         self.combined_dim = combined_dim
         self.mask_tot_dim = mask_tot_dim
@@ -614,7 +642,6 @@ class ContextProducer(nn.Module):
         self.tot_dim = combined_dim + mask_tot_dim + emb_time_dim
 
         self.num_layers = num_layers
-        self.nheads = nheads
         self.emb_time_dim = emb_time_dim
         self.skip_mask = skip_mask
         self.eps = 1e-8
@@ -642,14 +669,16 @@ class ContextProducer(nn.Module):
                     side_dim=self.side_dim,
                     channels=self.channels,
                     time_layer=build_time_layer(
-                        time_type, channels,
-                        kernel_size=time_kernel_size,
-                        gru_layers=time_gru_layers,
+                        residual_block.time.type,
+                        channels,
+                        kernel_size=residual_block.time.kernel_size,
+                        gru_layers=residual_block.time.gru_layers,
                     ),
                     feature_layer=build_feature_layer(
-                        feature_type, channels,
-                        nheads=feature_nheads,
-                        n_layers=feature_n_layers,
+                        residual_block.feature.type,
+                        channels,
+                        nheads=residual_block.feature.nheads,
+                        n_layers=residual_block.feature.n_layers,
                     ),
                 )
             )
@@ -761,14 +790,7 @@ class ContextProducerConfig:
 
     channels: int = 8
     num_layers: int = 2
-    nheads: int = 8
-    time_type: str = "conv"
-    time_kernel_size: int = 3
-    time_gru_layers: int = 1
-    feature_type: str = "transformer"
-    feature_nheads: int = 8
-    feature_n_layers: int = 2
+    residual_block: ResidualBlockConfig = field(default_factory=ResidualBlockConfig)
 
 
 ContextProducerConf = builds(ContextProducer, populate_full_signature=True)
-

@@ -10,13 +10,15 @@ transition:
   context:
     channels: 8
     num_layers: 2
-    nheads: 8
-    time_type: conv
-    time_kernel_size: 3
-    time_gru_layers: 1
-    feature_type: transformer
-    feature_nheads: 8
-    feature_n_layers: 2
+    residual_block:
+      time:
+        type: conv
+        kernel_size: 3
+        gru_layers: 1
+      feature:
+        type: transformer
+        nheads: 8
+        n_layers: 2
   gaussian_head:
     init_logvar: 0.0
     var_min: 1.0e-6

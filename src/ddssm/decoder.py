@@ -73,17 +73,11 @@ class Decoder(nn.Module):
         self.context_producer = ContextProducer(
             channels=context.channels,
             num_layers=context.num_layers,
-            nheads=context.nheads,
             combined_dim=self.hidden_dim,
             mask_tot_dim=self.mask_emb_dim,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,
-            time_type=context.time_type,
-            time_kernel_size=context.time_kernel_size,
-            time_gru_layers=context.time_gru_layers,
-            feature_type=context.feature_type,
-            feature_nheads=context.feature_nheads,
-            feature_n_layers=context.feature_n_layers,
+            residual_block=context.residual_block,
             static_emb_dim=self.total_static_dim,
         )
 
@@ -342,4 +336,3 @@ DecoderConf = builds(
     gaussian_head=GaussianHeadConfig(),
     populate_full_signature=True,
 )
-
