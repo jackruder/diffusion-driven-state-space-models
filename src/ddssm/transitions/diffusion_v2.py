@@ -257,11 +257,20 @@ class DiffusionV2Transition(BaseTransition):
         time_embed: torch.Tensor,  # (B, T, E_t)
         covariates: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """ESM regression loss (``L_p``) minus encoder entropy (``L_q``).
+        """Closed-form ESM regression loss IS the transition KL.
+
+        Per the V2 derivation (see ``model-v2.org`` "ELBO modifications"
+        / "Using Song Thm. 2"), the cross entropy decomposes as
+        ``CE(q‖p) = H(q) + E_τ E_q[½ g²(τ) ‖s_q − s_p‖²]``, so the KL
+        equals the ESM regression term directly — the encoder entropy
+        is *not* subtracted from it.
 
         ``L_q`` is the closed-form Gaussian entropy when ``logvars`` is
-        available, otherwise an MC estimate from ``logq_paths``.  The dict
-        contract matches V1: ``{"kl", "L_p", "L_q"}``.
+        available, otherwise an MC estimate from ``logq_paths``; it is
+        retained for logging only.  ``L_p`` (cross-entropy, also for
+        logging) is recovered as ``kl + L_q`` so that the V1 invariant
+        ``kl = L_p − L_q`` continues to hold across the dict contract
+        ``{"kl", "L_p", "L_q"}``.
         """
         B, S, d, T = zs.shape
         j = self.j
@@ -272,8 +281,12 @@ class DiffusionV2Transition(BaseTransition):
         logvars = enc_stats.get("logvars") if enc_stats is not None else None
         have_stats = mus is not None and logvars is not None
 
-        # ----- L_p : ESM loss summed over chunks ----- #
-        L_p_sum = torch.zeros((), device=device, dtype=dtype)
+        # ----- KL : ESM loss summed over chunks ----- #
+        # Per the V2 derivation, the closed-form ESM regression term
+        # IS the transition KL (the encoder-entropy cancellation is
+        # already baked into the CE decomposition).  We accumulate it
+        # under the name ``kl_sum`` to make the semantics explicit.
+        kl_sum = torch.zeros((), device=device, dtype=dtype)
         n_target_steps = max(0, T - j)
 
         if n_target_steps > 0:
@@ -305,7 +318,7 @@ class DiffusionV2Transition(BaseTransition):
                     mu_t_flat = z_target_flat
                     sigma2_t_flat = torch.zeros_like(z_target_flat)
 
-                L_p_sum = L_p_sum + self._esm_chunk_loss(
+                kl_sum = kl_sum + self._esm_chunk_loss(
                     mu_t=mu_t_flat,
                     sigma2_t=sigma2_t_flat,
                     z_hist=z_hist_flat,
@@ -317,7 +330,7 @@ class DiffusionV2Transition(BaseTransition):
         # (already averaged over S_k internally), so dividing by B*S*(T-j)
         # yields the per-(b, s, t) average matching V1's `.mean()` convention.
         denom = float(B * S * n_target_steps) if n_target_steps > 0 else 1.0
-        L_p = L_p_sum / denom
+        kl = kl_sum / denom
 
         # ----- L_q : encoder entropy over t = j..T-1 ----- #
         if have_stats:
@@ -329,7 +342,12 @@ class DiffusionV2Transition(BaseTransition):
         else:
             L_q = _mc_entropy_from_logq(logq_paths, j)
 
-        return {"kl": L_p - L_q, "L_p": L_p, "L_q": L_q}
+        # ``L_p`` (cross-entropy, for logging only) recovered from the
+        # identity ``CE = KL + H(q)`` so that ``kl == L_p - L_q`` matches
+        # the V1 invariant.
+        L_p = kl + L_q
+
+        return {"kl": kl, "L_p": L_p, "L_q": L_q}
 
     # ------------------------------------------------------------------ #
     # Per-chunk ESM loss.
