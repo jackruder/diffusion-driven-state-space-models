@@ -36,6 +36,7 @@ from .diffnets import ContextProducerConf, CSDIUnetConf
 from .dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
 from .eval.runner import EvalSpec
 from .experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
+from .viz.runner import PlotSpec, VizSpec
 from .gaussians import GaussianHeadConf
 from .train import DDSSMTrainer, DDSSMTrainerConf
 from .transitions.diffusion import DiffusionScheduleConfig, DiffusionTransition
@@ -110,6 +111,8 @@ TrainableModulesConf = builds(TrainableModules, populate_full_signature=True)
 TrainingScalarsConf = builds(TrainingScalars, populate_full_signature=True)
 ObjectiveSpecConf = builds(ObjectiveSpec, populate_full_signature=True)
 EvalSpecConf = builds(EvalSpec, populate_full_signature=True)
+PlotSpecConf = builds(PlotSpec, populate_full_signature=True)
+VizSpecConf = builds(VizSpec, populate_full_signature=True)
 
 # Pre-built ``trainable`` masks. Each experiment can pick one with
 # ``training=...`` style overrides or by passing the conf directly.
@@ -136,6 +139,7 @@ def _experiment_conf(
     training_conf,
     objective_conf=None,
     eval_conf=None,
+    viz_conf=None,
     data_dim: int,
     latent_dim: int,
     j: int = 1,
@@ -159,6 +163,7 @@ def _experiment_conf(
         training=training_conf,
         objective=objective_conf,
         eval=eval_conf,
+        viz=viz_conf,
         seed=seed,
         data_dim=data_dim,
         latent_dim=latent_dim,
@@ -178,6 +183,28 @@ def _experiment_conf(
 SynthEvalConf = EvalSpecConf(metrics=["loss_tail", "recon_mse"], split="val")
 KDDEvalConf = EvalSpecConf(metrics=["mae", "crps_sum"], split="test", num_samples=32)
 
+# Viz defaults per dataset family.
+SynthVizConf = VizSpecConf(
+    plots=[
+        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
+                     kwargs={"keys": ["loss/total"], "log_y": True}),
+    ],
+    split="val",
+    num_samples=10,
+    T_split=32,  # half of synthetic's default T=64; override per-experiment if needed
+)
+KDDVizConf = VizSpecConf(
+    plots=[
+        PlotSpecConf(name="forecast_1d", save_filename="forecast.png",
+                     kwargs={"n_show": 4}),
+        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
+                     kwargs={"keys": ["loss/total"], "log_y": True}),
+    ],
+    split="test",
+    num_samples=32,
+    # T_split picks up data.metadata.forecast_split == L1 automatically.
+)
+
 
 # Synthetic + Gaussian transition: small LGSSM run for smoke tests / CI.
 SyntheticGaussExperimentConf = _experiment_conf(
@@ -191,6 +218,7 @@ SyntheticGaussExperimentConf = _experiment_conf(
     training_conf=TrainingScalarsConf(steps=500, log_every=25, amp=False),
     objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
     eval_conf=SynthEvalConf,
+    viz_conf=SynthVizConf,
     data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
     use_observation_mask=False,
 )
@@ -207,6 +235,7 @@ SyntheticDiffusionExperimentConf = _experiment_conf(
     training_conf=TrainingScalarsConf(steps=1000, log_every=25, amp=False),
     objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
     eval_conf=SynthEvalConf,
+    viz_conf=SynthVizConf,
     data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
     use_observation_mask=False,
 )
@@ -223,6 +252,7 @@ KDDGaussExperimentConf = _experiment_conf(
     training_conf=TrainingScalarsConf(steps=5000, log_every=50, checkpoint_every=500, amp=True),
     objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
     eval_conf=KDDEvalConf,
+    viz_conf=KDDVizConf,
     data_dim=6, latent_dim=8, emb_time_dim=32, covariate_dim=3,
     use_observation_mask=False,
 )
@@ -239,6 +269,7 @@ KDDDiffusionExperimentConf = _experiment_conf(
     training_conf=TrainingScalarsConf(steps=8000, log_every=50, checkpoint_every=500, amp=True),
     objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
     eval_conf=KDDEvalConf,
+    viz_conf=KDDVizConf,
     data_dim=6, latent_dim=8, emb_time_dim=32, covariate_dim=3,
     use_observation_mask=False,
 )

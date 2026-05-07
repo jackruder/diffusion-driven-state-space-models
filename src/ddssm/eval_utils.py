@@ -1,6 +1,14 @@
-"""Evaluation helpers and visualisation utilities for DDSSM models."""
+"""Evaluation helpers and visualisation utilities for DDSSM models.
+
+DEPRECATED in favour of ``ddssm.viz``. The composable plot functions
+in ``ddssm.viz.plots`` (``forecast_1d``, ``forecast_2d_spatial``,
+``metrics_csv``) replace ``visualize_results``. The function is kept
+here for backward compatibility with the legacy script entry points
+(``scripts/experiments/verifications.py``, ``evaluate_models.py``).
+"""
 
 import math
+import warnings
 
 import torch
 import matplotlib.pyplot as plt
@@ -40,6 +48,12 @@ def visualize_results(
         show_title: Whether to add a per-subplot title with the sample index.
         time_start_at_zero: If ``True``, the time axis starts at 0; otherwise at 1.
     """
+    warnings.warn(
+        "visualize_results is deprecated; prefer ddssm.viz.plots.plot_forecast_1d "
+        "or plot_forecast_2d_spatial driven via Experiment.visualize.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     model.eval()
 
     # Grab specific samples if requested, otherwise take the first batch

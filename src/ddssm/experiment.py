@@ -162,6 +162,7 @@ class Experiment:
     training: TrainingScalars = field(default_factory=TrainingScalars)
     objective: ObjectiveSpec | None = None
     eval: Any = None  # ddssm.eval.EvalSpec | None -- typed lazily to avoid circular import
+    viz: Any = None  # ddssm.viz.VizSpec | None -- typed lazily to avoid circular import
     seed: int | None = 0
     wandb_config: dict | None = None
 
@@ -261,6 +262,35 @@ class Experiment:
         return _run_evaluate(
             self,
             self.eval,
+            device=device,
+            run_dir=run_dir,
+            checkpoint_path=checkpoint_path,
+            csv_path=csv_path,
+        )
+
+    def visualize(
+        self,
+        *,
+        device: torch.device,
+        run_dir: str,
+        checkpoint_path: str | None = None,
+        csv_path: str | None = None,
+    ) -> list[str]:
+        """Run every plot listed on ``self.viz`` and return saved paths.
+
+        Independent of ``train`` and ``evaluate``: load a checkpoint,
+        produce PNGs, return the list of saved paths.
+        """
+        if self.viz is None:
+            raise ValueError(
+                "Experiment.visualize called but self.viz is None. Set a "
+                "VizSpec on the experiment to declare which plots to draw."
+            )
+        from .viz import visualize as _run_visualize
+
+        return _run_visualize(
+            self,
+            self.viz,
             device=device,
             run_dir=run_dir,
             checkpoint_path=checkpoint_path,
