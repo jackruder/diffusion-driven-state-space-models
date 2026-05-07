@@ -1,0 +1,50 @@
+# @package _global_
+#
+# Experiment preset: KDD Cup 2018 air-quality model recipe (Gaussian
+# transition). This preset captures the model + hyperparameter shape used
+# by the KDD experiment; the dataset wiring is left as ``none`` because
+# KDD requires a preprocessed payload that the Hydra app does not load.
+#
+# Two recommended workflows:
+#
+# 1. Use the recipe with the legacy KDD entry point::
+#
+#        python scripts/experiments/kdd/kdd_train.py \
+#            --config configs/kdd_gauss_beijing.yaml \
+#            --data_path /path/to/kdd_processed.pt
+#
+# 2. Build the model directly from this Hydra preset (no auto-training)::
+#
+#        python -m ddssm.app +experiment=kdd_gauss dataset=none
+
+defaults:
+  - override /transition: gaussian
+  - override /dataset: none
+  - _self_
+
+# Run-level dimensions (override at CLI when payload differs).
+data_dim: 6
+latent_dim: 8
+j: 1
+emb_time_dim: 32
+covariate_dim: 3
+use_observation_mask: false
+
+hyperparams:
+  batch_size: 128
+  grad_accum_steps: 1
+  lambda_schedule: linear
+  lambda_start: 0.001
+  lambda_end: 1.0
+  lambda_warmup_steps: 500
+  enc_lr: 5e-4
+  dec_lr: 5e-4
+  zinit_lr: 5e-4
+  trans_lr: 5e-4
+  S: 1
+
+training:
+  steps: 5000
+  log_every: 50
+  checkpoint_every: 500
+  amp: true

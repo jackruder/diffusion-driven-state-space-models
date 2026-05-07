@@ -9,7 +9,11 @@ defaults:
   - transition: gaussian        # TransitionGaussianConf | TransitionDiffusionConf
   - hyperparams: default        # DDSSMHyperParamsConf -- override at cfg.hyperparams.*
   - trainer: default            # DDSSMTrainerConf
+  - dataset: none               # ``conf/dataset/*`` -- ``none`` skips auto-train
+  - training: default           # ``conf/training/default.yaml`` -- fit() scalars
   - _self_
+  # Optional overlays applied last so they win over the bases above.
+  # Activate at the CLI with ``+experiment=NAME`` and ``+sweep=NAME``.
 
 # Run-level dimensions (override via CLI: data_dim=2 latent_dim=8 ...)
 j: 1
@@ -19,3 +23,6 @@ emb_time_dim: 16
 covariate_dim: 0
 use_observation_mask: true
 checkpoint_dir: ./checkpoints
+
+# Global RNG seed used by ``ddssm.app`` for torch / numpy when training.
+seed: 0

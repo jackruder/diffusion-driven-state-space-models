@@ -1,0 +1,53 @@
+# @package _global_
+#
+# Experiment preset: small Gaussian-transition DDSSM trained on synthetic
+# LGSSM data. Designed to fit on a laptop CPU in a few minutes; ideal for
+# smoke tests, CI, and tutorial walkthroughs.
+#
+# Usage::
+#
+#     python -m ddssm.app +experiment=synthetic_gauss
+#
+# Optuna sweep::
+#
+#     python -m ddssm.app --multirun \
+#         +experiment=synthetic_gauss +sweep=synthetic_lr \
+#         hydra/sweeper=ddssm_optuna
+
+defaults:
+  - override /transition: gaussian
+  - override /dataset: synthetic
+  - _self_
+
+# Run-level dimensions.
+data_dim: 1
+latent_dim: 4
+j: 1
+emb_time_dim: 16
+covariate_dim: 0
+use_observation_mask: false
+
+# Dataset overrides (synthetic preset already sets ``D: ${data_dim}``).
+dataset:
+  mode: lgssm
+  T: 64
+  N_per_split: 512
+
+# Trainer / hyperparameter overrides.
+hyperparams:
+  batch_size: 32
+  grad_accum_steps: 1
+  lambda_schedule: cosine
+  lambda_start: 0.001
+  lambda_end: 1.0
+  lambda_warmup_steps: 200
+  enc_lr: 5e-4
+  dec_lr: 5e-4
+  zinit_lr: 5e-4
+  trans_lr: 5e-4
+  S: 1
+
+training:
+  steps: 500
+  log_every: 25
+  amp: false

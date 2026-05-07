@@ -1,0 +1,46 @@
+# @package _global_
+#
+# Experiment preset: KDD Cup 2018 model recipe with a diffusion transition.
+# Like ``kdd_gauss``, the dataset wiring is intentionally ``none`` because
+# the KDD payload is loaded by the legacy ``kdd_train.py`` entry point.
+#
+# Usage with the legacy KDD trainer::
+#
+#     python scripts/experiments/kdd/kdd_train.py \
+#         --config configs/kdd_gauss_beijing.yaml configs/kdd_diffusion_override_beijing.yaml \
+#         --data_path /path/to/kdd_processed.pt
+#
+# Build only::
+#
+#     python -m ddssm.app +experiment=kdd_diffusion dataset=none
+
+defaults:
+  - override /transition: diffusion
+  - override /dataset: none
+  - _self_
+
+data_dim: 6
+latent_dim: 8
+j: 1
+emb_time_dim: 32
+covariate_dim: 3
+use_observation_mask: false
+
+hyperparams:
+  batch_size: 64
+  grad_accum_steps: 1
+  lambda_schedule: linear
+  lambda_start: 0.001
+  lambda_end: 1.0
+  lambda_warmup_steps: 500
+  enc_lr: 5e-4
+  dec_lr: 5e-4
+  zinit_lr: 5e-4
+  trans_lr: 5e-4
+  S: 1
+
+training:
+  steps: 8000
+  log_every: 50
+  checkpoint_every: 500
+  amp: true

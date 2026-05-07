@@ -1,0 +1,10 @@
+# Validation split companion for the ``synthetic`` dataset preset.
+# Selected automatically when ``training.validate_every > 0``.
+
+_target_: ddssm.data.synthetic.SyntheticDataset
+mode: lgssm
+split: val
+N_per_split: 1024
+T: 100
+D: ${data_dim}
+dataset_seed: 1234
