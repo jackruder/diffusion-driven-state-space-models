@@ -50,10 +50,12 @@ class EvalSpec:
     num_samples: int = 1
     T_split: int | None = None
     output_filename: str = "metrics.json"
-    # ``dict[str, Any]`` (not bare ``dict``) keeps OmegaConf in free-form mode
-    # so CLI overrides like ``experiment.eval.kwargs={metric: {key: val}}``
-    # can add arbitrary metric-name keys without a struct-validation error.
-    kwargs: dict[str, Any] = field(default_factory=dict)
+    # ``Any`` (not ``dict`` or ``dict[str, Any]``) is required here.
+    # OmegaConf sets struct=True on DictConfig values inside structured
+    # configs regardless of the dict key/value type parameters.  Only
+    # ``Any`` fully escapes struct checking, letting CLI overrides like
+    # ``experiment.eval.kwargs={metric: {key: val}}`` add arbitrary keys.
+    kwargs: Any = field(default_factory=dict)
 
 
 def _select_loader(experiment, split: str):
