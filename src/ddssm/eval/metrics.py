@@ -109,6 +109,28 @@ def _iter_forecast_batches(ctx: EvalContext):
             yield out["pred_samples"], out["pred_mean"], y_future
 
 
+@register_metric("energy_score")
+def eval_energy_score(ctx: EvalContext) -> Dict[str, Any]:
+    """Energy score (proper scoring rule) averaged over forecast batches.
+
+    ES(F, y) = E[||X - y||] - 0.5 * E[||X - X'||]
+    where X, X' are i.i.d. forecast samples and expectation is taken over S draws.
+    (D, L2) dimensions are collapsed into a single vector before computing norms.
+    """
+    scores = []
+    for pred_samples, _, y_future in _iter_forecast_batches(ctx):
+        B, S, D, L2 = pred_samples.shape
+        s_flat = pred_samples.reshape(B, S, -1)           # (B, S, D*L2)
+        y_flat = y_future.reshape(B, -1).unsqueeze(1)     # (B, 1, D*L2)
+        term1 = torch.norm(s_flat - y_flat, dim=-1).mean(dim=1)        # (B,)
+        diff = s_flat.unsqueeze(2) - s_flat.unsqueeze(1)               # (B,S,S,D*L2)
+        term2 = torch.norm(diff, dim=-1).mean(dim=(1, 2))              # (B,)
+        scores.append(float((term1 - 0.5 * term2).mean().item()))
+    if not scores:
+        return {"energy_score": float("nan")}
+    return {"energy_score": float(np.mean(scores))}
+
+
 @register_metric("mae")
 def eval_mae(ctx: EvalContext) -> Dict[str, Any]:
     """Mean absolute error of the forecast mean against the true future."""

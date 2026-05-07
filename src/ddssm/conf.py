@@ -279,6 +279,232 @@ store(SyntheticDiffusionExperimentConf, group="experiment", name="synthetic_diff
 store(KDDGaussExperimentConf, group="experiment", name="kdd_gauss")
 store(KDDDiffusionExperimentConf, group="experiment", name="kdd_diffusion")
 
+# ---------------------------------------------------------------------------
+# Eval/viz defaults for synthetic verification experiments.
+# ---------------------------------------------------------------------------
+
+HarmonicEvalConf = EvalSpecConf(metrics=["mae", "crps_sum"], split="val", num_samples=32)
+HarmonicVizConf = VizSpecConf(
+    plots=[
+        PlotSpecConf(name="forecast_1d", save_filename="forecast.png",
+                     kwargs={"n_show": 4}),
+        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
+                     kwargs={"keys": ["loss/total"], "log_y": True}),
+    ],
+    split="val",
+    num_samples=32,
+    T_split=32,
+)
+
+BimodalEvalConf = EvalSpecConf(metrics=["energy_score", "crps_sum"], split="val", num_samples=64)
+BimodalVizConf = VizSpecConf(
+    plots=[
+        PlotSpecConf(name="forecast_1d", save_filename="forecast.png",
+                     kwargs={"n_show": 4}),
+        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
+                     kwargs={"keys": ["loss/total"], "log_y": True}),
+    ],
+    split="val",
+    num_samples=64,
+    T_split=32,
+)
+
+Robot2DEvalConf = EvalSpecConf(metrics=["energy_score", "crps_sum"], split="val", num_samples=32)
+Robot2DVizConf = VizSpecConf(
+    plots=[
+        PlotSpecConf(name="forecast_2d_spatial", save_filename="forecast_2d.png",
+                     kwargs={"n_show": 4}),
+        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
+                     kwargs={"keys": ["loss/total"], "log_y": True}),
+    ],
+    split="val",
+    num_samples=32,
+    T_split=32,
+)
+
+# ---------------------------------------------------------------------------
+# Harmonic: clean sine-wave signal.
+# ---------------------------------------------------------------------------
+
+_HarmonicHyperGauss = DDSSMHyperParamsConf(
+    batch_size=32, grad_accum_steps=1, lambda_schedule="cosine",
+    lambda_start=0.001, lambda_end=1.0, lambda_warmup_steps=200,
+    enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4, S=1,
+)
+_HarmonicHyperDiff = DDSSMHyperParamsConf(
+    batch_size=32, grad_accum_steps=1, lambda_schedule="cosine",
+    lambda_start=0.001, lambda_end=1.0, lambda_warmup_steps=400,
+    enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4, S=1,
+)
+
+HarmonicGaussExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="harmonic", T=64, N_per_split=1024, batch_size=32),
+    transition_conf=TransitionGaussianConf,
+    hyperparams_conf=_HarmonicHyperGauss,
+    training_conf=TrainingScalarsConf(steps=1000, log_every=25, checkpoint_every=200, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=HarmonicEvalConf,
+    viz_conf=HarmonicVizConf,
+    data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+HarmonicDiffExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="harmonic", T=64, N_per_split=1024, batch_size=32),
+    transition_conf=TransitionDiffusionConf,
+    hyperparams_conf=_HarmonicHyperDiff,
+    training_conf=TrainingScalarsConf(steps=2000, log_every=25, checkpoint_every=500, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=HarmonicEvalConf,
+    viz_conf=HarmonicVizConf,
+    data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+# j=2: second-order AR latent — the transition sees the last two latent states.
+HarmonicGaussJ2ExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="harmonic", T=64, N_per_split=1024, batch_size=32),
+    transition_conf=TransitionGaussianConf,
+    hyperparams_conf=_HarmonicHyperGauss,
+    training_conf=TrainingScalarsConf(steps=1000, log_every=25, checkpoint_every=200, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=HarmonicEvalConf,
+    viz_conf=HarmonicVizConf,
+    data_dim=1, latent_dim=4, j=2, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+HarmonicDiffJ2ExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="harmonic", T=64, N_per_split=1024, batch_size=32),
+    transition_conf=TransitionDiffusionConf,
+    hyperparams_conf=_HarmonicHyperDiff,
+    training_conf=TrainingScalarsConf(steps=2000, log_every=25, checkpoint_every=500, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=HarmonicEvalConf,
+    viz_conf=HarmonicVizConf,
+    data_dim=1, latent_dim=4, j=2, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+# ---------------------------------------------------------------------------
+# Harmonic-noisy: sine wave with higher observation noise.
+# ---------------------------------------------------------------------------
+
+HarmonicNoisyGaussExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="harmonic-noisy", T=64, N_per_split=1024, batch_size=32),
+    transition_conf=TransitionGaussianConf,
+    hyperparams_conf=_HarmonicHyperGauss,
+    training_conf=TrainingScalarsConf(steps=1000, log_every=25, checkpoint_every=200, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=HarmonicEvalConf,
+    viz_conf=HarmonicVizConf,
+    data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+HarmonicNoisyDiffExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="harmonic-noisy", T=64, N_per_split=1024, batch_size=32),
+    transition_conf=TransitionDiffusionConf,
+    hyperparams_conf=_HarmonicHyperDiff,
+    training_conf=TrainingScalarsConf(steps=2000, log_every=25, checkpoint_every=500, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=HarmonicEvalConf,
+    viz_conf=HarmonicVizConf,
+    data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+# ---------------------------------------------------------------------------
+# Bimodal: multimodality comparison — energy score is the headline metric.
+# ---------------------------------------------------------------------------
+
+_BimodalHyperGauss = DDSSMHyperParamsConf(
+    batch_size=32, grad_accum_steps=1, lambda_schedule="cosine",
+    lambda_start=0.001, lambda_end=1.0, lambda_warmup_steps=200,
+    enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4, S=4,
+)
+_BimodalHyperDiff = DDSSMHyperParamsConf(
+    batch_size=32, grad_accum_steps=1, lambda_schedule="cosine",
+    lambda_start=0.001, lambda_end=1.0, lambda_warmup_steps=400,
+    enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4, S=4,
+)
+
+BimodalGaussExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="bimodal", T=64, N_per_split=1024, batch_size=32),
+    transition_conf=TransitionGaussianConf,
+    hyperparams_conf=_BimodalHyperGauss,
+    training_conf=TrainingScalarsConf(steps=1000, log_every=25, checkpoint_every=200, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=BimodalEvalConf,
+    viz_conf=BimodalVizConf,
+    data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+BimodalDiffExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="bimodal", T=64, N_per_split=1024, batch_size=32),
+    transition_conf=TransitionDiffusionConf,
+    hyperparams_conf=_BimodalHyperDiff,
+    training_conf=TrainingScalarsConf(steps=2000, log_every=25, checkpoint_every=500, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=BimodalEvalConf,
+    viz_conf=BimodalVizConf,
+    data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+# ---------------------------------------------------------------------------
+# Robot navigation 2D: spatial trajectory, D=2, j=2.
+# ---------------------------------------------------------------------------
+
+_RobotHyperGauss = DDSSMHyperParamsConf(
+    batch_size=32, grad_accum_steps=1, lambda_schedule="cosine",
+    lambda_start=0.001, lambda_end=1.0, lambda_warmup_steps=400,
+    enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4, S=1,
+)
+_RobotHyperDiff = DDSSMHyperParamsConf(
+    batch_size=32, grad_accum_steps=1, lambda_schedule="cosine",
+    lambda_start=0.001, lambda_end=1.0, lambda_warmup_steps=800,
+    enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4, S=1,
+)
+
+RobotGauss2DExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="robot-basis-pursuit", T=64, D=2,
+                                      N_per_split=1024, batch_size=32),
+    transition_conf=TransitionGaussianConf,
+    hyperparams_conf=_RobotHyperGauss,
+    training_conf=TrainingScalarsConf(steps=2000, log_every=50, checkpoint_every=500, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=Robot2DEvalConf,
+    viz_conf=Robot2DVizConf,
+    data_dim=2, latent_dim=6, j=2, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+RobotDiff2DExperimentConf = _experiment_conf(
+    data_conf=SyntheticDataModuleConf(mode="robot-basis-pursuit", T=64, D=2,
+                                      N_per_split=1024, batch_size=32),
+    transition_conf=TransitionDiffusionConf,
+    hyperparams_conf=_RobotHyperDiff,
+    training_conf=TrainingScalarsConf(steps=4000, log_every=50, checkpoint_every=500, amp=False),
+    objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=Robot2DEvalConf,
+    viz_conf=Robot2DVizConf,
+    data_dim=2, latent_dim=6, j=2, emb_time_dim=16, covariate_dim=0,
+    use_observation_mask=False,
+)
+
+store(HarmonicGaussExperimentConf, group="experiment", name="harmonic_gauss")
+store(HarmonicDiffExperimentConf, group="experiment", name="harmonic_diff")
+store(HarmonicGaussJ2ExperimentConf, group="experiment", name="harmonic_gauss_j2")
+store(HarmonicDiffJ2ExperimentConf, group="experiment", name="harmonic_diff_j2")
+store(HarmonicNoisyGaussExperimentConf, group="experiment", name="harmonic_noisy_gauss")
+store(HarmonicNoisyDiffExperimentConf, group="experiment", name="harmonic_noisy_diff")
+store(BimodalGaussExperimentConf, group="experiment", name="bimodal_gauss")
+store(BimodalDiffExperimentConf, group="experiment", name="bimodal_diff")
+store(RobotGauss2DExperimentConf, group="experiment", name="robot_gauss_2d")
+store(RobotDiff2DExperimentConf, group="experiment", name="robot_diff_2d")
+
 # Materialise the store into Hydra's ConfigStore so @hydra.main can resolve it.
 # Importing this module is sufficient to activate the registrations.
 store.add_to_hydra_store(overwrite_ok=True)
@@ -369,6 +595,22 @@ __all__ = [
     "SyntheticDiffusionExperimentConf",
     "KDDGaussExperimentConf",
     "KDDDiffusionExperimentConf",
+    "HarmonicEvalConf",
+    "HarmonicVizConf",
+    "HarmonicGaussExperimentConf",
+    "HarmonicDiffExperimentConf",
+    "HarmonicGaussJ2ExperimentConf",
+    "HarmonicDiffJ2ExperimentConf",
+    "HarmonicNoisyGaussExperimentConf",
+    "HarmonicNoisyDiffExperimentConf",
+    "BimodalEvalConf",
+    "BimodalVizConf",
+    "BimodalGaussExperimentConf",
+    "BimodalDiffExperimentConf",
+    "Robot2DEvalConf",
+    "Robot2DVizConf",
+    "RobotGauss2DExperimentConf",
+    "RobotDiff2DExperimentConf",
     "StageLrsConf",
     "StageTrainableConf",
     "StageSchedulerConf",
