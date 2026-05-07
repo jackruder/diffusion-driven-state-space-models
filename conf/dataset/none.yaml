@@ -1,5 +1,0 @@
-# No dataset attached: ``ddssm.app`` will only build the model + trainer
-# and return without invoking ``trainer.fit``. Useful for smoke tests
-# (``python -m ddssm.app dataset=none``) or interactive exploration.
-
-_target_: null

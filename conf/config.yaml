@@ -1,28 +1,11 @@
 # Top-level Hydra config for DDSSM.
-# Model, trainer, and transition groups are registered via ddssm.conf's
-# ZenStore (see add_to_hydra_store at module load). The defaults list
-# below selects one option from each group; per-run dimensions interpolate
-# into the registered Confs.
+#
+# All experiment-specific wiring (data module, model, transition,
+# hyperparameters, training scalars, objective) lives inside
+# ``cfg.experiment``. The default selects the small Synthetic + Gaussian
+# preset for smoke tests; pick another preset with ``experiment=NAME``
+# (see ``ddssm.conf`` for the registered names).
 
 defaults:
-  - model: default              # DDSSMConf, registered in ddssm.conf
-  - transition: gaussian        # TransitionGaussianConf | TransitionDiffusionConf
-  - hyperparams: default        # DDSSMHyperParamsConf -- override at cfg.hyperparams.*
-  - trainer: default            # DDSSMTrainerConf
-  - dataset: none               # ``conf/dataset/*`` -- ``none`` skips auto-train
-  - training: default           # ``conf/training/default.yaml`` -- fit() scalars
+  - experiment: synthetic_gauss
   - _self_
-  # Optional overlays applied last so they win over the bases above.
-  # Activate at the CLI with ``+experiment=NAME`` and ``+sweep=NAME``.
-
-# Run-level dimensions (override via CLI: data_dim=2 latent_dim=8 ...)
-j: 1
-data_dim: 1
-latent_dim: 4
-emb_time_dim: 16
-covariate_dim: 0
-use_observation_mask: true
-checkpoint_dir: ./checkpoints
-
-# Global RNG seed used by ``ddssm.app`` for torch / numpy when training.
-seed: 0
