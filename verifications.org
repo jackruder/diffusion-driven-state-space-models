@@ -496,6 +496,142 @@ python -m ddssm.visualize experiment=bimodal \
 The histogram should show two well-separated modes for the diffusion model and
 a single mode (collapsed Gaussian) for the Gaussian transition.
 
+*** Diffusion V2 vs V1 — head-to-head on bimodal
+
+#+BEGIN_QUOTE
+Comparison of the original EDM-style diffusion (~transition=diffusion~, "V1")
+against the VP-SDE / explicit-score-matching variant
+(~transition=diffusion_v2~, "V2") on the bimodal dataset.  V2 differs from V1
+in three places relevant to this comparison:
+
+1. Schedule: variance-preserving (~beta_min, beta_max~) on ~tau in [tau_min, 1]~
+   instead of EDM's ~rho~-power ~sigma~-grid.
+2. Loss: closed-form *explicit* score matching using the encoder posterior
+   ~(mu_t, sigma_t**2)~ at the target step (V1 uses standard DSM around the
+   sampled ~z_t~).
+3. Importance sampling: ~k_sampling_mode=importance~ uses the LSGM choice
+   ~p(tau) ∝ d(sigma_tilde**2)/dtau = beta(tau)/alpha(tau)**2~, which makes
+   the IS-corrected ESM loss an integral over ~sigma_tilde**2~ and removes
+   the time-discretisation contribution to MC variance.
+#+END_QUOTE
+
+Both runs share the same encoder/decoder/zinit, the same data module, and the
+same training-step budget; only the transition (and its sampling/loss) changes.
+Use the *same* ~lambda_warmup_steps~ as the V1 baseline so the rate term
+ramps in identically.
+
+**** 1. Train V2 (LSGM importance sampling)
+
+#+BEGIN_SRC sh
+python -m ddssm.app experiment=bimodal \
+    transition=diffusion_v2 \
+    'experiment.transition.schedule.k_sampling_mode=importance' \
+    'experiment.training.steps=2000' \
+    'experiment.training.checkpoint_every=500' \
+    'experiment.hyperparams.lambda_warmup_steps=400' \
+    hydra.run.dir=runs/bimodal/diff_v2
+#+END_SRC
+
+#+RESULTS:
+:
+
+#+BEGIN_SRC sh
+python -m ddssm.evaluate experiment=bimodal \
+    transition=diffusion_v2 \
+    'experiment.transition.schedule.k_sampling_mode=importance' \
+    +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff_v2/metrics.csv \
+    hydra.run.dir=runs/bimodal/diff_v2
+#+END_SRC
+
+#+RESULTS:
+:
+
+#+BEGIN_SRC sh
+python -m ddssm.visualize experiment=bimodal \
+    transition=diffusion_v2 \
+    'experiment.transition.schedule.k_sampling_mode=importance' \
+    +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff_v2/metrics.csv \
+    hydra.run.dir=runs/bimodal/diff_v2
+#+END_SRC
+
+**** 2. JSD comparison vs V1 (and uniform-IS V2 as ablation)
+
+Re-use the ~bimodal_jsd~ metric from the V1 section, then drop V2 into the
+existing comparison plot.  The uniform-IS V2 run is an ablation that isolates
+the contribution of LSGM importance sampling.
+
+#+BEGIN_SRC sh
+# V2 — LSGM importance sampling (already trained above)
+python -m ddssm.evaluate experiment=bimodal \
+    transition=diffusion_v2 \
+    'experiment.transition.schedule.k_sampling_mode=importance' \
+    +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff_v2/metrics.csv \
+    'experiment.eval.metrics=[bimodal_jsd]' \
+    'experiment.eval.num_samples=1024' \
+    'experiment.eval.T_split=63' \
+    'experiment.eval.kwargs={bimodal_jsd: {npz_path: bimodal_jsd.npz}}' \
+    hydra.run.dir=runs/bimodal/diff_v2
+
+# V2 — uniform sampling ablation
+python -m ddssm.app experiment=bimodal \
+    transition=diffusion_v2 \
+    'experiment.transition.schedule.k_sampling_mode=uniform' \
+    'experiment.training.steps=2000' \
+    'experiment.training.checkpoint_every=500' \
+    'experiment.hyperparams.lambda_warmup_steps=400' \
+    hydra.run.dir=runs/bimodal/diff_v2_uniform
+
+python -m ddssm.evaluate experiment=bimodal \
+    transition=diffusion_v2 \
+    'experiment.transition.schedule.k_sampling_mode=uniform' \
+    +checkpoint=runs/bimodal/diff_v2_uniform/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff_v2_uniform/metrics.csv \
+    'experiment.eval.metrics=[bimodal_jsd]' \
+    'experiment.eval.num_samples=1024' \
+    'experiment.eval.T_split=63' \
+    'experiment.eval.kwargs={bimodal_jsd: {npz_path: bimodal_jsd.npz}}' \
+    hydra.run.dir=runs/bimodal/diff_v2_uniform
+#+END_SRC
+
+**** 3. Cross-model comparison plot (V1 vs V2 LSGM vs V2 uniform vs LOCF)
+
+#+BEGIN_SRC sh
+python scripts/experiments/plot_bimodal_compare.py \
+    --runs gauss=runs/bimodal/gauss/bimodal_jsd.npz \
+           v1=runs/bimodal/diff/bimodal_jsd.npz \
+           v2_lsgm=runs/bimodal/diff_v2/bimodal_jsd.npz \
+           v2_uniform=runs/bimodal/diff_v2_uniform/bimodal_jsd.npz \
+           locf=runs/bimodal/locf/bimodal_jsd.npz \
+    --out_jsd     runs/bimodal/compare_v2/jsd.png \
+    --out_density runs/bimodal/compare_v2/density.png \
+    --center_coefs 0.9 1.0
+#+END_SRC
+
+**** 4. Single-point forecast distribution (V2)
+
+#+BEGIN_SRC sh
+python -m ddssm.visualize experiment=bimodal \
+    transition=diffusion_v2 \
+    'experiment.transition.schedule.k_sampling_mode=importance' \
+    +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff_v2/metrics.csv \
+    'experiment.viz.plots=[{name: forecast_distribution, save_filename: dist_v2.png, kwargs: {series_idx: 0, dim_idx: 0, t_future_idx: 0}}]' \
+    'experiment.viz.num_samples=1024' \
+    hydra.run.dir=runs/bimodal/diff_v2
+#+END_SRC
+
+**** Expected behavior
+
+- Both diffusion variants resolve both modes; the Gaussian baseline collapses.
+- *V2 LSGM* should match or improve on V1 in mean JSD with lower variance
+  across timesteps (the LSGM IS reduces gradient-noise on the rare large-~tau~
+  steps that dominate mode coverage).
+- *V2 uniform* (ablation) is expected to underperform *V2 LSGM*, especially
+  for the ~a=0.9~ center coefficient where the modes are closer.
+
 ** Robot Navigation 2D
 
 A 2-D agent navigates around a square obstacle, producing spatial ~(x, y)~

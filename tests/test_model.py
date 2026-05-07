@@ -261,7 +261,9 @@ def test_diffusion_transition_kl_mc_entropy():
 # DiffusionV2Transition (VP-SDE, ESM)
 # ---------------------------------------------------------------------------
 
-def _make_diffusion_v2_transition(num_steps=4, S_k=1, k_chunk=1):
+def _make_diffusion_v2_transition(
+    num_steps=4, S_k=1, k_chunk=1, k_sampling_mode="uniform"
+):
     return DiffusionV2Transition(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
         unet=partial(
@@ -275,6 +277,7 @@ def _make_diffusion_v2_transition(num_steps=4, S_k=1, k_chunk=1):
         ),
         schedule=DiffusionV2ScheduleConfig(
             num_steps=num_steps, S_k=S_k, k_chunk=k_chunk,
+            k_sampling_mode=k_sampling_mode,
         ),
     )
 
@@ -283,8 +286,8 @@ def test_diffusion_v2_transition_builds():
     """DiffusionV2Transition registers VP-SDE buffers of the expected length."""
     dt = _make_diffusion_v2_transition(num_steps=10)
     expected = (
-        "alpha", "sigma_tilde", "wtilde", "c_skip", "c_out",
-        "c_in", "c_noise", "beta", "tau", "p_k",
+        "alpha", "sigma_tilde", "wtilde", "dsigma2_tilde_dtau",
+        "c_skip", "c_out", "c_in", "c_noise", "beta", "tau", "p_k",
     )
     for buf in expected:
         assert buf in dt._buffers, f"Missing buffer: {buf}"
@@ -293,6 +296,31 @@ def test_diffusion_v2_transition_builds():
         )
     # p_k is uniform by default, sums to 1.
     assert torch.allclose(dt.p_k.sum(), torch.tensor(1.0))
+
+
+def test_diffusion_v2_lsgm_importance_sampling_pk():
+    """`importance` mode must produce p_k ∝ d(sigma_tilde**2)/dtau (LSGM)."""
+    dt = _make_diffusion_v2_transition(num_steps=8, k_sampling_mode="importance")
+    expected = dt.dsigma2_tilde_dtau / dt.dsigma2_tilde_dtau.sum()
+    assert torch.allclose(dt.p_k, expected, atol=1e-6), (
+        "importance-mode p_k should be proportional to d(sigma_tilde**2)/dtau"
+    )
+    assert torch.allclose(dt.p_k.sum(), torch.tensor(1.0))
+
+
+def test_diffusion_v2_transition_kl_importance_mode_runs():
+    """End-to-end transition_kl with LSGM importance sampling stays finite."""
+    trans = _make_diffusion_v2_transition(k_sampling_mode="importance")
+    zs, logq, mus, logvars, time_emb = _make_inputs()
+    out = trans.transition_kl(
+        enc_stats={"mus": mus, "logvars": logvars},
+        zs=zs, logq_paths=logq, time_embed=time_emb,
+    )
+    assert set(out.keys()) == {"kl", "L_p", "L_q"}
+    for v in out.values():
+        assert v.ndim == 0
+        assert torch.isfinite(v).item()
+    assert torch.allclose(out["kl"], out["L_p"] - out["L_q"])
 
 
 def test_diffusion_v2_transition_kl_closed_form_entropy():

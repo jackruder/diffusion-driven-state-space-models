@@ -162,9 +162,23 @@ class DiffusionV2Transition(BaseTransition):
         # ESM loss weight w(tau) = beta(tau) * alpha**2 / (1 - alpha**2)
         wtilde = beta * alpha2 / one_minus_alpha2
 
+        # LSGM-style importance-sampling density for the sigma_tilde**2-
+        # parameterized loss: p(tau) ∝ d(sigma_tilde**2)/dtau.
+        #   sigma_tilde**2 = (1 - alpha**2) / alpha**2 = 1/alpha**2 - 1
+        #   d(sigma_tilde**2)/dtau = -1/alpha**4 * d(alpha**2)/dtau
+        #                          = -1/alpha**4 * (-beta * alpha**2)
+        #                          = beta / alpha**2
+        # Sampling tau ~ p re-expresses the loss as an integral over
+        # sigma_tilde**2 (LSGM Eq. 8 / VP-SDE variant), so the MC estimator's
+        # variance is independent of the time discretisation.
+        dsigma2_tilde_dtau = beta / alpha2.clamp_min(eps64)
+
         self.register_buffer("alpha", alpha.to(torch.float32))
         self.register_buffer("sigma_tilde", sigma_tilde.to(torch.float32))
         self.register_buffer("wtilde", wtilde.to(torch.float32))
+        self.register_buffer(
+            "dsigma2_tilde_dtau", dsigma2_tilde_dtau.to(torch.float32)
+        )
         self.register_buffer("c_skip", c_skip.to(torch.float32))
         self.register_buffer("c_out", c_out.to(torch.float32))
         self.register_buffer("c_in", c_in.to(torch.float32))
@@ -173,11 +187,17 @@ class DiffusionV2Transition(BaseTransition):
         self.register_buffer("tau", tau.to(torch.float32))
 
         # Sampling probabilities p_k for the tau index.
+        #
+        # ``"uniform"``     : p_k = 1/K (no IS).
+        # ``"importance"``  : LSGM-style p_k ∝ d(sigma_tilde**2)/dtau, optionally
+        #                     tilted by ``pk_gamma`` (gamma=1 reproduces LSGM
+        #                     exactly; gamma=0 reduces to uniform).  ``pk_floor``
+        #                     guards against zero mass before normalisation.
         self.gamma = float(schedule.pk_gamma)
         self.gfloor = float(schedule.pk_floor)
         ismode = schedule.k_sampling_mode
         if ismode == "importance":
-            p_k = self.wtilde.detach().to(dtype=torch.float32)
+            p_k = self.dsigma2_tilde_dtau.detach().to(dtype=torch.float32)
             p_k = p_k.clamp_min(1e-12).pow(self.gamma)
             p_k = p_k.clamp_min(self.gfloor)
             p_k = p_k / p_k.sum()
