@@ -63,7 +63,7 @@ The repo provides one reusable sweeper preset at
 python -m ddssm.app --multirun \
     hydra/sweeper=ddssm_optuna \
     hydra.sweeper.study_name=ddssm_example \
-    hydra.sweeper.storage=sqlite:///ddssm_optuna.db \
+    hydra.sweeper.storage=sqlite:///ddssm_example.db \
     hydra.sweeper.n_trials=50 \
     'hydra.sweeper.params.hyperparams.enc_lr=interval(1e-5,1e-3)' \
     'hydra.sweeper.params.hyperparams.batch_size=choice(32,64,128)'
