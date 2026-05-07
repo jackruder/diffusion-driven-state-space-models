@@ -1,7 +1,6 @@
 """Gaussian distribution helpers: log-probability, entropy, and parameterisation heads."""
 
 import math
-from dataclasses import dataclass
 from typing import TypedDict
 
 import torch
@@ -79,20 +78,6 @@ class GaussianStats(TypedDict, total=False):
     # e.g., 'base_logqs': torch.Tensor  # if you track flow base log density
 
 
-@dataclass
-class GaussianHeadConfig:
-    """Architectural config for ``GaussianHead``.
-
-    Excludes shape params ``in_features`` / ``out_features`` which are
-    derived from the enclosing module.
-    """
-
-    init_logvar: float = 0.0
-    var_min: float = 1e-6
-    clamp_logvar_min: float = -9.0
-    clamp_logvar_max: float = 6.0
-
-
 class GaussianHead(nn.Module):
     """Takes a feature vector and outputs mean and log-variance for a
     Gaussian distribution, with numerical stability guarantees.
@@ -163,10 +148,13 @@ class GaussianHead(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Hydra-zen config (auto-generated from constructor signature)
+# Hydra-zen partial config: parents fill in ``in_features`` / ``out_features``
+# at construction time. Instantiating this config returns a partial callable
+# that the parent module invokes with the shape kwargs.
 # ---------------------------------------------------------------------------
 
 GaussianHeadConf = builds(
     GaussianHead,
     populate_full_signature=True,
+    zen_partial=True,
 )

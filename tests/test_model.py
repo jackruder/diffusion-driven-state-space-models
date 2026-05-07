@@ -14,7 +14,7 @@ from ddssm.diffnets import (
     FeatureMixerConfig,
     ResidualBlockConfig,
 )
-from ddssm.gaussians import GaussianHeadConfig
+from ddssm.gaussians import GaussianHead
 from ddssm.futsum import FutureSummaryConfig
 from ddssm.transitions.diffusion import DiffusionScheduleConfig
 from types import SimpleNamespace
@@ -39,7 +39,7 @@ _CTX = ContextProducerConfig(
         feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
     ),
 )
-_GH = GaussianHeadConfig()
+_GH = GaussianHead  # zen_partial-style: parents call _GH(in_features=..., out_features=...)
 _FS = FutureSummaryConfig(summary_dim=CHANNELS, num_layers=1)
 
 

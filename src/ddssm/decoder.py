@@ -1,7 +1,7 @@
 """Decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history."""
 
 import math
-from typing import Tuple
+from typing import Callable, Tuple
 
 import torch
 import torch.nn as nn
@@ -9,7 +9,7 @@ import torch.nn as nn
 from hydra_zen import builds
 
 from .diffnets import ContextProducer, ContextProducerConfig
-from .gaussians import GaussianHead, GaussianHeadConfig
+from .gaussians import GaussianHead, GaussianHeadConf
 from .net_utils import hist_abs_time_tokens
 
 
@@ -32,13 +32,13 @@ class Decoder(nn.Module):
         hidden_dim: int = 64,
         mask_emb_dim: int = 8,
         context: ContextProducerConfig | None = None,
-        gaussian_head: GaussianHeadConfig | None = None,
+        gaussian_head: Callable[..., GaussianHead] | None = None,
     ) -> None:
         super().__init__()
         if context is None:
             context = ContextProducerConfig()
         if gaussian_head is None:
-            gaussian_head = GaussianHeadConfig()
+            gaussian_head = GaussianHead
 
         self.data_dim = data_dim
         self.latent_dim = latent_dim
@@ -82,19 +82,15 @@ class Decoder(nn.Module):
         )
 
         # -- Gaussian output head --
-        self.gaussian_head = GaussianHead(
+        self.gaussian_head = gaussian_head(
             in_features=head_in_dim,
             out_features=self.data_dim,
-            init_logvar=gaussian_head.init_logvar,
-            var_min=gaussian_head.var_min,
-            clamp_logvar_min=gaussian_head.clamp_logvar_min,
-            clamp_logvar_max=gaussian_head.clamp_logvar_max,
         )
 
         self.context_producer = torch.compile(self.context_producer, dynamic=True)
 
         # Variance prior parameters
-        self.logvar_prior_mean = gaussian_head.init_logvar
+        self.logvar_prior_mean = self.gaussian_head.init_logvar
         self.logvar_prior_std = 1.0
 
     def forward_unpadded(
@@ -333,6 +329,6 @@ class Decoder(nn.Module):
 DecoderConf = builds(
     Decoder,
     context=ContextProducerConfig(),
-    gaussian_head=GaussianHeadConfig(),
+    gaussian_head=GaussianHeadConf(),
     populate_full_signature=True,
 )

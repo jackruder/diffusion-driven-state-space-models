@@ -41,6 +41,8 @@ encoder:
         nheads: 8
         n_layers: 2
   gaussian_head:
+    _target_: ddssm.gaussians.GaussianHead
+    _partial_: true
     init_logvar: 0.0
     var_min: 1.0e-6
     clamp_logvar_min: -10.0
@@ -75,6 +77,8 @@ decoder:
         nheads: 8
         n_layers: 2
   gaussian_head:
+    _target_: ddssm.gaussians.GaussianHead
+    _partial_: true
     init_logvar: 0.0
     var_min: 1.0e-6
     clamp_logvar_min: -9.0
@@ -113,11 +117,15 @@ z_init:
         nheads: 8
         n_layers: 2
   gaussian_head:
+    _target_: ddssm.gaussians.GaussianHead
+    _partial_: true
     init_logvar: 0.0
     var_min: 1.0e-6
     clamp_logvar_min: -10.0
     clamp_logvar_max: 6.0
   aux_posterior_head:
+    _target_: ddssm.gaussians.GaussianHead
+    _partial_: true
     init_logvar: 0.0
     var_min: 1.0e-6
     clamp_logvar_min: -10.0

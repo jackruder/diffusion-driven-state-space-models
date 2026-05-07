@@ -20,6 +20,8 @@ transition:
         nheads: 8
         n_layers: 2
   gaussian_head:
+    _target_: ddssm.gaussians.GaussianHead
+    _partial_: true
     init_logvar: 0.0
     var_min: 1.0e-6
     clamp_logvar_min: -9.0

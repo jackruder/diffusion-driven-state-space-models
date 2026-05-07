@@ -32,7 +32,6 @@ from .decoder import DecoderConf
 from .transitions.transitions import GaussianTransitionConf
 from .transitions.diffusion import DiffusionTransitionConf
 from .diffnets import ContextProducerConfig
-from .gaussians import GaussianHeadConfig
 from .futsum import FutureSummaryConfig
 
 
