@@ -50,11 +50,11 @@ encoder:
     clamp_logvar_min: -10.0
     clamp_logvar_max: 6.0
   fut_summary:
-    type: gru
+    _target_: ddssm.futsum.GRUFutureSummary
+    _partial_: true
     summary_dim: 64
     num_layers: 2
-    gru:
-      gru_layers: 1
+    gru_layers: 1
 
 # ---- decoder ----
 decoder:

@@ -31,7 +31,6 @@ from .encoder import GaussianEncoderConf, GaussianInitPriorConf
 from .decoder import DecoderConf
 from .transitions.transitions import GaussianTransitionConf
 from .transitions.diffusion import DiffusionTransitionConf
-from .futsum import FutureSummaryConfig
 
 
 # ---------------------------------------------------------------------------

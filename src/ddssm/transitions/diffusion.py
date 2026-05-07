@@ -2,7 +2,8 @@
 
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, final
+from functools import partial
+from typing import Any, Callable, Dict, Optional, final
 
 import torch
 import torch.nn as nn
@@ -11,7 +12,7 @@ from hydra_zen import builds
 
 from ..windows import WindowBuilder
 
-from ..diffnets import CSDIUnet, CSDIUnetConfig
+from ..diffnets import CSDIUnet, CSDIUnetConf
 from ..net_utils import (
     get_side_info,
 )
@@ -47,13 +48,13 @@ class DiffusionTransition(BaseTransition):
         j: int,
         emb_time_dim: int,
         covariate_dim: int = 0,
-        unet: CSDIUnetConfig | None = None,
+        unet: Callable[..., CSDIUnet] | None = None,
         schedule: DiffusionScheduleConfig | None = None,
     ) -> None:
         super().__init__()
 
         if unet is None:
-            unet = CSDIUnetConfig()
+            unet = partial(CSDIUnet, channels=64, n_layers=4, embedding_dim=128)
         if schedule is None:
             schedule = DiffusionScheduleConfig()
 
@@ -69,17 +70,12 @@ class DiffusionTransition(BaseTransition):
             self.emb_time_dim + self.covariate_dim + self.emb_feature_dim + 1
         )
 
-        self.diffmodel = CSDIUnet(
+        self.diffmodel = unet(
             output_len=1,  # predict 1 latent step
             diffusion_steps=schedule.num_steps,
             latent_dim=self.latent_dim,
             latent_history_len=self.j,
             side_dim=self.side_dim,
-            channels=unet.channels,
-            n_layers=unet.n_layers,
-            embedding_dim=unet.embedding_dim,
-            projection_dim=unet.projection_dim,
-            residual_block=unet.residual_block,
         )
 
         self.diffmodel = torch.compile(self.diffmodel)
@@ -745,7 +741,7 @@ class DiffusionTransition(BaseTransition):
 
 DiffusionTransitionConf = builds(
     DiffusionTransition,
-    unet=CSDIUnetConfig(),
+    unet=CSDIUnetConf(),
     schedule=DiffusionScheduleConfig(),
     populate_full_signature=True,
 )

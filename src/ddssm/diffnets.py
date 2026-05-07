@@ -2,7 +2,7 @@
 
 import math
 from dataclasses import dataclass, field
-from typing import Optional, final
+from typing import final
 
 import torch
 import torch.nn as nn
@@ -231,16 +231,6 @@ def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_lay
     if feature_type == "identity":
         return IdentityLayer()
     raise ValueError(f"Unknown feature_type: {feature_type!r}. Choose from 'transformer', 'conv', 'identity'.")
-
-
-# ---------------------------------------------------------------------------
-# Hydra-zen layer configs (channels is MISSING – set by the parent module)
-# ---------------------------------------------------------------------------
-
-ConvTimeLayerConf = builds(ConvTimeLayer, populate_full_signature=True)
-GRUTimeLayerConf = builds(GRUTimeLayer, populate_full_signature=True)
-TransformerFeatureLayerConf = builds(TransformerFeatureLayer, populate_full_signature=True)
-ConvFeatureLayerConf = builds(ConvFeatureLayer, populate_full_signature=True)
 
 
 @dataclass
@@ -526,31 +516,20 @@ class CSDIUnet(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Hydra-zen configs for DiffusionEmbedding and CSDIUnet
+# Hydra-zen partial config for CSDIUnet.
+# Shape kwargs (output_len, diffusion_steps, latent_dim, latent_history_len,
+# side_dim) are filled in by the enclosing module at construction time.
+# Architectural defaults match the old CSDIUnetConfig dataclass.
 # ---------------------------------------------------------------------------
 
-DiffusionEmbeddingConf = builds(DiffusionEmbedding, populate_full_signature=True)
-
-
-@dataclass
-class CSDIUnetConfig:
-    """Architectural config for ``CSDIUnet``.
-
-    Excludes shape params (``output_len``, ``diffusion_steps``, ``latent_dim``,
-    ``latent_history_len``, ``side_dim``) which are derived from the
-    enclosing ``DiffusionTransition``.
-    """
-
-    channels: int = 64
-    n_layers: int = 4
-    embedding_dim: int = 128
-    projection_dim: Optional[int] = None
-    residual_block: DiffResidualBlockConfig = field(
-        default_factory=DiffResidualBlockConfig
-    )
-
-
-CSDIUnetConf = builds(CSDIUnet, populate_full_signature=True)
+CSDIUnetConf = builds(
+    CSDIUnet,
+    channels=64,
+    n_layers=4,
+    embedding_dim=128,
+    populate_full_signature=True,
+    zen_partial=True,
+)
 
 
 @final

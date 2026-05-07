@@ -10,13 +10,13 @@ from ddssm.transitions.diffusion import DiffusionTransition
 from ddssm.dssd import DDSSM_base
 from ddssm.diffnets import (
     ContextProducer,
-    CSDIUnetConfig,
+    CSDIUnet,
     DiffResidualBlockConfig,
     FeatureMixerConfig,
     ResidualBlockConfig,
 )
 from ddssm.gaussians import GaussianHead
-from ddssm.futsum import FutureSummaryConfig
+from ddssm.futsum import GRUFutureSummary
 from ddssm.transitions.diffusion import DiffusionScheduleConfig
 from types import SimpleNamespace
 
@@ -42,7 +42,7 @@ _CTX = partial(
     ),
 )
 _GH = GaussianHead  # zen_partial-style: parents call _GH(in_features=..., out_features=...)
-_FS = FutureSummaryConfig(summary_dim=CHANNELS, num_layers=1)
+_FS = partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1)
 
 
 def make_encoder():
@@ -158,7 +158,8 @@ def test_diffusion_transition_builds():
     """DiffusionTransition should build with config objects and register expected buffers."""
     dt = DiffusionTransition(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        unet=CSDIUnetConfig(
+        unet=partial(
+            CSDIUnet,
             channels=CHANNELS,
             n_layers=1,
             embedding_dim=CHANNELS,

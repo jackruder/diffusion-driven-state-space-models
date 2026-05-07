@@ -15,7 +15,7 @@ import torch.nn as nn
 
 from hydra_zen import builds
 
-from .futsum import FutureSummary, build_future_summary, FutureSummaryConfig
+from .futsum import FutureSummary, GRUFutureSummary
 from .diffnets import ContextProducer, ContextProducerConf
 from .gaussians import (
     GaussianHead,
@@ -174,7 +174,7 @@ class GaussianEncoder(BaseEncoder):
         static_covariate_dim: int = 0,
         context: Callable[..., ContextProducer] | None = None,
         gaussian_head: Callable[..., GaussianHead] | None = None,
-        fut_summary: FutureSummaryConfig | None = None,
+        fut_summary: Callable[..., FutureSummary] | None = None,
     ) -> None:
         super().__init__()
         if context is None:
@@ -182,9 +182,8 @@ class GaussianEncoder(BaseEncoder):
         if gaussian_head is None:
             gaussian_head = partial(GaussianHead, clamp_logvar_min=-10.0)
         if fut_summary is None:
-            fut_summary = FutureSummaryConfig()
+            fut_summary = partial(GRUFutureSummary, summary_dim=64, num_layers=2)
 
-        self.summary_dim = fut_summary.summary_dim
         self.hidden_dim = hidden_dim  # H
         self.data_dim = data_dim
         self.latent_dim = latent_dim
@@ -217,13 +216,13 @@ class GaussianEncoder(BaseEncoder):
         )
 
         # -- future summary module --
-        self.fut_sum_module = build_future_summary(
-            config=fut_summary,
+        self.fut_sum_module = fut_summary(
             data_dim=data_dim,
             emb_time_dim=emb_time_dim + self.covariate_dim,
             use_mask=use_mask,
             static_embed_dim=self.total_static_dim,
         )
+        self.summary_dim = self.fut_sum_module.summary_dim
 
         # -- projection layers --
         # project future summary h_t: C_summary -> H
@@ -582,7 +581,7 @@ GaussianEncoderConf = builds(
     GaussianEncoder,
     context=ContextProducerConf(),
     gaussian_head=GaussianHeadConf(clamp_logvar_min=-10.0),
-    fut_summary=FutureSummaryConfig(),
+    fut_summary=GRUFutureSummaryConf(),
     populate_full_signature=True,
 )
 

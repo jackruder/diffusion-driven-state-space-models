@@ -11,7 +11,7 @@ from ddssm.transitions.transitions import GaussianTransition
 from ddssm.conf import DDSSMTrainerConf
 from ddssm.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
 from ddssm.gaussians import GaussianHead
-from ddssm.futsum import FutureSummaryConfig
+from ddssm.futsum import GRUFutureSummary
 from torch.utils.data import Dataset, DataLoader
 from types import SimpleNamespace
 
@@ -31,7 +31,7 @@ _CTX = partial(
     ),
 )
 _GH = GaussianHead  # zen_partial-style: parents call _GH(in_features=..., out_features=...)
-_FS = FutureSummaryConfig(summary_dim=CHANNELS, num_layers=1)
+_FS = partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1)
 
 
 def make_small_model():

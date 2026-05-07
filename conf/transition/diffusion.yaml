@@ -7,6 +7,8 @@ j: ${j}
 emb_time_dim: ${emb_time_dim}
 covariate_dim: ${covariate_dim}
 unet:
+  _target_: ddssm.diffnets.CSDIUnet
+  _partial_: true
   channels: 64
   n_layers: 4
   embedding_dim: 128
