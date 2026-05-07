@@ -15,7 +15,7 @@ import torch.nn as nn
 
 from hydra_zen import builds
 
-from .futsum import FutureSummary, GRUFutureSummary
+from .futsum import FutureSummary, GRUFutureSummary, GRUFutureSummaryConf
 from .diffnets import ContextProducer, ContextProducerConf
 from .gaussians import (
     GaussianHead,
