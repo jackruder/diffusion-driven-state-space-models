@@ -157,3 +157,10 @@ model:
   use_observation_mask: ${use_observation_mask}
   hyperparams: ${hyperparams}
   checkpoint_dir: ${checkpoint_dir}
+
+trainer:
+  _target_: ddssm.train.DDSSMTrainer
+  tensorboard_dir: runs/ddssm
+  csv_log_path: null
+  wandb_config: null
+  quiet: false

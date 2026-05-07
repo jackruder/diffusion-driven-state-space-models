@@ -1,12 +1,13 @@
 # tests/test_trainer.py
 import torch
 import pytest
+from hydra_zen import instantiate
 from ddssm.dssd import DDSSM_base
 from ddssm.train import DDSSMTrainer
 from ddssm.encoder import GaussianEncoder, GaussianInitPrior
 from ddssm.decoder import Decoder
 from ddssm.transitions.transitions import GaussianTransition
-from ddssm.conf import DDSSMHyperParamsConf
+from ddssm.conf import DDSSMTrainerConf
 from ddssm.diffnets import ContextProducerConfig, FeatureMixerConfig, ResidualBlockConfig
 from ddssm.gaussians import GaussianHeadConfig
 from ddssm.futsum import FutureSummaryConfig
@@ -69,3 +70,15 @@ def make_small_model():
 @pytest.fixture
 def small_model():
     return make_small_model()
+
+
+def test_trainer_conf_builds_instantiates(small_model, tmp_path):
+    trainer = instantiate(
+        DDSSMTrainerConf(
+            model=small_model,
+            device=torch.device("cpu"),
+            tensorboard_dir=str(tmp_path / "runs"),
+            quiet=True,
+        )
+    )
+    assert isinstance(trainer, DDSSMTrainer)

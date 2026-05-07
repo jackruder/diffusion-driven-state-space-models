@@ -20,7 +20,6 @@ from torch.profiler import (
 )
 
 from .dssd import DDSSM_base
-from .conf import build_model, DDSSMHyperParamsConf
 from .logging import (
     CSVLogger,
     MetricSpec,
@@ -252,6 +251,7 @@ class DDSSMTrainer:
         optimizer: optim.Optimizer | None = None,
         **kwargs,
     ) -> "DDSSMTrainer":
+        from .conf import build_model
         cfg = build_model(yaml_path)
         from hydra_zen import instantiate
         model = instantiate(cfg).to(device)

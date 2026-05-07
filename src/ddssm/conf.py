@@ -5,6 +5,7 @@ This module provides:
   - A ``DDSSMHyperParamsConf`` dataclass for training hyperparameters.
   - A ``DDSSMConf`` that assembles all sub-module configs into a single
     instantiable configuration (built with hydra-zen ``builds()``).
+  - A ``DDSSMTrainerConf`` for trainer construction via hydra-zen ``builds()``.
   - ``build_model(yaml_path)`` – a convenience helper that loads a Hydra YAML
     and returns an instantiable config.
 
@@ -181,6 +182,22 @@ DDSSMConf = builds(
 )
 
 store(DDSSMConf, group="model", name="default")
+
+from .train import DDSSMTrainer  # noqa: E402 – circular import avoided by lazy train import
+
+DDSSMTrainerConf = builds(
+    DDSSMTrainer,
+    model=MISSING,
+    device=MISSING,
+    optimizer=None,
+    csv_log_path=None,
+    tensorboard_dir="runs/ddssm",
+    wandb_config=None,
+    quiet=False,
+    populate_full_signature=False,
+)
+
+store(DDSSMTrainerConf, group="trainer", name="default")
 
 
 # ---------------------------------------------------------------------------

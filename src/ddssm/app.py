@@ -34,40 +34,11 @@ def main(cfg: DictConfig) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info("Training on device: %s", device)
 
-    # Build each sub-module individually, then build the model
-    encoder = instantiate(cfg.encoder)
-    decoder = instantiate(cfg.decoder)
-    z_init = instantiate(cfg.z_init)
-    transition = instantiate(cfg.transition)
-
-    from .dssd import DDSSM_base
-    from .conf import DDSSMHyperParamsConf
-    from types import SimpleNamespace
-
-    # Hyperparams from config
-    hp = cfg.hyperparams
-    hyperparams = SimpleNamespace(**OmegaConf.to_container(hp, resolve=True))
-
-    model = DDSSM_base(
-        encoder=encoder,
-        decoder=decoder,
-        z_init=z_init,
-        transition=transition,
-        j=cfg.j,
-        data_dim=cfg.data_dim,
-        latent_dim=cfg.latent_dim,
-        emb_time_dim=cfg.emb_time_dim,
-        covariate_dim=cfg.get("covariate_dim", 0),
-        use_observation_mask=cfg.get("use_observation_mask", True),
-        hyperparams=hyperparams,
-        checkpoint_dir=cfg.get("checkpoint_dir", "./checkpoints"),
-    ).to(device)
+    model = instantiate(cfg.model).to(device)
 
     log.info("Model built: %d parameters", sum(p.numel() for p in model.parameters()))
 
-    from .train import DDSSMTrainer
-
-    trainer = DDSSMTrainer(model, device)
+    trainer = instantiate(cfg.trainer, model=model, device=device)
     log.info("Trainer ready. Run trainer.train(...) to start training.")
     return trainer
 
