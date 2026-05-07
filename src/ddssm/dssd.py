@@ -7,12 +7,22 @@ from typing import Dict, List, final
 import torch
 import torch.nn as nn
 
-from .decoder import Decoder
-from .encoder import BaseEncoder, BaseInitPrior, GaussianEncoder, GaussianInitPrior
+from hydra_zen import builds
+from omegaconf import MISSING
+
+from .decoder import Decoder, DecoderConf
+from .encoder import (
+    BaseEncoder,
+    BaseInitPrior,
+    GaussianEncoder,
+    GaussianEncoderConf,
+    GaussianInitPrior,
+    GaussianInitPriorConf,
+)
 from .net_utils import (
     time_embedding,
 )
-from .transitions.transitions import GaussianTransition
+from .transitions.transitions import GaussianTransition, GaussianTransitionConf
 from .transitions.diffusion import DiffusionTransition
 
 
@@ -736,3 +746,79 @@ def _default_hyperparams():
         logvar_max=7.0,
         rewo=SimpleNamespace(D0=0.1, nu=1e-3, alpha=0.99, tau1=1.0, tau2=1.0),
     )
+
+
+# ---------------------------------------------------------------------------
+# Hyperparameters and top-level DDSSMConf, co-located with DDSSM_base.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class REWOConf:
+    D0: float = 0.1
+    nu: float = 1e-3
+    alpha: float = 0.99
+    tau1: float = 1.0
+    tau2: float = 1.0
+
+
+@dataclass
+class DDSSMHyperParamsConf:
+    """Training hyperparameters for DDSSM."""
+
+    S: int = 1
+    ema_decay: float = 0.999
+    weight_decay: float = 1e-2
+    batch_size: int = 16
+    grad_accum_steps: int = 4
+    t_chunk: int = 16
+    clip_grad_norm: float | None = None
+
+    lambda_schedule: str = "none"  # "none" | "linear" | "cosine" | "rewo"
+    lambda_start: float = 0.001
+    lambda_end: float = 1.0
+    lambda_warmup_steps: int = 10
+
+    enc_lr: float = 5e-4
+    dec_lr: float = 5e-4
+    zinit_lr: float = 5e-4
+    trans_lr: float = 5e-4
+
+    logvar_min: float = -7.0
+    logvar_max: float = 7.0
+
+    rewo: REWOConf = field(default_factory=REWOConf)
+
+
+DDSSMConf = builds(
+    DDSSM_base,
+    encoder=GaussianEncoderConf(
+        data_dim=MISSING,
+        latent_dim=MISSING,
+        j=MISSING,
+        emb_time_dim=MISSING,
+        use_mask=True,
+    ),
+    decoder=DecoderConf(
+        latent_dim=MISSING,
+        data_dim=MISSING,
+        j=MISSING,
+        emb_time_dim=MISSING,
+    ),
+    z_init=GaussianInitPriorConf(
+        latent_dim=MISSING,
+        j=MISSING,
+        emb_time_dim=MISSING,
+    ),
+    transition=GaussianTransitionConf(
+        latent_dim=MISSING,
+        j=MISSING,
+        emb_time_dim=MISSING,
+    ),
+    j=MISSING,
+    data_dim=MISSING,
+    latent_dim=MISSING,
+    emb_time_dim=16,
+    hyperparams=DDSSMHyperParamsConf(),
+    populate_full_signature=False,  # device is runtime; explicit fields only
+)
