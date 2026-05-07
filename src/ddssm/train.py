@@ -19,8 +19,11 @@ from torch.profiler import (
     tensorboard_trace_handler,
 )
 
+from hydra_zen import builds
+from omegaconf import MISSING
+
 from .dssd import DDSSM_base
-from .logging import (
+from .loggers import (
     CSVLogger,
     MetricSpec,
     MetricStore,
@@ -252,8 +255,8 @@ class DDSSMTrainer:
         **kwargs,
     ) -> "DDSSMTrainer":
         # Local import avoids circular dependency with ddssm.conf importing DDSSMTrainerConf.
-        from .conf import build_model
-        cfg = build_model(yaml_path)
+        from .conf import load_yaml_config
+        cfg = load_yaml_config(yaml_path)
         from hydra_zen import instantiate
         model = instantiate(cfg).to(device)
 
@@ -772,3 +775,17 @@ class DDSSMTrainer:
         finally:
             if hasattr(self, "metrics"):
                 self.metrics.close()
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen config for DDSSMTrainer, co-located with the class.
+# ``model`` and ``device`` are runtime-supplied (typically by app.py) and
+# left MISSING here. Other fields inherit defaults from the constructor.
+# ---------------------------------------------------------------------------
+
+DDSSMTrainerConf = builds(
+    DDSSMTrainer,
+    populate_full_signature=True,
+    model=MISSING,
+    device=MISSING,
+)

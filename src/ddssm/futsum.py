@@ -8,8 +8,6 @@ produce latent distributions q_ϕ(z_t | ·).
 import torch
 import torch.nn as nn
 
-from dataclasses import dataclass, field
-
 from hydra_zen import builds
 
 from .diffnets import TimeLayer, ConvTimeLayer, IdentityLayer  # , MambaTimeLayer
@@ -178,86 +176,23 @@ class TransformerFutureSummary(FutureSummary):
 
 
 # ---------------------------------------------------------------------------
-# Nested type-specific configs
+# Hydra-zen partial configs: parents fill in shape kwargs (data_dim,
+# emb_time_dim, use_mask, static_embed_dim) at construction time.
+# Variant selection is now via Hydra config groups / explicit _target_
+# rather than a type-string discriminator + factory function.
 # ---------------------------------------------------------------------------
 
-@dataclass
-class GRUFutureSummaryConfig:
-    """GRU-specific config for ``GRUFutureSummary``."""
-
-    gru_layers: int = 1
-
-
-@dataclass
-class TransformerFutureSummaryConfig:
-    """Transformer-specific config for ``TransformerFutureSummary``."""
-
-    nheads: int = 4
-    ff_mult: int = 4
-    dropout: float = 0.0
-    transformer_layers: int = 1
-
-
-@dataclass
-class FutureSummaryConfig:
-    """Architectural config for the future-summary module.
-
-    ``type`` selects the variant (``'gru'`` or ``'transformer'``).
-    Type-specific parameters live in the ``gru`` / ``transformer`` sub-configs,
-    so the parent module does not need to know which variant is active.
-
-    Excludes shape params (``data_dim``, ``emb_time_dim``, ``use_mask``,
-    ``static_embed_dim``) which are provided by the enclosing ``GaussianEncoder``.
-    """
-
-    type: str = "gru"
-    summary_dim: int = 64
-    num_layers: int = 2
-    gru: GRUFutureSummaryConfig = field(default_factory=GRUFutureSummaryConfig)
-    transformer: TransformerFutureSummaryConfig = field(
-        default_factory=TransformerFutureSummaryConfig
-    )
-
-
-def build_future_summary(
-    config: FutureSummaryConfig,
-    data_dim: int,
-    emb_time_dim: int,
-    use_mask: bool,
-    static_embed_dim: int = 0,
-) -> FutureSummary:
-    """Factory: create the appropriate FutureSummary from a ``FutureSummaryConfig``."""
-    if config.type == "gru":
-        return GRUFutureSummary(
-            data_dim=data_dim,
-            emb_time_dim=emb_time_dim,
-            use_mask=use_mask,
-            static_embed_dim=static_embed_dim,
-            summary_dim=config.summary_dim,
-            num_layers=config.num_layers,
-            gru_layers=config.gru.gru_layers,
-        )
-    if config.type == "transformer":
-        return TransformerFutureSummary(
-            data_dim=data_dim,
-            emb_time_dim=emb_time_dim,
-            use_mask=use_mask,
-            static_embed_dim=static_embed_dim,
-            summary_dim=config.summary_dim,
-            num_layers=config.num_layers,
-            nheads=config.transformer.nheads,
-            ff_mult=config.transformer.ff_mult,
-            dropout=config.transformer.dropout,
-            transformer_layers=config.transformer.transformer_layers,
-        )
-    raise NotImplementedError(
-        f"FutureSummary type {config.type!r} not implemented. Choose 'gru' or 'transformer'."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Hydra-zen configs – co-located with the classes they describe
-# ---------------------------------------------------------------------------
-
-GRUFutureSummaryConf = builds(GRUFutureSummary, populate_full_signature=True)
-TransformerFutureSummaryConf = builds(TransformerFutureSummary, populate_full_signature=True)
+GRUFutureSummaryConf = builds(
+    GRUFutureSummary,
+    summary_dim=64,
+    num_layers=2,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+TransformerFutureSummaryConf = builds(
+    TransformerFutureSummary,
+    summary_dim=64,
+    num_layers=2,
+    populate_full_signature=True,
+    zen_partial=True,
+)

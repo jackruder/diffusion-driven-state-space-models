@@ -17,7 +17,8 @@ Defines the ``BaseTransition`` interface and the concrete ``GaussianTransition``
 """
 
 import math
-from typing import Any, Dict, Tuple, Optional
+from functools import partial
+from typing import Any, Callable, Dict, Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -26,8 +27,8 @@ import torch.nn as nn
 from hydra_zen import builds
 
 from ..encoder import GaussianHead, ContextProducer
-from ..diffnets import ContextProducerConfig
-from ..gaussians import GaussianHeadConfig
+from ..diffnets import ContextProducerConf
+from ..gaussians import GaussianHeadConf
 
 
 class BaseTransition(nn.Module):
@@ -367,14 +368,14 @@ class GaussianTransition(BaseTransition):
         emb_time_dim: int,
         covariate_dim: int = 0,
         hidden_dim: int = 64,
-        context: ContextProducerConfig | None = None,
-        gaussian_head: GaussianHeadConfig | None = None,
+        context: Callable[..., ContextProducer] | None = None,
+        gaussian_head: Callable[..., GaussianHead] | None = None,
     ) -> None:
         super().__init__()
         if context is None:
-            context = ContextProducerConfig()
+            context = partial(ContextProducer, channels=8, num_layers=2)
         if gaussian_head is None:
-            gaussian_head = GaussianHeadConfig(clamp_logvar_min=-9.0)
+            gaussian_head = GaussianHead
 
         self.latent_dim = int(latent_dim)
         self.j = int(j)
@@ -387,28 +388,21 @@ class GaussianTransition(BaseTransition):
         self.z_hist_proj = nn.Linear(self.latent_dim, self.hidden_dim)
 
         # ContextProducer over length j, with no explicit mask features
-        self.context_producer = ContextProducer(
-            channels=context.channels,
-            num_layers=context.num_layers,
+        self.context_producer = context(
             combined_dim=self.hidden_dim,
             mask_tot_dim=0,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,
-            residual_block=context.residual_block,
         )
+
+        # Gaussian head over flattened context
+        head_in_dim = self.context_producer.channels * self.hidden_dim
 
         self.context_producer = torch.compile(self.context_producer, dynamic=True)
 
-        # Gaussian head over flattened context
-        head_in_dim = context.channels * self.hidden_dim
-
-        self.gaussian_head = GaussianHead(
+        self.gaussian_head = gaussian_head(
             in_features=int(head_in_dim),
             out_features=self.latent_dim,
-            init_logvar=gaussian_head.init_logvar,
-            var_min=gaussian_head.var_min,
-            clamp_logvar_min=gaussian_head.clamp_logvar_min,
-            clamp_logvar_max=gaussian_head.clamp_logvar_max,
         )
 
     # --------- helpers ----------
@@ -564,7 +558,7 @@ class GaussianTransition(BaseTransition):
 
 GaussianTransitionConf = builds(
     GaussianTransition,
-    context=ContextProducerConfig(),
-    gaussian_head=GaussianHeadConfig(clamp_logvar_min=-9.0),
+    context=ContextProducerConf(),
+    gaussian_head=GaussianHeadConf(),  # default clamp_logvar_min=-9.0 matches old config
     populate_full_signature=True,
 )

@@ -1,4 +1,5 @@
 # tests/test_trainer.py
+from functools import partial
 import torch
 import pytest
 from hydra_zen import instantiate
@@ -8,9 +9,9 @@ from ddssm.encoder import GaussianEncoder, GaussianInitPrior
 from ddssm.decoder import Decoder
 from ddssm.transitions.transitions import GaussianTransition
 from ddssm.conf import DDSSMTrainerConf
-from ddssm.diffnets import ContextProducerConfig, FeatureMixerConfig, ResidualBlockConfig
-from ddssm.gaussians import GaussianHeadConfig
-from ddssm.futsum import FutureSummaryConfig
+from ddssm.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
+from ddssm.gaussians import GaussianHead
+from ddssm.futsum import GRUFutureSummary
 from torch.utils.data import Dataset, DataLoader
 from types import SimpleNamespace
 
@@ -21,15 +22,16 @@ EMB_TIME = 8
 CHANNELS = 8
 NHEADS = 4
 
-_CTX = ContextProducerConfig(
+_CTX = partial(
+    ContextProducer,
     channels=CHANNELS,
     num_layers=1,
     residual_block=ResidualBlockConfig(
         feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
     ),
 )
-_GH = GaussianHeadConfig()
-_FS = FutureSummaryConfig(summary_dim=CHANNELS, num_layers=1)
+_GH = GaussianHead  # zen_partial-style: parents call _GH(in_features=..., out_features=...)
+_FS = partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1)
 
 
 def make_small_model():

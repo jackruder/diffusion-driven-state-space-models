@@ -1,166 +1,21 @@
-# Main Hydra configuration file for DDSSM.
-# Defaults list: selects one option from each config group.
+# Top-level Hydra config for DDSSM.
+# Model, trainer, and transition groups are registered via ddssm.conf's
+# ZenStore (see add_to_hydra_store at module load). The defaults list
+# below selects one option from each group; per-run dimensions interpolate
+# into the registered Confs.
 
 defaults:
-  - transition: gaussian  # config group: transition/gaussian.yaml | transition/diffusion.yaml
-  - experiment: null       # optional experiment override (e.g. experiment/kdd_gauss_beijing.yaml)
+  - model: default              # DDSSMConf, registered in ddssm.conf
+  - transition: gaussian        # TransitionGaussianConf | TransitionDiffusionConf
+  - hyperparams: default        # DDSSMHyperParamsConf -- override at cfg.hyperparams.*
+  - trainer: default            # DDSSMTrainerConf
   - _self_
 
-# ---- global dims (set per experiment) ----
+# Run-level dimensions (override via CLI: data_dim=2 latent_dim=8 ...)
 j: 1
 data_dim: 1
 latent_dim: 4
 emb_time_dim: 16
 covariate_dim: 0
-static_embed_dim: 0
 use_observation_mask: true
 checkpoint_dir: ./checkpoints
-
-# ---- encoder (GaussianEncoder) ----
-encoder:
-  _target_: ddssm.encoder.GaussianEncoder
-  data_dim: ${data_dim}
-  latent_dim: ${latent_dim}
-  j: ${j}
-  emb_time_dim: ${emb_time_dim}
-  use_mask: ${use_observation_mask}
-  hidden_dim: 64
-  fut_mask_emb_dim: 8
-  pad_mask_emb_dim: 8
-  covariate_dim: ${covariate_dim}
-  context:
-    channels: 8
-    num_layers: 2
-    residual_block:
-      time:
-        type: conv
-        kernel_size: 3
-        gru_layers: 1
-      feature:
-        type: transformer
-        nheads: 8
-        n_layers: 2
-  gaussian_head:
-    init_logvar: 0.0
-    var_min: 1.0e-6
-    clamp_logvar_min: -10.0
-    clamp_logvar_max: 6.0
-  fut_summary:
-    type: gru
-    summary_dim: 64
-    num_layers: 2
-    gru:
-      gru_layers: 1
-
-# ---- decoder ----
-decoder:
-  _target_: ddssm.decoder.Decoder
-  latent_dim: ${latent_dim}
-  data_dim: ${data_dim}
-  j: ${j}
-  emb_time_dim: ${emb_time_dim}
-  covariate_dim: ${covariate_dim}
-  hidden_dim: 64
-  mask_emb_dim: 8
-  context:
-    channels: 8
-    num_layers: 2
-    residual_block:
-      time:
-        type: conv
-        kernel_size: 3
-        gru_layers: 1
-      feature:
-        type: transformer
-        nheads: 8
-        n_layers: 2
-  gaussian_head:
-    init_logvar: 0.0
-    var_min: 1.0e-6
-    clamp_logvar_min: -9.0
-    clamp_logvar_max: 6.0
-
-# ---- initialisation prior ----
-z_init:
-  _target_: ddssm.encoder.GaussianInitPrior
-  latent_dim: ${latent_dim}
-  j: ${j}
-  emb_time_dim: ${emb_time_dim}
-  covariate_dim: ${covariate_dim}
-  hidden_dim: 64
-  context:
-    channels: 8
-    num_layers: 2
-    residual_block:
-      time:
-        type: conv
-        kernel_size: 3
-        gru_layers: 1
-      feature:
-        type: transformer
-        nheads: 8
-        n_layers: 2
-  aux_context:
-    channels: 8
-    num_layers: 2
-    residual_block:
-      time:
-        type: conv
-        kernel_size: 3
-        gru_layers: 1
-      feature:
-        type: transformer
-        nheads: 8
-        n_layers: 2
-  gaussian_head:
-    init_logvar: 0.0
-    var_min: 1.0e-6
-    clamp_logvar_min: -10.0
-    clamp_logvar_max: 6.0
-  aux_posterior_head:
-    init_logvar: 0.0
-    var_min: 1.0e-6
-    clamp_logvar_min: -10.0
-    clamp_logvar_max: 6.0
-
-# ---- hyperparameters ----
-hyperparams:
-  S: 1
-  ema_decay: 0.999
-  weight_decay: 0.01
-  batch_size: 16
-  grad_accum_steps: 4
-  t_chunk: 16
-  enc_lr: 5e-4
-  dec_lr: 5e-4
-  zinit_lr: 5e-4
-  trans_lr: 5e-4
-  logvar_min: -7.0
-  logvar_max: 7.0
-  lambda_schedule: none
-  lambda_start: 0.001
-  lambda_end: 1.0
-  lambda_warmup_steps: 10
-
-# ---- model wrapper ----
-model:
-  _target_: ddssm.dssd.DDSSM_base
-  encoder: ${encoder}
-  decoder: ${decoder}
-  z_init: ${z_init}
-  transition: ${transition}
-  j: ${j}
-  data_dim: ${data_dim}
-  latent_dim: ${latent_dim}
-  emb_time_dim: ${emb_time_dim}
-  covariate_dim: ${covariate_dim}
-  use_observation_mask: ${use_observation_mask}
-  hyperparams: ${hyperparams}
-  checkpoint_dir: ${checkpoint_dir}
-
-trainer:
-  _target_: ddssm.train.DDSSMTrainer
-  tensorboard_dir: runs/ddssm
-  csv_log_path: null
-  wandb_config: null
-  quiet: false

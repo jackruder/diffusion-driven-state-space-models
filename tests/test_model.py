@@ -1,4 +1,5 @@
 # tests/test_model.py
+from functools import partial
 import torch
 import pytest
 from ddssm.net_utils import get_side_info, time_embedding
@@ -8,14 +9,14 @@ from ddssm.transitions.transitions import GaussianTransition
 from ddssm.transitions.diffusion import DiffusionTransition
 from ddssm.dssd import DDSSM_base
 from ddssm.diffnets import (
-    ContextProducerConfig,
-    CSDIUnetConfig,
+    ContextProducer,
+    CSDIUnet,
     DiffResidualBlockConfig,
     FeatureMixerConfig,
     ResidualBlockConfig,
 )
-from ddssm.gaussians import GaussianHeadConfig
-from ddssm.futsum import FutureSummaryConfig
+from ddssm.gaussians import GaussianHead
+from ddssm.futsum import GRUFutureSummary
 from ddssm.transitions.diffusion import DiffusionScheduleConfig
 from types import SimpleNamespace
 
@@ -32,15 +33,16 @@ CHANNELS = 8
 NHEADS = 4
 
 # Small architectural configs reused across tests
-_CTX = ContextProducerConfig(
+_CTX = partial(
+    ContextProducer,
     channels=CHANNELS,
     num_layers=1,
     residual_block=ResidualBlockConfig(
         feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
     ),
 )
-_GH = GaussianHeadConfig()
-_FS = FutureSummaryConfig(summary_dim=CHANNELS, num_layers=1)
+_GH = GaussianHead  # zen_partial-style: parents call _GH(in_features=..., out_features=...)
+_FS = partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1)
 
 
 def make_encoder():
@@ -156,7 +158,8 @@ def test_diffusion_transition_builds():
     """DiffusionTransition should build with config objects and register expected buffers."""
     dt = DiffusionTransition(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        unet=CSDIUnetConfig(
+        unet=partial(
+            CSDIUnet,
             channels=CHANNELS,
             n_layers=1,
             embedding_dim=CHANNELS,
