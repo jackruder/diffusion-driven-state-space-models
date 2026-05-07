@@ -161,6 +161,7 @@ class Experiment:
     build_trainer: Callable[..., DDSSMTrainer]
     training: TrainingScalars = field(default_factory=TrainingScalars)
     objective: ObjectiveSpec | None = None
+    eval: Any = None  # ddssm.eval.EvalSpec | None -- typed lazily to avoid circular import
     seed: int | None = 0
     wandb_config: dict | None = None
 
@@ -231,6 +232,40 @@ class Experiment:
 
     # Backward-compat alias; ``ddssm.app`` calls ``train`` directly.
     run = train
+
+    def evaluate(
+        self,
+        *,
+        device: torch.device,
+        run_dir: str,
+        checkpoint_path: str | None = None,
+        csv_path: str | None = None,
+    ) -> dict:
+        """Compute the metrics listed on ``self.eval`` and save metrics.json.
+
+        Independent of ``train``: load a checkpoint, drive the data
+        module's eval-split loader, write a single JSON. No training
+        side effects.
+        """
+        if self.eval is None:
+            raise ValueError(
+                "Experiment.evaluate called but self.eval is None. Set an "
+                "EvalSpec on the experiment to declare which metrics to "
+                "compute."
+            )
+        # Local import keeps ``ddssm.eval`` out of the import path until
+        # someone actually evaluates -- avoids importing matplotlib /
+        # numpy-heavy modules during a vanilla training run.
+        from .eval import evaluate as _run_evaluate
+
+        return _run_evaluate(
+            self,
+            self.eval,
+            device=device,
+            run_dir=run_dir,
+            checkpoint_path=checkpoint_path,
+            csv_path=csv_path,
+        )
 
     def _wandb_kwargs(self, run_dir: str) -> dict | None:
         """Resolve ``wandb_config`` into kwargs for :class:`WandbLogger`.

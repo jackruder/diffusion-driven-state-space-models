@@ -34,6 +34,7 @@ from .data.datamodule import (
 )
 from .diffnets import ContextProducerConf, CSDIUnetConf
 from .dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
+from .eval.runner import EvalSpec
 from .experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
 from .gaussians import GaussianHeadConf
 from .train import DDSSMTrainer, DDSSMTrainerConf
@@ -108,6 +109,7 @@ KDDDataModuleConf = builds(
 TrainableModulesConf = builds(TrainableModules, populate_full_signature=True)
 TrainingScalarsConf = builds(TrainingScalars, populate_full_signature=True)
 ObjectiveSpecConf = builds(ObjectiveSpec, populate_full_signature=True)
+EvalSpecConf = builds(EvalSpec, populate_full_signature=True)
 
 # Pre-built ``trainable`` masks. Each experiment can pick one with
 # ``training=...`` style overrides or by passing the conf directly.
@@ -133,6 +135,7 @@ def _experiment_conf(
     hyperparams_conf,
     training_conf,
     objective_conf=None,
+    eval_conf=None,
     data_dim: int,
     latent_dim: int,
     j: int = 1,
@@ -155,6 +158,7 @@ def _experiment_conf(
         build_trainer=DDSSMTrainerPartial,
         training=training_conf,
         objective=objective_conf,
+        eval=eval_conf,
         seed=seed,
         data_dim=data_dim,
         latent_dim=latent_dim,
@@ -168,6 +172,13 @@ def _experiment_conf(
     )
 
 
+# Eval defaults per dataset family. Synthetic uses recon-only because
+# its sequence-format data has no canonical past/future split unless
+# the user picks one; KDD always splits at L1 (carried in metadata).
+SynthEvalConf = EvalSpecConf(metrics=["loss_tail", "recon_mse"], split="val")
+KDDEvalConf = EvalSpecConf(metrics=["mae", "crps_sum"], split="test", num_samples=32)
+
+
 # Synthetic + Gaussian transition: small LGSSM run for smoke tests / CI.
 SyntheticGaussExperimentConf = _experiment_conf(
     data_conf=SyntheticDataModuleConf(mode="lgssm", T=64, N_per_split=512, batch_size=32),
@@ -179,6 +190,7 @@ SyntheticGaussExperimentConf = _experiment_conf(
     ),
     training_conf=TrainingScalarsConf(steps=500, log_every=25, amp=False),
     objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=SynthEvalConf,
     data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
     use_observation_mask=False,
 )
@@ -194,6 +206,7 @@ SyntheticDiffusionExperimentConf = _experiment_conf(
     ),
     training_conf=TrainingScalarsConf(steps=1000, log_every=25, amp=False),
     objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=SynthEvalConf,
     data_dim=1, latent_dim=4, emb_time_dim=16, covariate_dim=0,
     use_observation_mask=False,
 )
@@ -209,6 +222,7 @@ KDDGaussExperimentConf = _experiment_conf(
     ),
     training_conf=TrainingScalarsConf(steps=5000, log_every=50, checkpoint_every=500, amp=True),
     objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=KDDEvalConf,
     data_dim=6, latent_dim=8, emb_time_dim=32, covariate_dim=3,
     use_observation_mask=False,
 )
@@ -224,6 +238,7 @@ KDDDiffusionExperimentConf = _experiment_conf(
     ),
     training_conf=TrainingScalarsConf(steps=8000, log_every=50, checkpoint_every=500, amp=True),
     objective_conf=ObjectiveSpecConf(metric="loss/total", split="train", tail_frac=0.1),
+    eval_conf=KDDEvalConf,
     data_dim=6, latent_dim=8, emb_time_dim=32, covariate_dim=3,
     use_observation_mask=False,
 )

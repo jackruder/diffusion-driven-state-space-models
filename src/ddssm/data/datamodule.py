@@ -41,6 +41,11 @@ class DataMetadata:
 
     Anything the model or trainer needs to know about the data lives here
     so the experiment can read shapes off a single source of truth.
+
+    ``forecast_split`` is the canonical past/future boundary index used
+    by forecasting metrics and visualizations. Windowed datasets (KDD)
+    set it to ``L1``; sequence datasets (synthetic) leave it ``None``
+    and let the eval/viz spec choose explicitly.
     """
 
     data_dim: int
@@ -50,6 +55,7 @@ class DataMetadata:
     static_cardinalities: tuple[int, ...] = field(default_factory=tuple)
     means: torch.Tensor | None = None
     stds: torch.Tensor | None = None
+    forecast_split: int | None = None
 
 
 @runtime_checkable
@@ -305,6 +311,7 @@ class KDDDataModule:
             static_cardinalities=static_cardinalities,
             means=means,
             stds=stds,
+            forecast_split=self.L1,
         )
         self._built = True
 
