@@ -27,7 +27,15 @@ Implements the model described in ``model-v2.org``.  Compared to V1
       s_q_tilde   = -(z_tilde - mu_t) / (sigma_t**2 + sigma_tilde**2)
       D_star      = z_tilde + sigma_tilde**2 * s_q_tilde
       F_star      = (D_star - c_skip * z_tilde) / c_out
-      loss = w(tau) / p(tau) * || F_psi(c_in*z_tilde, c_noise, z_hist) - F_star ||**2
+      loss        = (1/2) * dtau * w(tau) / p(tau)
+                    * || F_psi(c_in*z_tilde, c_noise, z_hist) - F_star ||**2
+
+  where ``dtau = (1 - tau_min) / K`` is the Riemann measure for the
+  uniform tau grid, and the leading ``1/2`` comes from the KL definition
+  ``KL = (1/2) * E_tau E_q[ g**2(tau) * ||s_q - s_p||**2 ]``.  Both
+  factors are baked into ``wtilde`` so that callers obtain a correctly
+  scaled per-step KL in nats (matching the dict contract of the V1
+  transition)..
 
   When the encoder does not expose ``mus`` / ``logvars`` we fall back to the
   degenerate case ``mu_t = z_t, sigma_t**2 = 0``, which recovers the standard
@@ -159,22 +167,30 @@ class DiffusionV2Transition(BaseTransition):
         c_in = alpha
         c_noise = 0.25 * torch.log(sigma_tilde.clamp_min(eps64))
 
-        # ESM loss weight w(tau) = beta(tau) * alpha**2 / (1 - alpha**2)
-        wtilde = beta * alpha2 / one_minus_alpha2
+        # Per-tau ESM weight w(tau) = beta(tau) * alpha**2 / (1 - alpha**2)
+        # (model-v2.org L506-509).  The per-step KL is the *integral*
+        #     L_t = (1/2) * E_{tau ~ Unif[tau_min, 1]} E_q[ w(tau) * ||F - F*||**2 ]
+        # so an unbiased single-MC-sample estimator with k ~ p_k requires
+        # the per-grid weight  (1/2) * dtau * w(tau_k) / p_k[k], where
+        # dtau = (1 - tau_min) / K is the Riemann measure that matches the
+        # uniform PMF on K grid points.  We bake (1/2) * dtau into ``wtilde``
+        # so callers get a correctly scaled KL in nats; ``w_per_tau`` is kept
+        # available as a separate buffer for diagnostics / sampling.
+        w_per_tau = beta * alpha2 / one_minus_alpha2
+        dtau = (1.0 - tau_min) / float(K)
+        wtilde = 0.5 * dtau * w_per_tau
 
-        # LSGM-style importance-sampling density for the sigma_tilde**2-
-        # parameterized loss: p(tau) ∝ d(sigma_tilde**2)/dtau.
+        # Derivative d(sigma_tilde**2)/dtau, kept around for diagnostics
+        # and as a reference for any future importance-sampling schedule
+        # (the previous LSGM-style schedule that used this directly was
+        # incorrect; see the ``k_sampling_mode == "importance"`` branch).
         #   sigma_tilde**2 = (1 - alpha**2) / alpha**2 = 1/alpha**2 - 1
-        #   d(sigma_tilde**2)/dtau = -1/alpha**4 * d(alpha**2)/dtau
-        #                          = -1/alpha**4 * (-beta * alpha**2)
-        #                          = beta / alpha**2
-        # Sampling tau ~ p re-expresses the loss as an integral over
-        # sigma_tilde**2 (LSGM Eq. 8 / VP-SDE variant), so the MC estimator's
-        # variance is independent of the time discretisation.
+        #   d(sigma_tilde**2)/dtau = beta / alpha**2
         dsigma2_tilde_dtau = beta / alpha2.clamp_min(eps64)
 
         self.register_buffer("alpha", alpha.to(torch.float32))
         self.register_buffer("sigma_tilde", sigma_tilde.to(torch.float32))
+        self.register_buffer("w_per_tau", w_per_tau.to(torch.float32))
         self.register_buffer("wtilde", wtilde.to(torch.float32))
         self.register_buffer(
             "dsigma2_tilde_dtau", dsigma2_tilde_dtau.to(torch.float32)
@@ -189,22 +205,22 @@ class DiffusionV2Transition(BaseTransition):
         # Sampling probabilities p_k for the tau index.
         #
         # ``"uniform"``     : p_k = 1/K (no IS).
-        # ``"importance"``  : LSGM-style p_k ∝ d(sigma_tilde**2)/dtau, optionally
-        #                     tilted by ``pk_gamma`` (gamma=1 reproduces LSGM
-        #                     exactly; gamma=0 reduces to uniform).  ``pk_floor``
-        #                     guards against zero mass before normalisation.
+        # ``"importance"``  : currently unsupported in V2.  The previous
+        #                     LSGM-style derivation (p_k ∝ d(sigma_tilde**2)/dtau)
+        #                     was incorrect, so we raise NotImplementedError
+        #                     until the IS schedule is re-derived.  Use
+        #                     "uniform" for now.
         self.gamma = float(schedule.pk_gamma)
         self.gfloor = float(schedule.pk_floor)
         ismode = schedule.k_sampling_mode
         if ismode == "importance":
-            # `dsigma2_tilde_dtau` is already a float32 buffer with no grad.
-            # The leading clamp_min guards against ``0**gamma`` for gamma <= 0;
-            # the pk_floor is applied *after* the power to floor the final
-            # density, matching the V1 pattern.
-            p_k = self.dsigma2_tilde_dtau.clone()
-            p_k = p_k.clamp_min(1e-12).pow(self.gamma)
-            p_k = p_k.clamp_min(self.gfloor)
-            p_k = p_k / p_k.sum()
+            raise NotImplementedError(
+                "DiffusionV2Transition: importance sampling is currently "
+                "disabled because the previous LSGM-style schedule "
+                "(p_k ∝ d(sigma_tilde**2)/dtau) was incorrectly derived. "
+                "Use k_sampling_mode='uniform' until a corrected importance "
+                "schedule is implemented."
+            )
         elif ismode == "uniform":
             p_k = torch.full(
                 (self.num_steps,),
@@ -213,7 +229,7 @@ class DiffusionV2Transition(BaseTransition):
             )
         else:
             raise ValueError(
-                f"Unknown k_sampling_mode={ismode!r}; expected 'uniform' or 'importance'"
+                f"Unknown k_sampling_mode={ismode!r}; expected 'uniform'"
             )
         self.register_buffer("p_k", p_k)
         self.k_sampling_mode = ismode
