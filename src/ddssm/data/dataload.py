@@ -9,13 +9,37 @@ import torch
 from pandas.tseries.frequencies import to_offset
 from torch.utils.data import DataLoader, Dataset
 
-from gluonts.dataset.common import ListDataset
-from gluonts.dataset.field_names import FieldName
-from gluonts.dataset.loader import TrainDataLoader, as_stacked_batches
-from gluonts.dataset.multivariate_grouper import MultivariateGrouper
-from gluonts.torch.batchify import batchify
-from gluonts.transform import AddObservedValuesIndicator, InstanceSplitter
-from gluonts.transform.sampler import ExpectedNumInstanceSampler, InstanceSampler
+_GLUONTS_IMPORT_ERROR: Exception | None = None
+try:
+    from gluonts.dataset.common import ListDataset
+    from gluonts.dataset.field_names import FieldName
+    from gluonts.dataset.loader import TrainDataLoader, as_stacked_batches
+    from gluonts.dataset.multivariate_grouper import MultivariateGrouper
+    from gluonts.torch.batchify import batchify
+    from gluonts.transform import AddObservedValuesIndicator, InstanceSplitter
+    from gluonts.transform.sampler import ExpectedNumInstanceSampler, InstanceSampler
+except (ImportError, ModuleNotFoundError) as err:  # pragma: no cover - GluonTS optional
+    _GLUONTS_IMPORT_ERROR = err
+    ListDataset = None
+    TrainDataLoader = None
+    as_stacked_batches = None
+    MultivariateGrouper = None
+    batchify = None
+    AddObservedValuesIndicator = None
+    InstanceSplitter = None
+    ExpectedNumInstanceSampler = None
+
+    class _FieldNameFallback:
+        FEAT_DYNAMIC_REAL = "feat_dynamic_real"
+
+    FieldName = _FieldNameFallback
+
+    class InstanceSampler:
+        min_future = 1
+
+        def _get_bounds(self, ts):
+            n = len(ts)
+            return 0, n - int(self.min_future)
 
 
 class FixedLastKSampler(InstanceSampler):
@@ -199,6 +223,10 @@ def build_loaders_for_expt(
         )
 
     if backend == "gluonts":
+        if _GLUONTS_IMPORT_ERROR is not None:
+            raise ImportError(
+                "GluonTS backend requested but GluonTS imports failed."
+            ) from _GLUONTS_IMPORT_ERROR
 
         def to_listdataset(series, end):
             return ListDataset(
