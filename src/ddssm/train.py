@@ -23,7 +23,7 @@ from hydra_zen import builds
 from omegaconf import MISSING
 
 from .dssd import DDSSM_base
-from .logging import (
+from .loggers import (
     CSVLogger,
     MetricSpec,
     MetricStore,
