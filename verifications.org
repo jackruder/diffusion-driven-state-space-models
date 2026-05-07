@@ -540,7 +540,7 @@ commands too (re-run the bimodal section above with that override).
 #+BEGIN_SRC sh
 python -m ddssm.app experiment=bimodal \
     transition=diffusion_v2 \
-    'experiment.transition.schedule.k_sampling_mode=importance' \
+    'transition.schedule.k_sampling_mode=importance' \
     'experiment.training.steps=2000' \
     'experiment.training.checkpoint_every=500' \
     'experiment.hyperparams.lambda_warmup_steps=400' \
@@ -556,7 +556,7 @@ python -m ddssm.app experiment=bimodal \
 #+BEGIN_SRC sh
 python -m ddssm.evaluate experiment=bimodal \
     transition=diffusion_v2 \
-    'experiment.transition.schedule.k_sampling_mode=importance' \
+    'transition.schedule.k_sampling_mode=importance' \
     +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff_v2/metrics.csv \
     hydra.run.dir=runs/bimodal/diff_v2
@@ -568,7 +568,7 @@ python -m ddssm.evaluate experiment=bimodal \
 #+BEGIN_SRC sh
 python -m ddssm.visualize experiment=bimodal \
     transition=diffusion_v2 \
-    'experiment.transition.schedule.k_sampling_mode=importance' \
+    'transition.schedule.k_sampling_mode=importance' \
     +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff_v2/metrics.csv \
     hydra.run.dir=runs/bimodal/diff_v2
@@ -584,7 +584,7 @@ the contribution of LSGM importance sampling.
 # V2 — LSGM importance sampling (already trained above)
 python -m ddssm.evaluate experiment=bimodal \
     transition=diffusion_v2 \
-    'experiment.transition.schedule.k_sampling_mode=importance' \
+    'transition.schedule.k_sampling_mode=importance' \
     +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff_v2/metrics.csv \
     'experiment.eval.metrics=[bimodal_jsd]' \
@@ -596,7 +596,7 @@ python -m ddssm.evaluate experiment=bimodal \
 # V2 — uniform sampling ablation
 python -m ddssm.app experiment=bimodal \
     transition=diffusion_v2 \
-    'experiment.transition.schedule.k_sampling_mode=uniform' \
+    'transition.schedule.k_sampling_mode=uniform' \
     'experiment.training.steps=2000' \
     'experiment.training.checkpoint_every=500' \
     'experiment.hyperparams.lambda_warmup_steps=400' \
@@ -607,7 +607,7 @@ python -m ddssm.app experiment=bimodal \
 
 python -m ddssm.evaluate experiment=bimodal \
     transition=diffusion_v2 \
-    'experiment.transition.schedule.k_sampling_mode=uniform' \
+    'transition.schedule.k_sampling_mode=uniform' \
     +checkpoint=runs/bimodal/diff_v2_uniform/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff_v2_uniform/metrics.csv \
     'experiment.eval.metrics=[bimodal_jsd]' \
@@ -636,7 +636,7 @@ python scripts/experiments/plot_bimodal_compare.py \
 #+BEGIN_SRC sh
 python -m ddssm.visualize experiment=bimodal \
     transition=diffusion_v2 \
-    'experiment.transition.schedule.k_sampling_mode=importance' \
+    'transition.schedule.k_sampling_mode=importance' \
     +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
     +csv_path=runs/bimodal/diff_v2/metrics.csv \
     'experiment.viz.plots=[{name: forecast_distribution, save_filename: dist_v2.png, kwargs: {series_idx: 0, dim_idx: 0, t_future_idx: 0}}]' \
