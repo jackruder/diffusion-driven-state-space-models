@@ -18,7 +18,7 @@ try:
     from gluonts.torch.batchify import batchify
     from gluonts.transform import AddObservedValuesIndicator, InstanceSplitter
     from gluonts.transform.sampler import ExpectedNumInstanceSampler, InstanceSampler
-except Exception as err:  # pragma: no cover - exercised only when GluonTS imports fail
+except (ImportError, ModuleNotFoundError) as err:  # pragma: no cover - GluonTS optional
     _GLUONTS_IMPORT_ERROR = err
     ListDataset = None
     TrainDataLoader = None
