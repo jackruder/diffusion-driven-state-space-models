@@ -149,7 +149,7 @@ class CSVLogger(Logger):
 
     def on_epoch(self, split, epoch, row):
         # Intentionally no-op: this logger currently captures per-step metrics only.
-        return None
+        pass
 
 
 # ---------- spec & store ----------

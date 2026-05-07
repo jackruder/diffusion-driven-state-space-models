@@ -254,7 +254,7 @@ class DDSSMTrainer:
         optimizer: optim.Optimizer | None = None,
         **kwargs,
     ) -> "DDSSMTrainer":
-        # Local import avoids circular dependency with ddssm.conf importing DDSSMTrainerConf.
+        # Local import avoids a cycle: ddssm.conf imports DDSSMTrainerConf from this module.
         from .conf import load_yaml_config
         cfg = load_yaml_config(yaml_path)
         model = instantiate(cfg).to(device)
