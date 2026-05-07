@@ -41,7 +41,7 @@ SWEEPS = [
 
 @pytest.fixture(autouse=True)
 def _clear_global_hydra():
-    """Reset Hydra's singleton state between tests so initialise_config_dir is reusable."""
+    """Reset Hydra's singleton state between tests so initialize_config_dir is reusable."""
     if GlobalHydra.instance().is_initialized():
         GlobalHydra.instance().clear()
     yield
