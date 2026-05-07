@@ -792,6 +792,8 @@ class DDSSMHyperParamsConf:
 
 DDSSMConf = builds(
     DDSSM_base,
+    populate_full_signature=True,
+    # Sub-module placeholders; users override per-run via Hydra interpolation.
     encoder=GaussianEncoderConf(
         data_dim=MISSING,
         latent_dim=MISSING,
@@ -815,10 +817,5 @@ DDSSMConf = builds(
         j=MISSING,
         emb_time_dim=MISSING,
     ),
-    j=MISSING,
-    data_dim=MISSING,
-    latent_dim=MISSING,
-    emb_time_dim=16,
     hyperparams=DDSSMHyperParamsConf(),
-    populate_full_signature=False,  # device is runtime; explicit fields only
 )

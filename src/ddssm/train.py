@@ -785,12 +785,7 @@ class DDSSMTrainer:
 
 DDSSMTrainerConf = builds(
     DDSSMTrainer,
+    populate_full_signature=True,
     model=MISSING,
     device=MISSING,
-    optimizer=None,
-    csv_log_path=None,
-    tensorboard_dir="runs/ddssm",
-    wandb_config=None,
-    quiet=False,
-    populate_full_signature=False,
 )
