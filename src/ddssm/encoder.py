@@ -25,6 +25,7 @@ from .gaussians import (
     gaussian_log_prob,
 )
 from .net_utils import hist_abs_time_tokens
+from .torch_compile import maybe_compile
 
 
 class BaseEncoder(nn.Module, metaclass=abc.ABCMeta):
@@ -243,8 +244,8 @@ class GaussianEncoder(BaseEncoder):
             out_features=self.latent_dim,
         )
 
-        self.fut_sum_module = torch.compile(self.fut_sum_module, dynamic=True)
-        self.context_producer = torch.compile(self.context_producer, dynamic=True)
+        self.fut_sum_module = maybe_compile(self.fut_sum_module, dynamic=True)
+        self.context_producer = maybe_compile(self.context_producer, dynamic=True)
 
     @property
     def is_gaussian_family(self) -> bool:
@@ -784,10 +785,10 @@ class GaussianInitPrior(BaseInitPrior):
             out_features=self.latent_dim * self.j,
         )
 
-        self.context_producer_init = torch.compile(
+        self.context_producer_init = maybe_compile(
             self.context_producer_init, dynamic=True
         )
-        self.context_producer_aux = torch.compile(
+        self.context_producer_aux = maybe_compile(
             self.context_producer_aux, dynamic=True
         )
 

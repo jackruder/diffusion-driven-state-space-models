@@ -29,6 +29,7 @@ from hydra_zen import builds
 from ..encoder import GaussianHead, ContextProducer
 from ..diffnets import ContextProducerConf
 from ..gaussians import GaussianHeadConf
+from ..torch_compile import maybe_compile
 
 
 class BaseTransition(nn.Module):
@@ -398,7 +399,7 @@ class GaussianTransition(BaseTransition):
         # Gaussian head over flattened context
         head_in_dim = self.context_producer.channels * self.hidden_dim
 
-        self.context_producer = torch.compile(self.context_producer, dynamic=True)
+        self.context_producer = maybe_compile(self.context_producer, dynamic=True)
 
         self.gaussian_head = gaussian_head(
             in_features=int(head_in_dim),

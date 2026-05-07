@@ -108,7 +108,11 @@ KDDDataModuleConf = builds(
 # ---------------------------------------------------------------------------
 
 TrainableModulesConf = builds(TrainableModules, populate_full_signature=True)
-TrainingScalarsConf = builds(TrainingScalars, populate_full_signature=True)
+TrainingScalarsConf = builds(
+    TrainingScalars,
+    populate_full_signature=True,
+    trainable=TrainableModulesConf(),
+)
 ObjectiveSpecConf = builds(ObjectiveSpec, populate_full_signature=True)
 EvalSpecConf = builds(EvalSpec, populate_full_signature=True)
 PlotSpecConf = builds(PlotSpec, populate_full_signature=True)

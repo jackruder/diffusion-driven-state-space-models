@@ -13,6 +13,7 @@ from hydra_zen import builds
 from ..windows import WindowBuilder
 
 from ..diffnets import CSDIUnet, CSDIUnetConf
+from ..torch_compile import maybe_compile
 from ..net_utils import (
     get_side_info,
 )
@@ -78,7 +79,7 @@ class DiffusionTransition(BaseTransition):
             side_dim=self.side_dim,
         )
 
-        self.diffmodel = torch.compile(self.diffmodel)
+        self.diffmodel = maybe_compile(self.diffmodel)
 
         self.embed_layer = nn.Embedding(
             num_embeddings=self.latent_dim, embedding_dim=self.emb_feature_dim
