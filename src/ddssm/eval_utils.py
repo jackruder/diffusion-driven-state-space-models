@@ -8,13 +8,6 @@ import numpy as np
 import yaml
 import ast
 
-from .config import (
-    DDSSMConfig,
-    deep_merge,
-    apply_dot_overrides,
-    load_config_from_files,
-)
-
 
 def visualize_results(
     model,

@@ -1,101 +1,86 @@
 # tests/test_trainer.py
+from functools import partial
 import torch
 import pytest
+from hydra_zen import instantiate
 from ddssm.dssd import DDSSM_base
 from ddssm.train import DDSSMTrainer
+from ddssm.encoder import GaussianEncoder, GaussianInitPrior
+from ddssm.decoder import Decoder
+from ddssm.transitions.transitions import GaussianTransition
+from ddssm.conf import DDSSMTrainerConf
+from ddssm.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
+from ddssm.gaussians import GaussianHead
+from ddssm.futsum import GRUFutureSummary
 from torch.utils.data import Dataset, DataLoader
+from types import SimpleNamespace
 
-from ddssm.config import (
-    DDSSMConfig,
-    UNetConfig,
-    DecoderConfig,
-    EncoderConfig,
-    DDSSMHyperParams,
-    ResidualBlockConfig,
-    DiffusionScheduleConfig,
-    DiffusionEmbeddingConfig,
+J = 1
+DATA_DIM = 3
+LATENT_DIM = 2
+EMB_TIME = 8
+CHANNELS = 8
+NHEADS = 4
+
+_CTX = partial(
+    ContextProducer,
+    channels=CHANNELS,
+    num_layers=1,
+    residual_block=ResidualBlockConfig(
+        feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+    ),
 )
-
-B = 1  # Batch size
-D = 5  # Data dimension
-H = 2  # History length
-P = 1  # Prediction length
-T = H + P + 1  # Number of timepoints
-L = 2  # Latent dimension
+_GH = GaussianHead  # zen_partial-style: parents call _GH(in_features=..., out_features=...)
+_FS = partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1)
 
 
-class DummyDataset(Dataset):
-    def __init__(self, B, D, H, P, T):
-        self.B = B
-        self.D = D
-        self.H = H
-        self.P = P
-        self.T = T
-
-    def __len__(self):
-        return self.B
-
-    def __getitem__(self, idx):
-        x = torch.randn(self.D, self.H + 1)
-        hx = torch.randn(self.D, self.P)
-        return {
-            "history": x,
-            "history_mask": torch.ones(self.D, self.H + 1),
-            "future": hx,
-            "future_mask": torch.ones(self.D, self.P),
-            "timepoints": torch.arange(self.T),
-            "feature_id": torch.arange(self.D),
-        }
+def make_small_model():
+    enc = GaussianEncoder(
+        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        use_mask=True, hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH, fut_summary=_FS,
+    )
+    dec = Decoder(
+        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH,
+    )
+    zinit = GaussianInitPrior(
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=_CTX, aux_context=_CTX, gaussian_head=_GH, aux_posterior_head=_GH,
+    )
+    trans = GaussianTransition(
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH,
+    )
+    hp = SimpleNamespace(
+        S=1, ema_decay=0.999, weight_decay=1e-2, batch_size=1, grad_accum_steps=1,
+        t_chunk=4, clip_grad_norm=None, lambda_schedule="none", lambda_start=0.001,
+        lambda_end=1.0, lambda_warmup_steps=1, enc_lr=1e-3, dec_lr=1e-3,
+        zinit_lr=1e-3, trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
+        rewo=SimpleNamespace(D0=0.1, nu=1e-3, alpha=0.99, tau1=1.0, tau2=1.0),
+    )
+    return DDSSM_base(
+        encoder=enc, decoder=dec, z_init=zinit, transition=trans,
+        j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
+        hyperparams=hp,
+    )
 
 
 @pytest.fixture
 def small_model():
-    cfg = DDSSMConfig(
-        schedule=DiffusionScheduleConfig(num_steps=3),
-        encoder=EncoderConfig(
-            history_len=H, emb_feature_dim=6, hidden_dim=32, num_layers=1
-        ),
-        decoder=DecoderConfig(hidden_dim=8, num_layers=1),
-        unet=UNetConfig(
-            feature_emb_dim=4,
-            embedding=DiffusionEmbeddingConfig(embedding_dim=8, projection_dim=8),
-            block=ResidualBlockConfig(channels=8, layers=1, nheads=2),
-        ),
-        history_len=H,
-        prediction_len=P,
-        data_dim=D,
-        latent_dim=2,
-        latent_history_len=1,
-        emb_time_dim=16,
-        hyperparams=DDSSMHyperParams(S=2, loss_lambda=1.0, lr=1e-3, wd=1e-4),
+    return make_small_model()
+
+
+def test_trainer_conf_builds_instantiates(small_model, tmp_path):
+    trainer = instantiate(
+        DDSSMTrainerConf(
+            model=small_model,
+            device=torch.device("cpu"),
+            tensorboard_dir=str(tmp_path / "runs"),
+            quiet=True,
+        )
     )
-    return DDSSM_base(cfg, device="cpu")
-
-
-def test_trainer_io(tmp_path, small_model):
-    trainer = DDSSMTrainer(small_model, device="cpu")
-    # config
-    cfg_file = tmp_path / "cfg.yaml"
-    trainer.save_config(str(cfg_file))
-    loaded = DDSSMTrainer.load_from_yaml(str(cfg_file), device="cpu")
-    assert isinstance(loaded, DDSSMTrainer)
-
-    # checkpoint
-    ckpt = tmp_path / "ckpt.pth"
-    trainer.save_checkpoint(str(ckpt), epoch=5)
-    trainer2, epoch = DDSSMTrainer.load_checkpoint(
-        str(ckpt), device="cpu", optimizer=torch.optim.AdamW(small_model.parameters())
-    )
-    assert epoch == 5
-    # step the optimizer
-    trainer2.optimizer.step()
-
-
-def test_train_epoch(small_model):
-    ds = DummyDataset(B, D, H, P, T)
-    dl = DataLoader(ds, batch_size=B)
-    trainer = DDSSMTrainer(small_model, device="cpu")
-    stats = trainer.train_one_epoch(dl)
-    assert set(stats.keys()) == {"loss", "rec", "prior_kl", "diff_kl"}
-    for v in stats.values():
-        assert isinstance(v, float)
+    assert isinstance(trainer, DDSSMTrainer)

@@ -8,15 +8,8 @@ produce latent distributions q_ϕ(z_t | ·).
 import torch
 import torch.nn as nn
 
-from .config import (
-    GRUTimeConfig,
-    TimeConfig,
-    ConvTimeConfig,
-    MambaTimeConfig,
-    IdentityTimeConfig,
-    FutureSummaryConfig,
-    TransformerTimeConfig,
-)
+from hydra_zen import builds
+
 from .diffnets import TimeLayer, ConvTimeLayer, IdentityLayer  # , MambaTimeLayer
 
 
@@ -35,21 +28,21 @@ class FutureSummary(nn.Module):
 
     def __init__(
         self,
-        config: FutureSummaryConfig,
         data_dim: int,  # D
         emb_time_dim: int,  # E_t
         use_mask: bool,
         static_embed_dim: int = 0,
+        summary_dim: int = 64,
+        num_layers: int = 2,
     ) -> None:
         super().__init__()
         self.data_dim = data_dim
         self.emb_time_dim = emb_time_dim
         self.static_embed_dim = static_embed_dim
 
-        self.summary_dim = config.summary_dim
-        self.num_layers = config.num_layers
+        self.summary_dim = summary_dim
+        self.num_layers = num_layers
         self.use_mask = use_mask
-        self.config = config
 
         self.input_dim = data_dim + emb_time_dim + (data_dim if use_mask else 0)
 
@@ -100,16 +93,27 @@ class FutureSummary(nn.Module):
 
 
 class GRUFutureSummary(FutureSummary):
-    def __init__(self, config: FutureSummaryConfig, **kwargs):
-        super().__init__(config, **kwargs)
-        time_conf = config.time
-
-        assert isinstance(time_conf, GRUTimeConfig)
-
-        gru_layers = time_conf.gru_layers
+    def __init__(
+        self,
+        data_dim: int,
+        emb_time_dim: int,
+        use_mask: bool,
+        static_embed_dim: int = 0,
+        summary_dim: int = 64,
+        num_layers: int = 2,
+        gru_layers: int = 1,
+    ):
+        super().__init__(
+            data_dim=data_dim,
+            emb_time_dim=emb_time_dim,
+            use_mask=use_mask,
+            static_embed_dim=static_embed_dim,
+            summary_dim=summary_dim,
+            num_layers=num_layers,
+        )
         self.rnn = nn.GRU(
             input_size=self.summary_dim,
-            hidden_size=time_conf.hidden_dim,
+            hidden_size=self.summary_dim,
             num_layers=gru_layers,
             batch_first=True,
         )
@@ -121,29 +125,45 @@ class GRUFutureSummary(FutureSummary):
 
 
 class TransformerFutureSummary(FutureSummary):
-    def __init__(self, config: FutureSummaryConfig, **kwargs):
-        super().__init__(config, **kwargs)
-        time_conf = config.time
-        assert isinstance(time_conf, TransformerTimeConfig)
-
+    def __init__(
+        self,
+        data_dim: int,
+        emb_time_dim: int,
+        use_mask: bool,
+        static_embed_dim: int = 0,
+        summary_dim: int = 64,
+        num_layers: int = 2,
+        nheads: int = 4,
+        ff_mult: int = 4,
+        dropout: float = 0.0,
+        transformer_layers: int = 1,
+    ):
+        super().__init__(
+            data_dim=data_dim,
+            emb_time_dim=emb_time_dim,
+            use_mask=use_mask,
+            static_embed_dim=static_embed_dim,
+            summary_dim=summary_dim,
+            num_layers=num_layers,
+        )
         d_model = self.summary_dim
-        if d_model % time_conf.nheads != 0:
+        if d_model % nheads != 0:
             raise ValueError(
                 f"FutureSummary summary_dim ({d_model}) must be divisible by "
-                f"transformer_time.nheads ({time_conf.nheads})"
+                f"transformer nheads ({nheads})"
             )
 
-        ff_dim = max(d_model, time_conf.ff_mult * d_model)
+        ff_dim = max(d_model, ff_mult * d_model)
         layer = nn.TransformerEncoderLayer(
             d_model=d_model,
-            nhead=time_conf.nheads,
+            nhead=nheads,
             dim_feedforward=ff_dim,
-            dropout=time_conf.dropout,
+            dropout=dropout,
             batch_first=True,
             norm_first=True,
             activation="gelu",
         )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=time_conf.layers)
+        self.encoder = nn.TransformerEncoder(layer, num_layers=transformer_layers)
 
     def _forward_mixer(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, T, H) in reversed time order.
@@ -155,31 +175,24 @@ class TransformerFutureSummary(FutureSummary):
         return self.encoder(x, mask=causal_mask)
 
 
-def build_future_summary(
-    config: FutureSummaryConfig,
-    data_dim: int,
-    emb_time_dim: int,
-    use_mask: bool,
-    static_embed_dim: int = 0,
-) -> FutureSummary:
-    """Factory method to create the appropriate FutureSummary."""
-    if isinstance(config.time, GRUTimeConfig):
-        return GRUFutureSummary(
-            config,
-            data_dim=data_dim,
-            emb_time_dim=emb_time_dim,
-            use_mask=use_mask,
-            static_embed_dim=static_embed_dim,
-        )
-    elif isinstance(config.time, TransformerTimeConfig):
-        return TransformerFutureSummary(
-            config,
-            data_dim=data_dim,
-            emb_time_dim=emb_time_dim,
-            use_mask=use_mask,
-            static_embed_dim=static_embed_dim,
-        )
-    else:
-        raise NotImplementedError(
-            f"FutureSummary with time config {type(config.time)} not implemented."
-        )
+# ---------------------------------------------------------------------------
+# Hydra-zen partial configs: parents fill in shape kwargs (data_dim,
+# emb_time_dim, use_mask, static_embed_dim) at construction time.
+# Variant selection is now via Hydra config groups / explicit _target_
+# rather than a type-string discriminator + factory function.
+# ---------------------------------------------------------------------------
+
+GRUFutureSummaryConf = builds(
+    GRUFutureSummary,
+    summary_dim=64,
+    num_layers=2,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+TransformerFutureSummaryConf = builds(
+    TransformerFutureSummary,
+    summary_dim=64,
+    num_layers=2,
+    populate_full_signature=True,
+    zen_partial=True,
+)

@@ -1,18 +1,20 @@
 """Decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history."""
 
 import math
-from typing import Tuple
+from functools import partial
+from typing import Callable, Tuple
 
 import torch
 import torch.nn as nn
 
-from .config import DecoderConfig
-from .diffnets import ContextProducer
-from .gaussians import GaussianHead
+from hydra_zen import builds
+
+from .diffnets import ContextProducer, ContextProducerConf
+from .gaussians import GaussianHead, GaussianHeadConf
 from .net_utils import hist_abs_time_tokens
 
 
-class decoder(nn.Module):
+class Decoder(nn.Module):
     """Decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history.
 
     - Treats z_{t-j+1:t} as a short sequence of length j.
@@ -22,25 +24,49 @@ class decoder(nn.Module):
 
     def __init__(
         self,
-        config: DecoderConfig,
         latent_dim: int,  # d
         data_dim: int,  # D
         j: int = 1,
         emb_time_dim: int = 64,
         covariate_dim: int = 0,
         static_covariate_dim: int = 0,
+        hidden_dim: int = 64,
+        mask_emb_dim: int = 8,
+        context: Callable[..., ContextProducer] | None = None,
+        gaussian_head: Callable[..., GaussianHead] | None = None,
     ) -> None:
         super().__init__()
+        if context is None:
+            context = partial(ContextProducer, channels=8, num_layers=2)
+        if gaussian_head is None:
+            gaussian_head = GaussianHead
+
         self.data_dim = data_dim
         self.latent_dim = latent_dim
         self.j = j
         self.emb_time_dim = emb_time_dim
         self.covariate_dim = covariate_dim
-        self.mask_emb_dim = config.mask_emb_dim
-        self.hidden_dim = config.hidden_dim
+        self.mask_emb_dim = mask_emb_dim
+        self.hidden_dim = hidden_dim
 
         self.total_static_dim = static_covariate_dim
-        head_in_dim = config.context.channels * self.hidden_dim
+
+        # -- projection layers --
+        self.z_hist_proj = nn.Linear(self.latent_dim, self.hidden_dim)
+
+        # -- mask embedding (for valid/pad positions) --
+        self.mask_embed = nn.Linear(1, self.mask_emb_dim)
+
+        # -- context producer --
+        self.context_producer = context(
+            combined_dim=self.hidden_dim,
+            mask_tot_dim=self.mask_emb_dim,
+            emb_time_dim=self.emb_time_dim + self.covariate_dim,
+            combined_len=self.j,
+            static_emb_dim=self.total_static_dim,
+        )
+
+        head_in_dim = self.context_producer.channels * self.hidden_dim
 
         if self.total_static_dim > 0:
             # Project spatial dimension from D (data) -> hidden_dim (latent seq spatial dim)
@@ -54,26 +80,8 @@ class decoder(nn.Module):
             self.static_proj_context = None
             self.static_proj_out = None
 
-        # -- projection layers --
-        self.z_hist_proj = nn.Linear(self.latent_dim, self.hidden_dim)
-
-        # -- mask embedding (for valid/pad positions) --
-        self.mask_embed = nn.Linear(1, self.mask_emb_dim)
-
-        # -- context producer --
-        self.context_producer = ContextProducer(
-            config=config.context,
-            combined_dim=self.hidden_dim,
-            mask_tot_dim=self.mask_emb_dim,
-            emb_time_dim=self.emb_time_dim + self.covariate_dim,
-            combined_len=self.j,
-            static_emb_dim=self.total_static_dim,
-        )
-
         # -- Gaussian output head --
-        head_in_dim = config.context.channels * self.hidden_dim
-        self.gaussian_head = GaussianHead(
-            config=config.gaussian_head,
+        self.gaussian_head = gaussian_head(
             in_features=head_in_dim,
             out_features=self.data_dim,
         )
@@ -81,7 +89,7 @@ class decoder(nn.Module):
         self.context_producer = torch.compile(self.context_producer, dynamic=True)
 
         # Variance prior parameters
-        self.logvar_prior_mean = config.gaussian_head.init_logvar
+        self.logvar_prior_mean = self.gaussian_head.init_logvar
         self.logvar_prior_std = 1.0
 
     def forward_unpadded(
@@ -311,3 +319,15 @@ class decoder(nn.Module):
         obs_count_t = m_t.sum(dim=1).clamp_min(1.0)  # (B,)
 
         return logp_t, mu_x, logvar_x, obs_count_t
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen config for Decoder
+# ---------------------------------------------------------------------------
+
+DecoderConf = builds(
+    Decoder,
+    context=ContextProducerConf(),
+    gaussian_head=GaussianHeadConf(),
+    populate_full_signature=True,
+)

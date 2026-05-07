@@ -1,0 +1,21 @@
+# Top-level Hydra config for DDSSM.
+# Model, trainer, and transition groups are registered via ddssm.conf's
+# ZenStore (see add_to_hydra_store at module load). The defaults list
+# below selects one option from each group; per-run dimensions interpolate
+# into the registered Confs.
+
+defaults:
+  - model: default              # DDSSMConf, registered in ddssm.conf
+  - transition: gaussian        # TransitionGaussianConf | TransitionDiffusionConf
+  - hyperparams: default        # DDSSMHyperParamsConf -- override at cfg.hyperparams.*
+  - trainer: default            # DDSSMTrainerConf
+  - _self_
+
+# Run-level dimensions (override via CLI: data_dim=2 latent_dim=8 ...)
+j: 1
+data_dim: 1
+latent_dim: 4
+emb_time_dim: 16
+covariate_dim: 0
+use_observation_mask: true
+checkpoint_dir: ./checkpoints

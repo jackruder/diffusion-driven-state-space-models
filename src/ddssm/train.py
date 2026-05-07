@@ -2,7 +2,8 @@
 
 import os
 import math
-from typing import Callable, final
+import yaml
+from typing import Any, Callable, final
 import tempfile
 from contextlib import contextmanager, nullcontext
 from dataclasses import asdict
@@ -18,11 +19,11 @@ from torch.profiler import (
     tensorboard_trace_handler,
 )
 
-from .ddssm import DDSSM_base
-from .config import (
-    DDSSMConfig,
-)
-from .logging import (
+from hydra_zen import builds, instantiate
+from omegaconf import MISSING
+
+from .dssd import DDSSM_base
+from .loggers import (
     CSVLogger,
     MetricSpec,
     MetricStore,
@@ -33,6 +34,17 @@ from .logging import (
 from .train_utils import (
     param_groups_for_adamw,
 )
+
+
+def _namespace_to_dict(obj: Any) -> Any:
+    """Recursively convert SimpleNamespace / objects to plain dicts for YAML serialisation."""
+    if hasattr(obj, "__dict__") and not isinstance(obj, type):
+        return {k: _namespace_to_dict(v) for k, v in vars(obj).items()}
+    if isinstance(obj, dict):
+        return {k: _namespace_to_dict(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_namespace_to_dict(v) for v in obj)
+    return obj
 
 
 class EMA:
@@ -215,12 +227,22 @@ class DDSSMTrainer:
     # Serialization / Checkpoint
     # ------------------------
     def save_config(self, path: str):
-        """Dump current config (Pydantic model) to YAML."""
-        cfg_dict = (
-            self.model.config.dict()
-            if hasattr(self.model.config, "dict")
-            else asdict(self.model.config)
-        )
+        """Dump current config to YAML (supports Pydantic, dataclasses, or SimpleNamespace)."""
+        cfg = self.model.config
+        if hasattr(cfg, "model_dump"):
+            cfg_dict = cfg.model_dump()
+        elif hasattr(cfg, "dict"):
+            cfg_dict = cfg.dict()
+        elif hasattr(cfg, "__dict__"):
+            cfg_dict = {k: _namespace_to_dict(v) for k, v in vars(cfg).items()}
+        else:
+            try:
+                cfg_dict = asdict(cfg)
+            except Exception:
+                cfg_dict = {}
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(path, "w") as f:
             yaml.safe_dump(cfg_dict, f)
 
@@ -232,9 +254,10 @@ class DDSSMTrainer:
         optimizer: optim.Optimizer | None = None,
         **kwargs,
     ) -> "DDSSMTrainer":
-        config = DDSSMConfig.load_yaml(yaml_path)
-        model = DDSSM_base(config, device)
-        model.config = config
+        # Local import avoids a cycle: ddssm.conf imports DDSSMTrainerConf from this module.
+        from .conf import load_yaml_config
+        cfg = load_yaml_config(yaml_path)
+        model = instantiate(cfg).to(device)
 
         return cls(model, device, optimizer=optimizer, **kwargs)
 
@@ -264,12 +287,18 @@ class DDSSMTrainer:
         self,
         path: str,
     ):
-        if hasattr(self.model.config, "model_dump"):
-            cfg_dict = self.model.config.model_dump()
-        elif hasattr(self.model.config, "dict"):
-            cfg_dict = self.model.config.dict()
+        cfg = self.model.config
+        if hasattr(cfg, "model_dump"):
+            cfg_dict = cfg.model_dump()
+        elif hasattr(cfg, "dict"):
+            cfg_dict = cfg.dict()
+        elif hasattr(cfg, "__dict__"):
+            cfg_dict = {k: _namespace_to_dict(v) for k, v in vars(cfg).items()}
         else:
-            cfg_dict = asdict(self.model.config)
+            try:
+                cfg_dict = asdict(cfg)
+            except Exception:
+                cfg_dict = {}
 
         payload = {
             "_format": "ddssm_ckpt_v1",
@@ -745,3 +774,17 @@ class DDSSMTrainer:
         finally:
             if hasattr(self, "metrics"):
                 self.metrics.close()
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen config for DDSSMTrainer, co-located with the class.
+# ``model`` and ``device`` are runtime-supplied (typically by app.py) and
+# left MISSING here. Other fields inherit defaults from the constructor.
+# ---------------------------------------------------------------------------
+
+DDSSMTrainerConf = builds(
+    DDSSMTrainer,
+    populate_full_signature=True,
+    model=MISSING,
+    device=MISSING,
+)

@@ -5,18 +5,23 @@ from __future__ import annotations
 import os
 import csv
 import time
+from abc import ABC, abstractmethod
 from typing import Any, Dict, Callable, Optional
 import fnmatch
 from dataclasses import dataclass
 
 import torch
-from torch.utils.tensorboard import SummaryWriter
 
 
 # ---------- meters ----------
-class Meter:
+class Meter(ABC):
+    @abstractmethod
     def add(self, x: float, w: float = 1.0): ...
+
+    @abstractmethod
     def value(self) -> float: ...
+
+    @abstractmethod
     def reset(self): ...
 
 
@@ -96,8 +101,11 @@ METER_FACTORY: Dict[str, Callable[[], Meter]] = {
 
 
 # ---------- loggers ----------
-class Logger:
+class Logger(ABC):
+    @abstractmethod
     def on_step(self, split: str, step: int, row: Dict[str, float]): ...
+
+    @abstractmethod
     def on_epoch(self, split: str, epoch: int, row: Dict[str, float]): ...
 
 
@@ -140,7 +148,7 @@ class CSVLogger(Logger):
         self._write(split, "step", step, row)
 
     def on_epoch(self, split, epoch, row):
-        # self._write(split, "epoch", epoch, row)
+        # Intentionally no-op: this logger currently captures per-step metrics only.
         pass
 
 
@@ -258,20 +266,36 @@ class MetricStore:
 
 class TensorBoardLogger(Logger):
     def __init__(self, log_dir: str = "runs/ddssm", flush_secs: int = 10):
+        self._active = False
+        self.writer = None
+        try:
+            from torch.utils.tensorboard import SummaryWriter  # noqa: PLC0415
+        except ImportError:
+            print(
+                "[TensorBoardLogger] tensorboard not installed — logging disabled. "
+                "Install with `pip install tensorboard` to enable."
+            )
+            return
         self.writer = SummaryWriter(log_dir=log_dir, flush_secs=flush_secs)
+        self._active = True
 
     def on_step(self, split: str, step: int, row: Dict[str, float]):
+        if not self._active:
+            return
         # log each metric as <split>/<name>, e.g. train/loss/total
         for k, v in row.items():
             self.writer.add_scalar(f"{split}/{k}", v, step)
 
     def on_epoch(self, split: str, epoch: int, row: Dict[str, float]):
+        if not self._active:
+            return
         for k, v in row.items():
             self.writer.add_scalar(f"{split}_epoch/{k}", v, epoch)
         self.writer.flush()
 
     def close(self):
-        self.writer.close()
+        if self._active:
+            self.writer.close()
 
 
 class WandbLogger(Logger):

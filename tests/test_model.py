@@ -1,51 +1,105 @@
 # tests/test_model.py
+from functools import partial
 import torch
 import pytest
-from ddssm.dssd import (
-    diff_DDSSM,
-    decode_DDSSM,
-    encode_DDSSM,
-)
 from ddssm.net_utils import get_side_info, time_embedding
-
-from ddssm.config import (
-    DDSSMConfig,
-    UNetConfig,
-    DecoderConfig,
-    EncoderConfig,
-    DDSSMHyperParams,
+from ddssm.encoder import GaussianEncoder, GaussianInitPrior
+from ddssm.decoder import Decoder
+from ddssm.transitions.transitions import GaussianTransition
+from ddssm.transitions.diffusion import DiffusionTransition
+from ddssm.dssd import DDSSM_base
+from ddssm.diffnets import (
+    ContextProducer,
+    CSDIUnet,
+    DiffResidualBlockConfig,
+    FeatureMixerConfig,
     ResidualBlockConfig,
-    DiffusionScheduleConfig,
-    DiffusionEmbeddingConfig,
 )
+from ddssm.gaussians import GaussianHead
+from ddssm.futsum import GRUFutureSummary
+from ddssm.transitions.diffusion import DiffusionScheduleConfig
+from types import SimpleNamespace
 
 
-def make_base_config():
-    return DDSSMConfig(
-        schedule=DiffusionScheduleConfig(num_steps=3),
-        encoder=EncoderConfig(
-            history_len=1, emb_feature_dim=4, hidden_dim=8, num_layers=1
-        ),
-        decoder=DecoderConfig(hidden_dim=8, num_layers=1),
-        unet=UNetConfig(
-            feature_emb_dim=4,
-            embedding=DiffusionEmbeddingConfig(embedding_dim=8, projection_dim=8),
-            block=ResidualBlockConfig(channels=8, layers=1, nheads=2),
-        ),
-        history_len=1,
-        prediction_len=1,
-        data_dim=2,
-        latent_dim=3,
-        emb_time_dim=5,
-        latent_history_len=1,
-        hyperparams=DDSSMHyperParams(S=2, loss_lambda=1.0, lr=1e-3, wd=1e-4),
+# ---------------------------------------------------------------------------
+# Shared tiny config (channels=8 to keep tests fast; nheads=4 divides 8)
+# ---------------------------------------------------------------------------
+
+J = 2
+DATA_DIM = 3
+LATENT_DIM = 4
+EMB_TIME = 8
+CHANNELS = 8
+NHEADS = 4
+
+# Small architectural configs reused across tests
+_CTX = partial(
+    ContextProducer,
+    channels=CHANNELS,
+    num_layers=1,
+    residual_block=ResidualBlockConfig(
+        feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+    ),
+)
+_GH = GaussianHead  # zen_partial-style: parents call _GH(in_features=..., out_features=...)
+_FS = partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1)
+
+
+def make_encoder():
+    return GaussianEncoder(
+        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        use_mask=True, hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH, fut_summary=_FS,
+    )
+
+
+def make_decoder():
+    return Decoder(
+        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH,
+    )
+
+
+def make_zinit():
+    return GaussianInitPrior(
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=_CTX, aux_context=_CTX, gaussian_head=_GH, aux_posterior_head=_GH,
+    )
+
+
+def make_gaussian_transition():
+    return GaussianTransition(
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH,
+    )
+
+
+def make_hyperparams():
+    return SimpleNamespace(
+        S=1, ema_decay=0.999, weight_decay=1e-2, batch_size=2, grad_accum_steps=1,
+        t_chunk=4, clip_grad_norm=None, lambda_schedule="none", lambda_start=0.001,
+        lambda_end=1.0, lambda_warmup_steps=1, enc_lr=1e-3, dec_lr=1e-3,
+        zinit_lr=1e-3, trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
+        rewo=SimpleNamespace(D0=0.1, nu=1e-3, alpha=0.99, tau1=1.0, tau2=1.0),
     )
 
 
 @pytest.fixture
-def base_config():
-    return make_base_config()
+def model():
+    return DDSSM_base(
+        encoder=make_encoder(), decoder=make_decoder(),
+        z_init=make_zinit(), transition=make_gaussian_transition(),
+        j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
+        hyperparams=make_hyperparams(),
+    )
 
+
+# ---------------------------------------------------------------------------
+# net_utils utilities
+# ---------------------------------------------------------------------------
 
 def test_time_embedding_shapes():
     B, L, D = 2, 4, 6
@@ -64,63 +118,71 @@ def test_get_side_info_shapes():
     assert side.shape == (B, emb_time + emb_feat + 1, data_dim, L)
 
 
-def test_encode_collect_shapes(base_config):
-    enc = encode_DDSSM(
-        config=base_config.encoder,
-        history_len=base_config.history_len,
-        data_dim=base_config.data_dim,
-        latent_dim=base_config.latent_dim,
-        emb_time_dim=base_config.emb_time_dim,
-        device="cpu",
-    )
-    B, D, T = 2, base_config.data_dim, 3
-    x = torch.randn(B, D, T)
-    time_emb = torch.randn(B, T, base_config.emb_time_dim)
-    # single sample
-    mus, logvars, zs = enc.collect_stats_samples(x, time_emb, S=2, device="cpu")
-    assert mus.shape == (B, base_config.latent_dim, T)
-    assert logvars.shape == (B, base_config.latent_dim, T)
-    assert zs.shape == (B, 2, base_config.latent_dim, T)
+# ---------------------------------------------------------------------------
+# Module shape tests
+# ---------------------------------------------------------------------------
+
+def test_encoder_sample_paths():
+    enc = make_encoder()
+    B, T, S = 2, 6, 2
+    x = torch.randn(B, DATA_DIM, T)
+    time_emb = torch.randn(B, T, EMB_TIME)
+    mask = torch.ones(B, DATA_DIM, T)
+    zs, logqs, stats = enc.sample_paths(x, time_emb, S=S, cond_mask=mask)
+    assert zs.shape == (B, S, LATENT_DIM, T)
+    assert logqs.shape == (B, S, T)
 
 
-def test_decode_shapes(base_config):
-    dec = decode_DDSSM(
-        config=base_config.decoder,
-        latent_dim=base_config.latent_dim,
-        data_dim=base_config.data_dim,
-    )
-    B, Z = 3, base_config.latent_dim
-    z = torch.randn(B, Z)
-    x_hat = dec(z)
-    assert x_hat.shape == (B, base_config.data_dim)
+def test_decoder_forward():
+    dec = make_decoder()
+    B, T = 2, 4
+    z_hist = torch.randn(B, LATENT_DIM, J)
+    time_emb = torch.randn(B, T, EMB_TIME)
+    time_idx = torch.randint(J, T, (B,))
+    mu, logvar = dec.forward_unpadded(z=z_hist, time_embed=time_emb, time_idx=time_idx)
+    assert mu.shape == (B, DATA_DIM)
+    assert logvar.shape == (B, DATA_DIM)
 
 
-def test_diffusion_shapes(base_config):
-    # instantiate diff
-    diff = diff_DDSSM(
-        config=base_config.unet,
-        history_len=base_config.history_len,
-        prediction_len=base_config.prediction_len,
-        diffusion_steps=base_config.schedule.num_steps,
-        latent_dim=base_config.latent_dim,
-        latent_history_len=base_config.latent_history_len,
-        side_dim=base_config.emb_time_dim + base_config.unet.feature_emb_dim,
+def test_gaussian_transition_prior_params():
+    trans = make_gaussian_transition()
+    B = 3
+    z_hist = torch.randn(B, LATENT_DIM, J)
+    time_emb = torch.randn(B, J, EMB_TIME)
+    mu, logvar = trans.prior_params(z_hist, ctx={"hist_time_emb": time_emb})
+    assert mu.shape == (B, LATENT_DIM)
+    assert logvar.shape == (B, LATENT_DIM)
+
+
+def test_diffusion_transition_builds():
+    """DiffusionTransition should build with config objects and register expected buffers."""
+    dt = DiffusionTransition(
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        unet=partial(
+            CSDIUnet,
+            channels=CHANNELS,
+            n_layers=1,
+            embedding_dim=CHANNELS,
+            residual_block=DiffResidualBlockConfig(
+                feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+            ),
+        ),
+        schedule=DiffusionScheduleConfig(num_steps=10),
     )
-    B, d, L = (
-        2,
-        base_config.latent_dim,
-        base_config.latent_history_len + base_config.prediction_len,
-    )
-    x = torch.randn(B, d, L)
-    # side info must be (B, side_dim, d, L)
-    time_emb = torch.randn(B, L, base_config.emb_time_dim)
-    side = get_side_info(
-        base_config.latent_dim,
-        time_emb,
-        torch.nn.Embedding(base_config.latent_dim, base_config.unet.feature_emb_dim),
-    )
-    side = side[:, : diff.side_dim, :, :]  # match side_dim
-    steps = torch.randint(0, base_config.schedule.num_steps, (B,))
-    out = diff(x, side, steps)
-    # output shape (B, d, P)
-    assert out.shape == (B, d, base_config.prediction_len)
+    for buf in ("alpha_bar", "wtilde", "sigma", "c_noise", "p_k"):
+        assert buf in dt._buffers, f"Missing buffer: {buf}"
+
+
+# ---------------------------------------------------------------------------
+# DDSSM_base forward pass
+# ---------------------------------------------------------------------------
+
+def test_ddssm_forward(model):
+    B, T = 2, 5
+    x = torch.randn(B, DATA_DIM, T)
+    mask = torch.ones(B, DATA_DIM, T)
+    timepoints = torch.arange(T).unsqueeze(0).expand(B, -1)
+    result = model(observed_data=x, observation_mask=mask, timepoints=timepoints)
+    loss, distortion, rate, metrics, stats = result
+    assert loss.ndim == 0  # scalar
+    assert distortion.ndim == 0

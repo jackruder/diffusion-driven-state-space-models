@@ -1,24 +1,38 @@
 """Diffusion-based transition model wrapping CSDIUnet for use in DDSSM."""
 
 import math
-from typing import Any, Dict, Optional, final
+from dataclasses import dataclass
+from functools import partial
+from typing import Any, Callable, Dict, Optional, final
 
 import torch
 import torch.nn as nn
 
+from hydra_zen import builds
+
 from ..windows import WindowBuilder
 
-from ..config import (
-    DDSSMConfig,
-    DiffusionScheduleConfig,
-    DiffusionTransitionConfig,
-)
-from ..diffnets import CSDIUnet
+from ..diffnets import CSDIUnet, CSDIUnetConf
 from ..net_utils import (
     get_side_info,
 )
 from .transitions import BaseTransition
 
+
+
+@dataclass
+class DiffusionScheduleConfig:
+    """EDM diffusion schedule configuration for ``DiffusionTransition``."""
+
+    S_k: int = 1
+    k_chunk: int = 1
+    num_steps: int = 100
+    sigma_min: float = 2e-3
+    sigma_max: float = 80.0
+    rho: float = 7.0
+    k_sampling_mode: str = "uniform"
+    pk_gamma: float = 1.0
+    pk_floor: float = 1e-12
 
 
 @final
@@ -30,15 +44,19 @@ class DiffusionTransition(BaseTransition):
 
     def __init__(
         self,
-        transition_config: DiffusionTransitionConfig,
         latent_dim: int,
         j: int,
         emb_time_dim: int,
-        device: torch.device,
         covariate_dim: int = 0,
+        unet: Callable[..., CSDIUnet] | None = None,
+        schedule: DiffusionScheduleConfig | None = None,
     ) -> None:
         super().__init__()
-        self.config = transition_config
+
+        if unet is None:
+            unet = partial(CSDIUnet, channels=64, n_layers=4, embedding_dim=128)
+        if schedule is None:
+            schedule = DiffusionScheduleConfig()
 
         self.j = j
         self.latent_dim = latent_dim
@@ -52,15 +70,12 @@ class DiffusionTransition(BaseTransition):
             self.emb_time_dim + self.covariate_dim + self.emb_feature_dim + 1
         )
 
-        self.schedule = transition_config.schedule
-
-        self.diffmodel = CSDIUnet(
-            self.config.unet,
-            1,  # predict 1 latent step
-            self.schedule.num_steps,
-            self.latent_dim,
-            self.j,
-            self.side_dim,
+        self.diffmodel = unet(
+            output_len=1,  # predict 1 latent step
+            diffusion_steps=schedule.num_steps,
+            latent_dim=self.latent_dim,
+            latent_history_len=self.j,
+            side_dim=self.side_dim,
         )
 
         self.diffmodel = torch.compile(self.diffmodel)
@@ -69,24 +84,25 @@ class DiffusionTransition(BaseTransition):
             num_embeddings=self.latent_dim, embedding_dim=self.emb_feature_dim
         )
 
-        self.S_k = self.schedule.S_k  # number of k-draws per z_t monte-carlo sample
-        self.num_steps = self.schedule.num_steps
+        self.S_k = schedule.S_k  # number of k-draws per z_t monte-carlo sample
+        self.num_steps = schedule.num_steps
 
         dtype64 = torch.float64
         eps64 = torch.finfo(dtype64).eps
         K = self.num_steps
-        i = torch.linspace(0.0, 1.0, K, device=device, dtype=dtype64)
-        inv_rho = 1.0 / float(self.schedule.rho)
+        # Allocate on CPU; moved to device when .to(device) is called
+        i = torch.linspace(0.0, 1.0, K, dtype=dtype64)
+        inv_rho = 1.0 / float(schedule.rho)
         sigma = (
-            self.schedule.sigma_min**inv_rho
-            + i * (self.schedule.sigma_max**inv_rho - self.schedule.sigma_min**inv_rho)
-        ) ** float(self.schedule.rho)
+            schedule.sigma_min**inv_rho
+            + i * (schedule.sigma_max**inv_rho - schedule.sigma_min**inv_rho)
+        ) ** float(schedule.rho)
 
         sigma = sigma.to(torch.float64)
         sigma2 = sigma * sigma
         # define previous sigma^2, with sigma_{-1} = 0
         sigma2_prev = torch.cat([
-            torch.zeros(1, dtype=sigma2.dtype, device=sigma2.device),
+            torch.zeros(1, dtype=sigma2.dtype),
             sigma2[:-1],
         ])
 
@@ -111,9 +127,9 @@ class DiffusionTransition(BaseTransition):
         self.register_buffer("c_noise", c_noise.to(torch.float32))
 
         # sampling probabilities for k
-        self.gamma = self.schedule.pk_gamma
-        self.gfloor = self.schedule.pk_floor
-        ismode = self.schedule.k_sampling_mode
+        self.gamma = schedule.pk_gamma
+        self.gfloor = schedule.pk_floor
+        ismode = schedule.k_sampling_mode
         if ismode == "importance":
             p_k = self.wtilde.detach().to(
                 device=self.wtilde.device, dtype=torch.float32
@@ -130,6 +146,8 @@ class DiffusionTransition(BaseTransition):
             )
         self.register_buffer("p_k", p_k.to(torch.float32))
         self.k_sampling_mode = ismode
+        # store the schedule config for downstream access (e.g. _build_time_seq)
+        self.schedule = schedule
 
     def log_prob(
         self,
@@ -715,3 +733,15 @@ class DiffusionTransition(BaseTransition):
             x_denoised, _ = self._edm_denoise(x, z_hist, side_win, time_seq[-1])
             return x_denoised
         return x
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen config for DiffusionTransition
+# ---------------------------------------------------------------------------
+
+DiffusionTransitionConf = builds(
+    DiffusionTransition,
+    unet=CSDIUnetConf(),
+    schedule=DiffusionScheduleConfig(),
+    populate_full_signature=True,
+)

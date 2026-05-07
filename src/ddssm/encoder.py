@@ -7,16 +7,19 @@ As these have very similar structure (initprior is like an encoder without futur
 """
 
 import abc
-from typing import Dict, Tuple, Optional
+from functools import partial
+from typing import Callable, Dict, Tuple, Optional
 
 import torch
 import torch.nn as nn
 
-from .config import EncoderConfig, InitPriorConfig
-from .futsum import FutureSummary, build_future_summary
-from .diffnets import ContextProducer
+from hydra_zen import builds
+
+from .futsum import FutureSummary, GRUFutureSummary, GRUFutureSummaryConf
+from .diffnets import ContextProducer, ContextProducerConf
 from .gaussians import (
     GaussianHead,
+    GaussianHeadConf,
     GaussianStats,
     gaussian_entropy,
     gaussian_log_prob,
@@ -159,28 +162,37 @@ class GaussianEncoder(BaseEncoder):
 
     def __init__(
         self,
-        config: EncoderConfig,
         data_dim: int,  # D
         latent_dim: int,  # d
         j: int,  # latent history length
         emb_time_dim: int,  # E_t
-        use_mask: bool,  # whether to mask future observed data
+        use_mask: bool,  # whether to use observation mask
+        hidden_dim: int = 64,  # H
+        fut_mask_emb_dim: int = 8,
+        pad_mask_emb_dim: int = 8,
         covariate_dim: int = 0,
         static_covariate_dim: int = 0,
+        context: Callable[..., ContextProducer] | None = None,
+        gaussian_head: Callable[..., GaussianHead] | None = None,
+        fut_summary: Callable[..., FutureSummary] | None = None,
     ) -> None:
         super().__init__()
-        self.summary_dim = config.summary_config.summary_dim
-        self.gauss_head_config = config.gaussian_head
-        self.latent_gauss_head_config = config.latent_init_head
-        self.hidden_dim = config.hidden_dim  # H
+        if context is None:
+            context = partial(ContextProducer, channels=8, num_layers=2)
+        if gaussian_head is None:
+            gaussian_head = partial(GaussianHead, clamp_logvar_min=-10.0)
+        if fut_summary is None:
+            fut_summary = partial(GRUFutureSummary, summary_dim=64, num_layers=2)
+
+        self.hidden_dim = hidden_dim  # H
         self.data_dim = data_dim
         self.latent_dim = latent_dim
         self.covariate_dim = covariate_dim
         self.j = j
         self.emb_time_dim = emb_time_dim
-        self.fut_mask_emb_dim = config.fut_mask_emb_dim
-        self.pad_mask_emb_dim = config.pad_mask_emb_dim
-        self.mask_emb_dim = self.fut_mask_emb_dim + self.pad_mask_emb_dim
+        self.fut_mask_emb_dim = fut_mask_emb_dim
+        self.pad_mask_emb_dim = pad_mask_emb_dim
+        self.mask_emb_dim = fut_mask_emb_dim + pad_mask_emb_dim
         self.use_mask = use_mask
         self.eps = 1e-8
 
@@ -194,25 +206,23 @@ class GaussianEncoder(BaseEncoder):
             self.static_proj_context = None
 
         # -- context summarizer --
-
         combined_dim = self.hidden_dim
-        self.context_producer = ContextProducer(
-            config=config.context,
+        self.context_producer = context(
             combined_dim=combined_dim,
-            mask_tot_dim=self.mask_emb_dim,  # TODO times 2, when we add real/fake mask
+            mask_tot_dim=self.mask_emb_dim,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j + 1,
             static_emb_dim=self.total_static_dim,
         )
 
         # -- future summary module --
-        self.fut_sum_module = build_future_summary(
-            config.summary_config,
+        self.fut_sum_module = fut_summary(
             data_dim=data_dim,
             emb_time_dim=emb_time_dim + self.covariate_dim,
             use_mask=use_mask,
             static_embed_dim=self.total_static_dim,
         )
+        self.summary_dim = self.fut_sum_module.summary_dim
 
         # -- projection layers --
         # project future summary h_t: C_summary -> H
@@ -227,11 +237,10 @@ class GaussianEncoder(BaseEncoder):
         self.pad_mask_embed = nn.Linear(1, self.pad_mask_emb_dim)
 
         # heads: take flattened context (c * (h + e_t)) -> latent_dim
-        head_in_dim = config.context.channels * self.hidden_dim
-        self.gaussian_head = GaussianHead(
+        head_in_dim = self.context_producer.channels * self.hidden_dim
+        self.gaussian_head = gaussian_head(
             in_features=head_in_dim,
             out_features=self.latent_dim,
-            config=self.gauss_head_config,
         )
 
         self.fut_sum_module = torch.compile(self.fut_sum_module, dynamic=True)
@@ -564,6 +573,19 @@ class GaussianEncoder(BaseEncoder):
         return H_per_bs.mean()  # Mean over B, S
 
 
+# ---------------------------------------------------------------------------
+# Hydra-zen config for GaussianEncoder
+# ---------------------------------------------------------------------------
+
+GaussianEncoderConf = builds(
+    GaussianEncoder,
+    context=ContextProducerConf(),
+    gaussian_head=GaussianHeadConf(clamp_logvar_min=-10.0),
+    fut_summary=GRUFutureSummaryConf(),
+    populate_full_signature=True,
+)
+
+
 # ---- Initial Prior Interface ---- ####
 
 
@@ -685,35 +707,45 @@ class GaussianInitPrior(BaseInitPrior):
 
     def __init__(
         self,
-        config: InitPriorConfig,
         latent_dim: int,  # d
         j: int,  # latent history length
         emb_time_dim: int,  # E_t
         covariate_dim: int = 0,
+        hidden_dim: int = 64,
+        pad_mask_emb_dim: int = 8,
+        context: Callable[..., ContextProducer] | None = None,
+        aux_context: Callable[..., ContextProducer] | None = None,
+        gaussian_head: Callable[..., GaussianHead] | None = None,
+        aux_posterior_head: Callable[..., GaussianHead] | None = None,
     ) -> None:
 
         super().__init__()
-        self.hidden_dim = config.hidden_dim  # H
+        if context is None:
+            context = partial(ContextProducer, channels=8, num_layers=2)
+        if aux_context is None:
+            aux_context = partial(ContextProducer, channels=8, num_layers=2)
+        if gaussian_head is None:
+            gaussian_head = partial(GaussianHead, clamp_logvar_min=-10.0)
+        if aux_posterior_head is None:
+            aux_posterior_head = partial(GaussianHead, clamp_logvar_min=-10.0)
+
+        self.hidden_dim = hidden_dim  # H
         self.latent_dim = latent_dim
         self.j = j
         self.emb_time_dim = emb_time_dim
         self.covariate_dim = covariate_dim
-        self.pad_mask_emb_dim = config.pad_mask_emb_dim
+        self.pad_mask_emb_dim = pad_mask_emb_dim
         self.mask_emb_dim = self.pad_mask_emb_dim  # only pad mask here
-        self.gaussian_head_config = config.gaussian_head
-        self.latent_init_head_config = config.latent_init_head
 
         combined_dim = self.hidden_dim
-        self.context_producer_init = ContextProducer(
-            config=config.context,
+        self.context_producer_init = context(
             combined_dim=combined_dim,
             mask_tot_dim=self.mask_emb_dim,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
             combined_len=self.j,  # length j
         )
 
-        self.context_producer_aux = ContextProducer(
-            config=config.aux_context,
+        self.context_producer_aux = aux_context(
             combined_dim=combined_dim,
             mask_tot_dim=0,
             emb_time_dim=self.emb_time_dim + self.covariate_dim,
@@ -731,12 +763,11 @@ class GaussianInitPrior(BaseInitPrior):
         # Pad mask embedding only
         self.pad_mask_embed = nn.Linear(1, self.pad_mask_emb_dim)
 
-        head_in_dim = config.context.channels * self.hidden_dim
+        head_in_dim = self.context_producer_init.channels * self.hidden_dim
 
-        self.gaussian_head = GaussianHead(
+        self.gaussian_head = gaussian_head(
             in_features=head_in_dim,
             out_features=self.latent_dim,
-            config=self.gaussian_head_config,
         )
 
         # --- var posterior q_Φ(z_{-j+1:0} | z_{1:j}) ---
@@ -746,12 +777,11 @@ class GaussianInitPrior(BaseInitPrior):
         aux_hidden_dim = self.hidden_dim
 
         self.aux_proj = nn.Linear(aux_input_dim, aux_hidden_dim)
-        aux_head_in_dim = config.aux_context.channels * aux_hidden_dim
+        aux_head_in_dim = self.context_producer_aux.channels * aux_hidden_dim
 
-        self.aux_posterior_head = GaussianHead(
+        self.aux_posterior_head = aux_posterior_head(
             in_features=aux_head_in_dim,
             out_features=self.latent_dim * self.j,
-            config=self.latent_init_head_config,
         )
 
         self.context_producer_init = torch.compile(
@@ -1186,3 +1216,17 @@ class GaussianInitPrior(BaseInitPrior):
             "entropy": L_ent,
             "vhp": L_vhp,
         }
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen config for GaussianInitPrior
+# ---------------------------------------------------------------------------
+
+GaussianInitPriorConf = builds(
+    GaussianInitPrior,
+    context=ContextProducerConf(),
+    aux_context=ContextProducerConf(),
+    gaussian_head=GaussianHeadConf(clamp_logvar_min=-10.0),
+    aux_posterior_head=GaussianHeadConf(clamp_logvar_min=-10.0),
+    populate_full_signature=True,
+)

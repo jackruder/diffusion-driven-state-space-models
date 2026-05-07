@@ -1,6 +1,7 @@
 """This file implements common conditional diffusion models for timeseries."""
 
 import math
+from dataclasses import dataclass, field
 from typing import final
 
 import torch
@@ -9,19 +10,8 @@ import torch.nn as nn
 # from mamba_ssm import Mamba2
 import torch.nn.functional as F
 
-from .config import (
-    GRUTimeConfig,
-    TimeConfig,
-    UNetConfig,
-    FeatureConfig,
-    ConvTimeConfig,
-    MambaTimeConfig,
-    ConvFeatureConfig,
-    IdentityTimeConfig,
-    ContextProducerConfig,
-    IdentityFeatureConfig,
-    TransformerFeatureConfig,
-)
+from hydra_zen import builds
+
 from .net_utils import (
     Conv1d_with_init,
     get_torch_trans,
@@ -110,7 +100,7 @@ class TimeLayer(nn.Module):
 
 
 class ConvTimeLayer(TimeLayer):
-    def __init__(self, channels: int, config: ConvTimeConfig):
+    def __init__(self, channels: int, kernel_size: int = 3):
         super().__init__()
         self.layer = SmallTimeConvStack(channels)
 
@@ -130,12 +120,12 @@ class ConvTimeLayer(TimeLayer):
 
 
 class GRUTimeLayer(TimeLayer):
-    def __init__(self, channels: int, config: GRUTimeConfig):
+    def __init__(self, channels: int, gru_layers: int = 1):
         super().__init__()
         self.layer = nn.GRU(
             input_size=channels,
             hidden_size=channels,
-            num_layers=config.gru_layers,
+            num_layers=gru_layers,
             batch_first=True,
         )
 
@@ -168,10 +158,10 @@ class FeatureLayer(nn.Module):
 
 
 class TransformerFeatureLayer(FeatureLayer):
-    def __init__(self, channels: int, config: TransformerFeatureConfig):
+    def __init__(self, channels: int, nheads: int = 8, layers: int = 1):
         super().__init__()
         self.layer = get_torch_trans(
-            heads=config.nheads, layers=config.layers, channels=channels
+            heads=nheads, layers=layers, channels=channels
         )
 
     def forward(
@@ -196,7 +186,7 @@ class TransformerFeatureLayer(FeatureLayer):
 class ConvFeatureLayer(FeatureLayer):
     """Fallback feature mixing using convs (treating feature dim as sequence)."""
 
-    def __init__(self, channels: int, config: ConvFeatureConfig):
+    def __init__(self, channels: int, kernel_size: int = 3):
         super().__init__()
         self.layer = SmallTimeConvStack(channels)
 
@@ -221,27 +211,66 @@ class IdentityLayer(FeatureLayer, TimeLayer):
         return x_flat
 
 
-def build_time_layer(config: TimeConfig, channels: int) -> TimeLayer:
-    if isinstance(config, MambaTimeConfig):
-        return MambaTimeLayer(channels, config)
-    if isinstance(config, ConvTimeConfig):
-        return ConvTimeLayer(channels, config)
-    if isinstance(config, IdentityTimeConfig):
+def build_time_layer(time_type: str, channels: int, kernel_size: int = 3, gru_layers: int = 1) -> TimeLayer:
+    """Factory: create a TimeLayer from a type string and shared ``channels``."""
+    if time_type == "conv":
+        return ConvTimeLayer(channels, kernel_size=kernel_size)
+    if time_type == "gru":
+        return GRUTimeLayer(channels, gru_layers=gru_layers)
+    if time_type == "identity":
         return IdentityLayer()
-    if isinstance(config, GRUTimeConfig):
-        return GRUTimeLayer(channels, config)
-    raise ValueError(f"Unknown time config type: {type(config)}")
+    raise ValueError(f"Unknown time_type: {time_type!r}. Choose from 'conv', 'gru', 'identity'.")
 
 
-def build_feature_layer(config: FeatureConfig, channels: int) -> FeatureLayer:
-    if isinstance(config, TransformerFeatureConfig):
-        return TransformerFeatureLayer(channels, config)
-    if isinstance(config, ConvFeatureConfig):
-        return ConvFeatureLayer(channels, config)
-    if isinstance(config, IdentityFeatureConfig):
+def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_layers: int = 1) -> FeatureLayer:
+    """Factory: create a FeatureLayer from a type string and shared ``channels``."""
+    if feature_type == "transformer":
+        return TransformerFeatureLayer(channels, nheads=nheads, layers=n_layers)
+    if feature_type == "conv":
+        return ConvFeatureLayer(channels)
+    if feature_type == "identity":
         return IdentityLayer()
-    raise ValueError(f"Unknown feature config type: {type(config)}")
+    raise ValueError(f"Unknown feature_type: {feature_type!r}. Choose from 'transformer', 'conv', 'identity'.")
 
+
+@dataclass
+class TimeMixerConfig:
+    """Config for time-mixing layers used inside residual blocks."""
+
+    type: str = "conv"
+    kernel_size: int = 3
+    gru_layers: int = 1
+
+
+@dataclass
+class FeatureMixerConfig:
+    """Config for feature-mixing layers used inside residual blocks."""
+
+    type: str = "transformer"
+    nheads: int = 8
+    n_layers: int = 1
+
+
+def _default_context_feature_mixer_config() -> FeatureMixerConfig:
+    return FeatureMixerConfig(n_layers=2)
+
+
+@dataclass
+class ResidualBlockConfig:
+    """Config for ``ResidualBlock`` internals."""
+
+    time: TimeMixerConfig = field(default_factory=TimeMixerConfig)
+    feature: FeatureMixerConfig = field(
+        default_factory=_default_context_feature_mixer_config
+    )
+
+
+@dataclass
+class DiffResidualBlockConfig:
+    """Config for ``DiffResidualBlock`` internals."""
+
+    time: TimeMixerConfig = field(default_factory=TimeMixerConfig)
+    feature: FeatureMixerConfig = field(default_factory=FeatureMixerConfig)
 
 class DiffusionEmbedding(nn.Module):
     """Continuous EDM conditioning: embeds c_noise scalars into vectors.
@@ -315,8 +344,8 @@ class DiffResidualBlock(nn.Module):
         side_dim: int,
         channels: int,  # C (kept small; used as d_model)
         diffusion_embedding_dim: int,
-        time_config: TimeConfig,
-        feature_config: FeatureConfig,
+        time_layer: TimeLayer,
+        feature_layer: FeatureLayer,
     ) -> None:
         super().__init__()
         self.diffusion_projection = nn.Linear(diffusion_embedding_dim, channels)
@@ -324,8 +353,8 @@ class DiffResidualBlock(nn.Module):
         self.mid_projection = Conv1d_with_init(channels, 2 * channels, 1)
         self.output_projection = Conv1d_with_init(channels, 2 * channels, 1)
 
-        self.feature_layer = build_feature_layer(feature_config, channels)
-        self.time_layer = build_time_layer(time_config, channels)
+        self.feature_layer = feature_layer
+        self.time_layer = time_layer
 
     def forward(
         self, x: torch.Tensor, side_info: torch.Tensor, diffusion_emb: torch.Tensor
@@ -373,37 +402,35 @@ class DiffResidualBlock(nn.Module):
 
 @final
 class CSDIUnet(nn.Module):
-    """U-Net style denoising network for conditional diffusion on time series.
-
-    Args:
-        config (dict): Must contain keys:
-
-    """
+    """U-Net style denoising network for conditional diffusion on time series."""
 
     def __init__(
         self,
-        config: UNetConfig,
         output_len: int,
         diffusion_steps: int,
         latent_dim: int,
         latent_history_len: int,  # h
         side_dim: int,
+        channels: int = 64,
+        n_layers: int = 4,
+        embedding_dim: int = 128,
+        projection_dim: int | None = None,
+        residual_block: DiffResidualBlockConfig | None = None,
     ) -> None:
         super().__init__()
+        if residual_block is None:
+            residual_block = DiffResidualBlockConfig()
         self.output_len = output_len
         self.latent_dim = latent_dim
         self.latent_history_len = latent_history_len
 
-        self.channels = config.block.channels
-        self.n_layers = config.block.layers
-        self.nheads = config.block.nheads
+        self.channels = channels
+        self.n_layers = n_layers
 
         self.side_dim = side_dim
 
-        self.diffusion_embedding_dim = config.embedding.embedding_dim
-        self.diffusion_projection_dim = (
-            config.embedding.projection_dim or self.diffusion_embedding_dim
-        )
+        self.diffusion_embedding_dim = embedding_dim
+        self.diffusion_projection_dim = projection_dim or embedding_dim
 
         self.diffusion_embedding = DiffusionEmbedding(
             embedding_dim=self.diffusion_embedding_dim,
@@ -413,28 +440,28 @@ class CSDIUnet(nn.Module):
         self.input_projection = Conv1d_with_init(2, self.channels, 1)
 
         self.residual_layers = nn.ModuleList([
-            DiffResidualBlock(
-                side_dim=self.side_dim,
-                channels=self.channels,
-                diffusion_embedding_dim=self.diffusion_projection_dim,
-                time_config=config.block.time,
-                feature_config=config.block.feature,
-            )
-            for _ in range(self.n_layers)
+                DiffResidualBlock(
+                    side_dim=self.side_dim,
+                    channels=self.channels,
+                    diffusion_embedding_dim=self.diffusion_projection_dim,
+                    time_layer=build_time_layer(
+                        residual_block.time.type,
+                        channels,
+                        kernel_size=residual_block.time.kernel_size,
+                        gru_layers=residual_block.time.gru_layers,
+                    ),
+                    feature_layer=build_feature_layer(
+                        residual_block.feature.type,
+                        channels,
+                        nheads=residual_block.feature.nheads,
+                        n_layers=residual_block.feature.n_layers,
+                    ),
+                )
+                for _ in range(self.n_layers)
         ])
         self.output_projection1 = Conv1d_with_init(self.channels, self.channels, 1)
         self.output_projection2 = Conv1d_with_init(self.channels, 1, 1)
         _ = nn.init.zeros_(self.output_projection2.weight)
-
-        # self.slice_conv = nn.Conv1d(
-        #     in_channels=self.latent_dim,
-        #     out_channels=self.latent_dim,
-        #     kernel_size=self.latent_history_len + 1,
-        #     groups=self.latent_dim,  # one filter per feature
-        #     bias=True,
-        # )
-        # _ = nn.init.kaiming_normal_(self.slice_conv.weight, nonlinearity="relu")
-        # _ = nn.init.zeros_(self.slice_conv.bias)
 
     def forward(
         self, x: torch.Tensor, side_info: torch.Tensor, diffusion_step: torch.Tensor
@@ -484,9 +511,25 @@ class CSDIUnet(nn.Module):
         x = torch.relu(x)
         x = self.output_projection2(x)
         x = x.view(B, d, L)  # (B, d, L)
-        # x = self.slice_conv(x)  # (B,d,P) # slice the last P time steps
         x = x[:, :, -P:]  # (B, d, P)
         return x
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen partial config for CSDIUnet.
+# Shape kwargs (output_len, diffusion_steps, latent_dim, latent_history_len,
+# side_dim) are filled in by the enclosing module at construction time.
+# Architectural defaults match the old CSDIUnetConfig dataclass.
+# ---------------------------------------------------------------------------
+
+CSDIUnetConf = builds(
+    CSDIUnet,
+    channels=64,
+    n_layers=4,
+    embedding_dim=128,
+    populate_full_signature=True,
+    zen_partial=True,
+)
 
 
 @final
@@ -502,16 +545,16 @@ class ResidualBlock(nn.Module):
         self,
         side_dim: int,
         channels: int,  # C (kept small; used as d_model)
-        time_config: TimeConfig,
-        feature_config: FeatureConfig,
+        time_layer: TimeLayer,
+        feature_layer: FeatureLayer,
     ) -> None:
         super().__init__()
         self.cond_projection = Conv1d_with_init(side_dim, 2 * channels, 1)
         self.mid_projection = Conv1d_with_init(channels, 2 * channels, 1)
         self.output_projection = Conv1d_with_init(channels, 2 * channels, 1)
 
-        self.feature_layer = build_feature_layer(feature_config, channels)
-        self.time_layer = build_time_layer(time_config, channels)
+        self.feature_layer = feature_layer
+        self.time_layer = time_layer
 
     def forward(
         self,
@@ -558,16 +601,20 @@ class ContextProducer(nn.Module):
 
     def __init__(
         self,
-        config: ContextProducerConfig,
+        channels: int,  # C
+        num_layers: int,
         combined_dim: int,  # H_seq
         mask_tot_dim: int,  # H_mask
         emb_time_dim: int,  # H_time
         combined_len: int,  # L
+        residual_block: ResidualBlockConfig | None = None,
         skip_mask: bool = False,
         static_emb_dim: int = 0,
     ) -> None:
         super().__init__()
-        self.channels = config.channels  # C
+        if residual_block is None:
+            residual_block = ResidualBlockConfig()
+        self.channels = channels  # C
         self.combined_dim = combined_dim
         self.mask_tot_dim = mask_tot_dim
         self.emb_time_dim = emb_time_dim
@@ -577,8 +624,7 @@ class ContextProducer(nn.Module):
 
         self.tot_dim = combined_dim + mask_tot_dim + emb_time_dim
 
-        self.num_layers = config.num_layers
-        self.nheads = config.nheads
+        self.num_layers = num_layers
         self.emb_time_dim = emb_time_dim
         self.skip_mask = skip_mask
         self.eps = 1e-8
@@ -605,8 +651,18 @@ class ContextProducer(nn.Module):
                 ResidualBlock(
                     side_dim=self.side_dim,
                     channels=self.channels,
-                    time_config=config.time,
-                    feature_config=config.feature,
+                    time_layer=build_time_layer(
+                        residual_block.time.type,
+                        channels,
+                        kernel_size=residual_block.time.kernel_size,
+                        gru_layers=residual_block.time.gru_layers,
+                    ),
+                    feature_layer=build_feature_layer(
+                        residual_block.feature.type,
+                        channels,
+                        nheads=residual_block.feature.nheads,
+                        n_layers=residual_block.feature.n_layers,
+                    ),
                 )
             )
         self.context_blocks = nn.ModuleList(blocks)
@@ -699,3 +755,20 @@ class ContextProducer(nn.Module):
         x = x.squeeze(-1)  # (B, C*H_seq)
 
         return x
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen partial config for ContextProducer.
+# Shape kwargs (combined_dim, mask_tot_dim, emb_time_dim, combined_len,
+# static_emb_dim, skip_mask) are filled in by the enclosing module at
+# construction time. Architectural defaults match the old
+# ContextProducerConfig dataclass.
+# ---------------------------------------------------------------------------
+
+ContextProducerConf = builds(
+    ContextProducer,
+    channels=8,
+    num_layers=2,
+    populate_full_signature=True,
+    zen_partial=True,
+)
