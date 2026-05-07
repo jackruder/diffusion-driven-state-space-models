@@ -23,6 +23,11 @@ from omegaconf import DictConfig, OmegaConf
 
 import torch
 
+# Importing conf populates Hydra's ConfigStore with model/trainer/transition
+# groups via the side-effecting ``store.add_to_hydra_store(...)`` call at
+# the bottom of ddssm.conf. Must precede @hydra.main.
+from . import conf  # noqa: F401
+
 log = logging.getLogger(__name__)
 
 

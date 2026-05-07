@@ -22,7 +22,7 @@ from .encoder import (
 from .net_utils import (
     time_embedding,
 )
-from .transitions.transitions import GaussianTransition, GaussianTransitionConf
+from .transitions.transitions import GaussianTransition
 from .transitions.diffusion import DiffusionTransition
 
 
@@ -793,29 +793,37 @@ class DDSSMHyperParamsConf:
 DDSSMConf = builds(
     DDSSM_base,
     populate_full_signature=True,
-    # Sub-module placeholders; users override per-run via Hydra interpolation.
+    # Run-level dims interpolate from root cfg keys (set in conf/config.yaml).
+    j="${j}",
+    data_dim="${data_dim}",
+    latent_dim="${latent_dim}",
+    emb_time_dim="${emb_time_dim}",
+    covariate_dim="${covariate_dim}",
+    use_observation_mask="${use_observation_mask}",
+    checkpoint_dir="${checkpoint_dir}",
+    # Transition is supplied by the Hydra ``transition`` config group.
+    transition="${transition}",
+    # Sub-module Confs (zen_partial sub-fields stay nested via *Conf defaults).
     encoder=GaussianEncoderConf(
-        data_dim=MISSING,
-        latent_dim=MISSING,
-        j=MISSING,
-        emb_time_dim=MISSING,
-        use_mask=True,
+        data_dim="${data_dim}",
+        latent_dim="${latent_dim}",
+        j="${j}",
+        emb_time_dim="${emb_time_dim}",
+        covariate_dim="${covariate_dim}",
+        use_mask="${use_observation_mask}",
     ),
     decoder=DecoderConf(
-        latent_dim=MISSING,
-        data_dim=MISSING,
-        j=MISSING,
-        emb_time_dim=MISSING,
+        latent_dim="${latent_dim}",
+        data_dim="${data_dim}",
+        j="${j}",
+        emb_time_dim="${emb_time_dim}",
+        covariate_dim="${covariate_dim}",
     ),
     z_init=GaussianInitPriorConf(
-        latent_dim=MISSING,
-        j=MISSING,
-        emb_time_dim=MISSING,
-    ),
-    transition=GaussianTransitionConf(
-        latent_dim=MISSING,
-        j=MISSING,
-        emb_time_dim=MISSING,
+        latent_dim="${latent_dim}",
+        j="${j}",
+        emb_time_dim="${emb_time_dim}",
+        covariate_dim="${covariate_dim}",
     ),
     hyperparams=DDSSMHyperParamsConf(),
 )

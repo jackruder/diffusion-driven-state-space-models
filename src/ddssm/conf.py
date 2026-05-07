@@ -5,10 +5,15 @@ Top-level ``*Conf`` classes live next to the classes they describe:
   - ``DDSSMTrainerConf`` in ``ddssm.train``
   - per-module ``*Conf`` in their respective modules
 
-This file:
-  - Re-exports those configs for convenient ``from ddssm.conf import ...`` access.
-  - Owns the ``ZenStore`` and registers ``transition``, ``model``, and
-    ``trainer`` config groups.
+This module:
+  - Re-exports those configs for ``from ddssm.conf import ...`` access.
+  - Defines store-registered ``transition`` Confs with ``${...}`` interpolations
+    on shape kwargs (``latent_dim``, ``j``, ``emb_time_dim``, ``covariate_dim``)
+    so a defaults-list selection like ``- transition: gaussian`` produces a
+    fully-wired structured config without needing per-field YAML.
+  - Owns the ``ZenStore`` and registers the ``transition``, ``model``,
+    ``trainer`` config groups, then materialises them into Hydra's ConfigStore
+    so ``@hydra.main`` can resolve them.
   - Defines the slim Stages dataclasses (``StageSpecConf`` / ``StagesConf``)
     that are config-only (full stage logic lives in ``ddssm.stages``).
   - Provides ``build_model(yaml_path)`` for back-compat YAML loading.
@@ -19,13 +24,45 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, List
 
-from hydra_zen import ZenStore
+from hydra_zen import builds, ZenStore
 from omegaconf import MISSING
 
 from .dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
 from .train import DDSSMTrainerConf
-from .transitions.transitions import GaussianTransitionConf
-from .transitions.diffusion import DiffusionTransitionConf
+from .diffnets import ContextProducerConf, CSDIUnetConf
+from .gaussians import GaussianHeadConf
+from .transitions.transitions import GaussianTransition
+from .transitions.diffusion import DiffusionTransition, DiffusionScheduleConfig
+
+
+# ---------------------------------------------------------------------------
+# Top-level transition Confs for the ``transition`` config group.
+#
+# Shape kwargs interpolate from root cfg keys; sub-module Confs stay nested
+# (their own zen_partial defaults handle inner shape wiring at construction).
+# ---------------------------------------------------------------------------
+
+TransitionGaussianConf = builds(
+    GaussianTransition,
+    populate_full_signature=True,
+    latent_dim="${latent_dim}",
+    j="${j}",
+    emb_time_dim="${emb_time_dim}",
+    covariate_dim="${covariate_dim}",
+    context=ContextProducerConf(),
+    gaussian_head=GaussianHeadConf(),
+)
+
+TransitionDiffusionConf = builds(
+    DiffusionTransition,
+    populate_full_signature=True,
+    latent_dim="${latent_dim}",
+    j="${j}",
+    emb_time_dim="${emb_time_dim}",
+    covariate_dim="${covariate_dim}",
+    unet=CSDIUnetConf(),
+    schedule=DiffusionScheduleConfig(),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -34,11 +71,14 @@ from .transitions.diffusion import DiffusionTransitionConf
 
 store = ZenStore(name="ddssm")
 
-# transition group: gaussian | diffusion
-store(GaussianTransitionConf, group="transition", name="gaussian")
-store(DiffusionTransitionConf, group="transition", name="diffusion")
+store(TransitionGaussianConf, group="transition", name="gaussian")
+store(TransitionDiffusionConf, group="transition", name="diffusion")
 store(DDSSMConf, group="model", name="default")
 store(DDSSMTrainerConf, group="trainer", name="default")
+
+# Materialise the store into Hydra's ConfigStore so @hydra.main can resolve it.
+# Importing this module is sufficient to activate the registrations.
+store.add_to_hydra_store(overwrite_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +155,8 @@ __all__ = [
     "DDSSMHyperParamsConf",
     "DDSSMTrainerConf",
     "REWOConf",
+    "TransitionGaussianConf",
+    "TransitionDiffusionConf",
     "StageLrsConf",
     "StageTrainableConf",
     "StageSchedulerConf",
