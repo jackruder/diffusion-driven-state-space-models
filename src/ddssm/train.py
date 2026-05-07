@@ -19,7 +19,7 @@ from torch.profiler import (
     tensorboard_trace_handler,
 )
 
-from hydra_zen import builds
+from hydra_zen import builds, instantiate
 from omegaconf import MISSING
 
 from .dssd import DDSSM_base
@@ -257,7 +257,6 @@ class DDSSMTrainer:
         # Local import avoids circular dependency with ddssm.conf importing DDSSMTrainerConf.
         from .conf import load_yaml_config
         cfg = load_yaml_config(yaml_path)
-        from hydra_zen import instantiate
         model = instantiate(cfg).to(device)
 
         return cls(model, device, optimizer=optimizer, **kwargs)
