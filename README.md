@@ -52,6 +52,28 @@ python scripts/experiments/kdd/kdd_train.py \
     --override hyperparams.batch_size=32
 ```
 
+### Hydra + Optuna sweeps
+
+Hydra-based sweeps use Optuna through the pinned plugin dependency
+`hydra-optuna-sweeper @ git+https://github.com/dahlem/hydra.git@feature/upgrade-optuna-4.2.1#subdirectory=plugins/hydra_optuna_sweeper`.
+The repo provides one reusable sweeper preset at
+`conf/hydra/sweeper/ddssm_optuna.yaml`:
+
+```bash
+python -m ddssm.app --multirun \
+    hydra/sweeper=ddssm_optuna \
+    hydra.sweeper.study_name=ddssm_example \
+    hydra.sweeper.n_trials=50 \
+    'hydra.sweeper.params.hyperparams.enc_lr=interval(1e-5,1e-3)' \
+    'hydra.sweeper.params.hyperparams.batch_size=choice(32,64,128)'
+```
+
+Keep concrete study definitions and large search-space lists outside `conf/`
+(for example under `experiments/` or in command files). The checked-in
+`conf/` tree should remain a small library of reusable Hydra defaults, while
+Optuna study parameters can be supplied from external experiment assets and CLI
+overrides.
+
 ## Logging
 
 Metrics are written to TensorBoard and CSV by default; **W&B is opt-in**.
