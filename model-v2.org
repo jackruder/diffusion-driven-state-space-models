@@ -1,0 +1,562 @@
+#+title: Model V2
+
+* Model 
+For this doc, we drop superscript notation, where it is understood that \(p = p^{(t)}\) or \(p = p^{(t, k)}\) depending on context. We present \(j = 1\) for notational simplicity as well.
+Our generative model is given by
+\[p(z_{1:T}) = p(z_{1}) Π_{t=2}^T p(z_t | z_{t-1} ) p(x_t | z_t), \]
+where provably the optimal variational posterior takes the form
+\[ q(z_{1:T} | x_{1:T}) = q(z_1 | x_{1:T}) \prod_{t=2}^T q(z_t | z_{t-1}, x_{t:T}) \].
+
+The associated ELBO contains the per-\(t\) term
+\[\sum_{t=2}^T\mathrm{KL}\left[q_{φ}(z_t | z_{t-1}, x_{t:T}) || p_{ψ}(z_t | z_{t-1})\right].\]
+Our largest modeling choice of interest is to model \(p_ψ\) with a diffusion model. 
+However, compared to other DVAE, this immediately creates two issues.
+
+* Issues
+** Lack of Closed-Form KL divergence.
+When \(q_{φ}\) and \(p_{φ}\) are both Gaussian, the KL divergence is available in closed form.
+We restrict to the setting where \(q_{φ}\) is Gaussian, and \(p_{φ}\) is not available, in which case we split
+\[\mathrm{KL}\left[q_{φ}(z_t | z_{t-1}, x_{t:T}) || p_{ψ}(z_t | z_{t-1})\right] = H(q_{φ}) + \mathbb{E}_{q_{φ}}\left[ - \log p_{ψ}(z_t | z_{t-1}) \right].\]
+The first term is the entropy, analytically available in closed form. 
+The second term, the cross-entropy, *must* be estimated using Monte-Carlo samples drawn from \(q_{φ}\). 
+*** DDPM objective (our current implementation)
+Under a DDPM noise-reparameterization, the cross-entropy term has an upper-bound of 
+\[\mathbb{E}_{q_φ}\!\left[-\log p_ψ(z_t | z_{t-1})\right] \leq \mathbb{E}_{q_φ}\!\left[L_K + \sum_{k=1}^{K} \tilde{L}_k + L_0\right],\]
+where, using the noise-prediction network \(\epsilon_ψ\) and the forward-process sample \(z_t^k = \sqrt{\bar{\alpha}_k}\, z_t + \sqrt{1-\bar{\alpha}_k}\,\epsilon\), \(\epsilon \sim \mathcal{N}(0, I)\):
+- \(L_K = \mathrm{KL}[q_{\mathrm{fwd}}(z_t^K | z_t) \| \pi(z_t^K)]\), a constant w.r.t. \(\psi\),
+- \(\tilde{L}_k = \frac{\beta_k^2}{2 \sigma_k^2 \alpha_k (1-\bar{\alpha}_k)} \left\| \epsilon - \epsilon_ψ(\sqrt{\bar{\alpha}_k}\, z_t + \sqrt{1-\bar{\alpha}_k}\,\epsilon,\; k,\; z_{t-1}) \right\|^2\) for \(k = 1, \ldots, K\),
+- \(L_0 = -\log p_ψ(z_t | z_t^1, z_{t-1})\).
+Minimizing this bound produces a likelihood estimate on \(p_{ψ}(z_{t } | z_{t-1})\) used in the overall ELBO. 
+
+Given \(S\) trajectory samples \(z_{1:T}^{(s)} \sim q_φ(z_{1:T} | x_{1:T})\), each providing a single \(z_t^{(s)}\) per time step, and for each \((s, t)\), \(S_k\) uniformly drawn noise levels \(k^{(s,i)} \sim \mathrm{Uniform}\{1, \ldots, K\}\) with independent noise \(\epsilon^{(s,i)} \sim \mathcal{N}(0, I)\), the MC estimator is
+\[\mathbb{E}_{q_φ}\!\left[-\log p_ψ(z_t | z_{t-1})\right] \approx \frac{1}{S}\sum_{s=1}^{S}\!\left[L_K(z_t^{(s)}) + \frac{K}{S_k}\sum_{i=1}^{S_k} \tilde{L}_{k^{(s,i)}}(z_t^{(s)}, \epsilon^{(s,i)}) + L_0(z_t^{(s)})\right].\]
+
+Note that the \(S\) samples are *trajectory-level*: we draw \(S\) full paths \(z_{1:T}^{(s)} \sim q_φ(z_{1:T} | x_{1:T})\), each providing a single \(z_t^{(s)}\) per time step (conditioned on its own \(z_{t-1}^{(s)}\)). This avoids the combinatorial \(S^T\) explosion that would arise from drawing \(S\) independent samples at every \(t\).
+
+**** Gradients w.r.t. \(\psi\) (generative / denoiser parameters)
+The entropy \(H(q_φ)\) does not depend on \(\psi\). 
+The term \(L_K = \mathrm{KL}[q_{\mathrm{fwd}}(z_t^K | z_t) \| \pi(z_t^K)]\) involves only the fixed forward process and prior, so it also carries no \(\psi\)-gradient. 
+The remaining terms give
+\[\nabla_ψ \sum_{t=1}^{T} \mathrm{KL}_t \approx \sum_{t=1}^{T} \frac{1}{S}\sum_{s=1}^{S}\!\left[\frac{K}{S_k}\sum_{i=1}^{S_k} \nabla_ψ \tilde{L}_{k^{(s,t,i)}}(z_t^{(s)}, \epsilon^{(s,t,i)}) + \nabla_ψ L_0(z_t^{(s)}, z_{t-1}^{(s)})\right],\]
+where \(z_t^{(s)}\) and \(z_{t-1}^{(s)}\) are fixed w.r.t \(\psi\). 
+Note that \(z_{t-1}^{(s)}\) enters as a conditioning input to both \(\epsilon_ψ\) and \(p_ψ\) in \(L_0\), but carries no \(\psi\)-gradient. 
+We sum over every time step \(t\); only the diffusion noise levels \(k\) are subsampled (\(S_k\) per \((s, t)\)).
+
+***** Sources of variance in \(\nabla_ψ\)
+Since \(z_t^{(s)}\) and \(z_{t-1}^{(s)}\) are held fixed w.r.t. \(\psi\), the gradient is a simple average over trajectory samples and noise-level samples. 
+For a given time step \(t\):
+1. *Trajectory sampling* (\(S\)): different \(z_t^{(s)}\) yield different examples for the denoiser. This variance in these examples reflects the wideness \(q_φ\), and compounds along latent chain (later \(t\) inherit noise from \(\eta_{1:t}^{(s)}\)).
+2. *Noise-level sampling* (\(S_k\)): the gradient \(\nabla_ψ \tilde{L}_k\) varies across \(k\) because different noise levels probe different aspects of the denoiser. Without preconditioning, \(\tilde{L}_k\) is non-uniform across \(k\) (intermediate levels dominate), creating a large source of variance.
+3. *Forward-diffusion noise* (\(\epsilon\)): for a fixed \((z_t, k)\), the specific \(\epsilon\) draw determines the noised input to \(\epsilon_ψ\). This is typically the smallest contribution.
+
+Since \(\psi\) does not interact with the trajectory sampling process, these three sources are cleanly separated and no gradient amplification occurs across time steps.
+
+**** Gradients w.r.t. \(\phi\) (encoder / variational parameters)
+Using the reparameterization trick along the trajectory, each \(z_τ^{(s)}\) depends on the full chain of noise variables \(\eta_1^{(s)}, \ldots, \eta_τ^{(s)}\) via
+\[z_τ^{(s)} = \mu_φ(z_{τ-1}^{(s)}, x_{τ:T}) + \sigma_φ(z_{τ-1}^{(s)}, x_{τ:T}) \odot \eta_τ^{(s)}, \quad \eta_τ^{(s)} \sim \mathcal{N}(0, I), \quad τ = 1, \ldots, T.\]
+Every term in the per-step KL depends on \(\phi\):
+1. The entropy \(H(q_φ(z_t | z_{t-1}, x_{t:T}))\): analytic given \(z_{t-1}\), but \(z_{t-1}^{(s)}\) itself depends on \(\phi\) through the previous trajectory.
+2. \(L_K(z_t^{(s)})\): depends on \(\phi\) through \(z_t^{(s)}\), which determines the forward-diffusion endpoint. Though constant w.r.t. \(\psi\), it provides a \(\phi\)-gradient that pushes \(q_φ\) toward regions where the diffusion prior is well-matched. In practice this term is very, very small.
+3. \(\tilde{L}_k(z_t^{(s)}, \epsilon^{(s,t,i)})\): depends on \(\phi\) through both \(z_t^{(s)}\) (the clean sample being noised) and \(z_{t-1}^{(s)}\) (the conditioning input to \(\epsilon_ψ\)).
+4. \(L_0(z_t^{(s)}, z_{t-1}^{(s)})\): depends on \(\phi\) through both \(z_t^{(s)}\) and \(z_{t-1}^{(s)}\).
+
+The full ELBO gradient over all time steps is
+\[\nabla_φ \sum_{t=1}^{T} \mathrm{KL}_t \approx \frac{1}{S}\sum_{s=1}^{S} \nabla_φ \sum_{t=1}^{T}\!\left[-H(q_φ(z_t^{(s)} | z_{t-1}^{(s)}, x_{t:T})) + L_K(z_t^{(s)}) + \frac{K}{S_k}\sum_{i=1}^{S_k} \tilde{L}_{k^{(s,t,i)}}(z_t^{(s)}, \epsilon^{(s,t,i)}) + L_0(z_t^{(s)}, z_{t-1}^{(s)})\right],\]
+where \(\nabla_φ\) is computed by backpropagation through the full trajectory \(z_1^{(s)} \to \cdots \to z_T^{(s)}\). Every time step \(t\) is evaluated; only the diffusion noise levels \(k\) are subsampled (\(S_k\) per \((s,t)\), corrected by \(\frac{K}{S_k}\)). Each term at time \(t\) receives gradient contributions from all subsequent terms \(t' > t\) through the shared trajectory.
+
+***** Sources of variance in \(\nabla_\phi\)
+The \(\phi\)-gradient has the same three MC noise sources as \(\nabla_ψ\) (trajectory, noise-level, forward-diffusion), but with critical differences:
+1. *Trajectory sampling* (\(S\)): as with \(\nabla_ψ\), different \(z_{1:T}^{(s)}\) yield different gradient estimates. However, the \(\phi\)-gradient at time \(t\) flows through the full trajectory via the Jacobians \(∂ z_t / ∂ z_τ\) for \(τ < t\). These Jacobian products possibly may be a source of variance exploding exponentially with \(t\).
+2. *Noise-level sampling* (\(S_k\)): same as for \(\nabla_ψ\) — non-uniformity of \(\tilde{L}_k\) across \(k\) is the dominant inner-noise source at \(S_k = 1\).
+3. *Forward-diffusion noise* (\(\epsilon\)): same as for \(\nabla_ψ\), not a major contribution.
+4. *Trajectory sampling amplification*: unique to \(\nabla_\phi\). The loss at time \(t'\) contributes to \(\nabla_\phi\) at time \(t < t'\) through the product \(\prod_{τ=t+1}^{t'} ∂ z_τ / ∂ z_{τ-1}\). 
+   This couples all three noise sources across time steps and can make variance grow with the sequence length \(T\). 
+
+
+*** New objective.
+There are two primary motivations for reformulating the objective.
+**** Noise Scheduling (a source of variance)
+First, we can control the noise schedule, which is a major source of variance. For example, in the VP SDE (which /does/ correspond to DDPM),
+the variance of the ending noise process is identical to the data, where the VE SDE sends the variance to infinity. The LSGM paper describes that the Sub-VPSDE (presented in the Song SDE paper) reduces the variance in a helpful way for end-to-end training.
+**** Principled Importance Sampling
+Second, we can couple the objective with importance sampling techniques. These were found to be useful in the LSGM paper, where they train the diffusion alongside a VAE. Technically, we could employ IS to DDPM, but
+it has already been well-explored by the LSGM paper, where it is easier to perform the analysis of the variance in a score-based setting. LSGM show the derivation of an effective importance sampling schedule derived from the VPSDE, and apply it to the Sub-VPSDE. See figures 2 and 6 from their paper. 
+The authors also derive a Geometric-progression variance SDE, which is similar to the VESDE in the noise evolution but satisfies the variance-preserving property.
+The geometric VPSDE /without/ IS is competitive with the VPSDE /with/ IS.
+**** Potential Access to Explicit score matching? 
+Finally, note that the form of score matching used in the LSGM paper above is denoising-score matching. However, the authors restrict themselves to this setting because they consider normalizing flows for
+\(q(z | x)\).
+Assuming that our choice of using a gaussian for \(q_{φ}(z_t | z_{t-1}, x_{t:T})\) (writing ASSUMING here to demonstrate an advantage of this choice, I think there are differences between using a Gaussian in the static case compared to here) is justified, we may be able to use explicit score matching.
+
+In explicit score matching, you would compute \(J_{\mathrm{ESM}} \frac{1}{2}\mathbb{E}_{q_{τ}(\overline{z})}\left[||s_{θ}(\overline{z}) - ∇_{\overline{z}}\log q_{τ}(\overline{z})\right]||^{2}\) where \(q_{τ}\) is the marginal noised distribution. 
+But knowing the score requires knowing the marginal, hence the original score matching paper (Hyvarinen) transfroms the objective to rely on a trace estimator. 
+This is still expensive, so the modern approach typically employed by diffusion models is to employ denoising score matching, where only
+\[J_{\mathrm{DSM}} \frac{1}{2}\mathbb{E}_{q(z_t)}\mathbb{E}_{q_{τ}(\overline{z} | z_{t})}\mathbb{E}\left[||s_{θ}(\overline{z}) - ∇_{\overline{z}}\log q_{τ}(\overline{z} | z_{t})\right]||^2\]
+
+The Vincent DSM paper shows that these objectives differ by a constant, IE \(J_{DSM} = J_{ESM} + C\).
+Further, see recent analysis by Zhang et al. (2025, [[https://arxiv.org/pdf/2508.01597][Why Heuristic Weighting Works: A Theoretical Analysis of Denoising SScore Matching]]), where this constant is shown (for a fixed noise level \(σ_t\)) to be
+\(\frac{D}{σ_{t^2}} - \mathrm{tr}(\mathcal{I}(σ_t))\), where \(\mathcal{I}(σ_t) = \mathbb{E}_{x_t}\left[s(x_t)s(x_t)^T\right]\) is hte Fisher information of \(x_t\) and \(s\) is the score at \(x_t\).
+They explain that as \(σ_t\) is close to zero in diffusion models, this constant may explode.
+That is, ESM explicitly has lower variance than DSM.
+
+
+Instead, observe that unlike most diffusion models, we actually have access to the target score function in closed form. The encoder gives the marginal score for free! Thus we can
+use explicit score matching and we lose variance due to extremely high noise levels.
+For simplicity of notation, we fix \(t\). Let \(z_{t-1},x_{t:T}\) be a conditioning set, and consider a continuous-time forward diffusion process, which takes an input \(z_t\) and noises it to \(z_{t}^{τ}\) for \(τ \in [0,1]\).
+Let's consider the variance-preserving SDE \(dz_{t} = -\frac{1}{2}β(τ)z_{t} \; dτ + \sqrt{β{τ}}\;dw\). Then, the perturbation kernel \(q_{0τ}(z_{t }^{(τ)}| z_t)\) is normally distributed as
+\(\mathcal{N}(α_{τ}z_t, σ_{τ}^{2}I)\) where \(α_{τ} = e^{\frac{-1}{2}\int_0^Tβ(s)ds}\) and \(σ_{τ}^2 = 1 - α_τ^{2}\).
+From our variational posterior, we have that \(q(z_t | z_{t-1}, x_{t:T}) = \mathcal{N}(μ_t, \mathrm{diag}(\mathbf{σ}_t^{2}
+))\). 
+In closed form, we have the marginal distribution \(z_t^{τ} | z_{t-1}, x_{t:T}\) as
+\begin{align}
+q_{φ}(z_t^{τ} | z_{t-1}, x_{t:T}) &= \int q_{0τ}(z_t^{τ} | z_t)q(z_t | z_{t-1}, x_{t:T}) dz_t \\
+  &= \mathcal{N}\left(α_{τ}μ_{t}, \mathrm{diag}(α_{τ}^2\mathbf{σ}_t^2 + σ_{τ}^2)\right).
+\end{align}
+
+Then, we have
+\begin{equation}
+∇_{z_t^{τ}} \log q_{φ}(z_t^{τ} | z_{t-1}, x_{t:T}) = \frac{z_t^{τ} - α_{τ}u_t}{α_{τ}^2\mathbf{σ}_t^2  + σ_{τ}^2}.
+\end{equation}
+
+Instead, we score match against the preceeding equation. 
+
+* Score matching variational lower bound (our proof)
+*TODO state needed regularity conditions at beginning of section, and refer to them in theorem statements*
+Before proceeding, we need the following identity. 
+
+**Lemma.** For the forward SDE \(dz = f(z,τ)dτ + g(τ)dw\) and regularity conditions, we have
+\[-\frac{dH(q(z^τ))}{dτ} = 𝔼_{q(z^τ)}\left[f(z^τ, τ) · ∇_{z^τ} \log q(z^τ) - \frac{1}{2}g^2(τ) ‖∇_{z^τ} \log q(z^τ)‖^2\right].\]
+*Proof.* We write \(q := q(z^{τ}) \) and \(∇ := ∇_{z^{τ}}\) within the following proof to simplify notation. Starting from \(H(q(z^τ)) = -∫ q(z^τ) \log q(z^τ) \, dz^τ\), we seek to differentiate under the integral. By the Leibniz integral rule, this exchange is valid provided:
+1. \(q(z^τ, τ)\), \(\frac{∂q}{∂τ}\), and \(\frac{∂}{∂τ}[q \log q]\) are continuous in both arguments,
+2. There exist integrable dominating functions \(h_1(z^τ), h_2(z^τ)\), uniform in \(τ\) on any compact interval, such that \(\left|\frac{∂}{∂τ}(q \log q)\right| ≤ h_1\) and \(\left|\frac{∂q}{∂τ}\right| ≤ h_2\) for all \(τ\).
+3. \(fq \log q → 0\) as \(‖z^τ‖ → ∞\).
+
+4. \(q, ∇ q → 0\) sufficiently fast as \(‖z^τ‖ → ∞\).
+These conditions permit two applications of the Leibniz rule: one to bring \(∂_τ\) inside \(∫ q \log q \, dz^τ\), and one to bring it inside \(∫ q \, dz^τ\). Assuming these regularity conditions hold, we have
+\begin{align*}
+-\frac{∂H}{∂τ} &= ∫ \frac{∂}{∂τ}(q \log q) \, dz^τ \\
+               &= ∫ \frac{∂q}{∂τ} \log q \, dz^τ + ∫ q\frac{∂\log q}{∂τ} \, dz^τ \\
+               &= ∫ \frac{∂q}{∂τ} \log q \, dz^τ + ∫ q \frac{1}{q} \frac{∂q}{∂τ} \, dz^τ \\
+               &= ∫ \frac{∂q}{∂τ} \log q \, dz^τ + ∫ \frac{∂q}{∂τ} \, dz^τ \\
+               &= ∫ \frac{∂q}{∂τ} \log q \, dz^τ + \frac{d}{dτ}∫ q \, dz^τ \\
+               &= ∫ \frac{∂q}{∂τ} \log q \, dz^τ,
+\end{align*}
+where we have applied product rule in the second equality and chain rule in the third equality. The fifth equality is the second application of the Leibniz rule (justified by the dominating function \(h_2\)), and the last equality follows since probability is conserved, i.e., \(\frac{d}{dτ}∫ q \, dz^τ = 0\).
+
+From the Fokker–Planck equation, we have
+\[\frac{∂q}{∂τ} = -∇ · (f q) + \frac{1}{2}g^2 ∇^2 q.\]
+
+Substituting,
+\[-\frac{∂H}{∂τ} = ∫ \left[-∇ · (f q) + \frac{1}{2}g^2 ∇^2 q\right] \log q \, dz^τ.\]
+
+For the first term, the product rule gives \(∇ · (fq \log q) = ∇ · (fq) \log q + fq · ∇ \log q\), so rearranging and integrating over \(ℝ^d\),
+\[∫ [-∇ · (fq)] \log q \, dz^τ = ∫ fq · ∇ \log q \, dz^τ - ∫ ∇ · (fq \log q) \, dz^τ.\]
+By the divergence theorem, the last integral equals the boundary flux \(\lim_{R→∞} ∮_{‖z^τ‖ = R} (fq \log q) · n \, dS\), which we assume vanishes (i.e., \(fq \log q → 0\) sufficiently fast as \(‖z^τ‖ → ∞\)). Hence
+\[∫ [-∇ · (fq)] \log q \, dz^τ = ∫ fq · ∇ \log q \, dz^τ.\]
+
+
+For the second term, a second integration by parts yields (assuming \(q, ∇ q → 0\) sufficiently fast at infinity)
+\[∫ ∇^2 q · \log q \, dz^τ = -∫ ∇ q · ∇ \log q \, dz^τ.\]
+
+Using \(∇ q = q ∇ \log q\):
+\[= -∫ q ‖∇_{z^τ} \log q‖^2 \, dz^τ\]
+
+Combining:
+\[-\frac{dH(q(z^τ))}{dτ} = 𝔼_{q(z^τ)}\left[f · ∇_{z^τ} \log q - \frac{1}{2}g^2 ‖∇_{z^τ} \log q‖^2\right] \quad □\]
+
+The proof of Theorem 1 from LSGM states the following equality
+\begin{align*}
+CE(q(z^{0})||p(z^0)) &= H(q(z^1)) +
+\int_0^{1}
+\Big[
+𝔼_{q(z^τ)}
+[ \frac{1}{2}
+g^2(τ)||∇_{z^τ} \log p(z^τ)||^2_2 \\ &+ f(z^τ, τ)∇_{z^τ} \log q(z^τ) 
+− g^2(τ)∇_{z^τ} \log q(z^τ)^T ∇_{z^τ} \log p(z^τ)
+]\Big]
+dτ
+\end{align*}
+which they further simplify into a DSM objective. 
+Instead, we continue the proof from this equation and derive an ESM objective.
+For shorthand, we write \(s_{q} = ∇_{z^τ} \log q(z_τ)\) and, we define \(s_{p} = ∇_{z_τ} \log p(z_τ)\).
+
+Observe that
+\begin{equation}
+\frac{1}{2}g^2(τ) || s_q - s_p||^2 = \frac{1}{2}g^2(τ)||s_q||^2 - g^2 s_q^Ts_p + \frac{1}{2}g^2(τ)||s_p||^2,
+\end{equation}
+such that
+\begin{equation}
+\frac{1}{2}g^2(τ)||s_p^2|| - g^2(τ)s_q^T s_p = \frac{1}{2}g^2(τ)||s_q - s_p||^2 - \frac{1}{2}g^2(τ)||s_q||^2.
+\end{equation}
+
+Thus, we simplify,
+\begin{align}
+CE(q(z^{0})||p(z^0)) &= H(q(z^1)) +
+∫_0^1
+𝔼_{q(z_τ)}
+[ \frac{1}{2}
+g^2(τ)||s_p||^2_2 \\&\qquad\qquad+ f(z^τ, τ)s_q
+− g^2(τ)s_q^T s_p
+]
+dτ \\ 
+&= H(q(z^1)) +
+∫_0^1
+𝔼_{q(z^τ)}
+[ \frac{1}{2}
+g^2(τ)||s_q - s_p||^2_2\\&\qquad\qquad
+- \frac{1}{2}g^2(τ)||s_q||^2 + f(z^τ, τ)s_q
+]
+dτ \\ 
+&= H(q(z^1)) +
+∫_0^1
+𝔼_{q(z^τ)}
+\left[ \frac{1}{2}
+g^2(τ)||s_q - s_p||^2_2\right] dτ\\&\qquad\qquad
++ \int_0^1 𝔼_{q(z^τ)} \left[-\frac{1}{2}g^2(τ)||s_q||^2 + f(z^τ, τ)s_q
+\right]
+dτ \\ 
+&= H(q(z^1)) +
+∫_0^1
+𝔼_{q(z^τ)}
+\left[ \frac{1}{2} g^2(τ)||s_q - s_p||^2_2\right] dτ \\&\qquad\qquad
++ \int_0^1 𝔼_{q(z^τ)} \left[ -\frac{dH(q(z^τ))}{dτ}\right]dτ \\ 
+&= H(q(z^1)) + ∫_0^1 𝔼_{q(z^τ)}
+\left[ \frac{1}{2} g^2(τ)||s_q - s_p||_2^2 \right] dτ \\&\qquad\qquad+ [H(q(z^0)) - H(q(z^1))] \\ 
+&= H(q(z^0)) + 𝔼_{τ ∼ \text{Unif}[0,1]}𝔼_{q(z^τ)}
+\left[ \frac{1}{2} g^2(τ)||s_q - s_p||_2^2 \right]
+\end{align}
+
+
+
+# We recognize by Fokker-Planck that 
+# \begin{equation}
+# \mathbb{E}_{q(z_t)}\left[-\frac{1}{2}g^2||s_q||^2 + f \cdot s_q\right] = -\frac{dH(q(z_t))}{dt},
+# \end{equation}
+# so that
+
+* Using Song Thm. 2.
+** ELBO modifications.
+For the score-matching theory to work and be precise, we need to simplify the ELBO.
+
+The sequential ELBO for our generative model contains the terms
+
+\begin{align*}&𝔼_{q_φ(z_{1:T} | x_{1:T})}\left[\log q_{φ}(z_1 | x_{1:T}) - \log p_{ψ}(z_{1})\right] \\ &+𝔼_{q_{φ}(z_{1:T} | x_{1:T})}\sum_{t=2}^T\mathrm{KL}\left[q_φ(z_t | z_{t-1}, x_{t:T}) || p_ψ(z_t | z_{t-1})\right].\end{align*}
+
+*I missed a simplification which is present in the Krishnan 2015 Deep Kalman Filters paper, however, the simplification I thought was insufficiently justified in that paper. I haven't checked other papers for this simplification but I'm sure it is known.*
+
+The key simplification is due to the following simple result. *Probably exists somewhere, but I couldn't find the exact statement I liked.
+*Lemma.* Let \(q(z_{1:T} | x)\) be a joint density on \(\mathcal{Z}_{1} × \mathcal{Z}_{2} × \cdots × \mathcal{Z}_{T} \) and let \(f : \mathcal{Z}_S \to ℝ\) be a measurable function from \(\mathcal{Z}_{S } :=  Π_{j ∈ S}\mathcal{Z}_j\) for some subset \(S ⊆ \left\{ 1, …, T \right\}\).
+If \(f\) is integrable, then
+\begin{equation*}
+𝔼_{q(z_{1:T} | x)}\left[ |f(z_S)| \right] = 𝔼_{q(z_{S} | x)}\left[ |f(z_S)| \right],
+\end{equation*}
+where \(q(z_s | x) = ∫_{S^{c}}q(z_{1:T} | x)dz_{s^c}\) is the marginal.
+*Proof.*
+Since \(f\) is integrable, Fubini-Tonelli applies and thus
+\begin{align*}
+𝔼_{q(z_{1:T} | x)}\left[ |f(z_S)| \right]
+&= ∫_{\mathcal{Z}_{S}}  \left[∫_{{\mathcal{Z}_{S^c}}}  f(z_S)q(z_{1:T} | x) dz_{S^c} \right] dz_S \\
+&= ∫_{\mathcal{Z}_{S}} f(z_S) \left[ ∫_{{\mathcal{Z}_{S^c}}} q(z_{1:T} | x) dz_{S^c} \right] dz_S \\
+&= ∫_{\mathcal{Z}_{S}} f(z_S) q(z_s | x)) dz_S \\
+&= 𝔼_{q(z_S | x)} \left[f(z_S)\right]. \\
+\end{align*}
+
+The implication of the above lemma is that the expectations in the ELBO simplify, since the KL divergence are deterministic given \(z_{t-1}\) and the observations. Therefore,
+
+
+
+\begin{align*}
+&𝔼_{q_φ(z_{1:T} | x_{1:T})}\left[\log q_{φ}(z_1 | x_{1:T}) - \log p_{ψ}(z_{1})\right] \\ &+𝔼_{q_{φ}(z_{1:T} | x_{1:T})}\sum_{t=2}^T\mathrm{KL}\left[q_φ(z_t | z_{t-1}, x_{t:T}) || p_ψ(z_t | z_{t-1})\right] \\
+&= 𝔼_{q_φ(z_{1:T} | x_{1:T})}\left[\log q_{φ}(z_1 | x_{1:T}) - \log p_{ψ}(z_{1})\right] \\ &+ \sum_{t=2}^T𝔼_{q_{φ}(z_{1:T} | x_{1:T})}\mathrm{KL}\left[q_φ(z_t | z_{t-1}, x_{t:T}) || p_ψ(z_t | z_{t-1})\right] \\
+&= \mathrm{KL}\left[ q_{φ}(z_1 | x_{1:T}) ||  p_{ψ}(z_{1})\right] \\ &+ \sum_{t=2}^T𝔼_{q_{φ}(z_{t-1} | x_{1:T})}\mathrm{KL}\left[q_φ(z_t | z_{t-1}, x_{t:T}) || p_ψ(z_t | z_{t-1})\right] \\
+\end{align*}
+
+
+The point of writing this way, compared to before, is that it is clear that the conditioning variables are fixed for the inner KL divergence, and we do not need to consider interactions between different \(z_t\) once a MC sample of \(z_{t-1}\) is obtained.
+
+Note that this is equivilant to the derivation presented in Krishnan (2015).
+
+** ESM Formulation
+*** Closed-form target score.
+We have \(q_φ(z_t | z_{t-1}, x_{t:T}) = \mathcal{N}(z_t; μ_t, \boldsymbolσ_t^2)\) with
+\((μ_t, \boldsymbolσ_t^2) = (μ_t(z_{t-1}, x_{t:T}), \boldsymbolσ_t^2(z_{t-1}, x_{t:T}))\).
+Assume the forward SDE has Gaussian perturbation kernel
+\(q_{0τ}(z_t^{(τ)} | z_t) = \mathcal{N}(α_τ z_t, σ_τ^2 I)\).
+Then, the marginal is Gaussian:
+\[q_φ^{(τ)}(z_t^{(τ)} | z_{t-1}, x_{t:T}) = \mathcal{N}\left(z_t^{(τ)};\; α_τ μ_t,\; α_τ^2 \boldsymbolσ_t^2 + σ_τ^2 I\right),\]
+hence
+\[s_q^{(τ)} = -\frac{z_t^{(τ)} - α_τ μ_t(z_{t-1}, x_{t:T})}{α_τ^2 \boldsymbolσ_t^2(z_{t-1}, x_{t:T}) + σ_τ^2}.\]
+
+We therefore may perform /*explicit* score matching/: \(s_q^{(τ)}\) is available analytically as a function
+of the encoder outputs \((μ_t, \boldsymbolσ_t^2)\), with no denoising / noise-prediction
+reparameterization needed. Contrast with LSGM, which uses DSM because their \(q\)-marginal
+is not tractable.
+
+/TODO: can we justify that in the temporal context, keeping q gaussian is better than in the static context?/
+
+*** Rao–Blackwell: ESM has lower variance than DSM.
+Observe that the marginal score is the conditional expectation of the conditional score. Expanding \(∇ \log q_φ^{(τ)}\) under the noise-kernel-factorization \(q_φ^{(τ)}(z_t^{(τ)} | c) = ∫ q_{0τ}(z_t^{(τ)} | z_t) q_φ(z_t | c) dz_t\)
+(writing \(c := (z_{t-1}, x_{t:T})\)), we have
+\[s_q^{(τ)}(z_t^{(τ)}; c)
+ = ∇_{z_t^{(τ)}} \log q_φ^{(τ)}(z_t^{(τ)} | c)
+ = \frac{∫ ∇_{z_t^{(τ)}} q_{0τ}(z_t^{(τ)} | z_t)\, q_φ(z_t | c)\, dz_t}{q_φ^{(τ)}(z_t^{(τ)} | c)}\]
+\[= 𝔼_{q_φ(z_t | z_t^{(τ)}, c)}\left[∇_{z_t^{(τ)}} \log q_{0τ}(z_t^{(τ)} | z_t)\right],\]
+where the last step uses \(∇ q_{0τ} = q_{0τ} ∇ \log q_{0τ}\) and Bayes' rule to identify
+the posterior \(q_φ(z_t | z_t^{(τ)}, c) \propto q_{0τ}(z_t^{(τ)} | z_t) q_φ(z_t | c)\).
+/I think this is done by Vincent 2011, we shoudl just cite, saying that it is well-known that the marginal arises as a conditional expectation of the conditional)./
+
+By Rao–Blackwell, replacing the conditional (kernel) score by its conditional
+expectation — i.e., by the marginal score \(s_q^{(τ)}\) — cannot increase variance:
+\[\mathrm{Var}\!\left[\tfrac{1}{2} g^2(τ) \|s_q^{(τ)} - s_ψ\|^2\right]
+ \;\leq\; \mathrm{Var}\!\left[\tfrac{1}{2} g^2(τ) \|∇_{z_t^{(τ)}} \log q_{0τ}(z_t^{(τ)} | z_t) - s_ψ\|^2\right],\]
+with both expectations equal (up to a \(ψ\)-independent constant) as functions of \(ψ\).
+
+In particular, the DSM estimator requires sampling the *auxiliary* latent \(z_t\) in
+addition to \(z_t^{(τ)}\), whereas our ESM estimator integrates \(z_t\) out analytically
+via the Gaussian convolution \(q_φ^{(τ)}(z_t^{(τ)} | c) = \mathcal{N}(α_τ μ_t, α_τ^2
+\boldsymbolσ_t^2 + σ_τ^2 I)\).
+Thus, Monte Carlo noise from that extra sample is eliminated,
+yielding strictly lower-variance gradients for \(ψ\) at no additional cost.
+
+/This is the same Rao–Blackwell argument that Vincent (2011) uses to justify DSM over
+ISM when the marginal score is intractable; here we can go one step further because
+our \(q_φ\) is Gaussian and the marginal score *is* tractable, recovering ESM./
+
+
+** SDE as a generative model.
+We model the transition density \(p_{ψ}(z_t | z_{t-1} )\) with one induced by reversing a forward noising SDE.
+
+The key observation is that Anderson's time-reversal theorem is agnostic to conditioning, since the drift and diffusion coefficients of the forward SDE are not dependent on the conditioning set.
+*** Forward SDE.
+We fix \(τ\) and introduce the diffusion time \(τ \in [0,1]\).
+We let \(z_t^{(τ)}\) denote the state of the forward process governed by
+\begin{equation*}
+dz_t^{(τ)} = f(z_t^{τ}, τ)dτ + g(τ)dw,
+\end{equation*}
+where \(w\) is standard Brownian motion and we write \(z_{t}^{(0)}:= z_t\), where for generality we assume \(z_t\) is given by a density \(z_t ~ ρ(z_t)\). The density under the diffusion process at time \(τ\) we denote by \(ρ^{τ}(z_t)\).
+As usual, the drift \(f\) and diffusion \(g\) are chosen such that \(ρ_1(z_t^{(1)})\) is close to \(\mathcal{N}(0,I)\).
+Assuming linear drift \(f(z,τ)=h(τ)z\), the perturbation kernel is Gaussian,
+\(q_{0τ}(z_t^{(τ)} | z_t) = \mathcal{N}(α_τ z_t, σ_τ^2 I)\) where  \(α_τ = \exp\!∫_0^{τ} h(s)\,ds\) and \( σ_τ^2 = α_τ^2 ∫_0^{τ} \frac{g^2(s)}{α_s^2}\,ds.\)
+
+*** Reverse SDE via Anderson's Theorem.
+Anderson's theorem states that for any forward Itoo SDE with coefficients \((f,g)\) and density \(ρ_{τ}\), the time-reversed process satisfies
+\(dz_t^{(τ)} = \left[ f(z_t^{(τ)}, τ) - g^2(τ)∇_{z_t^{(τ)}}\log ρ_{τ}(z_t^{(τ)}) \right]dτ + g(τ)d\bar{w},\)
+where \(d\bar{w}\) is a reverse time standard brownian motion from \(τ=1\) to \(τ=0\).
+The theorem holds for /any/ density \(ρ_{τ}\) under the forward SDE. That is, conditioning on a fixed variable \(c\) yields the diffusion-time density \(ρ_{τ}(z_t^{(τ)} | c)\) and then 
+\(dz_t^{(τ)} = \left[ f(z_t^{(τ)}, τ) - g^2(τ)∇_{z_t^{(τ)}}\log ρ_{τ}(z_t^{(τ)} | c) \right]dτ + g(τ)d\bar{w}.\)
+Thus, the conditioning variable enters solely through the marginal score \(ρ_{τ}(z_t^{(τ)} | c)\).
+*** Generative Model.
+Our updated generative model is
+\(p_{ψ}(z_{1:T}, x_{1:T}) = p_{ψ}(z_1)p_θ(x_1 | z_1) Π_{t=2}^Tp_{ψ}^{\mathrm{sde}}(z_t | z_{t-1})p_{θ}(x_t | z_t),\)
+
+where 
+\(p_{ψ}^{\mathrm{sde}}(z_t | z_{t-1}) = \text{ density of } z_{t}^{(0)} \text{ under reverse SDE depending on } ∇_{z_t^{(τ)}}\log p_t^{(τ)}(z_t^{(τ)} | z_{t-1}).\)
+
+/Ref to Song paper for maybe a better way of writing this./
+/Or, perhaps the LSGM paper will elucidate better notation/organization. The confusion is that we could have two different time densities, depending on whether or not we use the posterior or prior densities over \(z_t\).
+
+We follow existing works and approximate the marginal score using a neural network \(s_{ψ}(z_t^{(τ)}, τ, z_{t-1}) \approx ∇_{z_t^{(τ)}}\log ρ_{τ}(z_t^{(τ)} | z_{t-1}).\)
+*** Score Matching.
+We must connect the generative model to 
+
+\[\sum_{t=2}^T𝔼_{q_{φ}(z_{t-1} | x_{1:T})}\mathrm{KL}\left[q_φ(z_t | z_{t-1}, x_{t:T}) || p_ψ(z_t | z_{t-1})\right] \].
+
+Song's Theorem 2 bounds \(\mathrm{KL}(p∥p_ψ^{\mathrm{sde}})\) where both densities are model-side. Our ELBO requires \(\mathrm{KL}(q∥p_ψ^{\mathrm{sde}})\) between variational and generative densities, so we apply our theorem (above) directly.
+**** Song's version (notation-adjusted)
+*Theorem 2.* Suppose \(p(z)\) and \(ρ(z)\) have continuous second-order derivatives and finite second
+moments. Let \(\left\{ z(τ) \right\}_{τ \in \left[ 0,T \right]}\) be the diffusion process defined by the SDE
+\begin{equation*}
+dz^{(τ)} = f(z^{τ}, τ)dτ + g(τ)dw,
+\end{equation*}
+We use \(p^{(τ)}\) and \(ρ^{(τ)}\) to denote the distributions of \(z(τ)\) when \(z(0) ∼ p\) and \(z(0) ∼ ρ\), and assume they satisfy the same assumptions in Appendix A. Under the conditions \(ρ^{(T)} ∼ π\) and \(s_ψ(z,τ) = ∇_z\log ρ^{τ}(z)\) for all \(t \in [0,T]\), we have the following equivalence in
+distributions
+\[p_{ψ}^{\mathrm{SDE}}=p_{ψ}^{\mathrm{ODE}} = q.\]
+Moreover, we have
+\[\mathrm{KL}(p || p_{ψ}^{\mathrm{SDE}}) = \mathcal{J}_{\mathrm{SM}}(ψ;g(⋅)^2) + \mathrm{KL}(p^{(T)} || π)\].
+
+/I think this theorem is not applicable in our setting, because the score matching objective referred to in \(\mathcal{J}_{\mathrm{SM}}\) matches the NN score to the distribution appearing in the LHS of the KL divergence, whereas our/LSGM version contains a KL between two fundamentally different distributions (variational vs. generative). /
+
+**** Via our theorem.
+We compute the KL divergence according to our theorem above. Specifically, applying
+our theorem pointwise at each \(t\), with \(q\) conditioned on \((z_{t-1}, x_{t:T})\)
+and \(p\) conditioned on \(z_{t-1}\). Anderson's reversal is agnostic to the
+conditioning set, so all objects in the theorem go through verbatim with conditioning
+appended to every density.
+
+Fix \(t \in \{2, \ldots, T\}\) and \(z_{t-1}\). We write
+\[q(z^{(0)}) \leftrightarrow q_φ(z_t | z_{t-1}, x_{t:T}), \quad p(z^{(0)}) \leftrightarrow p_ψ^{\mathrm{sde}}(z_t | z_{t-1}),\]
+the induced marginals under the shared forward SDE at time \(τ\) as
+\[q_φ^{(τ)}(z_t^{(τ)} | z_{t-1}, x_{t:T}) = ∫ q_{0τ}(z_t^{(τ)} | z_t) q_φ(z_t | z_{t-1}, x_{t:T}) dz_t,\]
+\[p_ψ^{(τ)}(z_t^{(τ)} | z_{t-1}) = ∫ q_{0τ}(z_t^{(τ)} | z_t) p_ψ^{\mathrm{sde}}(z_t | z_{t-1}) dz_t,\]
+and scores as
+\[s_q^{(τ)} := ∇_{z_t^{(τ)}} \log q_φ^{(τ)}(z_t^{(τ)} | z_{t-1}, x_{t:T}), \quad s_p^{(τ)} := ∇_{z_t^{(τ)}} \log p_ψ^{(τ)}(z_t^{(τ)} | z_{t-1}).\]
+
+The theorem gives
+\[\mathrm{KL}\left[q_φ(z_t | z_{t-1}, x_{t:T}) || p_ψ^{\mathrm{sde}}(z_t | z_{t-1})\right]
+= 𝔼_{τ \sim U[0,1]} 𝔼_{q_φ^{(τ)}(z_t^{(τ)} | z_{t-1}, x_{t:T})}\left[\tfrac{1}{2} g^2(τ) \|s_q^{(τ)} - s_p^{(τ)}\|^2\right].\]
+
+The RHS score \(s_p^{(τ)}\) is the marginal score of the generative SDE's time-\(τ\)
+density, which is exactly what the neural net \(s_ψ(z_t^{(τ)}, τ, z_{t-1})\) is trained
+to approximate. Crucially, this does not contain \(x_{t:T}\). 
+
+Substituting \(s_p^{(τ)} \leftarrow s_ψ(z_t^{(τ)}, τ, z_{t-1})\):
+\[\mathrm{KL}\left[q_φ(z_t | z_{t-1}, x_{t:T}) || p_ψ^{\mathrm{sde}}(z_t | z_{t-1})\right]
+= 𝔼_τ 𝔼_{q_φ^{(τ)}(z_t^{(τ)} | z_{t-1}, x_{t:T})}\left[\tfrac{1}{2} g^2(τ) \|s_q^{(τ)} - s_ψ(z_t^{(τ)}, τ, z_{t-1})\|^2\right].\]
+
+
+*** ELBO contribution.
+Summing over \(t\) and taking the outer expectation under \(q_φ(z_{t-1} | x_{1:T})\):
+\[\sum_{t=2}^T 𝔼_{q_φ(z_{t-1} | x_{1:T})} \mathrm{KL}\left[q_φ(z_t | z_{t-1}, x_{t:T}) || p_ψ^{\mathrm{sde}}(z_t | z_{t-1})\right]\]
+\[= \sum_{t=2}^T 𝔼_{q_φ(z_{t-1} | x_{1:T})} 𝔼_{τ \sim U[0,1]} 𝔼_{q_φ^{(τ)}(z_t^{(τ)} | z_{t-1}, x_{t:T})}\left[\tfrac{1}{2} g^2(τ) \|s_q^{(τ)} - s_ψ(z_t^{(τ)}, τ, z_{t-1})\|^2\right].\]
+
+All three nested expectations admit Monte Carlo estimators: the outer \(z_{t-1}\) from
+trajectory samples (same \(S\) trajectories as the current implementation); \(τ\) from
+\(U[0,1]\); and \(z_t^{(τ)}\) from the closed-form Gaussian above via reparameterization
+\(z_t^{(τ)} = α_τ μ_t + \sqrt{α_τ^2 \boldsymbolσ_t^2 + σ_τ^2} ε\), \(ε \sim \mathcal{N}(0, I)\).
+
+We will follow LSGM in performing importance sampling of the second expectation to reduce variance.
+
+*** Score parameterization and regression
+Note: The presentation here should be cleaned up.
+The observation is that we may easily use the EDM framework, the only thing that changes is the regression target becomes available in closed form. Deriving the target follows from 
+*** EDM Preconditioning
+**** Change of Coordinates
+We adopt the preconditioning scheme of EDM to reparamaterize our explicit score-matching objective. 
+The EDM framework presents the forward process using the VE kernel 
+\(\mathcal{N}(z_{t}, \tilde{σ}_{τ}^2 I)\), parameterized by noise level \(\tilde{σ}\).
+
+Define the rescaled state and noise level
+\[\tilde{z}_t^{(τ)} := z_t^{(τ)}/α_τ, \qquad \tilde{σ}_τ := σ_τ/α_τ\].
+Then, rescaling the kernel
+\(q_{0τ}(z_t^{(τ)} | z_t) = \mathcal{N}(α_τ z_t,
+σ_τ^2 I)\) yields the VE kernel
+\[\tilde{q}_{0τ}(\tilde{z}_t^{(τ)} | z_t) = \mathcal{N}(z_t, \tilde{σ}_τ^2 I).\]
+
+The expectation in the score matching identity transforms as
+\(𝔼_{q_{φ}^{(τ)}}[\cdot] = 𝔼_{\tilde{q}_{φ}^{(τ)}}[\cdot]\), and by the chain rule
+\(\tilde{s}(\tilde{z}) = α_τ\, s(z)\), hence
+\(\|s\|^2 = \|\tilde{s}\|^2/α_τ^2\).
+Substituting into the score-matching identity we have
+\[\mathrm{KL}[q_φ \| p_ψ^{\mathrm{sde}}]
+= 𝔼_τ\, 𝔼_{\tilde{q}_φ^{(τ)}}\!\left[\tfrac{1}{2}\,
+\frac{g^2(τ)}{α_τ^2}\, \|\tilde{s}_q^{(τ)} - \tilde{s}_ψ\|^2\right].\]
+Note that \(g^2(τ)\) is the coefficient under the original noising SDE, and not the
+rescaled SDE.
+
+**** Denoiser Parameterization
+Following Karras, we parameterize both the true and model scores through denoisers.
+With the VE kernel established, Tweedie's formula gives
+\[D^{*}(\tilde{z}_t^{(τ)}, τ, c) := 𝔼[z_t | \tilde{z}_t^{(τ)}, c]
+= \tilde{z}_t^{(τ)} + \tilde{σ}_τ^2\, \tilde{s}_q^{(τ)},\]
+and the score parameterizations
+\[\tilde{s}_q^{(τ)} = \frac{D^{*} - \tilde{z}_t^{(τ)}}{\tilde{σ}_τ^2}, \qquad
+\tilde{s}_ψ = \frac{D_ψ - \tilde{z}_t^{(τ)}}{\tilde{σ}_τ^2}.\]
+EDM's preconditioning on the model denoiser is
+\[D_ψ(\tilde{z}_t^{(τ)}, τ, z_{t-1})
+= c_{\mathrm{skip}}\, \tilde{z}_t^{(τ)} + c_{\mathrm{out}}\,
+F_ψ\!\bigl(c_{\mathrm{in}}\, \tilde{z}_t^{(τ)},\, c_{\mathrm{noise}},\, z_{t-1}\bigr),\]
+with constants determined by
+\[c_{\mathrm{skip}}(\tilde{σ}_τ) = \frac{σ_{\mathrm{data}}^2}{\tilde{σ}_τ^2 + σ_{\mathrm{data}}^2}, \quad
+c_{\mathrm{out}}(\tilde{σ}_τ) = \frac{\tilde{σ}_τ\, σ_{\mathrm{data}}}{\sqrt{\tilde{σ}_τ^2 + σ_{\mathrm{data}}^2}}, \quad
+c_{\mathrm{in}}(\tilde{σ}_τ) = \frac{1}{\sqrt{\tilde{σ}_τ^2 + σ_{\mathrm{data}}^2}}, \quad
+c_{\mathrm{noise}}(\tilde{σ}_τ) = \tfrac{1}{4}\ln \tilde{σ}_τ.\]
+
+**** Regression target and final loss.
+Substituting the denoiser parameterization into the squared score difference,
+\[\|\tilde{s}_ψ - \tilde{s}_q^{(τ)}\|^2
+= \frac{1}{\tilde{σ}_τ^4}\, \|D_ψ - D^{*}\|^2
+= \frac{c_{\mathrm{out}}^2}{\tilde{σ}_τ^4}\, \|F_ψ - F^{*}\|^2,\]
+with regression target
+\[F^{*}(\tilde{z}_t^{(τ)}, τ, c)
+:= \frac{D^{*}(\tilde{z}_t^{(τ)}, τ, c) - c_{\mathrm{skip}}\, \tilde{z}_t^{(τ)}}{c_{\mathrm{out}}}
+= \frac{(1 - c_{\mathrm{skip}})\, \tilde{z}_t^{(τ)} + \tilde{σ}_τ^2\, \tilde{s}_q^{(τ)}(\tilde{z}_t^{(τ)} | c)}{c_{\mathrm{out}}}.\]
+Combining with the SDE-coefficient factor from the change of variables:
+\begin{equation*}
+\boxed{\;
+\mathcal{L}_t = \tfrac{1}{2}\, 𝔼_{τ \sim π}\, 𝔼_{\tilde{z}_t^{(τ)} \sim \tilde{q}_φ^{(τ)}(\cdot | c)}
+\!\left[\, w(τ)\,
+\bigl\|F_ψ\!\bigl(c_{\mathrm{in}}\, \tilde{z}_t^{(τ)},\, c_{\mathrm{noise}},\, z_{t-1}\bigr)
+- F^{*}(\tilde{z}_t^{(τ)}, τ, c)\bigr\|^2 \,\right],
+\;}
+\end{equation*}
+\begin{equation*}
+w(τ) \;:=\; \frac{g^2(τ)\, c_{\mathrm{out}}^2(\tilde{σ}_τ)}{α_τ^2\, \tilde{σ}_τ^4}.
+\end{equation*}
+
+**** Rescaled target score \(\tilde{s}_q^{(τ)}\).
+Recall from the ESM section that the marginal in native coordinates
+is \(q_φ^{(τ)}(z_t^{(τ)} | c) = \mathcal{N}(α_τ μ_t,\, α_τ^2 \boldsymbolσ_t^2 + σ_τ^2 I)\).
+Pushed through \(\tilde{z} = z/α_τ\), this becomes
+\(\tilde{q}_φ^{(τ)}(\tilde{z}_t^{(τ)} | c) = \mathcal{N}(μ_t,\, \boldsymbolσ_t^2 + \tilde{σ}_τ^2 I)\),
+giving the closed-form target
+\[\tilde{s}_q^{(τ)}(\tilde{z}_t^{(τ)} | c)
+= -\frac{\tilde{z}_t^{(τ)} - μ_t(z_{t-1}, x_{t:T})}{\boldsymbolσ_t^2(z_{t-1}, x_{t:T}) + \tilde{σ}_τ^2}.\]
+Both \(\tilde{s}_q^{(τ)}\) and \(F^{*}\) are thus available analytically as
+functions of the encoder outputs.
+
+**** VP-SDE.
+For the VP-SDE with schedule \(β(τ)\):
+\[α_τ = \exp(-\tfrac{1}{2}∫_0^τ β(s)\, ds), \quad σ_τ^2 = 1 - α_τ^2, \quad
+g^2(τ) = β(τ), \quad \tilde{σ}_τ = \sqrt{α_τ^{-2} - 1}.\]
+With normalized latents (\(σ_{\mathrm{data}} = 1\)), the EDM constants reduce to
+\[c_{\mathrm{skip}}(τ) = α_τ^2, \quad
+c_{\mathrm{out}}(τ) = α_τ\, \tilde{σ}_τ = \sqrt{1 - α_τ^2}, \quad
+c_{\mathrm{in}}(τ) = α_τ, \quad
+c_{\mathrm{noise}}(τ) = \tfrac{1}{4}\ln \tilde{σ}_τ.\]
+The loss weight is
+\[w(τ) = \frac{g^2(τ)\, c_{\mathrm{out}}^2(\tilde{σ}_τ)}{α_τ^2\, \tilde{σ}_τ^4}
+= \frac{β(τ)\, (1-α_τ^2)}{α_τ^2\, \tilde{σ}_τ^4}
+= \frac{β(τ)\, α_τ^2}{1 - α_τ^2}.\]
+The marginal in VE coordinates is
+\(\tilde{q}_φ^{(τ)}(\tilde{z}_t^{(τ)} | c) = \mathcal{N}(μ_t,\, \boldsymbolσ_t^2 + \tilde{σ}_τ^2 I)\),
+sampled by \(\tilde{z}_t^{(τ)} = μ_t + \sqrt{\boldsymbolσ_t^2 + \tilde{σ}_τ^2}\, ε\),
+\(ε \sim \mathcal{N}(0, I)\), with target score
+\[\tilde{s}_q^{(τ)}(\tilde{z}_t^{(τ)} | c)
+= -\frac{\tilde{z}_t^{(τ)} - μ_t}{\boldsymbolσ_t^2 + \tilde{σ}_τ^2}.\]
+
+All quantities — \(α_τ\), \(\tilde{σ}_τ\), and the EDM constants — are
+deterministic functions of \(β(τ)\) and can be precomputed.
+
+*** Importance Sampling
+**** From LSGM
+\(r(τ) \propto \frac{dσ_{τ}^2}{dt}\) sampled by \(τ = \mathrm{var}^{{-1}}((1 - p)σ_0^2 + ρσ_1^{2})\)
+
+*** Misc stuff.
+- *Gradient w.r.t. \(ψ\).* Only \(s_ψ\) depends on \(ψ\), so
+  \(∇_ψ \hat{\mathcal{L}}_{\mathrm{ESM},t} = -g^2(τ) (s_q^{(τ)} - s_ψ)^\top ∇_ψ s_ψ\),
+  identical in form to standard score-matching training.
+- *Gradient w.r.t. \(φ\).* Encoder sees signal through \((μ_t, \boldsymbolσ_t^2)\) in both \(s_q^{(τ)}\) and the sampling distribution of \(z_t^{(τ)}\)
+- *Reduction to DDPM/DSM.* Under the VPSDE discretization with \(q_φ\) degenerate
+  (encoder matching DDPM's closed-form posterior), \(s_q^{(τ)}\) reduces to the standard
+  Gaussian denoising target and this objective collapses to the DSM loss currently used.
+
+/TODO: verify sign of \(s_q^{(τ)}\) matches the cross-entropy expansion (LSGM
+uses \(s = ∇ \log\), no minus sign — the minus sign above comes from
+\(∇ \log \mathcal{N}(z; m, Σ) = -Σ^{-1}(z - m)\), which is correct). should double-check against
+the notation in the entropy-rate lemma proof above./
+
+* Misc quotes from the LSGM paper to remember
+** On Sampling Speed Improvements
+We identify three main reasons for this significantly faster sampling from LSGM: (i) The SGM prior
+in our LSGM models latent variables with 32×32 spatial dim., whereas the original SGM [2] directly
+models 256×256 images. The larger spatial dimensions require a deeper network to achieve a large
+receptive field. (ii) Inspecting the SGM prior in our model suggests that the score function is heavily
+dominated by the linear term at the end of training, as the mixing coefficients α are all < 0.02. This
+makes our SGM prior smooth and numerically faster to solve. (iii) Since SGM is formed in the latent
+space in our model, errors from solving the ODE can be corrected to some degree using the VAE
+decoder, while in the original SGM [2] errors directly translate to artifacts in pixel space.
+** Usefulness to Us
+The results mentioned above show 637x and 56x speedups while achieving better FID results. In our case, we expect to
+realize this advantage as well over obs. space diffusion time-series, because 1. we operate in latent space, but also 2. we reduce the temporal
+dimension. 
+Note that we may or may not want to use the "mixture" of scores used in their model. 
+
+** End-to-End training
+End-to-end training. We proposed to train LSGM end-to-end, in contrast to [ 10]. Using a similar
+setup as above we compare end-to-end training of LSGM during the second stage with freezing the
+VAE encoder and decoder and only training the SGM prior in latent space during the second stage.
+When training the model end-to-end, we achieve an FID of 5.19 and NELBO of 2.98; when freezing
+the VAE networks during the second stage, we only get an FID of 9.00 and NELBO of 3.03. These
+results clearly motivate our end-to-end training strategy.
+
+
