@@ -261,7 +261,7 @@ class FeatureMixerConfig:
     n_layers: int = 1
 
 
-def _default_context_feature_mixer() -> FeatureMixerConfig:
+def _default_context_feature_mixer_config() -> FeatureMixerConfig:
     return FeatureMixerConfig(n_layers=2)
 
 
@@ -270,7 +270,9 @@ class ResidualBlockConfig:
     """Config for ``ResidualBlock`` internals."""
 
     time: TimeMixerConfig = field(default_factory=TimeMixerConfig)
-    feature: FeatureMixerConfig = field(default_factory=_default_context_feature_mixer)
+    feature: FeatureMixerConfig = field(
+        default_factory=_default_context_feature_mixer_config
+    )
 
 
 @dataclass
