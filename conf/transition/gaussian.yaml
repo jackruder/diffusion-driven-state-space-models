@@ -1,28 +1,31 @@
-# transition/gaussian.yaml – Gaussian transition config group option
+# @package transition
+# transition/gaussian.yaml – Gaussian transition config group option.
+# The @package directive places this file's contents directly under the
+# `transition` key (avoiding the double-nested transition.transition that
+# would otherwise result from the defaults-list group selection).
 
-transition:
-  _target_: ddssm.transitions.transitions.GaussianTransition
-  latent_dim: ${latent_dim}
-  j: ${j}
-  emb_time_dim: ${emb_time_dim}
-  covariate_dim: ${covariate_dim}
-  hidden_dim: 64
-  context:
-    channels: 8
-    num_layers: 2
-    residual_block:
-      time:
-        type: conv
-        kernel_size: 3
-        gru_layers: 1
-      feature:
-        type: transformer
-        nheads: 8
-        n_layers: 2
-  gaussian_head:
-    _target_: ddssm.gaussians.GaussianHead
-    _partial_: true
-    init_logvar: 0.0
-    var_min: 1.0e-6
-    clamp_logvar_min: -9.0
-    clamp_logvar_max: 6.0
+_target_: ddssm.transitions.transitions.GaussianTransition
+latent_dim: ${latent_dim}
+j: ${j}
+emb_time_dim: ${emb_time_dim}
+covariate_dim: ${covariate_dim}
+hidden_dim: 64
+context:
+  channels: 8
+  num_layers: 2
+  residual_block:
+    time:
+      type: conv
+      kernel_size: 3
+      gru_layers: 1
+    feature:
+      type: transformer
+      nheads: 8
+      n_layers: 2
+gaussian_head:
+  _target_: ddssm.gaussians.GaussianHead
+  _partial_: true
+  init_logvar: 0.0
+  var_min: 1.0e-6
+  clamp_logvar_min: -9.0
+  clamp_logvar_max: 6.0

@@ -1,31 +1,31 @@
-# transition/diffusion.yaml – Diffusion transition config group option
+# @package transition
+# transition/diffusion.yaml – Diffusion transition config group option.
 
-transition:
-  _target_: ddssm.transitions.diffusion.DiffusionTransition
-  latent_dim: ${latent_dim}
-  j: ${j}
-  emb_time_dim: ${emb_time_dim}
-  covariate_dim: ${covariate_dim}
-  unet:
-    channels: 64
-    n_layers: 4
-    embedding_dim: 128
-    residual_block:
-      time:
-        type: conv
-        kernel_size: 3
-        gru_layers: 1
-      feature:
-        type: transformer
-        nheads: 8
-        n_layers: 1
-  schedule:
-    S_k: 1
-    k_chunk: 1
-    num_steps: 100
-    sigma_min: 0.002
-    sigma_max: 80.0
-    rho: 7.0
-    k_sampling_mode: uniform
-    pk_gamma: 1.0
-    pk_floor: 1.0e-12
+_target_: ddssm.transitions.diffusion.DiffusionTransition
+latent_dim: ${latent_dim}
+j: ${j}
+emb_time_dim: ${emb_time_dim}
+covariate_dim: ${covariate_dim}
+unet:
+  channels: 64
+  n_layers: 4
+  embedding_dim: 128
+  residual_block:
+    time:
+      type: conv
+      kernel_size: 3
+      gru_layers: 1
+    feature:
+      type: transformer
+      nheads: 8
+      n_layers: 1
+schedule:
+  S_k: 1
+  k_chunk: 1
+  num_steps: 100
+  sigma_min: 0.002
+  sigma_max: 80.0
+  rho: 7.0
+  k_sampling_mode: uniform
+  pk_gamma: 1.0
+  pk_floor: 1.0e-12
