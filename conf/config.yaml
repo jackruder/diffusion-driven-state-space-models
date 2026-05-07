@@ -8,5 +8,6 @@
 
 defaults:
   - experiment: synthetic_gauss
+  - transition: gaussian
   - wandb: disabled
   - _self_

@@ -129,7 +129,6 @@ DDSSMTrainerPartial = builds(
 def _experiment_conf(
     *,
     data_conf,
-    transition_conf,
     hyperparams_conf,
     training_conf,
     objective_conf=None,
@@ -143,12 +142,22 @@ def _experiment_conf(
     use_observation_mask: bool = False,
     checkpoint_dir: str = "./checkpoints",
     seed: int = 0,
+    transition_conf=None,
 ):
     """Compose an Experiment config from its parts.
 
     Centralizes the wiring so each preset is a one-liner pointing at
     the right Confs.
+
+    ``transition_conf`` is optional.  When omitted the experiment uses
+    the top-level ``transition`` config-group selection (default:
+    ``transition=gaussian``), so callers in ``verifications.org`` can
+    switch ``experiment=harmonic transition=diffusion`` without touching
+    Python.  Pass an explicit conf only when the preset must lock in a
+    specific transition (e.g. KDD presets that also differ in batch
+    size and step count).
     """
+    resolved_transition = transition_conf if transition_conf is not None else "${transition}"
     return builds(
         Experiment,
         populate_full_signature=True,
@@ -167,7 +176,7 @@ def _experiment_conf(
         covariate_dim=covariate_dim,
         use_observation_mask=use_observation_mask,
         checkpoint_dir=checkpoint_dir,
-        transition=transition_conf,
+        transition=resolved_transition,
         hyperparams=hyperparams_conf,
     )
 
