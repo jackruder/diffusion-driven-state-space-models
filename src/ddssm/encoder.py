@@ -220,18 +220,11 @@ class GaussianEncoder(BaseEncoder):
 
         # -- future summary module --
         self.fut_sum_module = build_future_summary(
-            summary_type=fut_summary.type,
+            config=fut_summary,
             data_dim=data_dim,
             emb_time_dim=emb_time_dim + self.covariate_dim,
             use_mask=use_mask,
             static_embed_dim=self.total_static_dim,
-            summary_dim=fut_summary.summary_dim,
-            num_layers=fut_summary.num_layers,
-            gru_layers=fut_summary.gru_layers,
-            nheads=fut_summary.nheads,
-            ff_mult=fut_summary.ff_mult,
-            dropout=fut_summary.dropout,
-            transformer_layers=fut_summary.transformer_layers,
         )
 
         # -- projection layers --

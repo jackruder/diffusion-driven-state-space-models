@@ -8,7 +8,7 @@ produce latent distributions q_ϕ(z_t | ·).
 import torch
 import torch.nn as nn
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from hydra_zen import builds
 
@@ -177,46 +177,81 @@ class TransformerFutureSummary(FutureSummary):
         return self.encoder(x, mask=causal_mask)
 
 
+# ---------------------------------------------------------------------------
+# Nested type-specific configs
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GRUFutureSummaryConfig:
+    """GRU-specific config for ``GRUFutureSummary``."""
+
+    gru_layers: int = 1
+
+
+@dataclass
+class TransformerFutureSummaryConfig:
+    """Transformer-specific config for ``TransformerFutureSummary``."""
+
+    nheads: int = 4
+    ff_mult: int = 4
+    dropout: float = 0.0
+    transformer_layers: int = 1
+
+
+@dataclass
+class FutureSummaryConfig:
+    """Architectural config for the future-summary module.
+
+    ``type`` selects the variant (``'gru'`` or ``'transformer'``).
+    Type-specific parameters live in the ``gru`` / ``transformer`` sub-configs,
+    so the parent module does not need to know which variant is active.
+
+    Excludes shape params (``data_dim``, ``emb_time_dim``, ``use_mask``,
+    ``static_embed_dim``) which are provided by the enclosing ``GaussianEncoder``.
+    """
+
+    type: str = "gru"
+    summary_dim: int = 64
+    num_layers: int = 2
+    gru: GRUFutureSummaryConfig = field(default_factory=GRUFutureSummaryConfig)
+    transformer: TransformerFutureSummaryConfig = field(
+        default_factory=TransformerFutureSummaryConfig
+    )
+
+
 def build_future_summary(
-    summary_type: str,
+    config: "FutureSummaryConfig",
     data_dim: int,
     emb_time_dim: int,
     use_mask: bool,
     static_embed_dim: int = 0,
-    summary_dim: int = 64,
-    num_layers: int = 2,
-    gru_layers: int = 1,
-    nheads: int = 4,
-    ff_mult: int = 4,
-    dropout: float = 0.0,
-    transformer_layers: int = 1,
 ) -> "FutureSummary":
-    """Factory: create the appropriate FutureSummary from a type string."""
-    if summary_type == "gru":
+    """Factory: create the appropriate FutureSummary from a ``FutureSummaryConfig``."""
+    if config.type == "gru":
         return GRUFutureSummary(
             data_dim=data_dim,
             emb_time_dim=emb_time_dim,
             use_mask=use_mask,
             static_embed_dim=static_embed_dim,
-            summary_dim=summary_dim,
-            num_layers=num_layers,
-            gru_layers=gru_layers,
+            summary_dim=config.summary_dim,
+            num_layers=config.num_layers,
+            gru_layers=config.gru.gru_layers,
         )
-    if summary_type == "transformer":
+    if config.type == "transformer":
         return TransformerFutureSummary(
             data_dim=data_dim,
             emb_time_dim=emb_time_dim,
             use_mask=use_mask,
             static_embed_dim=static_embed_dim,
-            summary_dim=summary_dim,
-            num_layers=num_layers,
-            nheads=nheads,
-            ff_mult=ff_mult,
-            dropout=dropout,
-            transformer_layers=transformer_layers,
+            summary_dim=config.summary_dim,
+            num_layers=config.num_layers,
+            nheads=config.transformer.nheads,
+            ff_mult=config.transformer.ff_mult,
+            dropout=config.transformer.dropout,
+            transformer_layers=config.transformer.transformer_layers,
         )
     raise NotImplementedError(
-        f"FutureSummary type {summary_type!r} not implemented. Choose 'gru' or 'transformer'."
+        f"FutureSummary type {config.type!r} not implemented. Choose 'gru' or 'transformer'."
     )
 
 
@@ -226,24 +261,3 @@ def build_future_summary(
 
 GRUFutureSummaryConf = builds(GRUFutureSummary, populate_full_signature=True)
 TransformerFutureSummaryConf = builds(TransformerFutureSummary, populate_full_signature=True)
-
-
-@dataclass
-class FutureSummaryConfig:
-    """Architectural config for the future-summary module.
-
-    ``type`` selects the variant (``'gru'`` or ``'transformer'``).
-    Excludes shape params (``data_dim``, ``emb_time_dim``, ``use_mask``,
-    ``static_embed_dim``) which are provided by the enclosing ``GaussianEncoder``.
-    """
-
-    type: str = "gru"
-    summary_dim: int = 64
-    num_layers: int = 2
-    # GRU-specific
-    gru_layers: int = 1
-    # Transformer-specific
-    nheads: int = 4
-    ff_mult: int = 4
-    dropout: float = 0.0
-    transformer_layers: int = 1
