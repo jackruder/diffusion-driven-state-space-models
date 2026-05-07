@@ -251,6 +251,7 @@ class DDSSMTrainer:
         optimizer: optim.Optimizer | None = None,
         **kwargs,
     ) -> "DDSSMTrainer":
+        # Local import avoids circular dependency with ddssm.conf importing DDSSMTrainerConf.
         from .conf import build_model
         cfg = build_model(yaml_path)
         from hydra_zen import instantiate
