@@ -265,7 +265,7 @@ python -m ddssm.evaluate experiment=harmonic \
 
 Same periodic structure as harmonic but with ~ε ~ N(0, 0.2)~, a four-fold
 increase in observation noise. Tests robustness of posterior inference under
-higher uncertainty.  Override ~experiment.data.mode~ from the ~harmonic~ base.
+higher uncertainty. Override ~experiment.data.mode~ from the ~harmonic~ base.
 
 #+BEGIN_SRC sh
 python -m ddssm.app experiment=harmonic \
