@@ -54,10 +54,9 @@ python scripts/experiments/kdd/kdd_train.py \
 
 ### Hydra + Optuna sweeps
 
-Hydra-based sweeps use Optuna through the pinned plugin dependency
-`hydra-optuna-sweeper @ git+https://github.com/dahlem/hydra.git@feature/upgrade-optuna-4.2.1#subdirectory=plugins/hydra_optuna_sweeper`.
-This intentionally tracks the requested fork branch until an equivalent tagged
-or official release is available.
+Hydra-based sweeps use Optuna through the `hydra-optuna-sweeper` plugin pinned
+in `pyproject.toml`. This intentionally tracks the requested `dahlem/hydra`
+fork branch until an equivalent tagged or official release is available.
 The repo provides one reusable sweeper preset at
 `conf/hydra/sweeper/ddssm_optuna.yaml`:
 
