@@ -12,6 +12,7 @@ from hydra_zen import builds
 from .diffnets import ContextProducer, ContextProducerConf
 from .gaussians import GaussianHead, GaussianHeadConf
 from .net_utils import hist_abs_time_tokens
+from .torch_compile import maybe_compile
 
 
 class Decoder(nn.Module):
@@ -86,7 +87,7 @@ class Decoder(nn.Module):
             out_features=self.data_dim,
         )
 
-        self.context_producer = torch.compile(self.context_producer, dynamic=True)
+        self.context_producer = maybe_compile(self.context_producer, dynamic=True)
 
         # Variance prior parameters
         self.logvar_prior_mean = self.gaussian_head.init_logvar

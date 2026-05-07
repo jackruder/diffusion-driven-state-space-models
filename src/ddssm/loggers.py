@@ -334,6 +334,7 @@ class WandbLogger(Logger):
         tags: Optional[list[str]] = None,
         config: Optional[Dict[str, Any]] = None,
         base_url: Optional[str] = None,
+        run_dir: Optional[str] = None,
         enabled: bool = True,
     ):
         self._active = False
@@ -352,7 +353,7 @@ class WandbLogger(Logger):
         if base_url:
             os.environ["WANDB_BASE_URL"] = base_url
 
-        wandb.init(
+        init_kwargs: Dict[str, Any] = dict(
             project=project,
             entity=entity,
             name=name,
@@ -361,23 +362,38 @@ class WandbLogger(Logger):
             config=config or {},
             reinit="finish_previous",
         )
+        if run_dir:
+            init_kwargs["dir"] = run_dir
+        wandb.init(**init_kwargs)
+
+        # Each namespace gets its own monotonic step axis so train and
+        # epoch logs don't fight over W&B's single per-run step counter.
+        # ``train_step`` is the trainer's ``global_step``; ``epoch`` is
+        # whatever counter the trainer passes into ``on_epoch``.
+        wandb.define_metric("train_step")
+        wandb.define_metric("epoch")
+        wandb.define_metric("train/*", step_metric="train_step")
+        wandb.define_metric("val/*", step_metric="train_step")
+        wandb.define_metric("epoch/*", step_metric="epoch")
+
         self._wandb = wandb
         self._active = True
 
-    # ------------------------------------------------------------------
-    def _log(self, prefix: str, step: int, row: Dict[str, float]) -> None:
+    def _log(self, prefix: str, step_key: str, step: int, row: Dict[str, float]) -> None:
         if not self._active:
             return
-        self._wandb.log(
-            {f"{prefix}/{k}": v for k, v in row.items()},
-            step=step,
-        )
+        payload: Dict[str, Any] = {f"{prefix}/{k}": v for k, v in row.items()}
+        # Embed the step into the payload; let W&B's per-metric step axis
+        # ordering handle monotonicity. Do not pass ``step=`` -- that
+        # collides between train/val/epoch namespaces.
+        payload[step_key] = int(step)
+        self._wandb.log(payload)
 
     def on_step(self, split: str, step: int, row: Dict[str, float]) -> None:
-        self._log(split, step, row)
+        self._log(split, "train_step", step, row)
 
     def on_epoch(self, split: str, epoch: int, row: Dict[str, float]) -> None:
-        self._log(f"epoch/{split}", epoch, row)
+        self._log(f"epoch/{split}", "epoch", epoch, row)
 
     def close(self) -> None:
         if self._active:

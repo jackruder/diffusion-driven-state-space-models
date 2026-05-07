@@ -1,0 +1,7 @@
+# @package experiment.wandb_config
+#
+# Default: W&B logging is OFF. ``Experiment.run`` translates an
+# ``enabled: false`` config into a ``None`` ``wandb_config`` so the
+# trainer skips constructing a WandbLogger entirely.
+
+enabled: false

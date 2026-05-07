@@ -43,14 +43,100 @@ Requires Python 3.13 and PyTorch ≥ 2.9.
 
 ## Running experiments
 
-Experiment scripts live under `scripts/experiments/`.  Training entry points
-pass YAML configs and optional dot-notation overrides:
+There are two complementary entry points:
+
+1. **`python -m ddssm.app`** — the Hydra-native, composable entry point (use
+   for new experiments and Optuna sweeps; described below).
+2. **`scripts/experiments/...`** — legacy YAML-driven scripts (still used for
+   workflows that need the multi-stage Pydantic ``stages`` orchestrator and
+   for the KDD dataset, which the Hydra app does not yet load directly).
+
+Legacy YAML invocation example:
 
 ```bash
 python scripts/experiments/kdd/kdd_train.py \
     --config configs/base.yaml \
     --override hyperparams.batch_size=32
 ```
+
+### Hydra experiment presets
+
+Reusable experiment presets live in `conf/experiment/`. Each preset selects
+a transition (`gaussian`/`diffusion`), a dataset, root-level dimensions,
+hyperparameters, and training scalars. Activate one with `+experiment=NAME`:
+
+| Preset                          | Dataset    | Transition | Notes                                              |
+| ------------------------------- | ---------- | ---------- | -------------------------------------------------- |
+| `synthetic_gauss`               | synthetic  | gaussian   | LGSSM, runs end-to-end via `ddssm.app`             |
+| `synthetic_diffusion`           | synthetic  | diffusion  | LGSSM, runs end-to-end via `ddssm.app`             |
+| `kdd_gauss`                     | none       | gaussian   | Model recipe; pair with `kdd_train.py` for data    |
+| `kdd_diffusion`                 | none       | diffusion  | Model recipe; pair with `kdd_train.py` for data    |
+
+```bash
+# Single end-to-end run on synthetic data
+python -m ddssm.app +experiment=synthetic_gauss
+
+# Override anything the experiment sets
+python -m ddssm.app +experiment=synthetic_diffusion \
+    training.steps=2000 hyperparams.batch_size=64
+```
+
+When `cfg.dataset` is the `none` preset, `ddssm.app` builds the model and
+trainer but skips `trainer.fit(...)`. Use this for smoke tests, or pair the
+KDD experiment recipes with `scripts/experiments/kdd/kdd_train.py` for
+real KDD training.
+
+### Hydra + Optuna sweeps
+
+Hydra-based sweeps use Optuna through the `hydra-optuna-sweeper` plugin pinned
+in `pyproject.toml`. This intentionally tracks the requested `dahlem/hydra`
+fork branch until an equivalent tagged or official release is available.
+The repo provides a reusable sweeper preset at
+`conf/hydra/sweeper/ddssm_optuna.yaml` plus pre-defined search-space presets
+in `conf/sweep/`:
+
+| Sweep preset      | Pairs with               | Search space                                        |
+| ----------------- | ------------------------ | --------------------------------------------------- |
+| `synthetic_lr`    | `synthetic_*` experiments | enc/dec/zinit/trans LR, λ-warmup, λ-end, batch size |
+| `kdd_phase1`      | `kdd_*` experiments       | LRs (capped), λ schedule, weight decay, batch size  |
+
+Each sweep preset re-activates the Optuna sweeper, so a multirun is just:
+
+```bash
+python -m ddssm.app --multirun \
+    +experiment=synthetic_gauss \
+    +sweep=synthetic_lr \
+    hydra.sweeper.n_trials=20 \
+    hydra.sweeper.study_name=ddssm_synth_lr \
+    hydra.sweeper.storage=sqlite:///ddssm_synth_lr.db
+```
+
+`ddssm.app` returns the mean tail of `loss/total` from the run's `metrics.csv`
+as the Optuna objective. Override `training.return_objective=false` if you
+want the trainer object back instead. Failed trials surface as `+inf`, which
+Optuna's `minimize` direction handles cleanly.
+
+Ad-hoc search spaces can still be defined directly on the CLI without a
+preset:
+
+```bash
+python -m ddssm.app --multirun \
+    hydra/sweeper=ddssm_optuna \
+    +experiment=synthetic_gauss \
+    hydra.sweeper.n_trials=50 \
+    hydra.sweeper.study_name=ddssm_example \
+    hydra.sweeper.storage=sqlite:///ddssm_example.db \
+    'hydra.sweeper.params.hyperparams.enc_lr=interval(1e-5,1e-3)' \
+    'hydra.sweeper.params.hyperparams.batch_size=choice(32,64,128)'
+```
+
+Relative SQLite storage URLs are resolved from Hydra's runtime working
+directory. Use an absolute `sqlite:///...` path for shared studies or CI.
+
+The checked-in `conf/` tree is intentionally a small library of reusable
+Hydra defaults; large or experiment-specific search spaces should live
+either as additional `conf/sweep/*` presets or as external assets / CLI
+overrides.
 
 ## Logging
 
@@ -81,12 +167,25 @@ python scripts/experiments/verifications.py \
 W&B is a *soft dependency*: if the ``wandb`` package isn't installed the
 logger silently no-ops and training continues with TensorBoard + CSV.
 
-## SLURM (preview)
+## SLURM
 
 A ready-to-use submitit launcher config lives at
-``conf/hydra/launcher/submitit_slurm.yaml``. It will be wired up to a real
-entry point in the upcoming `hydra-zen` migration; the YAML is checked in
-now so resource-request defaults can be reviewed alongside this PR.
+``conf/hydra/launcher/submitit_slurm.yaml``. Combine it with any experiment
+preset and (optionally) a sweep preset to launch a multirun on a Slurm
+cluster:
+
+```bash
+python -m ddssm.app --multirun \
+    hydra/launcher=submitit_slurm \
+    +experiment=synthetic_diffusion \
+    +sweep=synthetic_lr \
+    hydra.sweeper.n_trials=64 \
+    hydra.sweeper.study_name=ddssm_synth_diff \
+    hydra.sweeper.storage=sqlite:///$PWD/ddssm_synth_diff.db
+```
+
+Resource overrides (``partition``, ``gpus_per_node``, ``timeout_min``, …) are
+plain CLI flags, e.g. ``hydra.launcher.timeout_min=240``.
 
 ## Development
 
