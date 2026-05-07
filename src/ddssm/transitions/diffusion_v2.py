@@ -35,7 +35,7 @@ Implements the model described in ``model-v2.org``.  Compared to V1
   ``KL = (1/2) * E_tau E_q[ g**2(tau) * ||s_q - s_p||**2 ]``.  Both
   factors are baked into ``wtilde`` so that callers obtain a correctly
   scaled per-step KL in nats (matching the dict contract of the V1
-  transition)..
+  transition).
 
   When the encoder does not expose ``mus`` / ``logvars`` we fall back to the
   degenerate case ``mu_t = z_t, sigma_t**2 = 0``, which recovers the standard

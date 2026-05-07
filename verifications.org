@@ -528,8 +528,8 @@ ramps in identically.
 
 All training commands in this section pass ~wandb=enabled
 experiment.wandb_config.group=bimodal_v1_v2~ so the per-step losses (~loss/total~, ~loss/recon~,
-~loss/trans~, ~loss/zinit~, ~loss/L_p~, ~loss/L_q~, etc.) for V1, V2-LSGM, and
-V2-uniform all show up in the same W&B group and can be overlaid.  Eval and
+~loss/trans~, ~loss/zinit~, ~loss/L_p~, ~loss/L_q~, etc.) for V1 and V2 all
+show up in the same W&B group and can be overlaid.  Eval and
 visualize stages do not need W&B; the training metrics live in the W&B run for
 each ~hydra.run.dir~.  If you want to retrain the V1 / Gaussian baselines under
 the same group, prepend ~wandb=enabled experiment.wandb_config.group=bimodal_v1_v2~ to those
