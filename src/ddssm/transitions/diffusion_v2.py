@@ -275,7 +275,10 @@ class DiffusionV2Transition(BaseTransition):
                         lv_chunk.exp().permute(0, 1, 3, 2).reshape(-1, d)
                     )
                 else:
-                    mu_t_flat = z_target_flat  # degenerate -> DSM around z_t
+                    # Encoder did not expose Gaussian stats: fall back to a
+                    # degenerate posterior with mu_t = z_t and sigma_t**2 = 0,
+                    # which collapses the ESM target to standard DSM around z_t.
+                    mu_t_flat = z_target_flat
                     sigma2_t_flat = torch.zeros_like(z_target_flat)
 
                 L_p_sum = L_p_sum + self._esm_chunk_loss(
