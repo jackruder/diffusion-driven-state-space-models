@@ -8,8 +8,6 @@ import numpy as np
 import yaml
 import ast
 
-from .conf import build_model
-
 
 def visualize_results(
     model,

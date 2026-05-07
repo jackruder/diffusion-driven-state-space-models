@@ -16,7 +16,7 @@ This module:
     so ``@hydra.main`` can resolve them.
   - Defines the slim Stages dataclasses (``StageSpecConf`` / ``StagesConf``)
     that are config-only (full stage logic lives in ``ddssm.stages``).
-  - Provides ``build_model(yaml_path)`` for back-compat YAML loading.
+  - Provides ``load_yaml_config(yaml_path)`` for back-compat YAML loading.
 """
 
 from __future__ import annotations
@@ -134,14 +134,13 @@ class StagesConf:
 
 # ---------------------------------------------------------------------------
 # Convenience helper: load a Hydra YAML and return an instantiable config.
-# (Phase 5 will rename this to ``load_yaml_config``.)
 # ---------------------------------------------------------------------------
 
-def build_model(yaml_path: str) -> Any:
-    """Load a Hydra-compatible YAML and return a DDSSMConf-style config.
+def load_yaml_config(yaml_path: str) -> Any:
+    """Load a Hydra-compatible YAML and return an OmegaConf DictConfig.
 
-    The returned object can be passed to ``hydra_zen.instantiate(cfg)`` to
-    construct the ``DDSSM_base`` model.
+    The returned object can be passed to ``hydra_zen.instantiate(cfg.model)``
+    (or any sub-key) to construct the corresponding object.
     """
     from omegaconf import OmegaConf
 
@@ -163,6 +162,6 @@ __all__ = [
     "LambdaRampConf",
     "StageSpecConf",
     "StagesConf",
-    "build_model",
+    "load_yaml_config",
     "store",
 ]
