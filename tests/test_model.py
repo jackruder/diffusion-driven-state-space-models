@@ -1,4 +1,5 @@
 # tests/test_model.py
+from functools import partial
 import torch
 import pytest
 from ddssm.net_utils import get_side_info, time_embedding
@@ -8,7 +9,7 @@ from ddssm.transitions.transitions import GaussianTransition
 from ddssm.transitions.diffusion import DiffusionTransition
 from ddssm.dssd import DDSSM_base
 from ddssm.diffnets import (
-    ContextProducerConfig,
+    ContextProducer,
     CSDIUnetConfig,
     DiffResidualBlockConfig,
     FeatureMixerConfig,
@@ -32,7 +33,8 @@ CHANNELS = 8
 NHEADS = 4
 
 # Small architectural configs reused across tests
-_CTX = ContextProducerConfig(
+_CTX = partial(
+    ContextProducer,
     channels=CHANNELS,
     num_layers=1,
     residual_block=ResidualBlockConfig(

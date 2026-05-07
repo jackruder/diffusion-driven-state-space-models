@@ -1,6 +1,7 @@
 """Decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history."""
 
 import math
+from functools import partial
 from typing import Callable, Tuple
 
 import torch
@@ -8,7 +9,7 @@ import torch.nn as nn
 
 from hydra_zen import builds
 
-from .diffnets import ContextProducer, ContextProducerConfig
+from .diffnets import ContextProducer, ContextProducerConf
 from .gaussians import GaussianHead, GaussianHeadConf
 from .net_utils import hist_abs_time_tokens
 
@@ -31,12 +32,12 @@ class Decoder(nn.Module):
         static_covariate_dim: int = 0,
         hidden_dim: int = 64,
         mask_emb_dim: int = 8,
-        context: ContextProducerConfig | None = None,
+        context: Callable[..., ContextProducer] | None = None,
         gaussian_head: Callable[..., GaussianHead] | None = None,
     ) -> None:
         super().__init__()
         if context is None:
-            context = ContextProducerConfig()
+            context = partial(ContextProducer, channels=8, num_layers=2)
         if gaussian_head is None:
             gaussian_head = GaussianHead
 
@@ -49,7 +50,23 @@ class Decoder(nn.Module):
         self.hidden_dim = hidden_dim
 
         self.total_static_dim = static_covariate_dim
-        head_in_dim = context.channels * self.hidden_dim
+
+        # -- projection layers --
+        self.z_hist_proj = nn.Linear(self.latent_dim, self.hidden_dim)
+
+        # -- mask embedding (for valid/pad positions) --
+        self.mask_embed = nn.Linear(1, self.mask_emb_dim)
+
+        # -- context producer --
+        self.context_producer = context(
+            combined_dim=self.hidden_dim,
+            mask_tot_dim=self.mask_emb_dim,
+            emb_time_dim=self.emb_time_dim + self.covariate_dim,
+            combined_len=self.j,
+            static_emb_dim=self.total_static_dim,
+        )
+
+        head_in_dim = self.context_producer.channels * self.hidden_dim
 
         if self.total_static_dim > 0:
             # Project spatial dimension from D (data) -> hidden_dim (latent seq spatial dim)
@@ -62,24 +79,6 @@ class Decoder(nn.Module):
         else:
             self.static_proj_context = None
             self.static_proj_out = None
-
-        # -- projection layers --
-        self.z_hist_proj = nn.Linear(self.latent_dim, self.hidden_dim)
-
-        # -- mask embedding (for valid/pad positions) --
-        self.mask_embed = nn.Linear(1, self.mask_emb_dim)
-
-        # -- context producer --
-        self.context_producer = ContextProducer(
-            channels=context.channels,
-            num_layers=context.num_layers,
-            combined_dim=self.hidden_dim,
-            mask_tot_dim=self.mask_emb_dim,
-            emb_time_dim=self.emb_time_dim + self.covariate_dim,
-            combined_len=self.j,
-            residual_block=context.residual_block,
-            static_emb_dim=self.total_static_dim,
-        )
 
         # -- Gaussian output head --
         self.gaussian_head = gaussian_head(
@@ -328,7 +327,7 @@ class Decoder(nn.Module):
 
 DecoderConf = builds(
     Decoder,
-    context=ContextProducerConfig(),
+    context=ContextProducerConf(),
     gaussian_head=GaussianHeadConf(),
     populate_full_signature=True,
 )

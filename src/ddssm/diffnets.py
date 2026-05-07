@@ -779,22 +779,17 @@ class ContextProducer(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Hydra-zen config for ContextProducer
-# (combined_dim, mask_tot_dim, emb_time_dim, combined_len must be set by caller)
+# Hydra-zen partial config for ContextProducer.
+# Shape kwargs (combined_dim, mask_tot_dim, emb_time_dim, combined_len,
+# static_emb_dim, skip_mask) are filled in by the enclosing module at
+# construction time. Architectural defaults match the old
+# ContextProducerConfig dataclass.
 # ---------------------------------------------------------------------------
 
-@dataclass
-class ContextProducerConfig:
-    """Architectural config for ``ContextProducer``.
-
-    Excludes shape params (``combined_dim``, ``mask_tot_dim``, ``emb_time_dim``,
-    ``combined_len``, ``static_emb_dim``, ``skip_mask``) which are computed
-    by the enclosing module.
-    """
-
-    channels: int = 8
-    num_layers: int = 2
-    residual_block: ResidualBlockConfig = field(default_factory=ResidualBlockConfig)
-
-
-ContextProducerConf = builds(ContextProducer, populate_full_signature=True)
+ContextProducerConf = builds(
+    ContextProducer,
+    channels=8,
+    num_layers=2,
+    populate_full_signature=True,
+    zen_partial=True,
+)

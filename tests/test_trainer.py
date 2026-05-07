@@ -1,4 +1,5 @@
 # tests/test_trainer.py
+from functools import partial
 import torch
 import pytest
 from hydra_zen import instantiate
@@ -8,7 +9,7 @@ from ddssm.encoder import GaussianEncoder, GaussianInitPrior
 from ddssm.decoder import Decoder
 from ddssm.transitions.transitions import GaussianTransition
 from ddssm.conf import DDSSMTrainerConf
-from ddssm.diffnets import ContextProducerConfig, FeatureMixerConfig, ResidualBlockConfig
+from ddssm.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
 from ddssm.gaussians import GaussianHead
 from ddssm.futsum import FutureSummaryConfig
 from torch.utils.data import Dataset, DataLoader
@@ -21,7 +22,8 @@ EMB_TIME = 8
 CHANNELS = 8
 NHEADS = 4
 
-_CTX = ContextProducerConfig(
+_CTX = partial(
+    ContextProducer,
     channels=CHANNELS,
     num_layers=1,
     residual_block=ResidualBlockConfig(

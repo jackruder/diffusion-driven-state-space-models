@@ -11,6 +11,8 @@ emb_time_dim: ${emb_time_dim}
 covariate_dim: ${covariate_dim}
 hidden_dim: 64
 context:
+  _target_: ddssm.diffnets.ContextProducer
+  _partial_: true
   channels: 8
   num_layers: 2
   residual_block:
