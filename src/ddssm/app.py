@@ -57,7 +57,7 @@ def main(cfg: DictConfig):
         log.warning("Could not persist resolved_config.yaml: %s", e)
 
     experiment = instantiate(cfg.experiment)
-    return experiment.run(device=device, run_dir=run_dir)
+    return experiment.train(device=device, run_dir=run_dir)
 
 
 if __name__ == "__main__":

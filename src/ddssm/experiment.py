@@ -29,8 +29,30 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class TrainableModules:
+    """Per-module ``requires_grad`` flags applied via ``trainer._set_trainable``.
+
+    Mirrors the ``StageTrainable`` shape used by the multi-stage
+    pipeline so a single field can express recon-only, trans-only, or
+    joint training without each experiment re-stating four flags.
+    """
+
+    encoder: bool = True
+    decoder: bool = True
+    z_init: bool = True
+    transition: bool = True
+
+
+@dataclass
 class TrainingScalars:
-    """Runtime knobs forwarded to :meth:`DDSSMTrainer.fit`."""
+    """Runtime knobs forwarded to :meth:`DDSSMTrainer.fit`.
+
+    ``trainable`` is applied via ``trainer._set_trainable`` before
+    ``fit``; ``compute_recon`` / ``compute_trans`` toggle which loss
+    terms contribute (and thus which gradients flow). For "recon only"
+    set ``trainable.transition=False`` *and* ``compute_trans=False``;
+    leaving either out leaks gradients or wastes optimizer state.
+    """
 
     steps: int = 1000
     log_every: int = 50
@@ -42,6 +64,7 @@ class TrainingScalars:
     resume_from: str | None = None
     compute_recon: bool = True
     compute_trans: bool = True
+    trainable: TrainableModules | None = None
 
     def fit_kwargs(self) -> dict[str, Any]:
         return {
@@ -154,7 +177,8 @@ class Experiment:
     transition: Any = None
     hyperparams: Any = None
 
-    def run(self, *, device: torch.device, run_dir: str) -> float | DDSSMTrainer:
+    def train(self, *, device: torch.device, run_dir: str) -> float | DDSSMTrainer:
+        """Run training only. Eval and visualization are separate stages."""
         _seed_everything(self.seed)
 
         os.makedirs(run_dir, exist_ok=True)
@@ -170,6 +194,10 @@ class Experiment:
             tensorboard_dir=tensorboard_dir,
             wandb_config=wandb_kwargs,
         )
+
+        if self.training.trainable is not None:
+            log.info("Applying trainable mask: %s", self.training.trainable)
+            trainer._set_trainable(self.training.trainable)
 
         train_loader = self.data.train_loader()
         if train_loader is None:
@@ -201,6 +229,9 @@ class Experiment:
         )
         return value
 
+    # Backward-compat alias; ``ddssm.app`` calls ``train`` directly.
+    run = train
+
     def _wandb_kwargs(self, run_dir: str) -> dict | None:
         """Resolve ``wandb_config`` into kwargs for :class:`WandbLogger`.
 
@@ -222,5 +253,6 @@ class Experiment:
 __all__ = [
     "Experiment",
     "TrainingScalars",
+    "TrainableModules",
     "ObjectiveSpec",
 ]

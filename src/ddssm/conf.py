@@ -34,7 +34,7 @@ from .data.datamodule import (
 )
 from .diffnets import ContextProducerConf, CSDIUnetConf
 from .dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
-from .experiment import Experiment, ObjectiveSpec, TrainingScalars
+from .experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
 from .gaussians import GaussianHeadConf
 from .train import DDSSMTrainer, DDSSMTrainerConf
 from .transitions.diffusion import DiffusionScheduleConfig, DiffusionTransition
@@ -105,8 +105,19 @@ KDDDataModuleConf = builds(
 # Experiment dataclass confs
 # ---------------------------------------------------------------------------
 
+TrainableModulesConf = builds(TrainableModules, populate_full_signature=True)
 TrainingScalarsConf = builds(TrainingScalars, populate_full_signature=True)
 ObjectiveSpecConf = builds(ObjectiveSpec, populate_full_signature=True)
+
+# Pre-built ``trainable`` masks. Each experiment can pick one with
+# ``training=...`` style overrides or by passing the conf directly.
+TrainableJointConf = TrainableModulesConf()
+TrainableReconOnlyConf = TrainableModulesConf(
+    encoder=True, decoder=True, z_init=True, transition=False
+)
+TrainableTransOnlyConf = TrainableModulesConf(
+    encoder=False, decoder=False, z_init=False, transition=True
+)
 
 # ``build_trainer`` is a partial of DDSSMTrainer that the Experiment
 # completes at run time with model + device + run-dir-derived paths.
