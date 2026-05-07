@@ -1,7 +1,8 @@
 """This file implements common conditional diffusion models for timeseries."""
 
 import math
-from typing import final
+from dataclasses import dataclass
+from typing import Optional, final
 
 import torch
 import torch.nn as nn
@@ -490,6 +491,29 @@ class CSDIUnet(nn.Module):
 # ---------------------------------------------------------------------------
 
 DiffusionEmbeddingConf = builds(DiffusionEmbedding, populate_full_signature=True)
+
+
+@dataclass
+class CSDIUnetConfig:
+    """Architectural config for ``CSDIUnet``.
+
+    Excludes shape params (``output_len``, ``diffusion_steps``, ``latent_dim``,
+    ``latent_history_len``, ``side_dim``) which are derived from the
+    enclosing ``DiffusionTransition``.
+    """
+
+    channels: int = 64
+    n_layers: int = 4
+    embedding_dim: int = 128
+    projection_dim: Optional[int] = None
+    time_type: str = "conv"
+    time_kernel_size: int = 3
+    time_gru_layers: int = 1
+    feature_type: str = "transformer"
+    feature_nheads: int = 8
+    feature_n_layers: int = 1
+
+
 CSDIUnetConf = builds(CSDIUnet, populate_full_signature=True)
 
 
@@ -725,6 +749,26 @@ class ContextProducer(nn.Module):
 # Hydra-zen config for ContextProducer
 # (combined_dim, mask_tot_dim, emb_time_dim, combined_len must be set by caller)
 # ---------------------------------------------------------------------------
+
+@dataclass
+class ContextProducerConfig:
+    """Architectural config for ``ContextProducer``.
+
+    Excludes shape params (``combined_dim``, ``mask_tot_dim``, ``emb_time_dim``,
+    ``combined_len``, ``static_emb_dim``, ``skip_mask``) which are computed
+    by the enclosing module.
+    """
+
+    channels: int = 8
+    num_layers: int = 2
+    nheads: int = 8
+    time_type: str = "conv"
+    time_kernel_size: int = 3
+    time_gru_layers: int = 1
+    feature_type: str = "transformer"
+    feature_nheads: int = 8
+    feature_n_layers: int = 2
+
 
 ContextProducerConf = builds(ContextProducer, populate_full_signature=True)
 

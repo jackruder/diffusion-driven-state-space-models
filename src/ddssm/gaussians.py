@@ -1,6 +1,7 @@
 """Gaussian distribution helpers: log-probability, entropy, and parameterisation heads."""
 
 import math
+from dataclasses import dataclass
 from typing import TypedDict
 
 import torch
@@ -78,10 +79,22 @@ class GaussianStats(TypedDict, total=False):
     # e.g., 'base_logqs': torch.Tensor  # if you track flow base log density
 
 
-class GaussianHead(nn.Module):
-    """Produces Gaussian parameters (mu, logvar) from input features.
+@dataclass
+class GaussianHeadConfig:
+    """Architectural config for ``GaussianHead``.
 
-    Takes a feature vector and outputs mean and log-variance for a
+    Excludes shape params ``in_features`` / ``out_features`` which are
+    derived from the enclosing module.
+    """
+
+    init_logvar: float = 0.0
+    var_min: float = 1e-6
+    clamp_logvar_min: float = -9.0
+    clamp_logvar_max: float = 6.0
+
+
+class GaussianHead(nn.Module):
+    """Takes a feature vector and outputs mean and log-variance for a
     Gaussian distribution, with numerical stability guarantees.
     """
 

@@ -16,7 +16,7 @@ static_embed_dim: 0
 use_observation_mask: true
 checkpoint_dir: ./checkpoints
 
-# ---- encoder (GaussianEncoder flat params) ----
+# ---- encoder (GaussianEncoder) ----
 encoder:
   _target_: ddssm.encoder.GaussianEncoder
   data_dim: ${data_dim}
@@ -28,16 +28,26 @@ encoder:
   fut_mask_emb_dim: 8
   pad_mask_emb_dim: 8
   covariate_dim: ${covariate_dim}
-  context_channels: 8
-  context_num_layers: 2
-  context_nheads: 8
-  context_time_type: conv
-  context_feature_type: transformer
-  context_feature_nheads: 8
-  context_feature_n_layers: 2
-  summary_dim: 64
-  summary_num_layers: 2
-  summary_type: gru
+  context:
+    channels: 8
+    num_layers: 2
+    nheads: 8
+    time_type: conv
+    time_kernel_size: 3
+    time_gru_layers: 1
+    feature_type: transformer
+    feature_nheads: 8
+    feature_n_layers: 2
+  gaussian_head:
+    init_logvar: 0.0
+    var_min: 1.0e-6
+    clamp_logvar_min: -10.0
+    clamp_logvar_max: 6.0
+  fut_summary:
+    type: gru
+    summary_dim: 64
+    num_layers: 2
+    gru_layers: 1
 
 # ---- decoder ----
 decoder:
@@ -49,13 +59,21 @@ decoder:
   covariate_dim: ${covariate_dim}
   hidden_dim: 64
   mask_emb_dim: 8
-  context_channels: 8
-  context_num_layers: 2
-  context_nheads: 8
-  context_time_type: conv
-  context_feature_type: transformer
-  context_feature_nheads: 8
-  context_feature_n_layers: 2
+  context:
+    channels: 8
+    num_layers: 2
+    nheads: 8
+    time_type: conv
+    time_kernel_size: 3
+    time_gru_layers: 1
+    feature_type: transformer
+    feature_nheads: 8
+    feature_n_layers: 2
+  gaussian_head:
+    init_logvar: 0.0
+    var_min: 1.0e-6
+    clamp_logvar_min: -9.0
+    clamp_logvar_max: 6.0
 
 # ---- initialisation prior ----
 z_init:
@@ -65,16 +83,36 @@ z_init:
   emb_time_dim: ${emb_time_dim}
   covariate_dim: ${covariate_dim}
   hidden_dim: 64
-  context_channels: 8
-  context_num_layers: 2
-  context_nheads: 8
-  context_time_type: conv
-  context_feature_type: transformer
-  aux_context_channels: 8
-  aux_context_num_layers: 2
-  aux_context_nheads: 8
-  aux_context_time_type: conv
-  aux_context_feature_type: transformer
+  context:
+    channels: 8
+    num_layers: 2
+    nheads: 8
+    time_type: conv
+    time_kernel_size: 3
+    time_gru_layers: 1
+    feature_type: transformer
+    feature_nheads: 8
+    feature_n_layers: 2
+  aux_context:
+    channels: 8
+    num_layers: 2
+    nheads: 8
+    time_type: conv
+    time_kernel_size: 3
+    time_gru_layers: 1
+    feature_type: transformer
+    feature_nheads: 8
+    feature_n_layers: 2
+  gaussian_head:
+    init_logvar: 0.0
+    var_min: 1.0e-6
+    clamp_logvar_min: -10.0
+    clamp_logvar_max: 6.0
+  aux_posterior_head:
+    init_logvar: 0.0
+    var_min: 1.0e-6
+    clamp_logvar_min: -10.0
+    clamp_logvar_max: 6.0
 
 # ---- hyperparameters ----
 hyperparams:

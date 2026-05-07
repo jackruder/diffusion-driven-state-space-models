@@ -8,6 +8,8 @@ produce latent distributions q_ϕ(z_t | ·).
 import torch
 import torch.nn as nn
 
+from dataclasses import dataclass
+
 from hydra_zen import builds
 
 from .diffnets import TimeLayer, ConvTimeLayer, IdentityLayer  # , MambaTimeLayer
@@ -224,3 +226,24 @@ def build_future_summary(
 
 GRUFutureSummaryConf = builds(GRUFutureSummary, populate_full_signature=True)
 TransformerFutureSummaryConf = builds(TransformerFutureSummary, populate_full_signature=True)
+
+
+@dataclass
+class FutureSummaryConfig:
+    """Architectural config for the future-summary module.
+
+    ``type`` selects the variant (``'gru'`` or ``'transformer'``).
+    Excludes shape params (``data_dim``, ``emb_time_dim``, ``use_mask``,
+    ``static_embed_dim``) which are provided by the enclosing ``GaussianEncoder``.
+    """
+
+    type: str = "gru"
+    summary_dim: int = 64
+    num_layers: int = 2
+    # GRU-specific
+    gru_layers: int = 1
+    # Transformer-specific
+    nheads: int = 4
+    ff_mult: int = 4
+    dropout: float = 0.0
+    transformer_layers: int = 1

@@ -1,6 +1,7 @@
 """Diffusion-based transition model wrapping CSDIUnet for use in DDSSM."""
 
 import math
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, final
 
 import torch
@@ -10,12 +11,27 @@ from hydra_zen import builds
 
 from ..windows import WindowBuilder
 
-from ..diffnets import CSDIUnet
+from ..diffnets import CSDIUnet, CSDIUnetConfig
 from ..net_utils import (
     get_side_info,
 )
 from .transitions import BaseTransition
 
+
+
+@dataclass
+class DiffusionScheduleConfig:
+    """EDM diffusion schedule configuration for ``DiffusionTransition``."""
+
+    S_k: int = 1
+    k_chunk: int = 1
+    num_steps: int = 100
+    sigma_min: float = 2e-3
+    sigma_max: float = 80.0
+    rho: float = 7.0
+    k_sampling_mode: str = "uniform"
+    pk_gamma: float = 1.0
+    pk_floor: float = 1e-12
 
 
 @final
@@ -31,29 +47,15 @@ class DiffusionTransition(BaseTransition):
         j: int,
         emb_time_dim: int,
         covariate_dim: int = 0,
-        # UNet params
-        unet_channels: int = 64,
-        unet_n_layers: int = 4,
-        unet_embedding_dim: int = 128,
-        unet_projection_dim: int | None = None,
-        unet_time_type: str = "conv",
-        unet_time_kernel_size: int = 3,
-        unet_time_gru_layers: int = 1,
-        unet_feature_type: str = "transformer",
-        unet_feature_nheads: int = 8,
-        unet_feature_n_layers: int = 1,
-        # Diffusion schedule params
-        S_k: int = 1,
-        k_chunk: int = 1,
-        num_steps: int = 100,
-        sigma_min: float = 2e-3,
-        sigma_max: float = 80.0,
-        rho: float = 7.0,
-        k_sampling_mode: str = "uniform",
-        pk_gamma: float = 1.0,
-        pk_floor: float = 1e-12,
+        unet: CSDIUnetConfig | None = None,
+        schedule: DiffusionScheduleConfig | None = None,
     ) -> None:
         super().__init__()
+
+        if unet is None:
+            unet = CSDIUnetConfig()
+        if schedule is None:
+            schedule = DiffusionScheduleConfig()
 
         self.j = j
         self.latent_dim = latent_dim
@@ -69,20 +71,20 @@ class DiffusionTransition(BaseTransition):
 
         self.diffmodel = CSDIUnet(
             output_len=1,  # predict 1 latent step
-            diffusion_steps=num_steps,
+            diffusion_steps=schedule.num_steps,
             latent_dim=self.latent_dim,
             latent_history_len=self.j,
             side_dim=self.side_dim,
-            channels=unet_channels,
-            n_layers=unet_n_layers,
-            embedding_dim=unet_embedding_dim,
-            projection_dim=unet_projection_dim,
-            time_type=unet_time_type,
-            time_kernel_size=unet_time_kernel_size,
-            time_gru_layers=unet_time_gru_layers,
-            feature_type=unet_feature_type,
-            feature_nheads=unet_feature_nheads,
-            feature_n_layers=unet_feature_n_layers,
+            channels=unet.channels,
+            n_layers=unet.n_layers,
+            embedding_dim=unet.embedding_dim,
+            projection_dim=unet.projection_dim,
+            time_type=unet.time_type,
+            time_kernel_size=unet.time_kernel_size,
+            time_gru_layers=unet.time_gru_layers,
+            feature_type=unet.feature_type,
+            feature_nheads=unet.feature_nheads,
+            feature_n_layers=unet.feature_n_layers,
         )
 
         self.diffmodel = torch.compile(self.diffmodel)
@@ -91,19 +93,19 @@ class DiffusionTransition(BaseTransition):
             num_embeddings=self.latent_dim, embedding_dim=self.emb_feature_dim
         )
 
-        self.S_k = S_k  # number of k-draws per z_t monte-carlo sample
-        self.num_steps = num_steps
+        self.S_k = schedule.S_k  # number of k-draws per z_t monte-carlo sample
+        self.num_steps = schedule.num_steps
 
         dtype64 = torch.float64
         eps64 = torch.finfo(dtype64).eps
         K = self.num_steps
         # Allocate on CPU; moved to device when .to(device) is called
         i = torch.linspace(0.0, 1.0, K, dtype=dtype64)
-        inv_rho = 1.0 / float(rho)
+        inv_rho = 1.0 / float(schedule.rho)
         sigma = (
-            sigma_min**inv_rho
-            + i * (sigma_max**inv_rho - sigma_min**inv_rho)
-        ) ** float(rho)
+            schedule.sigma_min**inv_rho
+            + i * (schedule.sigma_max**inv_rho - schedule.sigma_min**inv_rho)
+        ) ** float(schedule.rho)
 
         sigma = sigma.to(torch.float64)
         sigma2 = sigma * sigma
@@ -134,9 +136,9 @@ class DiffusionTransition(BaseTransition):
         self.register_buffer("c_noise", c_noise.to(torch.float32))
 
         # sampling probabilities for k
-        self.gamma = pk_gamma
-        self.gfloor = pk_floor
-        ismode = k_sampling_mode
+        self.gamma = schedule.pk_gamma
+        self.gfloor = schedule.pk_floor
+        ismode = schedule.k_sampling_mode
         if ismode == "importance":
             p_k = self.wtilde.detach().to(
                 device=self.wtilde.device, dtype=torch.float32
@@ -153,12 +155,8 @@ class DiffusionTransition(BaseTransition):
             )
         self.register_buffer("p_k", p_k.to(torch.float32))
         self.k_sampling_mode = ismode
-        # store for schedule access
-        self.schedule = type("_Sched", (), {
-            "S_k": S_k, "k_chunk": k_chunk, "num_steps": num_steps,
-            "sigma_min": sigma_min, "sigma_max": sigma_max, "rho": rho,
-            "k_sampling_mode": k_sampling_mode, "pk_gamma": pk_gamma, "pk_floor": pk_floor,
-        })()
+        # store the schedule config for downstream access (e.g. _build_time_seq)
+        self.schedule = schedule
 
     def log_prob(
         self,
@@ -750,5 +748,10 @@ class DiffusionTransition(BaseTransition):
 # Hydra-zen config for DiffusionTransition
 # ---------------------------------------------------------------------------
 
-DiffusionTransitionConf = builds(DiffusionTransition, populate_full_signature=True)
+DiffusionTransitionConf = builds(
+    DiffusionTransition,
+    unet=CSDIUnetConfig(),
+    schedule=DiffusionScheduleConfig(),
+    populate_full_signature=True,
+)
 

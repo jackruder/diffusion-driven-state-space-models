@@ -7,6 +7,10 @@ from ddssm.decoder import Decoder
 from ddssm.transitions.transitions import GaussianTransition
 from ddssm.transitions.diffusion import DiffusionTransition
 from ddssm.dssd import DDSSM_base
+from ddssm.diffnets import ContextProducerConfig, CSDIUnetConfig
+from ddssm.gaussians import GaussianHeadConfig
+from ddssm.futsum import FutureSummaryConfig
+from ddssm.transitions.diffusion import DiffusionScheduleConfig
 from types import SimpleNamespace
 
 
@@ -21,39 +25,41 @@ EMB_TIME = 8
 CHANNELS = 8
 NHEADS = 4
 
+# Small architectural configs reused across tests
+_CTX = ContextProducerConfig(channels=CHANNELS, num_layers=1, nheads=NHEADS, feature_nheads=NHEADS)
+_GH = GaussianHeadConfig()
+_FS = FutureSummaryConfig(summary_dim=CHANNELS, num_layers=1)
+
 
 def make_encoder():
     return GaussianEncoder(
         data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        use_mask=True, hidden_dim=CHANNELS, context_channels=CHANNELS,
-        context_num_layers=1, context_nheads=NHEADS, context_feature_nheads=NHEADS,
-        summary_dim=CHANNELS, summary_num_layers=1,
+        use_mask=True, hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH, fut_summary=_FS,
     )
 
 
 def make_decoder():
     return Decoder(
         latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS, context_channels=CHANNELS, context_num_layers=1,
-        context_nheads=NHEADS, context_feature_nheads=NHEADS,
+        hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH,
     )
 
 
 def make_zinit():
     return GaussianInitPrior(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS, context_channels=CHANNELS, context_num_layers=1,
-        context_nheads=NHEADS, context_feature_nheads=NHEADS,
-        aux_context_channels=CHANNELS, aux_context_num_layers=1,
-        aux_context_nheads=NHEADS, aux_context_feature_nheads=NHEADS,
+        hidden_dim=CHANNELS,
+        context=_CTX, aux_context=_CTX, gaussian_head=_GH, aux_posterior_head=_GH,
     )
 
 
 def make_gaussian_transition():
     return GaussianTransition(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS, context_channels=CHANNELS, context_num_layers=1,
-        context_nheads=NHEADS, context_feature_nheads=NHEADS,
+        hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH,
     )
 
 
@@ -135,11 +141,11 @@ def test_gaussian_transition_prior_params():
 
 
 def test_diffusion_transition_builds():
-    """DiffusionTransition should build with flat params and register expected buffers."""
+    """DiffusionTransition should build with config objects and register expected buffers."""
     dt = DiffusionTransition(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        unet_channels=CHANNELS, unet_n_layers=1, unet_embedding_dim=CHANNELS,
-        unet_feature_nheads=NHEADS, num_steps=10,
+        unet=CSDIUnetConfig(channels=CHANNELS, n_layers=1, embedding_dim=CHANNELS, feature_nheads=NHEADS),
+        schedule=DiffusionScheduleConfig(num_steps=10),
     )
     for buf in ("alpha_bar", "wtilde", "sigma", "c_noise", "p_k"):
         assert buf in dt._buffers, f"Missing buffer: {buf}"

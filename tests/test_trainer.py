@@ -7,6 +7,9 @@ from ddssm.encoder import GaussianEncoder, GaussianInitPrior
 from ddssm.decoder import Decoder
 from ddssm.transitions.transitions import GaussianTransition
 from ddssm.conf import DDSSMHyperParamsConf
+from ddssm.diffnets import ContextProducerConfig
+from ddssm.gaussians import GaussianHeadConfig
+from ddssm.futsum import FutureSummaryConfig
 from torch.utils.data import Dataset, DataLoader
 from types import SimpleNamespace
 
@@ -17,30 +20,31 @@ EMB_TIME = 8
 CHANNELS = 8
 NHEADS = 4
 
+_CTX = ContextProducerConfig(channels=CHANNELS, num_layers=1, nheads=NHEADS, feature_nheads=NHEADS)
+_GH = GaussianHeadConfig()
+_FS = FutureSummaryConfig(summary_dim=CHANNELS, num_layers=1)
+
 
 def make_small_model():
     enc = GaussianEncoder(
         data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        use_mask=True, hidden_dim=CHANNELS, context_channels=CHANNELS,
-        context_num_layers=1, context_nheads=NHEADS, context_feature_nheads=NHEADS,
-        summary_dim=CHANNELS, summary_num_layers=1,
+        use_mask=True, hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH, fut_summary=_FS,
     )
     dec = Decoder(
         latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS, context_channels=CHANNELS, context_num_layers=1,
-        context_nheads=NHEADS, context_feature_nheads=NHEADS,
+        hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH,
     )
     zinit = GaussianInitPrior(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS, context_channels=CHANNELS, context_num_layers=1,
-        context_nheads=NHEADS, context_feature_nheads=NHEADS,
-        aux_context_channels=CHANNELS, aux_context_num_layers=1,
-        aux_context_nheads=NHEADS, aux_context_feature_nheads=NHEADS,
+        hidden_dim=CHANNELS,
+        context=_CTX, aux_context=_CTX, gaussian_head=_GH, aux_posterior_head=_GH,
     )
     trans = GaussianTransition(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS, context_channels=CHANNELS, context_num_layers=1,
-        context_nheads=NHEADS, context_feature_nheads=NHEADS,
+        hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH,
     )
     hp = SimpleNamespace(
         S=1, ema_decay=0.999, weight_decay=1e-2, batch_size=1, grad_accum_steps=1,
