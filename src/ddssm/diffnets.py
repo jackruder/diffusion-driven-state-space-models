@@ -211,7 +211,7 @@ class IdentityLayer(FeatureLayer, TimeLayer):
         return x_flat
 
 
-def build_time_layer(time_type: str, channels: int, kernel_size: int = 3, gru_layers: int = 1) -> "TimeLayer":
+def build_time_layer(time_type: str, channels: int, kernel_size: int = 3, gru_layers: int = 1) -> TimeLayer:
     """Factory: create a TimeLayer from a type string and shared ``channels``."""
     if time_type == "conv":
         return ConvTimeLayer(channels, kernel_size=kernel_size)
@@ -222,7 +222,7 @@ def build_time_layer(time_type: str, channels: int, kernel_size: int = 3, gru_la
     raise ValueError(f"Unknown time_type: {time_type!r}. Choose from 'conv', 'gru', 'identity'.")
 
 
-def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_layers: int = 1) -> "FeatureLayer":
+def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_layers: int = 1) -> FeatureLayer:
     """Factory: create a FeatureLayer from a type string and shared ``channels``."""
     if feature_type == "transformer":
         return TransformerFeatureLayer(channels, nheads=nheads, layers=n_layers)

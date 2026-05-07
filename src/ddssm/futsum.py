@@ -220,12 +220,12 @@ class FutureSummaryConfig:
 
 
 def build_future_summary(
-    config: "FutureSummaryConfig",
+    config: FutureSummaryConfig,
     data_dim: int,
     emb_time_dim: int,
     use_mask: bool,
     static_embed_dim: int = 0,
-) -> "FutureSummary":
+) -> FutureSummary:
     """Factory: create the appropriate FutureSummary from a ``FutureSummaryConfig``."""
     if config.type == "gru":
         return GRUFutureSummary(
