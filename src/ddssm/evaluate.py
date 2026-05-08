@@ -25,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import os
 
 import hydra
 import torch
@@ -45,8 +46,13 @@ def main(cfg: DictConfig):
     run_dir = HydraConfig.get().runtime.output_dir
     log.info("Device=%s run_dir=%s", device, run_dir)
 
+    orig_cwd = hydra.utils.get_original_cwd()
     checkpoint_path = cfg.get("checkpoint", None)
+    if checkpoint_path is not None and not os.path.isabs(checkpoint_path):
+        checkpoint_path = os.path.join(orig_cwd, checkpoint_path)
     csv_path = cfg.get("csv_path", None)
+    if csv_path is not None and not os.path.isabs(csv_path):
+        csv_path = os.path.join(orig_cwd, csv_path)
 
     experiment = instantiate(cfg.experiment)
     return experiment.evaluate(
