@@ -19,7 +19,8 @@ states. An ELBO objective jointly trains:
 ```
 src/ddssm/
   config.py          # Pydantic config models (DDSSMConfig, …)
-  ddssm.py           # Core model: DDSSM_base (ELBO forward pass)
+  dssd.py            # Core model: DDSSM_base (ELBO forward pass)
+  experiment.py      # Experiment composition root (data + model + trainer)
   train.py           # DDSSMTrainer (fit / checkpoint helpers)
   stages.py          # Multi-stage training orchestration
   encoder.py         # Variational encoder networks
@@ -27,9 +28,11 @@ src/ddssm/
   transitions/       # Transition models (Gaussian + diffusion)
   diffnets.py        # CSDIUnet and related networks
   net_utils.py       # Shared utilities (time embeddings, side info)
-  logging.py         # CSV + TensorBoard + W&B logging helpers
+  loggers.py         # CSV + TensorBoard + W&B logging helpers
   eval_utils.py      # Visualisation utilities
   eval_metrics.py    # MAE / CRPS-sum metrics + recon-divergence detection
+  eval/              # Hydra evaluation stage (runner + metric registry)
+  viz/               # Hydra visualisation stage (runner + plot registry)
   data/              # Dataset loaders (GluonTS, PM2.5, KDD, synthetic)
 ```
 
@@ -48,15 +51,15 @@ There are two complementary entry points:
 1. **`python -m ddssm.app`** — the Hydra-native, composable entry point (use
    for new experiments and Optuna sweeps; described below).
 2. **`scripts/experiments/...`** — legacy YAML-driven scripts (still used for
-   workflows that need the multi-stage Pydantic ``stages`` orchestrator and
-   for the KDD dataset, which the Hydra app does not yet load directly).
+   workflows that need the multi-stage Pydantic ``stages`` orchestrator).
 
 Legacy YAML invocation example:
 
 ```bash
 python scripts/experiments/kdd/kdd_train.py \
+    --data_path data/kdd.pt \
     --config configs/base.yaml \
-    --override hyperparams.batch_size=32
+    --set hyperparams.batch_size=32
 ```
 
 ### Hydra experiment presets
@@ -69,8 +72,8 @@ hyperparameters, and training scalars. Activate one with `experiment=NAME`:
 | ------------------------------- | ---------- | ---------- | -------------------------------------------------- |
 | `synthetic_gauss`               | synthetic  | gaussian   | LGSSM, runs end-to-end via `ddssm.app`             |
 | `synthetic_diffusion`           | synthetic  | diffusion  | LGSSM, runs end-to-end via `ddssm.app`             |
-| `kdd_gauss`                     | none       | gaussian   | Model recipe; pair with `kdd_train.py` for data    |
-| `kdd_diffusion`                 | none       | diffusion  | Model recipe; pair with `kdd_train.py` for data    |
+| `kdd_gauss`                     | kdd        | gaussian   | Model recipe; pair with `kdd_train.py` for data    |
+| `kdd_diffusion`                 | kdd        | diffusion  | Model recipe; pair with `kdd_train.py` for data    |
 
 ```bash
 # Single end-to-end run on synthetic data
@@ -81,10 +84,8 @@ python -m ddssm.app experiment=synthetic_diffusion \
     experiment.training.steps=2000 experiment.hyperparams.batch_size=64
 ```
 
-When `cfg.dataset` is the `none` preset, `ddssm.app` builds the model and
-trainer but skips `trainer.fit(...)`. Use this for smoke tests, or pair the
-KDD experiment recipes with `scripts/experiments/kdd/kdd_train.py` for
-real KDD training.
+When `cfg.experiment.data` is a `NullDataModule`, `ddssm.app` builds the model and
+trainer but skips `trainer.fit(...)`. Use this for smoke tests.
 
 ### Hydra + Optuna sweeps
 
