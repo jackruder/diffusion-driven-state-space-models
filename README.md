@@ -63,7 +63,7 @@ python scripts/experiments/kdd/kdd_train.py \
 
 Reusable experiment presets live in `conf/experiment/`. Each preset selects
 a transition (`gaussian`/`diffusion`), a dataset, root-level dimensions,
-hyperparameters, and training scalars. Activate one with `+experiment=NAME`:
+hyperparameters, and training scalars. Activate one with `experiment=NAME`:
 
 | Preset                          | Dataset    | Transition | Notes                                              |
 | ------------------------------- | ---------- | ---------- | -------------------------------------------------- |
@@ -74,11 +74,11 @@ hyperparameters, and training scalars. Activate one with `+experiment=NAME`:
 
 ```bash
 # Single end-to-end run on synthetic data
-python -m ddssm.app +experiment=synthetic_gauss
+python -m ddssm.app experiment=synthetic_gauss
 
 # Override anything the experiment sets
-python -m ddssm.app +experiment=synthetic_diffusion \
-    training.steps=2000 hyperparams.batch_size=64
+python -m ddssm.app experiment=synthetic_diffusion \
+    experiment.training.steps=2000 experiment.hyperparams.batch_size=64
 ```
 
 When `cfg.dataset` is the `none` preset, `ddssm.app` builds the model and
@@ -104,7 +104,7 @@ Each sweep preset re-activates the Optuna sweeper, so a multirun is just:
 
 ```bash
 python -m ddssm.app --multirun \
-    +experiment=synthetic_gauss \
+    experiment=synthetic_gauss \
     +sweep=synthetic_lr \
     hydra.sweeper.n_trials=20 \
     hydra.sweeper.study_name=ddssm_synth_lr \
@@ -112,7 +112,7 @@ python -m ddssm.app --multirun \
 ```
 
 `ddssm.app` returns the mean tail of `loss/total` from the run's `metrics.csv`
-as the Optuna objective. Override `training.return_objective=false` if you
+as the Optuna objective. Override `experiment.training.return_objective=false` if you
 want the trainer object back instead. Failed trials surface as `+inf`, which
 Optuna's `minimize` direction handles cleanly.
 
@@ -122,12 +122,12 @@ preset:
 ```bash
 python -m ddssm.app --multirun \
     hydra/sweeper=ddssm_optuna \
-    +experiment=synthetic_gauss \
+    experiment=synthetic_gauss \
     hydra.sweeper.n_trials=50 \
     hydra.sweeper.study_name=ddssm_example \
     hydra.sweeper.storage=sqlite:///ddssm_example.db \
-    'hydra.sweeper.params.hyperparams.enc_lr=interval(1e-5,1e-3)' \
-    'hydra.sweeper.params.hyperparams.batch_size=choice(32,64,128)'
+    'hydra.sweeper.params.experiment.hyperparams.enc_lr=interval(1e-5,1e-3)' \
+    'hydra.sweeper.params.experiment.hyperparams.batch_size=choice(32,64,128)'
 ```
 
 Relative SQLite storage URLs are resolved from Hydra's runtime working
@@ -177,7 +177,7 @@ cluster:
 ```bash
 python -m ddssm.app --multirun \
     hydra/launcher=submitit_slurm \
-    +experiment=synthetic_diffusion \
+    experiment=synthetic_diffusion \
     +sweep=synthetic_lr \
     hydra.sweeper.n_trials=64 \
     hydra.sweeper.study_name=ddssm_synth_diff \
