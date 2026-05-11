@@ -750,6 +750,204 @@ def _default_hyperparams():
 
 
 # ---------------------------------------------------------------------------
+# Legacy factory: build DDSSM_base from a DDSSMConfig pydantic model
+# ---------------------------------------------------------------------------
+
+
+def build_model_from_config(config: "DDSSMConfig") -> "DDSSM_base":
+    """Build a :class:`DDSSM_base` from a :class:`~ddssm.config.DDSSMConfig`.
+
+    This is a compatibility shim for legacy scripts that load model
+    configuration from YAML files via :func:`~ddssm.config.load_config_from_files`
+    and need to instantiate the model without Hydra.
+
+    Args:
+        config: Fully-populated :class:`~ddssm.config.DDSSMConfig` instance.
+
+    Returns:
+        An initialised (but not yet trained) :class:`DDSSM_base` model.
+
+    Example::
+
+        config = load_config_from_files(["configs/base.yaml"])
+        model  = build_model_from_config(config)
+    """
+    from functools import partial as _partial
+
+    from .config import (
+        DDSSMConfig,  # noqa: F401 – used in type hint above
+        DiffusionTransitionConfig,
+        GaussianTransitionConfig,
+    )
+    from .decoder import Decoder
+    from .diffnets import (
+        ContextProducer,
+        CSDIUnet,
+        DiffResidualBlockConfig,
+        FeatureMixerConfig,
+        ResidualBlockConfig as ContextResidualBlockConfig,
+        TimeMixerConfig,
+    )
+    from .encoder import GaussianEncoder, GaussianInitPrior
+    from .futsum import GRUFutureSummary
+    from .gaussians import GaussianHead
+    from .transitions.diffusion import DiffusionTransition
+    from .transitions.transitions import GaussianTransition
+
+    # ---- helpers: convert Pydantic sub-configs to diffnets dataclasses ----
+
+    def _time_mixer(t) -> TimeMixerConfig:
+        """Map a Pydantic TimeConfig to a diffnets TimeMixerConfig.
+
+        ``mamba`` is no longer supported and falls back to ``conv``.
+        """
+        t_type = t.type if t.type != "mamba" else "conv"
+        return TimeMixerConfig(
+            type=t_type,
+            kernel_size=getattr(t, "kernel_size", 3),
+            gru_layers=getattr(t, "gru_layers", 1),
+        )
+
+    def _feature_mixer(f) -> FeatureMixerConfig:
+        """Map a Pydantic FeatureConfig to a diffnets FeatureMixerConfig."""
+        return FeatureMixerConfig(
+            type=f.type,
+            nheads=getattr(f, "nheads", 8),
+            # Pydantic FeatureConfig uses ``layers``; dataclass uses ``n_layers``
+            n_layers=getattr(f, "layers", getattr(f, "n_layers", 1)),
+        )
+
+    def _ctx_partial(ctx_cfg):
+        """Build a ContextProducer partial from a ContextProducerConfig."""
+        rb = ContextResidualBlockConfig(
+            time=_time_mixer(ctx_cfg.time),
+            feature=_feature_mixer(ctx_cfg.feature),
+        )
+        return _partial(
+            ContextProducer,
+            channels=ctx_cfg.channels,
+            num_layers=ctx_cfg.num_layers,
+            residual_block=rb,
+        )
+
+    def _gh_partial(gh_cfg):
+        """Build a GaussianHead partial from a GaussianHeadConfig."""
+        return _partial(
+            GaussianHead,
+            init_logvar=gh_cfg.init_logvar,
+            var_min=gh_cfg.var_min,
+            clamp_logvar_min=gh_cfg.clamp_logvar_min,
+            clamp_logvar_max=gh_cfg.clamp_logvar_max,
+        )
+
+    # ---- Encoder ----
+    enc_cfg = config.encoder
+    encoder = GaussianEncoder(
+        data_dim=config.data_dim,
+        latent_dim=config.latent_dim,
+        j=config.j,
+        emb_time_dim=config.emb_time_dim,
+        use_mask=config.use_observation_mask,
+        hidden_dim=enc_cfg.hidden_dim,
+        fut_mask_emb_dim=enc_cfg.fut_mask_emb_dim,
+        pad_mask_emb_dim=enc_cfg.pad_mask_emb_dim,
+        covariate_dim=config.covariate_dim,
+        context=_ctx_partial(enc_cfg.context),
+        gaussian_head=_gh_partial(enc_cfg.gaussian_head),
+        fut_summary=_partial(
+            GRUFutureSummary,
+            summary_dim=enc_cfg.summary_config.summary_dim,
+            num_layers=enc_cfg.summary_config.num_layers,
+        ),
+    )
+
+    # ---- Decoder ----
+    dec_cfg = config.decoder
+    decoder = Decoder(
+        latent_dim=config.latent_dim,
+        data_dim=config.data_dim,
+        j=config.j,
+        emb_time_dim=config.emb_time_dim,
+        covariate_dim=config.covariate_dim,
+        hidden_dim=dec_cfg.hidden_dim,
+        mask_emb_dim=dec_cfg.mask_emb_dim,
+        context=_ctx_partial(dec_cfg.context),
+        gaussian_head=_gh_partial(dec_cfg.gaussian_head),
+    )
+
+    # ---- Init Prior ----
+    zi_cfg = config.z_init
+    z_init = GaussianInitPrior(
+        latent_dim=config.latent_dim,
+        j=config.j,
+        emb_time_dim=config.emb_time_dim,
+        covariate_dim=config.covariate_dim,
+        hidden_dim=zi_cfg.hidden_dim,
+        pad_mask_emb_dim=zi_cfg.pad_mask_emb_dim,
+        context=_ctx_partial(zi_cfg.context),
+        aux_context=_ctx_partial(zi_cfg.aux_context),
+        gaussian_head=_gh_partial(zi_cfg.gaussian_head),
+        aux_posterior_head=_gh_partial(zi_cfg.latent_init_head),
+    )
+
+    # ---- Transition ----
+    t_cfg = config.transition
+    if isinstance(t_cfg, GaussianTransitionConfig):
+        transition = GaussianTransition(
+            latent_dim=config.latent_dim,
+            j=config.j,
+            emb_time_dim=config.emb_time_dim,
+            covariate_dim=config.covariate_dim,
+            hidden_dim=t_cfg.hidden_dim,
+            context=_ctx_partial(t_cfg.context),
+            gaussian_head=_gh_partial(t_cfg.gaussian_head),
+        )
+    elif isinstance(t_cfg, DiffusionTransitionConfig):
+        unet_cfg = t_cfg.unet
+        diff_rb = DiffResidualBlockConfig(
+            time=_time_mixer(unet_cfg.block.time),
+            feature=_feature_mixer(unet_cfg.block.feature),
+        )
+        transition = DiffusionTransition(
+            latent_dim=config.latent_dim,
+            j=config.j,
+            emb_time_dim=config.emb_time_dim,
+            covariate_dim=config.covariate_dim,
+            unet=_partial(
+                CSDIUnet,
+                channels=unet_cfg.block.channels,
+                n_layers=unet_cfg.block.layers,
+                embedding_dim=unet_cfg.embedding.embedding_dim,
+                projection_dim=unet_cfg.embedding.projection_dim,
+                residual_block=diff_rb,
+            ),
+            schedule=t_cfg.schedule,
+        )
+    else:
+        raise ValueError(
+            f"Unknown transition config type: {type(t_cfg).__name__!r}. "
+            "Expected GaussianTransitionConfig or DiffusionTransitionConfig."
+        )
+
+    return DDSSM_base(
+        encoder=encoder,
+        decoder=decoder,
+        z_init=z_init,
+        transition=transition,
+        j=config.j,
+        data_dim=config.data_dim,
+        latent_dim=config.latent_dim,
+        emb_time_dim=config.emb_time_dim,
+        covariate_dim=config.covariate_dim,
+        use_observation_mask=config.use_observation_mask,
+        mask_emb_dim=config.mask_emb_dim,
+        hyperparams=config.hyperparams,
+        stages=config.stages,
+        checkpoint_dir=config.checkpoint_dir,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Hyperparameters and top-level DDSSMConf, co-located with DDSSM_base.
 # ---------------------------------------------------------------------------
 

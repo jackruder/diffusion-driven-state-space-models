@@ -4,9 +4,8 @@ Usage::
 
     python scripts/experiments/verifications.py \\
         --config configs/base.yaml \\
-        [--override hyperparams.batch_size=8] \\
-        [--ckpt checkpoints/my_run/ckpt_latest.pth] \\
-        [--save_path plots/verify.png]
+        [--set hyperparams.batch_size=8] \\
+        [--resume checkpoints/my_run/ckpt_latest.pth]
 
 The script loads a trained DDSSM checkpoint, runs the model on a dataset split,
 and saves a multi-panel figure comparing observed data, posterior reconstruction,
@@ -20,14 +19,13 @@ from types import SimpleNamespace
 import argparse
 
 import torch
-import torch._dynamo
 
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 
-from ddssm.ddssm import DDSSM_base
+from ddssm.dssd import DDSSM_base, build_model_from_config
 from ddssm.train import DDSSMTrainer
 from ddssm.config import (
     DDSSMConfig,
@@ -138,26 +136,18 @@ def run_verification(args):
         print("Error: --config is required to specify the model configuration.")
         return
 
-    # Apply overrides to default configs if no YAML was provided
-    if not args.config and args.set:
-        config_dict = (
-            config.model_dump() if hasattr(config, "model_dump") else config.dict()
-        )
-        config_dict = apply_dot_overrides(config_dict, args.set)
-        config = DDSSMConfig.model_validate(config_dict)
-
     # Instantiate the dataset THIRD, dynamically using config.data_dim
     dataset = SyntheticDataset(
         mode=args.mode,
         split="train",
-        N_per_split=1024,
+        N_per_split=args.num_samples,
         T=args.seq_len,
         D=config.data_dim,
         dataset_seed=args.dataset_seed,
     )
     loader = DataLoader(dataset, batch_size=config.hyperparams.batch_size, shuffle=True)
 
-    model = DDSSM_base(config, device)
+    model = build_model_from_config(config)
 
     csv_log_path = os.path.join(run_dir, "metrics.csv")
 
@@ -360,11 +350,11 @@ if __name__ == "__main__":
         "--training_mode",
         type=str,
         default="joint",
-        choices=["joint", "joint", "recon_only", "trans_only"],
-        help="Training strategy: three_stage (recon -> trans -> joint), joint (joint only), recon_only, or trans_only.",
+        choices=["joint", "recon_only", "trans_only"],
+        help="Training strategy: joint (joint only), recon_only, or trans_only.",
     )
 
-    parser.add_argument(  # if passed, sets args.quiet to True supressing console loggingg
+    parser.add_argument(  # if passed, sets args.quiet to True suppressing console logging
         "--quiet",
         action="store_true",
         help="If set, suppress console logging.",
