@@ -550,6 +550,7 @@ class MLPCSDIUnet(nn.Module):
         residual_block: DiffResidualBlockConfig | None = None,
     ) -> None:
         super().__init__()
+        # Kept for constructor compatibility with ``CSDIUnet``.
         _ = diffusion_steps, embedding_dim, projection_dim, residual_block
 
         self.output_len = int(output_len)
@@ -858,6 +859,7 @@ class MLPContextProducer(nn.Module):
         static_emb_dim: int = 0,
     ) -> None:
         super().__init__()
+        # Kept for constructor compatibility with ``ContextProducer``.
         _ = residual_block
 
         self.channels = int(channels)
