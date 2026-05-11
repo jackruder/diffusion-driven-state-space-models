@@ -56,6 +56,15 @@ Implements the model described in ``model-v2.org``.  Compared to V1
   :class:`NotImplementedError`); use ``"lsgm_is"`` for principled IS or
   ``"uniform"`` to disable IS.
 
+* **Objective ablation.**  ``schedule.objective`` selects between
+  ``"esm"`` (default; closed-form marginal score from encoder
+  ``(mu_t, sigma2_t)``) and ``"dsm"`` (standard denoising score
+  matching using the sampled ``z_t`` with ``sigma2_t = 0``).  DSM
+  arises as a degenerate case of the ESM code path with
+  ``mu_t -> z_t`` and ``sigma2_t -> 0``; setting ``objective="dsm"``
+  forces this path even when encoder stats are available, enabling
+  Rao–Blackwell variance-reduction ablations.
+
 * **Log-likelihood / boundary KL.** Not implemented in V2; the relevant
   ``log_likelihood`` / ``forward_kl_loss`` / ``log_prob`` methods raise
   :class:`NotImplementedError`.  The ESM derivation in ``model-v2.org`` makes
@@ -95,6 +104,7 @@ class DiffusionV2ScheduleConfig:
     k_sampling_mode: str = "uniform"
     pk_gamma: float = 1.0
     pk_floor: float = 1e-12
+    objective: str = "esm"  # "esm" (closed-form marginal score) or "dsm"
 
 
 @final
@@ -165,6 +175,11 @@ class DiffusionV2Transition(BaseTransition):
             raise ValueError(
                 f"beta_max ({beta_max}) must be > beta_min ({beta_min})"
             )
+        if schedule.objective not in ("esm", "dsm"):
+            raise ValueError(
+                f"objective must be 'esm' or 'dsm'; got {schedule.objective!r}"
+            )
+        self.objective = schedule.objective
 
         tau = torch.linspace(tau_min, 1.0, K, dtype=dtype64)
         beta = beta_min + (beta_max - beta_min) * tau
@@ -355,7 +370,11 @@ class DiffusionV2Transition(BaseTransition):
             ) in self._iter_window_chunks(
                 zs, time_embed, covariates=covariates,
             ):
-                if have_stats:
+                use_esm = self.objective == "esm" and have_stats
+                if use_esm:
+                    # ESM: use encoder marginal stats, integrate z_t
+                    # analytically via the Gaussian convolution
+                    # sigma2_t + sigma_tilde**2.
                     # mus, logvars: (B, S, d, T) -> (B, S, d, chunk_len)
                     mu_chunk = mus[..., t_start:t_end]
                     lv_chunk = logvars[..., t_start:t_end]
@@ -365,9 +384,10 @@ class DiffusionV2Transition(BaseTransition):
                         lv_chunk.exp().permute(0, 1, 3, 2).reshape(-1, d)
                     )
                 else:
-                    # Encoder did not expose Gaussian stats: fall back to a
-                    # degenerate posterior with mu_t = z_t and sigma_t**2 = 0,
-                    # which collapses the ESM target to standard DSM around z_t.
+                    # Reached when objective == "dsm" or encoder stats are
+                    # unavailable; both cases collapse the ESM target to the
+                    # standard DSM kernel score around the sampled z_t
+                    # (mu_t = z_t, sigma_t**2 = 0).
                     mu_t_flat = z_target_flat
                     sigma2_t_flat = torch.zeros_like(z_target_flat)
 
