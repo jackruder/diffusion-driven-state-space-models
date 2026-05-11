@@ -94,6 +94,12 @@ MODULE_GROUP_OVERRIDES = [
     "z_init=gaussian",
 ]
 
+MLP_MODULE_GROUP_OVERRIDES = [
+    "encoder=gaussian_mlp",
+    "decoder=gaussian_mlp",
+    "z_init=gaussian_mlp",
+]
+
 
 @pytest.mark.parametrize("name", EXPERIMENTS)
 def test_module_group_overrides_compose(name: str) -> None:
@@ -115,6 +121,41 @@ def test_module_group_overrides_instantiate(name: str) -> None:
         cfg = compose(
             config_name="config",
             overrides=[f"experiment={name}"] + MODULE_GROUP_OVERRIDES,
+        )
+    expt = instantiate(cfg.experiment)
+    assert isinstance(expt, Experiment)
+    n_params = sum(p.numel() for p in expt.model.parameters())
+    assert n_params > 0
+
+
+def test_mlp_architecture_ablation_overrides_compose() -> None:
+    with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
+        cfg = compose(
+            config_name="config",
+            overrides=[
+                "experiment=harmonic",
+                "transition=diffusion_mlp",
+            ]
+            + MLP_MODULE_GROUP_OVERRIDES,
+        )
+
+    assert cfg.experiment.model.transition._target_.endswith("DiffusionTransition")
+    assert cfg.experiment.model.transition.unet._target_.endswith("MLPCSDIUnet")
+    assert cfg.experiment.model.encoder.context._target_.endswith("MLPContextProducer")
+    assert cfg.experiment.model.decoder.context._target_.endswith("MLPContextProducer")
+    assert cfg.experiment.model.z_init.context._target_.endswith("MLPContextProducer")
+    assert cfg.experiment.model.z_init.aux_context._target_.endswith("MLPContextProducer")
+
+
+def test_mlp_architecture_ablation_overrides_instantiate() -> None:
+    with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
+        cfg = compose(
+            config_name="config",
+            overrides=[
+                "experiment=harmonic",
+                "transition=diffusion_mlp",
+            ]
+            + MLP_MODULE_GROUP_OVERRIDES,
         )
     expt = instantiate(cfg.experiment)
     assert isinstance(expt, Experiment)

@@ -24,7 +24,12 @@ from ..data.datamodule import (
     SyntheticDataModule,
 )
 from ..decoder import GaussianDecoder, GaussianDecoderConf
-from ..diffnets import ContextProducerConf, CSDIUnetConf
+from ..diffnets import (
+    ContextProducerConf,
+    CSDIUnetConf,
+    MLPContextProducerConf,
+    MLPCSDIUnetConf,
+)
 from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
 from ..encoder import (
     GaussianEncoder,
@@ -63,6 +68,17 @@ TransitionGaussianConf = builds(
     gaussian_head=GaussianHeadConf(),
 )
 
+TransitionGaussianMLPConf = builds(
+    GaussianTransition,
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    context=MLPContextProducerConf(),
+    gaussian_head=GaussianHeadConf(),
+)
+
 TransitionDiffusionConf = builds(
     DiffusionTransition,
     populate_full_signature=True,
@@ -74,6 +90,17 @@ TransitionDiffusionConf = builds(
     schedule=DiffusionScheduleConfig(),
 )
 
+TransitionDiffusionMLPConf = builds(
+    DiffusionTransition,
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    unet=MLPCSDIUnetConf(),
+    schedule=DiffusionScheduleConfig(),
+)
+
 TransitionDiffusionV2Conf = builds(
     DiffusionV2Transition,
     populate_full_signature=True,
@@ -82,6 +109,17 @@ TransitionDiffusionV2Conf = builds(
     emb_time_dim="${experiment.emb_time_dim}",
     covariate_dim="${experiment.covariate_dim}",
     unet=CSDIUnetConf(),
+    schedule=DiffusionV2ScheduleConfig(),
+)
+
+TransitionDiffusionV2MLPConf = builds(
+    DiffusionV2Transition,
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    unet=MLPCSDIUnetConf(),
     schedule=DiffusionV2ScheduleConfig(),
 )
 
@@ -114,6 +152,19 @@ EncoderGaussianConf = builds(
     use_mask="${experiment.use_observation_mask}",
 )
 
+EncoderGaussianMLPConf = builds(
+    GaussianEncoder,
+    builds_bases=(GaussianEncoderConf,),
+    populate_full_signature=True,
+    data_dim="${experiment.data_dim}",
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    use_mask="${experiment.use_observation_mask}",
+    context=MLPContextProducerConf(),
+)
+
 DecoderGaussianConf = builds(
     GaussianDecoder,
     builds_bases=(GaussianDecoderConf,),
@@ -123,6 +174,18 @@ DecoderGaussianConf = builds(
     j="${experiment.j}",
     emb_time_dim="${experiment.emb_time_dim}",
     covariate_dim="${experiment.covariate_dim}",
+)
+
+DecoderGaussianMLPConf = builds(
+    GaussianDecoder,
+    builds_bases=(GaussianDecoderConf,),
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    data_dim="${experiment.data_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    context=MLPContextProducerConf(),
 )
 
 InitPriorGaussianConf = builds(
@@ -135,12 +198,30 @@ InitPriorGaussianConf = builds(
     covariate_dim="${experiment.covariate_dim}",
 )
 
+InitPriorGaussianMLPConf = builds(
+    GaussianInitPrior,
+    builds_bases=(GaussianInitPriorConf,),
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    context=MLPContextProducerConf(),
+    aux_context=MLPContextProducerConf(),
+)
+
 store(TransitionGaussianConf, group="transition", name="gaussian")
+store(TransitionGaussianMLPConf, group="transition", name="gaussian_mlp")
 store(TransitionDiffusionConf, group="transition", name="diffusion")
+store(TransitionDiffusionMLPConf, group="transition", name="diffusion_mlp")
 store(TransitionDiffusionV2Conf, group="transition", name="diffusion_v2")
+store(TransitionDiffusionV2MLPConf, group="transition", name="diffusion_v2_mlp")
 store(EncoderGaussianConf, group="encoder", name="gaussian")
+store(EncoderGaussianMLPConf, group="encoder", name="gaussian_mlp")
 store(DecoderGaussianConf, group="decoder", name="gaussian")
+store(DecoderGaussianMLPConf, group="decoder", name="gaussian_mlp")
 store(InitPriorGaussianConf, group="z_init", name="gaussian")
+store(InitPriorGaussianMLPConf, group="z_init", name="gaussian_mlp")
 store(DDSSMHyperParamsConf, group="hyperparams", name="default")
 store(DDSSMConf, group="model", name="default")
 store(DDSSMTrainerConf, group="trainer", name="default")
