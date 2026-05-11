@@ -84,10 +84,37 @@ python -m ddssm.app experiment=synthetic_gauss
 # Override anything the experiment sets
 python -m ddssm.app experiment=synthetic_diffusion \
     experiment.training.steps=2000 experiment.hyperparams.batch_size=64
-
-# Variance probe stage (offline metric/variance analysis)
-python -m ddssm.variance experiment=variance_probe_lgssm
 ```
+
+#### Variance probe workflow (train, then probe)
+
+Variance probe presets are optimized for quick diagnostics and write checkpoints
+to stable per-preset directories under `runs/variance_probe/...`.
+
+| Preset                                 | Purpose |
+| -------------------------------------- | ------- |
+| `variance_probe_lgssm`                 | Baseline linear-Gaussian case for sanity-checking variance trends. |
+| `variance_probe_bimodal_clean`         | Multimodal target without observation noise; tests mode handling only. |
+| `variance_probe_bimodal_noisy`         | Same multimodal structure with added noise; tests robustness. |
+| `variance_probe_nonlinear_bimodal_lift`| Higher-dimensional nonlinear stress case for the probe metrics. |
+
+```bash
+# 1) Train one preset and produce a stable checkpoint
+python -m ddssm.app experiment=variance_probe_lgssm +sweep=variance_probe
+
+# 2) Run offline variance analysis from the trained checkpoint
+python -m ddssm.variance \
+    experiment=variance_probe_lgssm \
+    checkpoint='${experiment.checkpoint_dir}/ckpt_latest.pth' \
+    +sweep=variance_probe
+```
+
+The variance stage writes:
+
+- `variance_raw.csv`: per-replica/per-seed probe rows
+- `variance_summary.json`: aggregate metrics and metadata
+- plot files (defaults): `var_grad_vs_tau.png`, `var_loss_vs_tau.png`,
+  `ratio_vs_tau.png`, `summary_table.png`
 
 When `cfg.experiment.data` is a `NullDataModule`, `ddssm.app` builds the model and
 trainer but skips `trainer.fit(...)`. Use this for smoke tests.
