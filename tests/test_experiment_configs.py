@@ -14,14 +14,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from hydra import compose, initialize_config_dir
-from hydra.core.global_hydra import GlobalHydra
+import pytest
 from hydra_zen import instantiate
+from hydra.core.global_hydra import GlobalHydra
 
 import ddssm.conf  # noqa: F401  -- registers ConfigStore entries
-from ddssm.data.datamodule import DDSSMDataModule
 from ddssm.experiment import Experiment, ObjectiveSpec, TrainingScalars
+from ddssm.data.datamodule import DDSSMDataModule
 
 CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
 
@@ -123,7 +123,8 @@ def test_module_group_overrides_compose(name: str) -> None:
 @pytest.mark.parametrize("name", EXPERIMENTS)
 def test_module_group_overrides_instantiate(name: str) -> None:
     """Model still builds with non-empty parameter count when each module
-    slot is selected via its config group instead of the hard-coded path."""
+    slot is selected via its config group instead of the hard-coded path.
+    """
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(
             config_name="config",
@@ -237,7 +238,6 @@ def test_experiment_and_sweep_combine() -> None:
     assert "optuna" in cfg.hydra.sweeper._target_.lower()
 
 
-
 # ---------------------------------------------------------------------------
 # Synthetic verification: base presets + transition/override combos.
 #
@@ -310,10 +310,10 @@ def test_synth_shape_fields(
 
 
 @pytest.mark.parametrize("overrides,expected_metrics", [
-    (["experiment=harmonic"],  ["mae", "crps_sum"]),
+    (["experiment=harmonic"], ["mae", "crps_sum"]),
     (["experiment=harmonic", "experiment.data.mode=harmonic-noisy"], ["mae", "crps_sum"]),
-    (["experiment=bimodal"],   ["energy_score", "crps_sum"]),
-    (["experiment=robot_2d"],  ["energy_score", "crps_sum"]),
+    (["experiment=bimodal"], ["energy_score", "crps_sum"]),
+    (["experiment=robot_2d"], ["energy_score", "crps_sum"]),
 ])
 def test_synth_eval_metrics(overrides: list, expected_metrics: list) -> None:
     """Eval metric list must match the family spec (harmonic→mae, bimodal/robot→energy_score)."""
@@ -323,9 +323,9 @@ def test_synth_eval_metrics(overrides: list, expected_metrics: list) -> None:
 
 
 @pytest.mark.parametrize("overrides,expected_first_plot", [
-    (["experiment=harmonic"],  "forecast_1d"),
-    (["experiment=bimodal"],   "forecast_1d"),
-    (["experiment=robot_2d"],  "forecast_2d_spatial"),
+    (["experiment=harmonic"], "forecast_1d"),
+    (["experiment=bimodal"], "forecast_1d"),
+    (["experiment=robot_2d"], "forecast_2d_spatial"),
 ])
 def test_synth_viz_first_plot(overrides: list, expected_first_plot: str) -> None:
     """Robot preset must use the 2D spatial plot; all others use forecast_1d."""
