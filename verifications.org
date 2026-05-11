@@ -256,6 +256,20 @@ python -m ddssm.evaluate experiment=harmonic \
     hydra.run.dir=runs/harmonic/diff_j2
 #+END_SRC
 
+#+BEGIN_SRC sh
+python -m ddssm.visualize experiment=harmonic \
+    'experiment.j=2' \
+    +checkpoint=runs/harmonic/gauss_j2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/harmonic/gauss_j2/metrics.csv \
+    hydra.run.dir=runs/harmonic/gauss_j2
+python -m ddssm.visualize experiment=harmonic \
+    'experiment.j=2' \
+    transition=diffusion \
+    +checkpoint=runs/harmonic/diff_j2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/harmonic/diff_j2/metrics.csv \
+    hydra.run.dir=runs/harmonic/diff_j2
+#+END_SRC
+
 **** Expected behavior
 - ~j=2~ models should achieve lower MAE than ~j=1~ on periodic signals because
   the transition can represent a linear oscillator exactly.
