@@ -23,7 +23,7 @@ import ddssm.conf  # noqa: F401  -- registers ConfigStore entries
 from ddssm.data.datamodule import DDSSMDataModule
 from ddssm.experiment import Experiment, ObjectiveSpec, TrainingScalars
 
-CONF_DIR = (Path(__file__).resolve().parent.parent / "conf").as_posix()
+CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
 
 EXPERIMENTS = [
     "synthetic_gauss",
@@ -33,6 +33,10 @@ EXPERIMENTS = [
     "harmonic",
     "bimodal",
     "robot_2d",
+    "variance_probe_lgssm",
+    "variance_probe_bimodal_clean",
+    "variance_probe_bimodal_noisy",
+    "variance_probe_nonlinear_bimodal_lift",
 ]
 
 SWEEPS = ["synthetic_lr", "kdd_phase1"]

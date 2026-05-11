@@ -1,0 +1,35 @@
+# @package _global_
+#
+# Config preset for fast train→probe variance diagnostics.
+# Step 1 (train a preset checkpoint)::
+#
+#     python -m ddssm.app \
+#         experiment=variance_probe_lgssm \
+#         +sweep=variance_probe
+#
+# Step 2 (run probe from that checkpoint)::
+#
+#     python -m ddssm.variance \
+#         experiment=variance_probe_lgssm \
+#         checkpoint='${experiment.checkpoint_dir}/ckpt_latest.pth' \
+#         +sweep=variance_probe
+#
+# Override project/entity/tags at the CLI as usual::
+#
+#     python -m ddssm.app experiment=variance_probe_lgssm \
+#         +sweep=variance_probe \
+#         'experiment.wandb_config.project=my-project' \
+#         'experiment.wandb_config.entity=my-team' \
+#         'experiment.wandb_config.tags=[variance-probe,lgssm]'
+
+defaults:
+  - override /wandb: enabled
+
+experiment:
+  wandb_config:
+    project: ddssm-variance-probe
+    tags: [variance-probe]
+  variance:
+    R: 32
+    n_batches: 1
+    seeds: [0]

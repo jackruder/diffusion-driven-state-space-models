@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Dict, List, final
+from typing import Any, Dict, List, final
 
 import torch
 import torch.nn as nn
@@ -24,6 +24,26 @@ from .net_utils import (
 )
 from .transitions.transitions import GaussianTransition
 from .transitions.diffusion import DiffusionTransition
+
+
+@dataclass
+class ProbeBatch:
+    """Detached latent-encoding payload reused by variance probes."""
+
+    zs: torch.Tensor
+    logq_paths: torch.Tensor
+    enc_stats: dict
+    time_embed: torch.Tensor
+    covariates: torch.Tensor | None = None
+
+    def as_kwargs(self) -> dict:
+        return {
+            "enc_stats": self.enc_stats,
+            "zs": self.zs,
+            "logq_paths": self.logq_paths,
+            "time_embed": self.time_embed,
+            "covariates": self.covariates,
+        }
 
 
 @final
@@ -149,6 +169,35 @@ class DDSSM_base(nn.Module):
             static_embed=static_embed,
         )
         return zs, logq_paths, enc_stats
+
+    @torch.no_grad()
+    def encode_for_probe(self, batch: dict) -> ProbeBatch:
+        """Encode one batch and return detached tensors for variance probes."""
+        observed_data = batch["observed_data"]
+        observation_mask = batch["observation_mask"]
+        timepoints = batch["timepoints"]
+        covariates = batch.get("covariates", None)
+        static_covariates = batch.get("static_covariates", None)
+
+        te = time_embedding(timepoints, self.emb_time_dim, device=observed_data.device)
+        static_embed = self._embed_static(static_covariates)
+        zs, logq_paths, enc_stats = self._encode_latents(
+            observed_data=observed_data,
+            time_embed=te,
+            observation_mask=observation_mask,
+            covariates=covariates,
+            static_embed=static_embed,
+        )
+        detached_stats = {
+            k: v.detach() if isinstance(v, torch.Tensor) else v for k, v in enc_stats.items()
+        }
+        return ProbeBatch(
+            zs=zs.detach(),
+            logq_paths=logq_paths.detach(),
+            enc_stats=detached_stats,
+            time_embed=te.detach(),
+            covariates=None if covariates is None else covariates.detach(),
+        )
 
     def _reconstruction_loss(
         self,
@@ -325,6 +374,7 @@ class DDSSM_base(nn.Module):
         time_embed: torch.Tensor,  # (B, T, E_t)
         covariates: torch.Tensor | None = None,
         static_covariates: torch.Tensor | None = None,
+        mc_override: dict[str, Any] | None = None,
     ) -> dict:
         """Compute transition KL term and any optional sub-components.
 
@@ -332,13 +382,16 @@ class DDSSM_base(nn.Module):
         which must contain ``"kl"`` and may include implementation-specific
         sub-components such as ``"L_p"``/``"L_q"`` for logging.
         """
-        return self.transition.transition_kl(
-            enc_stats=enc_stats,
-            zs=zs,
-            logq_paths=logq_paths,
-            time_embed=time_embed,
-            covariates=covariates,
-        )
+        transition_kwargs = {
+            "enc_stats": enc_stats,
+            "zs": zs,
+            "logq_paths": logq_paths,
+            "time_embed": time_embed,
+            "covariates": covariates,
+        }
+        if mc_override is not None:
+            transition_kwargs["mc_override"] = mc_override
+        return self.transition.transition_kl(**transition_kwargs)
 
     def _embed_static(
         self, static_covariates: torch.Tensor | None
@@ -387,12 +440,10 @@ class DDSSM_base(nn.Module):
         """
         j = self.j
 
+        static_embed = self._embed_static(static_covariates)
         time_embed = time_embedding(
             timepoints, self.emb_time_dim, device=observed_data.device
         )  # (B, T, E_t)
-
-        static_embed = self._embed_static(static_covariates)
-
         # encode latents: q_ϕ(z_{1:T}|·)
         zs, logq_paths, enc_stats = self._encode_latents(
             observed_data=observed_data,

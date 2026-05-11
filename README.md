@@ -33,6 +33,7 @@ src/ddssm/
   eval_metrics.py    # MAE / CRPS-sum metrics + recon-divergence detection
   eval/              # Hydra evaluation stage (runner + metric registry)
   viz/               # Hydra visualisation stage (runner + plot registry)
+  variance/          # Hydra variance probe stage (runner + metric/plot registries)
   data/              # Dataset loaders (GluonTS, PM2.5, KDD, synthetic)
 ```
 
@@ -64,9 +65,10 @@ python scripts/experiments/kdd/kdd_train.py \
 
 ### Hydra experiment presets
 
-Reusable experiment presets live in `conf/experiment/`. Each preset selects
-a transition (`gaussian`/`diffusion`), a dataset, root-level dimensions,
-hyperparameters, and training scalars. Activate one with `experiment=NAME`:
+Reusable experiment presets are registered in `src/ddssm/conf/experiments/`.
+Each preset selects a transition (`gaussian`/`diffusion`), a dataset,
+root-level dimensions, hyperparameters, and training scalars. Activate one
+with `experiment=NAME`:
 
 | Preset                          | Dataset    | Transition | Notes                                              |
 | ------------------------------- | ---------- | ---------- | -------------------------------------------------- |
@@ -84,6 +86,36 @@ python -m ddssm.app experiment=synthetic_diffusion \
     experiment.training.steps=2000 experiment.hyperparams.batch_size=64
 ```
 
+#### Variance probe workflow (train, then probe)
+
+Variance probe presets are optimized for quick diagnostics and write checkpoints
+to stable per-preset directories under `runs/variance_probe/...`.
+
+| Preset                                 | Purpose |
+| -------------------------------------- | ------- |
+| `variance_probe_lgssm`                 | Baseline linear-Gaussian case for sanity-checking variance trends. |
+| `variance_probe_bimodal_clean`         | Multimodal target without observation noise; tests mode handling only. |
+| `variance_probe_bimodal_noisy`         | Same multimodal structure with added noise; tests robustness. |
+| `variance_probe_nonlinear_bimodal_lift`| Higher-dimensional nonlinear stress case for the probe metrics. |
+
+```bash
+# 1) Train one preset and produce a stable checkpoint
+python -m ddssm.app experiment=variance_probe_lgssm +sweep=variance_probe
+
+# 2) Run offline variance analysis from the trained checkpoint
+python -m ddssm.variance \
+    experiment=variance_probe_lgssm \
+    checkpoint='${experiment.checkpoint_dir}/ckpt_latest.pth' \
+    +sweep=variance_probe
+```
+
+The variance stage writes:
+
+- `variance_raw.csv`: per-replica/per-seed probe rows
+- `variance_summary.json`: aggregate metrics and metadata
+- plot files (defaults): `var_grad_vs_tau.png`, `var_loss_vs_tau.png`,
+  `ratio_vs_tau.png`, `summary_table.png`
+
 When `cfg.experiment.data` is a `NullDataModule`, `ddssm.app` builds the model and
 trainer but skips `trainer.fit(...)`. Use this for smoke tests.
 
@@ -93,8 +125,8 @@ Hydra-based sweeps use Optuna through the `hydra-optuna-sweeper` plugin pinned
 in `pyproject.toml`. This intentionally tracks the requested `dahlem/hydra`
 fork branch until an equivalent tagged or official release is available.
 The repo provides a reusable sweeper preset at
-`conf/hydra/sweeper/ddssm_optuna.yaml` plus pre-defined search-space presets
-in `conf/sweep/`:
+`src/ddssm/conf/hydra/sweeper/ddssm_optuna.yaml` plus pre-defined
+search-space presets in `src/ddssm/conf/sweep/`:
 
 | Sweep preset      | Pairs with               | Search space                                        |
 | ----------------- | ------------------------ | --------------------------------------------------- |
@@ -134,10 +166,10 @@ python -m ddssm.app --multirun \
 Relative SQLite storage URLs are resolved from Hydra's runtime working
 directory. Use an absolute `sqlite:///...` path for shared studies or CI.
 
-The checked-in `conf/` tree is intentionally a small library of reusable
-Hydra defaults; large or experiment-specific search spaces should live
-either as additional `conf/sweep/*` presets or as external assets / CLI
-overrides.
+The checked-in `src/ddssm/conf/` tree is intentionally a small library of
+reusable Hydra defaults; large or experiment-specific search spaces should
+live either as additional `src/ddssm/conf/sweep/*` presets or as external
+assets / CLI overrides.
 
 ## Logging
 
@@ -171,7 +203,7 @@ logger silently no-ops and training continues with TensorBoard + CSV.
 ## SLURM
 
 A ready-to-use submitit launcher config lives at
-``conf/hydra/launcher/submitit_slurm.yaml``. Combine it with any experiment
+``src/ddssm/conf/hydra/launcher/submitit_slurm.yaml``. Combine it with any experiment
 preset and (optionally) a sweep preset to launch a multirun on a Slurm
 cluster:
 
