@@ -533,6 +533,74 @@ CSDIUnetConf = builds(
 
 
 @final
+class MLPCSDIUnet(nn.Module):
+    """Simple MLP denoiser used for architectural ablations/testing."""
+
+    def __init__(
+        self,
+        output_len: int,
+        diffusion_steps: int,
+        latent_dim: int,
+        latent_history_len: int,
+        side_dim: int,
+        channels: int = 64,
+        n_layers: int = 2,
+        embedding_dim: int = 128,
+        projection_dim: int | None = None,
+        residual_block: DiffResidualBlockConfig | None = None,
+    ) -> None:
+        super().__init__()
+        # Kept for constructor compatibility with ``CSDIUnet``.
+        _ = diffusion_steps, embedding_dim, projection_dim, residual_block
+
+        self.output_len = int(output_len)
+        self.latent_dim = int(latent_dim)
+        self.latent_history_len = int(latent_history_len)
+        self.side_dim = int(side_dim)
+
+        L = self.latent_history_len + self.output_len
+        in_dim = self.latent_dim * L + self.side_dim * self.latent_dim * L + 1
+        out_dim = self.latent_dim * self.output_len
+        hidden = max(int(channels), 16)
+        depth = max(int(n_layers), 1)
+
+        layers: list[nn.Module] = [nn.Linear(in_dim, hidden), nn.SiLU()]
+        for _ in range(depth - 1):
+            layers.extend([nn.Linear(hidden, hidden), nn.SiLU()])
+        layers.append(nn.Linear(hidden, out_dim))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(
+        self, x: torch.Tensor, side_info: torch.Tensor, diffusion_step: torch.Tensor
+    ) -> torch.Tensor:
+        B, d, L = x.shape
+        assert d == self.latent_dim
+        assert L == self.latent_history_len + self.output_len
+
+        x_flat = x.reshape(B, -1)
+        side_flat = side_info.reshape(B, -1)
+        step = diffusion_step.reshape(B, 1).to(dtype=x.dtype)
+        inp = torch.cat([x_flat, side_flat, step], dim=1)
+        out = self.mlp(inp)
+        return out.reshape(B, self.latent_dim, self.output_len)
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen partial config for MLPCSDIUnet.
+# Shape kwargs are supplied by enclosing transition modules.
+# ---------------------------------------------------------------------------
+
+MLPCSDIUnetConf = builds(
+    MLPCSDIUnet,
+    channels=64,
+    n_layers=2,
+    embedding_dim=128,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+
+@final
 class ResidualBlock(nn.Module):
     """Residual block variant for the encoder, matching CSDI side-info integration.
 
@@ -767,6 +835,115 @@ class ContextProducer(nn.Module):
 
 ContextProducerConf = builds(
     ContextProducer,
+    channels=8,
+    num_layers=2,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+
+@final
+class MLPContextProducer(nn.Module):
+    """Simple MLP context producer used for architectural ablations/testing."""
+
+    def __init__(
+        self,
+        channels: int,
+        num_layers: int,
+        combined_dim: int,
+        mask_tot_dim: int,
+        emb_time_dim: int,
+        combined_len: int,
+        residual_block: ResidualBlockConfig | None = None,
+        skip_mask: bool = False,
+        static_emb_dim: int = 0,
+    ) -> None:
+        super().__init__()
+        # Kept for constructor compatibility with ``ContextProducer``.
+        _ = residual_block
+
+        self.channels = int(channels)
+        self.num_layers = int(num_layers)
+        self.combined_dim = int(combined_dim)
+        self.mask_tot_dim = int(mask_tot_dim)
+        self.emb_time_dim = int(emb_time_dim)
+        self.combined_len = int(combined_len)
+        self.skip_mask = bool(skip_mask)
+        self.static_emb_dim = int(static_emb_dim)
+
+        in_dim = (
+            self.combined_dim * self.combined_len
+            + self.mask_tot_dim * self.combined_len
+            + self.emb_time_dim * self.combined_len
+            + self.static_emb_dim * self.combined_dim
+        )
+        out_dim = self.channels * self.combined_dim
+        hidden = max(out_dim, 16)
+        depth = max(self.num_layers, 1)
+
+        layers: list[nn.Module] = [nn.Linear(in_dim, hidden), nn.SiLU()]
+        for _ in range(depth - 1):
+            layers.extend([nn.Linear(hidden, hidden), nn.SiLU()])
+        layers.append(nn.Linear(hidden, out_dim))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(
+        self,
+        *,
+        combined: torch.Tensor,
+        mask_embedded: torch.Tensor | None,
+        hist_time_emb: torch.Tensor,
+        static_embedded: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        B, H_seq, L = combined.shape
+        assert H_seq == self.combined_dim
+        assert L == self.combined_len
+
+        if self.skip_mask:
+            if mask_embedded is None:
+                mask_embedded = torch.zeros(
+                    B, 0, L, device=combined.device, dtype=combined.dtype
+                )
+            assert mask_embedded.shape == (B, 0, L)
+        else:
+            assert mask_embedded is not None
+            assert mask_embedded.shape == (B, self.mask_tot_dim, L)
+
+        assert hist_time_emb.shape == (B, self.emb_time_dim, L)
+
+        if self.static_emb_dim > 0:
+            if static_embedded is None:
+                static_embedded = torch.zeros(
+                    B,
+                    self.static_emb_dim,
+                    self.combined_dim,
+                    device=combined.device,
+                    dtype=combined.dtype,
+                )
+            assert static_embedded.shape == (B, self.static_emb_dim, self.combined_dim)
+            static_flat = static_embedded.reshape(B, -1)
+        else:
+            static_flat = torch.zeros(B, 0, device=combined.device, dtype=combined.dtype)
+
+        inp = torch.cat(
+            [
+                combined.reshape(B, -1),
+                mask_embedded.reshape(B, -1),
+                hist_time_emb.reshape(B, -1),
+                static_flat,
+            ],
+            dim=1,
+        )
+        return self.mlp(inp)
+
+
+# ---------------------------------------------------------------------------
+# Hydra-zen partial config for MLPContextProducer.
+# Shape kwargs are supplied by enclosing encoder/decoder/transition modules.
+# ---------------------------------------------------------------------------
+
+MLPContextProducerConf = builds(
+    MLPContextProducer,
     channels=8,
     num_layers=2,
     populate_full_signature=True,

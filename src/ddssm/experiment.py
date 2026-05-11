@@ -178,6 +178,9 @@ class Experiment:
     use_observation_mask: bool = False
     checkpoint_dir: str = "./checkpoints"
     transition: Any = None
+    encoder: Any = None
+    decoder: Any = None
+    z_init: Any = None
     hyperparams: Any = None
 
     def train(self, *, device: torch.device, run_dir: str) -> float | DDSSMTrainer:
