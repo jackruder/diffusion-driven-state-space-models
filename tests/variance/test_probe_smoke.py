@@ -25,7 +25,14 @@ def test_encode_for_probe_matches_transition_term() -> None:
     batch = expt.data.batch_transform(next(iter(loader)), torch.device("cpu"))
     with torch.no_grad():
         probe_batch = model.encode_for_probe(batch)
-        trans = model.transition.transition_kl(**probe_batch.as_kwargs())
+        bs = probe_batch.zs.shape[0] * probe_batch.zs.shape[1]
+        d = probe_batch.zs.shape[2]
+        sk = int(model.transition.S_k)
+        mc_override = {
+            "k_idx": torch.zeros((bs, sk), dtype=torch.long),
+            "eps": torch.zeros((bs, d, sk), dtype=probe_batch.zs.dtype),
+        }
+        trans = model.transition.transition_kl(**probe_batch.as_kwargs(), mc_override=mc_override)
         _, _, _, metrics, _ = model(
             batch["observed_data"],
             batch["observation_mask"],
@@ -35,6 +42,8 @@ def test_encode_for_probe_matches_transition_term() -> None:
             train=False,
             compute_recon=False,
             compute_trans=True,
+            probe_batch=probe_batch,
+            transition_mc_override=mc_override,
         )
     assert torch.allclose(trans["kl"], metrics["loss/rate/trans/kl"], atol=1e-5, rtol=1e-5)
 

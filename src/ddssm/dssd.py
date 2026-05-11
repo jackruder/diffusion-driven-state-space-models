@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Dict, List, final
+from typing import Any, Dict, List, final
 
 import torch
 import torch.nn as nn
@@ -374,6 +374,7 @@ class DDSSM_base(nn.Module):
         time_embed: torch.Tensor,  # (B, T, E_t)
         covariates: torch.Tensor | None = None,
         static_covariates: torch.Tensor | None = None,
+        mc_override: dict[str, Any] | None = None,
     ) -> dict:
         """Compute transition KL term and any optional sub-components.
 
@@ -381,13 +382,16 @@ class DDSSM_base(nn.Module):
         which must contain ``"kl"`` and may include implementation-specific
         sub-components such as ``"L_p"``/``"L_q"`` for logging.
         """
-        return self.transition.transition_kl(
-            enc_stats=enc_stats,
-            zs=zs,
-            logq_paths=logq_paths,
-            time_embed=time_embed,
-            covariates=covariates,
-        )
+        transition_kwargs = {
+            "enc_stats": enc_stats,
+            "zs": zs,
+            "logq_paths": logq_paths,
+            "time_embed": time_embed,
+            "covariates": covariates,
+        }
+        if mc_override is not None:
+            transition_kwargs["mc_override"] = mc_override
+        return self.transition.transition_kl(**transition_kwargs)
 
     def _embed_static(
         self, static_covariates: torch.Tensor | None
@@ -411,6 +415,8 @@ class DDSSM_base(nn.Module):
         compute_recon: bool = True,  # compute elbo terms other than trans likelihood
         compute_trans: bool = True,  # compute transition likelihood
         report_scaled: bool = True,
+        probe_batch: ProbeBatch | None = None,
+        transition_mc_override: dict[str, Any] | None = None,
     ):
         """Compute ELBO loss and its components for a batch.
 
@@ -436,20 +442,26 @@ class DDSSM_base(nn.Module):
         """
         j = self.j
 
-        time_embed = time_embedding(
-            timepoints, self.emb_time_dim, device=observed_data.device
-        )  # (B, T, E_t)
-
         static_embed = self._embed_static(static_covariates)
-
-        # encode latents: q_ϕ(z_{1:T}|·)
-        zs, logq_paths, enc_stats = self._encode_latents(
-            observed_data=observed_data,
-            time_embed=time_embed,
-            observation_mask=observation_mask,
-            covariates=covariates,
-            static_embed=static_embed,
-        )  # zs: (B,S,d,T), logq_paths: (B,S,T)
+        if probe_batch is None:
+            time_embed = time_embedding(
+                timepoints, self.emb_time_dim, device=observed_data.device
+            )  # (B, T, E_t)
+            # encode latents: q_ϕ(z_{1:T}|·)
+            zs, logq_paths, enc_stats = self._encode_latents(
+                observed_data=observed_data,
+                time_embed=time_embed,
+                observation_mask=observation_mask,
+                covariates=covariates,
+                static_embed=static_embed,
+            )  # zs: (B,S,d,T), logq_paths: (B,S,T)
+        else:
+            time_embed = probe_batch.time_embed
+            zs = probe_batch.zs
+            logq_paths = probe_batch.logq_paths
+            enc_stats = probe_batch.enc_stats
+            if covariates is None:
+                covariates = probe_batch.covariates
 
         # optional Gaussian stats
         mus = enc_stats.get("mus", None)
@@ -501,6 +513,7 @@ class DDSSM_base(nn.Module):
                 enc_stats=enc_stats,
                 time_embed=time_embed,
                 covariates=covariates,
+                mc_override=transition_mc_override,
             )
             L_trans = trans_terms["kl"]
             trans_subterms = {k: v for k, v in trans_terms.items() if k != "kl"}
