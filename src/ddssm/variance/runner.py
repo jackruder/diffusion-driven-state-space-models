@@ -39,7 +39,9 @@ class ProbePlotSpec:
 
 @dataclass
 class ProbeSpec:
-    cells: list[ProbeCell] = field(default_factory=lambda: [
+    # Keep as untyped ``list`` so OmegaConf/hydra-zen accepts both ProbeCell
+    # and Builds_ProbeCell instances in structured configs.
+    cells: list = field(default_factory=lambda: [
         ProbeCell("esm", "uniform"),
         ProbeCell("dsm", "uniform"),
         ProbeCell("esm", "lsgm_is"),
@@ -53,13 +55,15 @@ class ProbeSpec:
     split: str = "train"
     seeds: list[int] = field(default_factory=lambda: [0, 1, 2])
     freeze: list[str] = field(default_factory=lambda: ["encoder", "decoder", "zinit", "embed_layer"])
-    metrics: list[ProbeMetricSpec] = field(default_factory=lambda: [
+    # Same rationale as ``cells`` above.
+    metrics: list = field(default_factory=lambda: [
         ProbeMetricSpec("loss_var"),
         ProbeMetricSpec("grad_var"),
         ProbeMetricSpec("ratio_esm_dsm"),
         ProbeMetricSpec("var_per_tau"),
     ])
-    plots: list[ProbePlotSpec] = field(default_factory=lambda: [
+    # Same rationale as ``cells`` above.
+    plots: list = field(default_factory=lambda: [
         ProbePlotSpec("var_grad_vs_tau"),
         ProbePlotSpec("var_loss_vs_tau"),
         ProbePlotSpec("ratio_vs_tau"),
