@@ -415,8 +415,6 @@ class DDSSM_base(nn.Module):
         compute_recon: bool = True,  # compute elbo terms other than trans likelihood
         compute_trans: bool = True,  # compute transition likelihood
         report_scaled: bool = True,
-        probe_batch: ProbeBatch | None = None,
-        transition_mc_override: dict[str, Any] | None = None,
     ):
         """Compute ELBO loss and its components for a batch.
 
@@ -443,25 +441,17 @@ class DDSSM_base(nn.Module):
         j = self.j
 
         static_embed = self._embed_static(static_covariates)
-        if probe_batch is None:
-            time_embed = time_embedding(
-                timepoints, self.emb_time_dim, device=observed_data.device
-            )  # (B, T, E_t)
-            # encode latents: q_ϕ(z_{1:T}|·)
-            zs, logq_paths, enc_stats = self._encode_latents(
-                observed_data=observed_data,
-                time_embed=time_embed,
-                observation_mask=observation_mask,
-                covariates=covariates,
-                static_embed=static_embed,
-            )  # zs: (B,S,d,T), logq_paths: (B,S,T)
-        else:
-            time_embed = probe_batch.time_embed
-            zs = probe_batch.zs
-            logq_paths = probe_batch.logq_paths
-            enc_stats = probe_batch.enc_stats
-            if covariates is None:
-                covariates = probe_batch.covariates
+        time_embed = time_embedding(
+            timepoints, self.emb_time_dim, device=observed_data.device
+        )  # (B, T, E_t)
+        # encode latents: q_ϕ(z_{1:T}|·)
+        zs, logq_paths, enc_stats = self._encode_latents(
+            observed_data=observed_data,
+            time_embed=time_embed,
+            observation_mask=observation_mask,
+            covariates=covariates,
+            static_embed=static_embed,
+        )  # zs: (B,S,d,T), logq_paths: (B,S,T)
 
         # optional Gaussian stats
         mus = enc_stats.get("mus", None)
@@ -513,7 +503,6 @@ class DDSSM_base(nn.Module):
                 enc_stats=enc_stats,
                 time_embed=time_embed,
                 covariates=covariates,
-                mc_override=transition_mc_override,
             )
             L_trans = trans_terms["kl"]
             trans_subterms = {k: v for k, v in trans_terms.items() if k != "kl"}

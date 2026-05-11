@@ -32,20 +32,15 @@ def test_encode_for_probe_matches_transition_term() -> None:
             "k_idx": torch.zeros((bs, sk), dtype=torch.long),
             "eps": torch.zeros((bs, d, sk), dtype=probe_batch.zs.dtype),
         }
-        trans = model.transition.transition_kl(**probe_batch.as_kwargs(), mc_override=mc_override)
-        _, _, _, metrics, _ = model(
-            batch["observed_data"],
-            batch["observation_mask"],
-            batch["timepoints"],
-            covariates=batch.get("covariates", None),
-            static_covariates=batch.get("static_covariates", None),
-            train=False,
-            compute_recon=False,
-            compute_trans=True,
-            probe_batch=probe_batch,
-            transition_mc_override=mc_override,
+        # probe path (what the variance runner does)
+        trans_probe = model.transition.transition_kl(
+            **probe_batch.as_kwargs(), mc_override=mc_override
         )
-    assert torch.allclose(trans["kl"], metrics["loss/rate/trans/kl"], atol=1e-5, rtol=1e-5)
+        # internal model path (what forward calls)
+        trans_internal = model._compute_transition_kl(
+            **probe_batch.as_kwargs(), mc_override=mc_override
+        )
+    assert torch.allclose(trans_probe["kl"], trans_internal["kl"], atol=1e-5, rtol=1e-5)
 
 
 def test_variance_runner_smoke(tmp_path: Path) -> None:
