@@ -18,7 +18,7 @@ states. An ELBO objective jointly trains:
 
 ```
 src/ddssm/
-  config.py          # Pydantic config models (DDSSMConfig, …)
+  conf/              # hydra-zen ConfigStore: Confs, config groups, presets
   dssd.py            # Core model: DDSSM_base (ELBO forward pass)
   experiment.py      # Experiment composition root (data + model + trainer)
   train.py           # DDSSMTrainer (fit / checkpoint helpers)
@@ -47,21 +47,9 @@ Requires Python 3.13 and PyTorch ≥ 2.9.
 
 ## Running experiments
 
-There are two complementary entry points:
-
-1. **`python -m ddssm.app`** — the Hydra-native, composable entry point (use
-   for new experiments and Optuna sweeps; described below).
-2. **`scripts/experiments/...`** — legacy YAML-driven scripts (still used for
-   workflows that need the multi-stage Pydantic ``stages`` orchestrator).
-
-Legacy YAML invocation example:
-
-```bash
-python scripts/experiments/kdd/kdd_train.py \
-    --data_path data/kdd.pt \
-    --config configs/base.yaml \
-    --set hyperparams.batch_size=32
-```
+`python -m ddssm.app` is the single Hydra-native entry point. All experiment
+configuration is composed from the hydra-zen `ConfigStore` registered in
+`src/ddssm/conf/`; there is no separate Pydantic config layer.
 
 ### Hydra experiment presets
 
@@ -74,8 +62,8 @@ with `experiment=NAME`:
 | ------------------------------- | ---------- | ---------- | -------------------------------------------------- |
 | `synthetic_gauss`               | synthetic  | gaussian   | LGSSM, runs end-to-end via `ddssm.app`             |
 | `synthetic_diffusion`           | synthetic  | diffusion  | LGSSM, runs end-to-end via `ddssm.app`             |
-| `kdd_gauss`                     | kdd        | gaussian   | Model recipe; pair with `kdd_train.py` for data    |
-| `kdd_diffusion`                 | kdd        | diffusion  | Model recipe; pair with `kdd_train.py` for data    |
+| `kdd_gauss`                     | kdd        | gaussian   | KDD Cup 2018 air-quality, gaussian transition      |
+| `kdd_diffusion`                 | kdd        | diffusion  | KDD Cup 2018 air-quality, diffusion transition     |
 
 ```bash
 # Single end-to-end run on synthetic data
@@ -84,6 +72,33 @@ python -m ddssm.app experiment=synthetic_gauss
 # Override anything the experiment sets
 python -m ddssm.app experiment=synthetic_diffusion \
     experiment.training.steps=2000 experiment.hyperparams.batch_size=64
+```
+
+### Architecture config groups
+
+Top-level config groups select pluggable sub-architectures and propagate
+into encoder, decoder, init-prior and transition wherever they appear. They
+can be set per-preset or overridden on the CLI:
+
+| Group           | Choices                                  | Effect |
+| --------------- | ---------------------------------------- | ------ |
+| `transition`    | `gaussian`, `diffusion`, `diffusion_v2`  | Transition prior `p_ψ(z_t \| z_{t-j:t-1})`. |
+| `encoder`       | `gaussian`                               | Variational encoder `q_ϕ`. |
+| `decoder`       | `gaussian`                               | Observation decoder `p_θ`. |
+| `z_init`        | `gaussian`                               | Initial-state prior `p_η(z_{1:j})`. |
+| `context`       | `csdi` (default), `mlp`                  | Context producer used by encoder/decoder/z_init/Gaussian-transition. `csdi` uses the residual stack with selectable mixers; `mlp` is a feed-forward ablation. |
+| `unet`          | `csdi` (default), `mlp`                  | Denoiser used by `diffusion` / `diffusion_v2` transitions. `csdi` uses the residual stack with selectable mixers; `mlp` is a feed-forward ablation. |
+| `time_mixer`    | `conv` (default), `gru`, `identity`      | Per-channel mixer over the time axis inside CSDI residual blocks. |
+| `feature_mixer` | `transformer` (default), `conv`, `identity` | Per-channel mixer over the feature axis inside CSDI residual blocks. |
+
+```bash
+# Swap the CSDI context producer & U-Net for their MLP ablations
+python -m ddssm.app experiment=harmonic transition=diffusion \
+    context=mlp unet=mlp
+
+# Try a GRU time mixer with an identity feature mixer everywhere
+python -m ddssm.app experiment=harmonic transition=diffusion \
+    time_mixer=gru feature_mixer=identity
 ```
 
 #### Variance probe workflow (train, then probe)
