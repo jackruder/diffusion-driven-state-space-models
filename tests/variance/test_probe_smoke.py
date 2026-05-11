@@ -9,7 +9,7 @@ from hydra_zen import instantiate
 import ddssm.conf  # noqa: F401
 from ddssm.variance.runner import ProbeCell, ProbePlotSpec, ProbeSpec, variance
 
-CONF_DIR = (Path(__file__).resolve().parents[2] / "conf").as_posix()
+CONF_DIR = (Path(__file__).resolve().parents[2] / "src" / "ddssm" / "conf").as_posix()
 
 
 def _make_experiment(name: str):
