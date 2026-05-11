@@ -23,7 +23,7 @@ from __future__ import annotations
 # 1. Infrastructure (creates ``store`` and registers transition/model/trainer groups)
 from ._infra import (
     DDSSMTrainerPartial,
-    DecoderDefaultConf,
+    DecoderGaussianConf,
     EncoderGaussianConf,
     InitPriorGaussianConf,
     KDDDataModuleConf,
@@ -94,7 +94,7 @@ __all__ = [
     "TransitionDiffusionConf",
     # Encoder / Decoder / InitPrior groups
     "EncoderGaussianConf",
-    "DecoderDefaultConf",
+    "DecoderGaussianConf",
     "InitPriorGaussianConf",
     # Data modules
     "NullDataModuleConf",

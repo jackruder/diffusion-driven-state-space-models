@@ -54,8 +54,8 @@ class BaseDecoder(nn.Module, metaclass=abc.ABCMeta):
         ...
 
 
-class Decoder(BaseDecoder):
-    """Decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history.
+class GaussianDecoder(BaseDecoder):
+    """Gaussian decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history.
 
     - Treats z_{t-j+1:t} as a short sequence of length j.
     - Runs ContextProducer along this history axis.
@@ -362,11 +362,11 @@ class Decoder(BaseDecoder):
 
 
 # ---------------------------------------------------------------------------
-# Hydra-zen config for Decoder
+# Hydra-zen config for GaussianDecoder
 # ---------------------------------------------------------------------------
 
-DecoderConf = builds(
-    Decoder,
+GaussianDecoderConf = builds(
+    GaussianDecoder,
     context=ContextProducerConf(),
     gaussian_head=GaussianHeadConf(),
     populate_full_signature=True,

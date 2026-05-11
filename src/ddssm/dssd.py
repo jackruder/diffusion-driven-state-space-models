@@ -10,7 +10,7 @@ import torch.nn as nn
 from hydra_zen import builds
 from omegaconf import MISSING
 
-from .decoder import Decoder, DecoderConf
+from .decoder import BaseDecoder, GaussianDecoder, GaussianDecoderConf
 from .encoder import (
     BaseEncoder,
     BaseInitPrior,
@@ -61,7 +61,7 @@ class DDSSM_base(nn.Module):
     def __init__(
         self,
         encoder: BaseEncoder,
-        decoder: Decoder,
+        decoder: BaseDecoder,
         z_init: BaseInitPrior,
         transition: nn.Module,
         j: int,

@@ -75,7 +75,7 @@ def test_default_experiment_is_synthetic_gauss() -> None:
     assert cfg.experiment.data._target_.endswith("SyntheticDataModule")
     assert cfg.experiment.model.transition._target_.endswith("GaussianTransition")
     assert cfg.experiment.model.encoder._target_.endswith("GaussianEncoder")
-    assert cfg.experiment.model.decoder._target_.endswith("Decoder")
+    assert cfg.experiment.model.decoder._target_.endswith("GaussianDecoder")
     assert cfg.experiment.model.z_init._target_.endswith("GaussianInitPrior")
 
 
@@ -90,7 +90,7 @@ def test_default_experiment_is_synthetic_gauss() -> None:
 
 MODULE_GROUP_OVERRIDES = [
     "encoder=gaussian",
-    "decoder=default",
+    "decoder=gaussian",
     "z_init=gaussian",
 ]
 
@@ -103,7 +103,7 @@ def test_module_group_overrides_compose(name: str) -> None:
             overrides=[f"experiment={name}"] + MODULE_GROUP_OVERRIDES,
         )
     assert cfg.experiment.model.encoder._target_.endswith("GaussianEncoder")
-    assert cfg.experiment.model.decoder._target_.endswith("Decoder")
+    assert cfg.experiment.model.decoder._target_.endswith("GaussianDecoder")
     assert cfg.experiment.model.z_init._target_.endswith("GaussianInitPrior")
 
 

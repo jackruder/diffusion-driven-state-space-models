@@ -23,7 +23,7 @@ from ..data.datamodule import (
     NullDataModule,
     SyntheticDataModule,
 )
-from ..decoder import Decoder, DecoderConf
+from ..decoder import GaussianDecoder, GaussianDecoderConf
 from ..diffnets import ContextProducerConf, CSDIUnetConf
 from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
 from ..encoder import (
@@ -114,9 +114,9 @@ EncoderGaussianConf = builds(
     use_mask="${experiment.use_observation_mask}",
 )
 
-DecoderDefaultConf = builds(
-    Decoder,
-    builds_bases=(DecoderConf,),
+DecoderGaussianConf = builds(
+    GaussianDecoder,
+    builds_bases=(GaussianDecoderConf,),
     populate_full_signature=True,
     latent_dim="${experiment.latent_dim}",
     data_dim="${experiment.data_dim}",
@@ -139,7 +139,7 @@ store(TransitionGaussianConf, group="transition", name="gaussian")
 store(TransitionDiffusionConf, group="transition", name="diffusion")
 store(TransitionDiffusionV2Conf, group="transition", name="diffusion_v2")
 store(EncoderGaussianConf, group="encoder", name="gaussian")
-store(DecoderDefaultConf, group="decoder", name="default")
+store(DecoderGaussianConf, group="decoder", name="gaussian")
 store(InitPriorGaussianConf, group="z_init", name="gaussian")
 store(DDSSMHyperParamsConf, group="hyperparams", name="default")
 store(DDSSMConf, group="model", name="default")
@@ -224,7 +224,7 @@ def _experiment_conf(
     ``transition_conf``, ``encoder_conf``, ``decoder_conf`` and
     ``z_init_conf`` are all optional.  When omitted the experiment uses
     the top-level config-group selection (defaults: ``transition=gaussian``,
-    ``encoder=gaussian``, ``decoder=default``, ``z_init=gaussian``), so
+    ``encoder=gaussian``, ``decoder=gaussian``, ``z_init=gaussian``), so
     callers can switch e.g. ``experiment=harmonic transition=diffusion
     encoder=gaussian`` from the CLI without touching Python.  Pass an
     explicit conf only when the preset must lock in a specific
