@@ -6,7 +6,7 @@ from hydra_zen import instantiate
 from ddssm.dssd import DDSSM_base
 from ddssm.train import DDSSMTrainer
 from ddssm.encoder import GaussianEncoder, GaussianInitPrior
-from ddssm.decoder import Decoder
+from ddssm.decoder import GaussianDecoder
 from ddssm.transitions.transitions import GaussianTransition
 from ddssm.conf import DDSSMTrainerConf
 from ddssm.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
@@ -40,7 +40,7 @@ def make_small_model():
         use_mask=True, hidden_dim=CHANNELS,
         context=_CTX, gaussian_head=_GH, fut_summary=_FS,
     )
-    dec = Decoder(
+    dec = GaussianDecoder(
         latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
         context=_CTX, gaussian_head=_GH,

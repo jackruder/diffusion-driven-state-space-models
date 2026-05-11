@@ -4,7 +4,7 @@ import torch
 import pytest
 from ddssm.net_utils import get_side_info, time_embedding
 from ddssm.encoder import GaussianEncoder, GaussianInitPrior
-from ddssm.decoder import Decoder
+from ddssm.decoder import GaussianDecoder
 from ddssm.transitions.transitions import GaussianTransition
 from ddssm.transitions.diffusion import DiffusionTransition
 from ddssm.transitions.diffusion_v2 import (
@@ -58,7 +58,7 @@ def make_encoder():
 
 
 def make_decoder():
-    return Decoder(
+    return GaussianDecoder(
         latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
         context=_CTX, gaussian_head=_GH,

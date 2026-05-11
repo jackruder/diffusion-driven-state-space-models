@@ -9,5 +9,8 @@
 defaults:
   - experiment: synthetic_gauss
   - transition: gaussian
+  - encoder: gaussian
+  - decoder: gaussian
+  - z_init: gaussian
   - wandb: disabled
   - _self_

@@ -23,6 +23,12 @@ from __future__ import annotations
 # 1. Infrastructure (creates ``store`` and registers transition/model/trainer groups)
 from ._infra import (
     DDSSMTrainerPartial,
+    DecoderGaussianConf,
+    DecoderGaussianMLPConf,
+    EncoderGaussianConf,
+    EncoderGaussianMLPConf,
+    InitPriorGaussianConf,
+    InitPriorGaussianMLPConf,
     KDDDataModuleConf,
     LambdaRampConf,
     NullDataModuleConf,
@@ -39,7 +45,11 @@ from ._infra import (
     TrainableTransOnlyConf,
     TrainingScalarsConf,
     TransitionDiffusionConf,
+    TransitionDiffusionMLPConf,
+    TransitionDiffusionV2Conf,
+    TransitionDiffusionV2MLPConf,
     TransitionGaussianConf,
+    TransitionGaussianMLPConf,
     _experiment_conf,
     load_yaml_config,
     store,
@@ -88,7 +98,18 @@ __all__ = [
     "REWOConf",
     # Transitions
     "TransitionGaussianConf",
+    "TransitionGaussianMLPConf",
     "TransitionDiffusionConf",
+    "TransitionDiffusionMLPConf",
+    "TransitionDiffusionV2Conf",
+    "TransitionDiffusionV2MLPConf",
+    # Encoder / Decoder / InitPrior groups
+    "EncoderGaussianConf",
+    "EncoderGaussianMLPConf",
+    "DecoderGaussianConf",
+    "DecoderGaussianMLPConf",
+    "InitPriorGaussianConf",
+    "InitPriorGaussianMLPConf",
     # Data modules
     "NullDataModuleConf",
     "SyntheticDataModuleConf",

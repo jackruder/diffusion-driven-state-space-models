@@ -10,7 +10,7 @@ import torch.nn as nn
 from hydra_zen import builds
 from omegaconf import MISSING
 
-from .decoder import Decoder, DecoderConf
+from .decoder import BaseDecoder, GaussianDecoder, GaussianDecoderConf
 from .encoder import (
     BaseEncoder,
     BaseInitPrior,
@@ -61,7 +61,7 @@ class DDSSM_base(nn.Module):
     def __init__(
         self,
         encoder: BaseEncoder,
-        decoder: Decoder,
+        decoder: BaseDecoder,
         z_init: BaseInitPrior,
         transition: nn.Module,
         j: int,
@@ -803,28 +803,12 @@ DDSSMConf = builds(
     covariate_dim="${experiment.covariate_dim}",
     use_observation_mask="${experiment.use_observation_mask}",
     checkpoint_dir="${experiment.checkpoint_dir}",
-    # Transition group is selected per-experiment via the ``transition`` group.
+    # Module slots are selected per-experiment via their own config groups
+    # (``encoder``, ``decoder``, ``z_init``, ``transition``).  The active
+    # experiment subtree forwards whichever option was selected.
     transition="${experiment.transition}",
-    encoder=GaussianEncoderConf(
-        data_dim="${experiment.data_dim}",
-        latent_dim="${experiment.latent_dim}",
-        j="${experiment.j}",
-        emb_time_dim="${experiment.emb_time_dim}",
-        covariate_dim="${experiment.covariate_dim}",
-        use_mask="${experiment.use_observation_mask}",
-    ),
-    decoder=DecoderConf(
-        latent_dim="${experiment.latent_dim}",
-        data_dim="${experiment.data_dim}",
-        j="${experiment.j}",
-        emb_time_dim="${experiment.emb_time_dim}",
-        covariate_dim="${experiment.covariate_dim}",
-    ),
-    z_init=GaussianInitPriorConf(
-        latent_dim="${experiment.latent_dim}",
-        j="${experiment.j}",
-        emb_time_dim="${experiment.emb_time_dim}",
-        covariate_dim="${experiment.covariate_dim}",
-    ),
+    encoder="${experiment.encoder}",
+    decoder="${experiment.decoder}",
+    z_init="${experiment.z_init}",
     hyperparams="${experiment.hyperparams}",
 )

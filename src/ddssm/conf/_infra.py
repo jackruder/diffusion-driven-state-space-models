@@ -23,8 +23,20 @@ from ..data.datamodule import (
     NullDataModule,
     SyntheticDataModule,
 )
-from ..diffnets import ContextProducerConf, CSDIUnetConf
+from ..decoder import GaussianDecoder, GaussianDecoderConf
+from ..diffnets import (
+    ContextProducerConf,
+    CSDIUnetConf,
+    MLPContextProducerConf,
+    MLPCSDIUnetConf,
+)
 from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
+from ..encoder import (
+    GaussianEncoder,
+    GaussianEncoderConf,
+    GaussianInitPrior,
+    GaussianInitPriorConf,
+)
 from ..eval.runner import EvalSpec
 from ..experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
 from ..viz.runner import PlotSpec, VizSpec
@@ -56,6 +68,17 @@ TransitionGaussianConf = builds(
     gaussian_head=GaussianHeadConf(),
 )
 
+TransitionGaussianMLPConf = builds(
+    GaussianTransition,
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    context=MLPContextProducerConf(),
+    gaussian_head=GaussianHeadConf(),
+)
+
 TransitionDiffusionConf = builds(
     DiffusionTransition,
     populate_full_signature=True,
@@ -64,6 +87,17 @@ TransitionDiffusionConf = builds(
     emb_time_dim="${experiment.emb_time_dim}",
     covariate_dim="${experiment.covariate_dim}",
     unet=CSDIUnetConf(),
+    schedule=DiffusionScheduleConfig(),
+)
+
+TransitionDiffusionMLPConf = builds(
+    DiffusionTransition,
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    unet=MLPCSDIUnetConf(),
     schedule=DiffusionScheduleConfig(),
 )
 
@@ -78,6 +112,17 @@ TransitionDiffusionV2Conf = builds(
     schedule=DiffusionV2ScheduleConfig(),
 )
 
+TransitionDiffusionV2MLPConf = builds(
+    DiffusionV2Transition,
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    unet=MLPCSDIUnetConf(),
+    schedule=DiffusionV2ScheduleConfig(),
+)
+
 
 # ---------------------------------------------------------------------------
 # ZenStore (shared singleton — all experiment modules append to this store).
@@ -85,9 +130,98 @@ TransitionDiffusionV2Conf = builds(
 
 store = ZenStore(name="ddssm")
 
+# ---------------------------------------------------------------------------
+# Encoder / Decoder / InitPrior group Confs.
+#
+# These mirror the ``transition`` group: each module is registered as a
+# named choice inside its own config group, with shape kwargs interpolating
+# from the active ``experiment.*`` subtree.  ``DDSSMConf`` then refers to
+# whichever option the user selected via ``${experiment.encoder}``,
+# ``${experiment.decoder}``, ``${experiment.z_init}``.
+# ---------------------------------------------------------------------------
+
+EncoderGaussianConf = builds(
+    GaussianEncoder,
+    builds_bases=(GaussianEncoderConf,),
+    populate_full_signature=True,
+    data_dim="${experiment.data_dim}",
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    use_mask="${experiment.use_observation_mask}",
+)
+
+EncoderGaussianMLPConf = builds(
+    GaussianEncoder,
+    builds_bases=(GaussianEncoderConf,),
+    populate_full_signature=True,
+    data_dim="${experiment.data_dim}",
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    use_mask="${experiment.use_observation_mask}",
+    context=MLPContextProducerConf(),
+)
+
+DecoderGaussianConf = builds(
+    GaussianDecoder,
+    builds_bases=(GaussianDecoderConf,),
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    data_dim="${experiment.data_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+)
+
+DecoderGaussianMLPConf = builds(
+    GaussianDecoder,
+    builds_bases=(GaussianDecoderConf,),
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    data_dim="${experiment.data_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    context=MLPContextProducerConf(),
+)
+
+InitPriorGaussianConf = builds(
+    GaussianInitPrior,
+    builds_bases=(GaussianInitPriorConf,),
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+)
+
+InitPriorGaussianMLPConf = builds(
+    GaussianInitPrior,
+    builds_bases=(GaussianInitPriorConf,),
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    context=MLPContextProducerConf(),
+    aux_context=MLPContextProducerConf(),
+)
+
 store(TransitionGaussianConf, group="transition", name="gaussian")
+store(TransitionGaussianMLPConf, group="transition", name="gaussian_mlp")
 store(TransitionDiffusionConf, group="transition", name="diffusion")
+store(TransitionDiffusionMLPConf, group="transition", name="diffusion_mlp")
 store(TransitionDiffusionV2Conf, group="transition", name="diffusion_v2")
+store(TransitionDiffusionV2MLPConf, group="transition", name="diffusion_v2_mlp")
+store(EncoderGaussianConf, group="encoder", name="gaussian")
+store(EncoderGaussianMLPConf, group="encoder", name="gaussian_mlp")
+store(DecoderGaussianConf, group="decoder", name="gaussian")
+store(DecoderGaussianMLPConf, group="decoder", name="gaussian_mlp")
+store(InitPriorGaussianConf, group="z_init", name="gaussian")
+store(InitPriorGaussianMLPConf, group="z_init", name="gaussian_mlp")
 store(DDSSMHyperParamsConf, group="hyperparams", name="default")
 store(DDSSMConf, group="model", name="default")
 store(DDSSMTrainerConf, group="trainer", name="default")
@@ -159,21 +293,28 @@ def _experiment_conf(
     checkpoint_dir: str = "./checkpoints",
     seed: int = 0,
     transition_conf=None,
+    encoder_conf=None,
+    decoder_conf=None,
+    z_init_conf=None,
 ):
     """Compose an Experiment config from its parts.
 
     Centralizes the wiring so each preset is a one-liner pointing at
     the right Confs.
 
-    ``transition_conf`` is optional.  When omitted the experiment uses
-    the top-level ``transition`` config-group selection (default:
-    ``transition=gaussian``), so callers in ``verifications.org`` can
-    switch ``experiment=harmonic transition=diffusion`` without touching
-    Python.  Pass an explicit conf only when the preset must lock in a
-    specific transition (e.g. KDD presets that also differ in batch
-    size and step count).
+    ``transition_conf``, ``encoder_conf``, ``decoder_conf`` and
+    ``z_init_conf`` are all optional.  When omitted the experiment uses
+    the top-level config-group selection (defaults: ``transition=gaussian``,
+    ``encoder=gaussian``, ``decoder=gaussian``, ``z_init=gaussian``), so
+    callers can switch e.g. ``experiment=harmonic transition=diffusion
+    encoder=gaussian`` from the CLI without touching Python.  Pass an
+    explicit conf only when the preset must lock in a specific
+    implementation.
     """
     resolved_transition = transition_conf if transition_conf is not None else "${transition}"
+    resolved_encoder = encoder_conf if encoder_conf is not None else "${encoder}"
+    resolved_decoder = decoder_conf if decoder_conf is not None else "${decoder}"
+    resolved_z_init = z_init_conf if z_init_conf is not None else "${z_init}"
     return builds(
         Experiment,
         populate_full_signature=True,
@@ -193,6 +334,9 @@ def _experiment_conf(
         use_observation_mask=use_observation_mask,
         checkpoint_dir=checkpoint_dir,
         transition=resolved_transition,
+        encoder=resolved_encoder,
+        decoder=resolved_decoder,
+        z_init=resolved_z_init,
         hyperparams=hyperparams_conf,
     )
 
