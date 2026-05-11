@@ -65,9 +65,10 @@ python scripts/experiments/kdd/kdd_train.py \
 
 ### Hydra experiment presets
 
-Reusable experiment presets live in `conf/experiment/`. Each preset selects
-a transition (`gaussian`/`diffusion`), a dataset, root-level dimensions,
-hyperparameters, and training scalars. Activate one with `experiment=NAME`:
+Reusable experiment presets are registered in `src/ddssm/conf/experiments/`.
+Each preset selects a transition (`gaussian`/`diffusion`), a dataset,
+root-level dimensions, hyperparameters, and training scalars. Activate one
+with `experiment=NAME`:
 
 | Preset                          | Dataset    | Transition | Notes                                              |
 | ------------------------------- | ---------- | ---------- | -------------------------------------------------- |
@@ -97,8 +98,8 @@ Hydra-based sweeps use Optuna through the `hydra-optuna-sweeper` plugin pinned
 in `pyproject.toml`. This intentionally tracks the requested `dahlem/hydra`
 fork branch until an equivalent tagged or official release is available.
 The repo provides a reusable sweeper preset at
-`conf/hydra/sweeper/ddssm_optuna.yaml` plus pre-defined search-space presets
-in `conf/sweep/`:
+`src/ddssm/conf/hydra/sweeper/ddssm_optuna.yaml` plus pre-defined
+search-space presets in `src/ddssm/conf/sweep/`:
 
 | Sweep preset      | Pairs with               | Search space                                        |
 | ----------------- | ------------------------ | --------------------------------------------------- |
@@ -138,10 +139,10 @@ python -m ddssm.app --multirun \
 Relative SQLite storage URLs are resolved from Hydra's runtime working
 directory. Use an absolute `sqlite:///...` path for shared studies or CI.
 
-The checked-in `conf/` tree is intentionally a small library of reusable
-Hydra defaults; large or experiment-specific search spaces should live
-either as additional `conf/sweep/*` presets or as external assets / CLI
-overrides.
+The checked-in `src/ddssm/conf/` tree is intentionally a small library of
+reusable Hydra defaults; large or experiment-specific search spaces should
+live either as additional `src/ddssm/conf/sweep/*` presets or as external
+assets / CLI overrides.
 
 ## Logging
 
@@ -175,7 +176,7 @@ logger silently no-ops and training continues with TensorBoard + CSV.
 ## SLURM
 
 A ready-to-use submitit launcher config lives at
-``conf/hydra/launcher/submitit_slurm.yaml``. Combine it with any experiment
+``src/ddssm/conf/hydra/launcher/submitit_slurm.yaml``. Combine it with any experiment
 preset and (optionally) a sweep preset to launch a multirun on a Slurm
 cluster:
 
