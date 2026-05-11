@@ -182,6 +182,7 @@ class BaseTransition(nn.Module):
         time_chunk_num: Optional[int] = None,  #
         time_chunk_size: Optional[int] = None,
         covariates: Optional[torch.Tensor] = None,
+        mc_override: Optional[Dict[str, Any]] = None,
     ) -> torch.Tensor:
         """Compute ``sum_{t=j}^{T-1} E_q[ log p_psi(z_t | z_{t-j:t-1}) ]``
         (or a bound thereof) over chunks to bound peak memory.
@@ -223,7 +224,7 @@ class BaseTransition(nn.Module):
             time_chunk_size=time_chunk_size,
             covariates=covariates,
         ):
-            log_p_flat = self.log_prob(z=z_target_flat, z_hist=z_hist_flat, ctx=ctx)
+            log_p_flat = self.log_prob(z=z_target_flat, z_hist=z_hist_flat, ctx=ctx, mc_override=mc_override)
             log_p = log_p_flat.view(B_, S_, current_chunk_len)
 
             # Sum over time in chunk, Mean over S
@@ -256,6 +257,7 @@ class BaseTransition(nn.Module):
         z: torch.Tensor,
         z_hist: torch.Tensor,
         ctx: Optional[Dict[str, Any]] = None,
+        mc_override: Optional[Dict[str, Any]] = None,
     ) -> torch.Tensor:
         """Log p(z | z_hist, ctx).
 
@@ -547,6 +549,7 @@ class GaussianTransition(BaseTransition):
         z: torch.Tensor,
         z_hist: torch.Tensor,
         ctx: Optional[Dict[str, Any]] = None,
+        mc_override: Optional[Dict[str, Any]] = None,
     ) -> torch.Tensor:
         """Log p(z | z_hist, ctx) summed over latent dims.
 

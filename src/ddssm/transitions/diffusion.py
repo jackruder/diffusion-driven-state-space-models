@@ -156,6 +156,7 @@ class DiffusionTransition(BaseTransition):
         z: torch.Tensor,
         z_hist: torch.Tensor,
         ctx: Optional[Dict[str, Any]] = None,
+        mc_override: Optional[Dict[str, Any]] = None,
     ) -> torch.Tensor:
         """Compute negative EDM loss for the batch.
 
@@ -216,17 +217,31 @@ class DiffusionTransition(BaseTransition):
 
         total_sqerr = torch.zeros(N, device=device, dtype=dtype)
 
+        # Pre-extract override tensors (validated once, sliced per chunk)
+        override_k_idx = mc_override.get("k_idx") if mc_override is not None else None
+        override_eps = mc_override.get("eps") if mc_override is not None else None
+
         # Iterate over S_k in chunks
         remaining_k = int(self.S_k)
+        k_cursor = 0
         while remaining_k > 0:
             kc = min(k_chunk, remaining_k)
             remaining_k -= kc
 
-            # Sample k indices and noise
-            k_idx = torch.multinomial(self.p_k, N * kc, replacement=True).view(
-                N, kc
-            )  # (N, kc)
-            eps = torch.randn(N, d, kc, device=device, dtype=dtype)
+            # Sample k indices and noise (or use deterministic override)
+            if override_k_idx is not None:
+                k_idx = override_k_idx[:, k_cursor: k_cursor + kc].to(device=device)
+                if k_idx.dtype != torch.long:
+                    k_idx = k_idx.long()
+            else:
+                k_idx = torch.multinomial(self.p_k, N * kc, replacement=True).view(
+                    N, kc
+                )  # (N, kc)
+            if override_eps is not None:
+                eps = override_eps[:, :, k_cursor: k_cursor + kc].to(device=device, dtype=dtype)
+            else:
+                eps = torch.randn(N, d, kc, device=device, dtype=dtype)
+            k_cursor += kc
 
             # EDM preconditioning
             _, z_in, y_target = self._edm_precondition(z, k_idx, eps)  # (N, d, kc) each
@@ -287,6 +302,7 @@ class DiffusionTransition(BaseTransition):
         logq_paths: torch.Tensor,  # (B, S, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
         covariates: Optional[torch.Tensor] = None,
+        mc_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, torch.Tensor]:
         """Diffusion transition KL = EDM regression loss minus encoder entropy.
 
@@ -299,7 +315,7 @@ class DiffusionTransition(BaseTransition):
         j = self.j
 
         L_p = -self.seq_log_prob(
-            zs=zs, time_embed=time_embed, covariates=covariates
+            zs=zs, time_embed=time_embed, covariates=covariates, mc_override=mc_override
         ).mean()
 
         if "logvars" in enc_stats and enc_stats["logvars"] is not None:
