@@ -31,14 +31,12 @@ def register_probe_plot(name: str) -> Callable[[ProbePlotFn], ProbePlotFn]:
     return _wrap
 
 
-def _plot_var_per_tau(ctx: ProbePlotContext, save_path: str, value_key: str) -> None:
+def _plot_var_per_k(ctx: ProbePlotContext, save_path: str) -> None:
     var = ctx.metrics.get("var_per_tau", {})
     fig, ax = plt.subplots(figsize=(8, 5))
     for cell, kvals in sorted(var.items()):
         xs = np.array([int(k) for k in kvals.keys()], dtype=np.int64)
         ys = np.array([float(v) for v in kvals.values()], dtype=np.float64)
-        if value_key == "ratio":
-            continue
         ax.plot(xs, ys, label=cell)
     ax.set_xlabel("k index")
     ax.set_ylabel("Variance")
@@ -51,12 +49,12 @@ def _plot_var_per_tau(ctx: ProbePlotContext, save_path: str, value_key: str) -> 
 
 @register_probe_plot("var_grad_vs_tau")
 def plot_var_grad_vs_tau(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
-    _plot_var_per_tau(ctx, save_path, "grad")
+    _plot_var_per_k(ctx, save_path)
 
 
 @register_probe_plot("var_loss_vs_tau")
 def plot_var_loss_vs_tau(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
-    _plot_var_per_tau(ctx, save_path, "loss")
+    _plot_var_per_k(ctx, save_path)
 
 
 @register_probe_plot("ratio_vs_tau")

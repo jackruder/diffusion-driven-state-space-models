@@ -149,6 +149,8 @@ class SyntheticDataset(Dataset):
 
             data = z + 0.2 * torch.randn(self.N_total, self.D, self.T)
         elif self.mode == "bimodal-noisy":
+            # Same latent dynamics as ``bimodal`` but with higher
+            # observation noise to stress variance-sensitive metrics.
             z = torch.zeros(self.N_total, self.D, self.T)
             z[:, :, 0] = torch.randn(self.N_total, self.D)
             for t in range(1, self.T):
@@ -187,6 +189,7 @@ class SyntheticDataset(Dataset):
             sigma_z = 0.1
             sigma_x = 0.1
             hidden_dim = 8
+            data = torch.zeros(self.N_total, self.D, self.T)
 
             z = torch.zeros(self.N_total, 1, self.T)
             z[:, :, 0] = torch.randn(self.N_total, 1)

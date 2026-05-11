@@ -7,6 +7,8 @@ from typing import Any, Callable
 
 import numpy as np
 
+MIN_DIVISOR = 1e-12
+
 
 @dataclass
 class ProbeContext:
@@ -70,8 +72,14 @@ def metric_ratio_esm_dsm(ctx: ProbeContext) -> dict[str, Any]:
     for mode in ("uniform", "lsgm_is"):
         e_key = f"esm:{mode}"
         d_key = f"dsm:{mode}"
-        out["loss"][mode] = float(loss_var.get(e_key, np.nan) / max(loss_var.get(d_key, np.nan), 1e-12))
-        out["grad"][mode] = float(grad_var.get(e_key, np.nan) / max(grad_var.get(d_key, np.nan), 1e-12))
+        d_loss = loss_var.get(d_key, np.nan)
+        d_grad = grad_var.get(d_key, np.nan)
+        out["loss"][mode] = (
+            float(np.nan) if not np.isfinite(d_loss) else float(loss_var.get(e_key, np.nan) / max(d_loss, MIN_DIVISOR))
+        )
+        out["grad"][mode] = (
+            float(np.nan) if not np.isfinite(d_grad) else float(grad_var.get(e_key, np.nan) / max(d_grad, MIN_DIVISOR))
+        )
     return {"ratio_esm_dsm": out}
 
 

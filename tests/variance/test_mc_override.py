@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from functools import partial
+
 import torch
 
 from ddssm.diffnets import CSDIUnet, DiffResidualBlockConfig, FeatureMixerConfig
 from ddssm.transitions.diffusion_v2 import DiffusionV2ScheduleConfig
 from ddssm.transitions.diffusion_v2 import DiffusionV2Transition
-from functools import partial
 
 
 def make_transition(schedule: DiffusionV2ScheduleConfig) -> DiffusionV2Transition:

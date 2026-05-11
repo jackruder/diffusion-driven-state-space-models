@@ -507,6 +507,9 @@ class DiffusionV2Transition(BaseTransition):
                         f"mc_override['k_idx'] must have shape {(N, int(self.S_k))}, "
                         f"got {tuple(override_k_idx.shape)}"
                     )
+                override_k_idx = override_k_idx.to(device=device)
+                if override_k_idx.dtype != torch.long:
+                    override_k_idx = override_k_idx.long()
             if override_eps is not None:
                 if not isinstance(override_eps, torch.Tensor):
                     raise TypeError("mc_override['eps'] must be a torch.Tensor.")
@@ -515,6 +518,7 @@ class DiffusionV2Transition(BaseTransition):
                         f"mc_override['eps'] must have shape {(N, d, int(self.S_k))}, "
                         f"got {tuple(override_eps.shape)}"
                     )
+                override_eps = override_eps.to(device=device, dtype=dtype)
 
         remaining_k = int(self.S_k)
         k_cursor = 0
@@ -523,17 +527,13 @@ class DiffusionV2Transition(BaseTransition):
             remaining_k -= kc
 
             if override_k_idx is not None:
-                k_idx = override_k_idx[:, k_cursor: k_cursor + kc].to(device=device)
-                if k_idx.dtype != torch.long:
-                    k_idx = k_idx.long()
+                k_idx = override_k_idx[:, k_cursor: k_cursor + kc]
             else:
                 k_idx = torch.multinomial(self.p_k, N * kc, replacement=True).view(
                     N, kc
                 )  # (N, kc)
             if override_eps is not None:
-                eps_n = override_eps[:, :, k_cursor: k_cursor + kc].to(
-                    device=device, dtype=dtype
-                )
+                eps_n = override_eps[:, :, k_cursor: k_cursor + kc]
             else:
                 eps_n = torch.randn(N, d, kc, device=device, dtype=dtype)
             k_cursor += kc

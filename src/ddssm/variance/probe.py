@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import math
 import random
 from collections import defaultdict
@@ -30,26 +29,22 @@ def _select_loader(experiment, split: str):
     raise ValueError(f"Unknown variance split: {split!r}")
 
 
-def _retarget_sampling_mode(transition: torch.nn.Module, mode: str) -> torch.nn.Module:
-    clone = copy.deepcopy(transition)
-    if not hasattr(clone, "p_k"):
+def _p_k_for_mode(transition: torch.nn.Module, mode: str) -> torch.Tensor:
+    if not hasattr(transition, "p_k"):
         raise TypeError("Variance probe currently supports transitions with a p_k buffer.")
     if mode == "uniform":
-        p_k = torch.full_like(clone.p_k, 1.0 / float(clone.p_k.numel()))
+        p_k = torch.full_like(transition.p_k, 1.0 / float(transition.p_k.numel()))
     elif mode == "lsgm_is":
-        eps = torch.finfo(clone.beta.dtype).eps
-        proposal = clone.beta / (1.0 - clone.alpha.pow(2)).clamp_min(eps)
-        proposal = proposal.clamp_min(float(getattr(clone, "gfloor", 1e-12)))
-        gamma = float(getattr(clone, "gamma", 1.0))
+        eps = torch.finfo(transition.beta.dtype).eps
+        proposal = transition.beta / (1.0 - transition.alpha.pow(2)).clamp_min(eps)
+        proposal = proposal.clamp_min(float(getattr(transition, "gfloor", 1e-12)))
+        gamma = float(getattr(transition, "gamma", 1.0))
         if gamma != 1.0:
             proposal = proposal.pow(gamma)
         p_k = proposal / proposal.sum().clamp_min(eps)
     else:
         raise ValueError(f"Unsupported k_sampling_mode {mode!r}.")
-    clone.k_sampling_mode = mode
-    clone.p_k = p_k.to(clone.p_k.device, clone.p_k.dtype)
-    clone.schedule.k_sampling_mode = mode
-    return clone
+    return p_k
 
 
 def _freeze_model(model: torch.nn.Module, freeze: list[str]) -> None:
@@ -92,16 +87,11 @@ def run_probe(
         raise TypeError("Model is missing transition module for variance probing.")
 
     modes = sorted({cell.k_sampling_mode for cell in spec.cells})
-    transitions: dict[str, torch.nn.Module] = {}
-    for mode in modes:
-        if mode == getattr(model.transition, "k_sampling_mode", None):
-            transitions[mode] = model.transition
-        else:
-            twin = _retarget_sampling_mode(model.transition, mode)
-            twin.load_state_dict(model.transition.state_dict(), strict=False)
-            twin.diffmodel = model.transition.diffmodel
-            twin.embed_layer = model.transition.embed_layer
-            transitions[mode] = twin.to(device)
+    transitions: dict[str, torch.nn.Module] = {mode: model.transition for mode in modes}
+    p_k_by_mode = {
+        mode: _p_k_for_mode(model.transition, mode).to(device=device, dtype=model.transition.p_k.dtype)
+        for mode in modes
+    }
 
     loader = _select_loader(experiment, spec.split)
     if loader is None:
@@ -128,11 +118,14 @@ def run_probe(
                 shared_k_idx: dict[str, torch.Tensor] = {}
                 for mode, trans in transitions.items():
                     shared_k_idx[mode] = torch.multinomial(
-                        trans.p_k, bs * sk, replacement=True
+                        p_k_by_mode[mode], bs * sk, replacement=True
                     ).view(bs, sk).to(device=device, dtype=torch.long)
 
                 for cell in spec.cells:
                     trans = transitions[cell.k_sampling_mode]
+                    trans.p_k = p_k_by_mode[cell.k_sampling_mode]
+                    trans.k_sampling_mode = cell.k_sampling_mode
+                    trans.schedule.k_sampling_mode = cell.k_sampling_mode
                     trans.zero_grad(set_to_none=True)
                     out = trans.transition_kl(
                         **probe_batch.as_kwargs(),
@@ -168,7 +161,7 @@ def run_probe(
             if spec.force_per_k:
                 k_max = int(getattr(model.transition, "num_steps", 0))
                 for k in range(k_max):
-                    forced_idx = torch.full((bs, sk), int(k), device=device, dtype=torch.long)
+                    forced_idx = torch.full((bs, sk), k, device=device, dtype=torch.long)
                     forced_eps = torch.randn(bs, d, sk, device=device)
                     for cell in spec.cells:
                         trans = transitions[cell.k_sampling_mode]

@@ -13,7 +13,7 @@ import torch
 
 from .metrics import PROBE_METRIC_REGISTRY, ProbeContext
 from .plots import PROBE_PLOT_REGISTRY, ProbePlotContext
-from .probe import run_probe
+from .probe import _select_loader, run_probe
 
 log = logging.getLogger(__name__)
 
@@ -98,13 +98,7 @@ def variance(
     raw_path = os.path.join(run_dir, spec.raw_filename)
     _write_rows(rows, raw_path)
 
-    loader = None
-    if spec.split == "train":
-        loader = experiment.data.train_loader()
-    elif spec.split == "val":
-        loader = experiment.data.val_loader()
-    elif spec.split == "test":
-        loader = experiment.data.test_loader()
+    loader = _select_loader(experiment, spec.split)
 
     ctx = ProbeContext(
         model=experiment.model,
