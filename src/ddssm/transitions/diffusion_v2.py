@@ -27,19 +27,34 @@ Implements the model described in ``model-v2.org``.  Compared to V1
       s_q_tilde   = -(z_tilde - mu_t) / (sigma_t**2 + sigma_tilde**2)
       D_star      = z_tilde + sigma_tilde**2 * s_q_tilde
       F_star      = (D_star - c_skip * z_tilde) / c_out
-      loss        = (1/2) * dtau * w(tau) / p(tau)
+      loss_k      = wtilde(tau_k) / (K * p_k)
                     * || F_psi(c_in*z_tilde, c_noise, z_hist) - F_star ||**2
 
-  where ``dtau = (1 - tau_min) / K`` is the Riemann measure for the
-  uniform tau grid, and the leading ``1/2`` comes from the KL definition
-  ``KL = (1/2) * E_tau E_q[ g**2(tau) * ||s_q - s_p||**2 ]``.  Both
-  factors are baked into ``wtilde`` so that callers obtain a correctly
-  scaled per-step KL in nats (matching the dict contract of the V1
-  transition).
+  where ``wtilde(tau) = (1/2) * dtau * w(tau)`` bakes in the leading
+  ``1/2`` from the KL definition
+  ``KL = (1/2) * E_tau E_q[ g**2(tau) * ||s_q - s_p||**2 ]`` together
+  with the Riemann measure ``dtau = (1 - tau_min) / K`` of the uniform
+  tau grid.  The ``1/K`` factor in ``loss_k`` matches the implicit
+  uniform PMF on the K grid points, so the per-sample estimator is an
+  unbiased Monte Carlo estimate of the uniform-measure expectation
+  ``E_{tau ~ Unif[tau_min, 1]}[w(tau) * ||F - F*||**2]`` for any choice
+  of ``p_k`` (uniform or LSGM IS).
 
   When the encoder does not expose ``mus`` / ``logvars`` we fall back to the
   degenerate case ``mu_t = z_t, sigma_t**2 = 0``, which recovers the standard
   DSM target around the sampled latent.
+
+* **Importance sampling.** When ``k_sampling_mode="lsgm_is"``, the
+  diffusion-time index ``k`` is sampled from the LSGM (Vahdat & Kreis
+  2021) optimal proposal for likelihood-weighted ESM,
+  ``r(tau) ∝ d log sigma_tilde(tau)**2 / dtau = beta(tau) / (1 - alpha(tau)**2)``,
+  discretized on the precomputed ``tau`` grid.  The per-sample loss is
+  reweighted by ``wtilde(tau_k) / (K * p_k)`` so that the Monte Carlo
+  estimator targets ``E_{tau ~ Unif[tau_min, 1]}[w(tau) * ||F - F*||**2]``
+  and remains comparable across ``k_sampling_mode`` choices.  The legacy
+  ``"importance"`` value is retained but disabled (raises
+  :class:`NotImplementedError`); use ``"lsgm_is"`` for principled IS or
+  ``"uniform"`` to disable IS.
 
 * **Log-likelihood / boundary KL.** Not implemented in V2; the relevant
   ``log_likelihood`` / ``forward_kl_loss`` / ``log_prob`` methods raise
@@ -170,20 +185,20 @@ class DiffusionV2Transition(BaseTransition):
         # Per-tau ESM weight w(tau) = beta(tau) * alpha**2 / (1 - alpha**2)
         # (model-v2.org L506-509).  The per-step KL is the *integral*
         #     L_t = (1/2) * E_{tau ~ Unif[tau_min, 1]} E_q[ w(tau) * ||F - F*||**2 ]
-        # so an unbiased single-MC-sample estimator with k ~ p_k requires
-        # the per-grid weight  (1/2) * dtau * w(tau_k) / p_k[k], where
-        # dtau = (1 - tau_min) / K is the Riemann measure that matches the
-        # uniform PMF on K grid points.  We bake (1/2) * dtau into ``wtilde``
-        # so callers get a correctly scaled KL in nats; ``w_per_tau`` is kept
-        # available as a separate buffer for diagnostics / sampling.
+        # We bake the (1/2 * dtau) Riemann measure into ``wtilde`` here, and
+        # the IS correction in ``_esm_chunk_loss`` divides by ``K * p_k`` so
+        # that the per-sample MC estimator is unbiased for the uniform-
+        # measure expectation under any ``p_k`` (uniform or LSGM IS).
+        # ``w_per_tau`` is kept as a separate buffer for diagnostics.
         w_per_tau = beta * alpha2 / one_minus_alpha2
         dtau = (1.0 - tau_min) / float(K)
         wtilde = 0.5 * dtau * w_per_tau
 
-        # Derivative d(sigma_tilde**2)/dtau, kept around for diagnostics
-        # and as a reference for any future importance-sampling schedule
-        # (the previous LSGM-style schedule that used this directly was
-        # incorrect; see the ``k_sampling_mode == "importance"`` branch).
+        # Derivative d(sigma_tilde**2)/dtau, kept around for diagnostics.
+        # Note: the LSGM optimal IS proposal is *not* this quantity; it is
+        # ``d log sigma_tilde**2 / dtau = beta / (1 - alpha**2)``, which is
+        # constructed directly from ``beta`` and ``one_minus_alpha2`` in the
+        # ``"lsgm_is"`` branch below.
         #   sigma_tilde**2 = (1 - alpha**2) / alpha**2 = 1/alpha**2 - 1
         #   d(sigma_tilde**2)/dtau = beta / alpha**2
         dsigma2_tilde_dtau = beta / alpha2.clamp_min(eps64)
@@ -205,21 +220,42 @@ class DiffusionV2Transition(BaseTransition):
         # Sampling probabilities p_k for the tau index.
         #
         # ``"uniform"``     : p_k = 1/K (no IS).
-        # ``"importance"``  : currently unsupported in V2.  The previous
-        #                     LSGM-style derivation (p_k ∝ d(sigma_tilde**2)/dtau)
-        #                     was incorrect, so we raise NotImplementedError
-        #                     until the IS schedule is re-derived.  Use
-        #                     "uniform" for now.
+        # ``"lsgm_is"``     : LSGM (Vahdat & Kreis 2021) optimal proposal for
+        #                     likelihood-weighted ESM under a linear VP-SDE,
+        #                       r(tau) ∝ d log sigma_tilde(tau)**2 / dtau
+        #                              = beta(tau) / (1 - alpha(tau)**2).
+        #                     Discretized on the precomputed ``tau`` grid and
+        #                     normalized to sum to 1.  ``pk_floor`` is applied
+        #                     before normalisation as a numerical guardrail;
+        #                     ``pk_gamma`` (default 1.0) is an optional
+        #                     temperature exponent for ablations
+        #                     (gamma == 0 collapses to uniform after re-norm,
+        #                     gamma == 1 is the principled LSGM proposal).
+        # ``"importance"``  : Legacy heuristic (p_k ∝ d(sigma_tilde**2)/dtau)
+        #                     was incorrectly derived; kept reserved and
+        #                     raises :class:`NotImplementedError`.  Use
+        #                     ``"lsgm_is"`` instead.
         self.gamma = float(schedule.pk_gamma)
         self.gfloor = float(schedule.pk_floor)
         ismode = schedule.k_sampling_mode
-        if ismode == "importance":
+        if ismode == "lsgm_is":
+            # LSGM optimal IS proposal for likelihood weighting:
+            #   r(tau) ∝ d log sigma_tilde(tau)**2 / dtau
+            #          = beta(tau) / (1 - alpha(tau)**2).
+            # Discretized on the existing tau grid, floored for numerical
+            # safety, optionally tempered by ``pk_gamma``, then renormalised.
+            p_k = (beta / one_minus_alpha2).to(torch.float32)
+            p_k = p_k.clamp_min(self.gfloor)
+            if self.gamma != 1.0:
+                p_k = p_k.pow(self.gamma)
+            p_k = p_k / p_k.sum()
+        elif ismode == "importance":
             raise NotImplementedError(
-                "DiffusionV2Transition: importance sampling is currently "
+                "DiffusionV2Transition: legacy 'importance' sampling is "
                 "disabled because the previous LSGM-style schedule "
                 "(p_k ∝ d(sigma_tilde**2)/dtau) was incorrectly derived. "
-                "Use k_sampling_mode='uniform' until a corrected importance "
-                "schedule is implemented."
+                "Use k_sampling_mode='lsgm_is' for the principled LSGM "
+                "proposal, or 'uniform' to disable IS."
             )
         elif ismode == "uniform":
             p_k = torch.full(
@@ -229,7 +265,8 @@ class DiffusionV2Transition(BaseTransition):
             )
         else:
             raise ValueError(
-                f"Unknown k_sampling_mode={ismode!r}; expected 'uniform'"
+                f"Unknown k_sampling_mode={ismode!r}; "
+                "expected 'uniform' or 'lsgm_is'"
             )
         self.register_buffer("p_k", p_k)
         self.k_sampling_mode = ismode
@@ -440,8 +477,15 @@ class DiffusionV2Transition(BaseTransition):
 
             k_flat = k_idx.reshape(N * kc)
             c_noise_flat = self.c_noise[k_flat]  # (N*kc,)
+            # IS-corrected per-sample weight.  ``wtilde`` already bakes in
+            # the (1/2 * dtau) Riemann measure for the uniform tau grid;
+            # the additional 1/K factor matches the implicit uniform PMF
+            # (p_k = 1/K) so that the MC estimator is an unbiased estimate
+            # of E_{tau ~ Unif[tau_min, 1]}[w(tau) * ||F - F*||**2] for
+            # any choice of ``p_k`` (uniform or LSGM IS).
             weights = (
-                self.wtilde[k_flat] / self.p_k[k_flat].clamp_min(1e-12)
+                self.wtilde[k_flat]
+                / (self.num_steps * self.p_k[k_flat].clamp_min(1e-12))
             ).detach()  # (N*kc,)
 
             F_pred = self.diffmodel(latent_w, side_w, c_noise_flat)  # (N*kc, d, 1)
