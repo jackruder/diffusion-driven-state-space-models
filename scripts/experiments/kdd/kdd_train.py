@@ -12,20 +12,19 @@ from the merged YAML configs, and runs multi-stage training via
 """
 
 import os
-import argparse
 from pathlib import Path
-import yaml
+import argparse
 from datetime import datetime
 
+import yaml
 import torch
+from ddssm.ddssm import DDSSM_base
 import torch._dynamo
 import torch._inductor.config as inductor_config
 
-from ddssm.ddssm import DDSSM_base
 from ddssm.train import DDSSMTrainer
-from ddssm.config import DDSSMConfig
-from ddssm.data.dataload import build_loaders_for_expt, parse_batch
-from ddssm.config import load_config_from_files, apply_dot_overrides
+from ddssm.config import DDSSMConfig, apply_dot_overrides, load_config_from_files
+from ddssm.data.dataload import parse_batch, build_loaders_for_expt
 
 
 def _update_latest_symlink(work_dir: str, run_dir: str) -> None:

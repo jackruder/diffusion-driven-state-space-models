@@ -1,25 +1,21 @@
 """Diffusion-based transition model wrapping CSDIUnet for use in DDSSM."""
 
 import math
-from dataclasses import dataclass
+from typing import Any, Dict, Callable, Optional, final
 from functools import partial
-from typing import Any, Callable, Dict, Optional, final
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-
 from hydra_zen import builds
-
-from ..windows import WindowBuilder
 
 from ..diffnets import CSDIUnet, CSDIUnetConf
 from ..gaussians import GaussianStats, gaussian_entropy
-from ..torch_compile import maybe_compile
 from ..net_utils import (
     get_side_info,
 )
 from .transitions import BaseTransition, _mc_entropy_from_logq
-
+from ..torch_compile import maybe_compile
 
 
 @dataclass
@@ -246,8 +242,7 @@ class DiffusionTransition(BaseTransition):
             # Side window: tile over kc
             # side_win: (N, C_side, d, j+1) -> (N*kc, C_side, d, j+1)
             side_w = (
-                side_win
-                .unsqueeze(1)
+                side_win.unsqueeze(1)
                 .expand(N, kc, -1, -1, -1)
                 .reshape(N * kc, self.side_dim, d, self.j + 1)
                 .contiguous()
@@ -305,9 +300,7 @@ class DiffusionTransition(BaseTransition):
         if "logvars" in enc_stats and enc_stats["logvars"] is not None:
             logvars = enc_stats["logvars"]  # (B, S, d, T)
             if j >= T:
-                L_q = torch.zeros(
-                    (), device=logvars.device, dtype=logvars.dtype
-                )
+                L_q = torch.zeros((), device=logvars.device, dtype=logvars.dtype)
             else:
                 lv = logvars[:, :, :, j:]  # (B, S, d, T-j)
                 H_per_bs = gaussian_entropy(lv)  # (B, S)

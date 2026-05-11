@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import logging
 import os
+import logging
 
 import torch
 from torch import nn
@@ -17,7 +17,6 @@ def maybe_compile(module: nn.Module, *, dynamic: bool = False) -> nn.Module:
       - ``1/true/yes``: force-enabled
       - unset/``auto``: enabled on CPU, disabled on CUDA
     """
-
     mode = os.environ.get("DDSSM_TORCH_COMPILE", "auto").strip().lower()
     if mode in {"0", "false", "no"}:
         return module

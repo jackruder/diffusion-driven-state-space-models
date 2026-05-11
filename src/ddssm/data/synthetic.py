@@ -16,15 +16,14 @@ class SyntheticDataset(Dataset):
         seed: int = 42,
         dataset_seed: int = 1234,  # new: controls the data split, not the model seed
     ):
-        """
-        Args:
-            mode: 'iid', 'lgssm', ...
-            split: 'train', 'val', 'test'
-            N_per_split: Number of sequences per split (default 1024)
-            T: Length of each sequence
-            D: Data dimension
-            seed: (legacy, ignored for splitting)
-            dataset_seed: Seed for data generation and split
+        """Args:
+        mode: 'iid', 'lgssm', ...
+        split: 'train', 'val', 'test'
+        N_per_split: Number of sequences per split (default 1024)
+        T: Length of each sequence
+        D: Data dimension
+        seed: (legacy, ignored for splitting)
+        dataset_seed: Seed for data generation and split
         """
         self.mode = mode
         self.split = split

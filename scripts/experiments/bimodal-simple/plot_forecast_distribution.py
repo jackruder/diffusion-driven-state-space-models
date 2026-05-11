@@ -12,16 +12,16 @@ Loads a checkpoint, draws forecast sample paths, and overlays them against the
 analytic bimodal density for visual inspection.
 """
 
-import argparse
 import os
+import argparse
 
-import matplotlib.pyplot as plt
 import torch
-from torch.utils.data import DataLoader
-
 from ddssm.ddssm import DDSSM_base
-from ddssm.data.synthetic import SyntheticDataset
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+
 from ddssm.eval_utils import load_config_from_files
+from ddssm.data.synthetic import SyntheticDataset
 
 
 def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device):

@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
+from typing import Dict, Optional
 from functools import partial
-from typing import Any, Dict, Optional
 
 import numpy as np
-import pytest
 import torch
+import pytest
 
 from ddssm.diffnets import (
     CSDIUnet,
-    DiffResidualBlockConfig,
     FeatureMixerConfig,
+    DiffResidualBlockConfig,
 )
 from ddssm.transitions.diffusion_v2 import (
-    DiffusionV2ScheduleConfig,
     DiffusionV2Transition,
+    DiffusionV2ScheduleConfig,
 )
-
 
 # ---------------------------------------------------------------------------
 # Tiny architectural constants (mirrors ``tests/test_model.py``).

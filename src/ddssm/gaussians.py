@@ -5,9 +5,8 @@ from typing import TypedDict
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
 from hydra_zen import builds
+import torch.nn.functional as F
 
 from .net_utils import softplus_inv
 

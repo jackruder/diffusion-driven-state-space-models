@@ -7,10 +7,7 @@ produce latent distributions q_ϕ(z_t | ·).
 
 import torch
 import torch.nn as nn
-
 from hydra_zen import builds
-
-from .diffnets import TimeLayer, ConvTimeLayer, IdentityLayer  # , MambaTimeLayer
 
 
 class FutureSummary(nn.Module):
@@ -54,6 +51,7 @@ class FutureSummary(nn.Module):
 
     def _forward_mixer(self, x: torch.Tensor) -> torch.Tensor:
         """Process the sequence in the hidden space.
+
         Args:
             x: (B, T, hidden_dim) - already reversed
         Returns:

@@ -3,22 +3,28 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import torch
+import pytest
 
 from ddssm.transitions.diffusion_v2 import DiffusionV2ScheduleConfig
 
-from .conftest import compute_per_sample_loss, make_transition
+from .conftest import make_transition, compute_per_sample_loss
 
 
 def _build_pair(num_steps: int = 16):
     """Build matching uniform / lsgm_is transitions sharing weights."""
     torch.manual_seed(0)
     cfg_uni = DiffusionV2ScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=num_steps, k_sampling_mode="uniform",
+        S_k=1,
+        k_chunk=1,
+        num_steps=num_steps,
+        k_sampling_mode="uniform",
     )
     cfg_is = DiffusionV2ScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=num_steps, k_sampling_mode="lsgm_is",
+        S_k=1,
+        k_chunk=1,
+        num_steps=num_steps,
+        k_sampling_mode="lsgm_is",
     )
     t_uni = make_transition(schedule=cfg_uni)
     t_is = make_transition(schedule=cfg_is)

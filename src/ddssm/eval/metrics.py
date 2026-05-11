@@ -11,16 +11,16 @@ live in ``ddssm.eval_metrics`` and are reused here unchanged.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Dict
-
-import math
 import os
+import math
+from typing import Any, Dict, Callable
+from dataclasses import dataclass
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ..eval_metrics import crps_sum_metrics, mae_metrics
+from ..eval_metrics import mae_metrics, crps_sum_metrics
 
 
 @dataclass
@@ -122,11 +122,11 @@ def eval_energy_score(ctx: EvalContext) -> Dict[str, Any]:
     scores = []
     for pred_samples, _, y_future in _iter_forecast_batches(ctx):
         B, S, D, L2 = pred_samples.shape
-        s_flat = pred_samples.reshape(B, S, -1)           # (B, S, D*L2)
-        y_flat = y_future.reshape(B, -1).unsqueeze(1)     # (B, 1, D*L2)
-        term1 = torch.norm(s_flat - y_flat, dim=-1).mean(dim=1)        # (B,)
-        diff = s_flat.unsqueeze(2) - s_flat.unsqueeze(1)               # (B,S,S,D*L2)
-        term2 = torch.norm(diff, dim=-1).mean(dim=(1, 2))              # (B,)
+        s_flat = pred_samples.reshape(B, S, -1)  # (B, S, D*L2)
+        y_flat = y_future.reshape(B, -1).unsqueeze(1)  # (B, 1, D*L2)
+        term1 = torch.norm(s_flat - y_flat, dim=-1).mean(dim=1)  # (B,)
+        diff = s_flat.unsqueeze(2) - s_flat.unsqueeze(1)  # (B,S,S,D*L2)
+        term2 = torch.norm(diff, dim=-1).mean(dim=(1, 2))  # (B,)
         scores.append(float((term1 - 0.5 * term2).mean().item()))
     if not scores:
         return {"energy_score": float("nan")}
@@ -190,6 +190,7 @@ def eval_recon_mse(ctx: EvalContext) -> Dict[str, Any]:
             zs = stats["zs"][:, 0]  # (B, d, T)
 
             from ..net_utils import time_embedding
+
             te = time_embedding(t, model.emb_time_dim, device=device)
 
             T = x.shape[-1]
@@ -231,8 +232,10 @@ def _normal_pdf(x: np.ndarray, mu: float, sigma: float) -> np.ndarray:
 
 
 def _jsd_discrete(p: np.ndarray, q: np.ndarray) -> float:
-    p = np.clip(p, _JSD_EPS, None); p = p / p.sum()
-    q = np.clip(q, _JSD_EPS, None); q = q / q.sum()
+    p = np.clip(p, _JSD_EPS, None)
+    p = p / p.sum()
+    q = np.clip(q, _JSD_EPS, None)
+    q = q / q.sum()
     m = 0.5 * (p + q)
     return float(0.5 * np.sum(p * np.log(p / m)) + 0.5 * np.sum(q * np.log(q / m)))
 
@@ -243,13 +246,20 @@ def _hist_mass(vals: np.ndarray, edges: np.ndarray) -> np.ndarray:
     return np.ones_like(h) / h.size if h.sum() <= 0 else h / h.sum()
 
 
-def _bimodal_truth_mass(centers: np.ndarray, x_prev: float, *,
-                        a: float, step_size: float, sigma: float,
-                        center_coef: float) -> np.ndarray:
+def _bimodal_truth_mass(
+    centers: np.ndarray,
+    x_prev: float,
+    *,
+    a: float,
+    step_size: float,
+    sigma: float,
+    center_coef: float,
+) -> np.ndarray:
     """Discretised analytic one-step truth, centred at ``-center_coef * x_prev``."""
     shift = (a - center_coef) * x_prev
-    pdf = 0.5 * _normal_pdf(centers, shift - step_size, sigma) \
-        + 0.5 * _normal_pdf(centers, shift + step_size, sigma)
+    pdf = 0.5 * _normal_pdf(centers, shift - step_size, sigma) + 0.5 * _normal_pdf(
+        centers, shift + step_size, sigma
+    )
     pdf = np.clip(pdf, _JSD_EPS, None)
     return pdf / pdf.sum()
 
@@ -332,9 +342,14 @@ def eval_bimodal_jsd(
             for b in range(B):
                 ctr = xhat[b] - center_coef * x_prev[b]
                 p = _hist_mass(ctr, edges)
-                q = _bimodal_truth_mass(centers, float(x_prev[b]),
-                                        a=a, step_size=step_size, sigma=sigma,
-                                        center_coef=center_coef)
+                q = _bimodal_truth_mass(
+                    centers,
+                    float(x_prev[b]),
+                    a=a,
+                    step_size=step_size,
+                    sigma=sigma,
+                    center_coef=center_coef,
+                )
                 jsds.append(_jsd_discrete(p, q))
                 x_prevs.append(float(x_prev[b]))
                 sample_buf.append(xhat[b].astype(np.float32, copy=True))
@@ -394,7 +409,9 @@ def eval_bimodal_jsd(
 
 
 @register_metric("loss_tail")
-def eval_loss_tail(ctx: EvalContext, *, column: str = "loss/total", tail_frac: float = 0.1) -> Dict[str, Any]:
+def eval_loss_tail(
+    ctx: EvalContext, *, column: str = "loss/total", tail_frac: float = 0.1
+) -> Dict[str, Any]:
     """Mean of the final ``tail_frac`` of values in a CSV column."""
     if not ctx.csv_path:
         return {column.replace("/", "_") + "_tail": float("nan")}

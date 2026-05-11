@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 
 def test_gradient_flows_to_score_net(transition, fixed_batch):
@@ -12,7 +12,10 @@ def test_gradient_flows_to_score_net(transition, fixed_batch):
     transition.train()
     transition.zero_grad()
     out = transition.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths, time_embed=time_embed,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
     )
     out["L_p"].backward()
     n_with_grad = 0
@@ -37,11 +40,15 @@ def test_overfit_single_batch(fixed_batch):
     closed-form Gaussian entropy ``L_q`` is constant across optimizer steps
     so monitoring ``L_p = kl + L_q`` masks the kl reduction.
     """
-    from .conftest import make_transition
     from ddssm.transitions.diffusion_v2 import DiffusionV2ScheduleConfig
 
+    from .conftest import make_transition
+
     cfg = DiffusionV2ScheduleConfig(
-        S_k=16, k_chunk=16, num_steps=20, k_sampling_mode="uniform",
+        S_k=16,
+        k_chunk=16,
+        num_steps=20,
+        k_sampling_mode="uniform",
     )
     torch.manual_seed(0)
     transition = make_transition(schedule=cfg)
@@ -55,7 +62,10 @@ def test_overfit_single_batch(fixed_batch):
     for _ in range(n_steps):
         optim.zero_grad()
         out = transition.transition_kl(
-            enc_stats=enc_stats, zs=zs, logq_paths=logq_paths, time_embed=time_embed,
+            enc_stats=enc_stats,
+            zs=zs,
+            logq_paths=logq_paths,
+            time_embed=time_embed,
         )
         loss = out["kl"]
         loss.backward()
@@ -79,7 +89,10 @@ def test_device_consistency(transition, fixed_batch):
     logq_paths = logq_paths.to(device)
     enc_stats_d = {k: v.to(device) for k, v in enc_stats.items()}
     out = transition.transition_kl(
-        enc_stats=enc_stats_d, zs=zs, logq_paths=logq_paths, time_embed=time_embed,
+        enc_stats=enc_stats_d,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
     )
     for v in out.values():
         assert v.device.type == "cuda"

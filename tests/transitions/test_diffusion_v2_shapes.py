@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
-from .conftest import EMB_TIME, J, LATENT_DIM, make_dummy_ctx
+from .conftest import EMB_TIME, LATENT_DIM, J, make_dummy_ctx
 
 
 def test_forward_shapes(transition, fixed_batch):
     """``transition_kl`` returns scalar tensors with the expected keys."""
     zs, enc_stats, time_embed, logq_paths = fixed_batch
     out = transition.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths, time_embed=time_embed,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
     )
     assert set(out.keys()) == {"kl", "L_p", "L_q"}
     for v in out.values():
@@ -36,11 +39,17 @@ def test_fallback_when_no_encoder_stats(transition, fixed_batch):
     zs, _enc_stats, time_embed, logq_paths = fixed_batch
     # None
     out_none = transition.transition_kl(
-        enc_stats=None, zs=zs, logq_paths=logq_paths, time_embed=time_embed,
+        enc_stats=None,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
     )
     # Empty dict
     out_empty = transition.transition_kl(
-        enc_stats={}, zs=zs, logq_paths=logq_paths, time_embed=time_embed,
+        enc_stats={},
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
     )
     for out in (out_none, out_empty):
         assert set(out.keys()) == {"kl", "L_p", "L_q"}
@@ -72,7 +81,10 @@ def test_zero_target_steps(transition):
     logvars = torch.randn(B, S, d, T) * 0.1 - 1.0
     enc_stats = {"mus": mus, "logvars": logvars}
     out = transition.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths, time_embed=time_embed,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
     )
     assert set(out.keys()) == {"kl", "L_p", "L_q"}
     assert torch.equal(out["kl"], torch.zeros_like(out["kl"]))

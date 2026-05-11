@@ -6,9 +6,9 @@ startup.  All sub-configs follow the same complexity-notation convention used by
 length, ``d``/``C`` = channel/latent dimension.
 """
 
+import ast
 from typing import List, Union, Literal, Optional, Annotated, TypeAlias
 
-import ast
 import yaml
 from pydantic import Field, BaseModel, field_validator, model_validator
 
@@ -149,6 +149,7 @@ class ResidualBlockConfig(BaseModel):
         L: layers
         T: Sequence length (time axis)
         d: Feature dimension (spatial/latent axis)
+
     Args:
         channels: Model dimension (C).
         layers: Number of blocks (L).
@@ -218,7 +219,7 @@ class FutureSummaryConfig(BaseModel):
         - Time: O(T * C^2) (time mixer scan)
     """
 
-    summary_dim: int = 64  #  dimension (and output dimension) of the future summary
+    summary_dim: int = 64  # dimension (and output dimension) of the future summary
     num_layers: int = 2
     # Pluggable time mixer (Mamba/Conv/Identity), default to Mamba for BC
     time: TimeConfig = Field(default_factory=MambaTimeConfig)
@@ -293,6 +294,7 @@ class GaussianTransitionConfig(TransitionConfig):
         context: ContextProducer config for processing the latent history window.
         gaussian_head: Parameterisation head config for the Gaussian output.
     """
+
     context: ContextProducerConfig = ContextProducerConfig()
     gaussian_head: GaussianHeadConfig = GaussianHeadConfig()
 
@@ -305,6 +307,7 @@ class DiffusionTransitionConfig(TransitionConfig):
         unet: U-Net architecture config (``UNetConfig``).
         schedule: Diffusion noise schedule config (``DiffusionScheduleConfig``).
     """
+
     unet: UNetConfig
     schedule: DiffusionScheduleConfig
 
@@ -390,6 +393,7 @@ class LambdaRamp(BaseModel):
         delay: Number of flat steps at ``start`` before the ramp begins.
         steps: Ramp duration in steps; if ``None``, uses the stage's total steps.
     """
+
     end: float | None = 1.0
     delay: int = 0  # flat steps at 'start' before ramp begins
     steps: int | None = None  # ramp duration in steps; if None, use stage.steps
@@ -404,6 +408,7 @@ class StageTrainable(BaseModel):
         z_init: Whether to train the initialisation prior.
         transition: Whether to train the transition model.
     """
+
     decoder: bool = True
     z_init: bool = True
     transition: bool = False
@@ -418,6 +423,7 @@ class StageLrs(BaseModel):
         zinit_lr: Initialisation-prior learning rate.
         trans_lr: Transition model learning rate (often 0 during recon-only stages).
     """
+
     dec_lr: float = 5e-4
     zinit_lr: float = 5e-4
     trans_lr: float = 0.0
@@ -431,6 +437,7 @@ class StageScheduler(BaseModel):
         warmup_steps: Linear warm-up steps before the main schedule.
         final_lr_scale: Fraction of base LR at the end of cosine decay.
     """
+
     warmup_steps: int = 0
     final_lr_scale: float = 1.0
 
@@ -452,6 +459,7 @@ class StageSpec(BaseModel):
         val_every: Run validation every this many steps.
         checkpoint_every: Save a checkpoint every this many steps.
     """
+
     steps: int
     trainable: StageTrainable
     lrs: StageLrs
@@ -473,6 +481,7 @@ class StagesConfig(BaseModel):
         run: Ordered list of stage names to execute (subset of
             ``["stage_1", "stage_2", "stage_3"]``).
     """
+
     stage_2: StageSpec | None = None
     stage_3: StageSpec | None = None
 
@@ -596,9 +605,10 @@ def apply_dot_overrides(base_dict: dict, overrides: list[str]) -> dict:
     return base_dict
 
 
-def load_config_from_files(paths: list[str], overrides: list[str] = None) -> DDSSMConfig:
+def load_config_from_files(
+    paths: list[str], overrides: list[str] = None
+) -> DDSSMConfig:
     """Load multiple YAMLs, merge them, and apply CLI overrides."""
-
     # 1. Load base
     print(f"[Config] Loading base configuration from {paths[0]}")
     with open(paths[0], "r") as f:

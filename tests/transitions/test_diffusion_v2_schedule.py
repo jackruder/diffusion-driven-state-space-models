@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 from ddssm.transitions.diffusion_v2 import (
     DiffusionV2ScheduleConfig,
@@ -49,7 +49,9 @@ def test_vp_variance_preserving_identity(transition):
     # In VP, sigma**2 := 1 - alpha**2 by construction; sigma_tilde**2 = sigma**2/alpha**2.
     # Verify via the EDM constants: c_out**2 = 1 - alpha**2.
     c_out = transition.c_out.double()
-    assert torch.allclose(c_out * c_out + alpha * alpha, torch.ones_like(alpha), atol=1e-5)
+    assert torch.allclose(
+        c_out * c_out + alpha * alpha, torch.ones_like(alpha), atol=1e-5
+    )
 
 
 def test_edm_constants_consistency(transition):
@@ -76,13 +78,9 @@ def test_invalid_config_rejected():
     with pytest.raises(ValueError):
         make_transition(schedule=DiffusionV2ScheduleConfig(tau_min=1.0))
     with pytest.raises(ValueError):
-        make_transition(
-            schedule=DiffusionV2ScheduleConfig(beta_min=10.0, beta_max=5.0)
-        )
+        make_transition(schedule=DiffusionV2ScheduleConfig(beta_min=10.0, beta_max=5.0))
     with pytest.raises(ValueError):
-        make_transition(
-            schedule=DiffusionV2ScheduleConfig(k_sampling_mode="bogus")
-        )
+        make_transition(schedule=DiffusionV2ScheduleConfig(k_sampling_mode="bogus"))
     with pytest.raises(ValueError):
         make_transition(schedule=DiffusionV2ScheduleConfig(objective="bogus"))
 

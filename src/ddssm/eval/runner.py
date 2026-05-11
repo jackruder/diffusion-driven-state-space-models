@@ -13,15 +13,15 @@ from the CLI.
 
 from __future__ import annotations
 
-import json
-import logging
 import os
-from dataclasses import dataclass, field
+import json
 from typing import Any
+import logging
+from dataclasses import field, dataclass
 
 import torch
 
-from .metrics import EvalContext, METRIC_REGISTRY
+from .metrics import METRIC_REGISTRY, EvalContext
 
 log = logging.getLogger(__name__)
 
@@ -77,14 +77,20 @@ def _resolve_T_split(spec: EvalSpec, experiment) -> int | None:
     return getattr(meta, "forecast_split", None)
 
 
-def _maybe_load_checkpoint(model: torch.nn.Module, ckpt_path: str | None, device: torch.device) -> None:
+def _maybe_load_checkpoint(
+    model: torch.nn.Module, ckpt_path: str | None, device: torch.device
+) -> None:
     if ckpt_path is None:
         log.warning("No checkpoint provided; evaluating randomly-initialised weights.")
         return
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path!r}")
     payload = torch.load(ckpt_path, map_location=device, weights_only=False)
-    state = payload["model_state"] if isinstance(payload, dict) and "model_state" in payload else payload
+    state = (
+        payload["model_state"]
+        if isinstance(payload, dict) and "model_state" in payload
+        else payload
+    )
     model.load_state_dict(state, strict=True)
     log.info("Loaded checkpoint from %s", ckpt_path)
 

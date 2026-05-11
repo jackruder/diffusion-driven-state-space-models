@@ -1,29 +1,21 @@
 """Core DDSSM model: ELBO forward pass, encoder/decoder/transition dispatch, and forecast rollout."""
 
-from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Dict, List, final
+from dataclasses import field, dataclass
 
 import torch
 import torch.nn as nn
-
 from hydra_zen import builds
-from omegaconf import MISSING
 
-from .decoder import BaseDecoder, GaussianDecoder, GaussianDecoderConf
+from .decoder import BaseDecoder
 from .encoder import (
     BaseEncoder,
     BaseInitPrior,
-    GaussianEncoder,
-    GaussianEncoderConf,
-    GaussianInitPrior,
-    GaussianInitPriorConf,
 )
 from .net_utils import (
     time_embedding,
 )
-from .transitions.transitions import GaussianTransition
-from .transitions.diffusion import DiffusionTransition
 
 
 @final
@@ -101,7 +93,9 @@ class DDSSM_base(nn.Module):
                 self.static_embeddings.append(
                     nn.Embedding(num_classes, self.static_embed_dim)
                 )
-            self.total_static_dim = len(self.num_classes_per_static) * self.static_embed_dim
+            self.total_static_dim = (
+                len(self.num_classes_per_static) * self.static_embed_dim
+            )
         else:
             self.total_static_dim = 0
 
@@ -592,16 +586,14 @@ class DDSSM_base(nn.Module):
         z_hist_flat = z_hist.reshape(B * num_samples, d, j)
 
         time_embed_all_bs = (
-            time_embed_all
-            .unsqueeze(1)
+            time_embed_all.unsqueeze(1)
             .expand(B, num_samples, -1, -1)
             .reshape(B * num_samples, H + L2, -1)
         )
 
         if covariates_all is not None:
             covariates_all_bs = (
-                covariates_all
-                .unsqueeze(1)
+                covariates_all.unsqueeze(1)
                 .expand(B, num_samples, -1, -1)
                 .reshape(B * num_samples, covariates_all.size(1), H + L2)
             )
@@ -610,8 +602,7 @@ class DDSSM_base(nn.Module):
 
         if static_embed is not None:
             static_embed_bs = (
-                static_embed
-                .unsqueeze(1)
+                static_embed.unsqueeze(1)
                 .expand(B, num_samples, -1, -1)
                 .reshape(B * num_samples, self.data_dim, self.total_static_dim)
             )
@@ -720,6 +711,7 @@ class DDSSM_base(nn.Module):
 # ---------------------------------------------------------------------------
 # Default hyperparams namespace (used when no hyperparams object is provided)
 # ---------------------------------------------------------------------------
+
 
 def _default_hyperparams():
     """Return a SimpleNamespace with default training hyperparameters.

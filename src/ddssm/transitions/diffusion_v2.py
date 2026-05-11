@@ -74,21 +74,19 @@ Implements the model described in ``model-v2.org``.  Compared to V1
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
+from typing import Any, Dict, Callable, Optional, final
 from functools import partial
-from typing import Any, Callable, Dict, Optional, final
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-
 from hydra_zen import builds
 
 from ..diffnets import CSDIUnet, CSDIUnetConf
 from ..gaussians import GaussianStats, gaussian_entropy
 from ..net_utils import get_side_info
-from ..torch_compile import maybe_compile
 from .transitions import BaseTransition, _mc_entropy_from_logq
+from ..torch_compile import maybe_compile
 
 
 @dataclass
@@ -172,9 +170,7 @@ class DiffusionV2Transition(BaseTransition):
         if not (0.0 < tau_min < 1.0):
             raise ValueError(f"tau_min must be in (0, 1); got {tau_min}")
         if beta_max <= beta_min:
-            raise ValueError(
-                f"beta_max ({beta_max}) must be > beta_min ({beta_min})"
-            )
+            raise ValueError(f"beta_max ({beta_max}) must be > beta_min ({beta_min})")
         if schedule.objective not in ("esm", "dsm"):
             raise ValueError(
                 f"objective must be 'esm' or 'dsm'; got {schedule.objective!r}"
@@ -222,9 +218,7 @@ class DiffusionV2Transition(BaseTransition):
         self.register_buffer("sigma_tilde", sigma_tilde.to(torch.float32))
         self.register_buffer("w_per_tau", w_per_tau.to(torch.float32))
         self.register_buffer("wtilde", wtilde.to(torch.float32))
-        self.register_buffer(
-            "dsigma2_tilde_dtau", dsigma2_tilde_dtau.to(torch.float32)
-        )
+        self.register_buffer("dsigma2_tilde_dtau", dsigma2_tilde_dtau.to(torch.float32))
         self.register_buffer("c_skip", c_skip.to(torch.float32))
         self.register_buffer("c_out", c_out.to(torch.float32))
         self.register_buffer("c_in", c_in.to(torch.float32))
@@ -280,8 +274,7 @@ class DiffusionV2Transition(BaseTransition):
             )
         else:
             raise ValueError(
-                f"Unknown k_sampling_mode={ismode!r}; "
-                "expected 'uniform' or 'lsgm_is'"
+                f"Unknown k_sampling_mode={ismode!r}; expected 'uniform' or 'lsgm_is'"
             )
         self.register_buffer("p_k", p_k)
         self.k_sampling_mode = ismode
@@ -365,10 +358,12 @@ class DiffusionV2Transition(BaseTransition):
                 t_start,
                 t_end,
                 z_target_flat,  # (BS*chunk_len, d) — used only as DSM fallback
-                z_hist_flat,    # (BS*chunk_len, d, j)
+                z_hist_flat,  # (BS*chunk_len, d, j)
                 ctx,
             ) in self._iter_window_chunks(
-                zs, time_embed, covariates=covariates,
+                zs,
+                time_embed,
+                covariates=covariates,
             ):
                 use_esm = self.objective == "esm" and have_stats
                 if use_esm:
@@ -380,9 +375,7 @@ class DiffusionV2Transition(BaseTransition):
                     lv_chunk = logvars[..., t_start:t_end]
                     # match z_target_flat ordering: (B, S, chunk_len, d)
                     mu_t_flat = mu_chunk.permute(0, 1, 3, 2).reshape(-1, d)
-                    sigma2_t_flat = (
-                        lv_chunk.exp().permute(0, 1, 3, 2).reshape(-1, d)
-                    )
+                    sigma2_t_flat = lv_chunk.exp().permute(0, 1, 3, 2).reshape(-1, d)
                 else:
                     # Reached when objective == "dsm" or encoder stats are
                     # unavailable; both cases collapse the ESM target to the
@@ -427,9 +420,9 @@ class DiffusionV2Transition(BaseTransition):
     # ------------------------------------------------------------------ #
     def _esm_chunk_loss(
         self,
-        mu_t: torch.Tensor,        # (N, d)
-        sigma2_t: torch.Tensor,    # (N, d)  >= 0
-        z_hist: torch.Tensor,      # (N, d, j)
+        mu_t: torch.Tensor,  # (N, d)
+        sigma2_t: torch.Tensor,  # (N, d)  >= 0
+        z_hist: torch.Tensor,  # (N, d, j)
         ctx: Dict[str, torch.Tensor],
     ) -> torch.Tensor:
         """Return scalar = sum over the N rows of (mean-over-S_k weighted sq.err)."""
@@ -483,9 +476,7 @@ class DiffusionV2Transition(BaseTransition):
             z_in_exp = z_in.unsqueeze(2)  # (N, d, 1, kc)
             latent_w = torch.cat([z_hist_rep, z_in_exp], dim=2)  # (N, d, j+1, kc)
             latent_w = (
-                latent_w.permute(0, 3, 1, 2)
-                .reshape(N * kc, d, self.j + 1)
-                .contiguous()
+                latent_w.permute(0, 3, 1, 2).reshape(N * kc, d, self.j + 1).contiguous()
             )
 
             side_w = (
@@ -520,10 +511,10 @@ class DiffusionV2Transition(BaseTransition):
 
     def _vp_precondition(
         self,
-        mu_t: torch.Tensor,        # (N, d)
-        sigma2_t: torch.Tensor,    # (N, d)
-        k_idx: torch.Tensor,       # (N, S_k)
-        eps: torch.Tensor,         # (N, d, S_k)
+        mu_t: torch.Tensor,  # (N, d)
+        sigma2_t: torch.Tensor,  # (N, d)
+        k_idx: torch.Tensor,  # (N, S_k)
+        eps: torch.Tensor,  # (N, d, S_k)
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Build (z_in, F_target) for the ESM regression.
 
@@ -535,28 +526,28 @@ class DiffusionV2Transition(BaseTransition):
         """
         eps_dtype = torch.finfo(mu_t.dtype).eps
 
-        sigma_tilde = self.sigma_tilde[k_idx]      # (N, S_k)
-        sigma_tilde2 = sigma_tilde * sigma_tilde   # (N, S_k)
-        c_skip = self.c_skip[k_idx]                # (N, S_k)
+        sigma_tilde = self.sigma_tilde[k_idx]  # (N, S_k)
+        sigma_tilde2 = sigma_tilde * sigma_tilde  # (N, S_k)
+        c_skip = self.c_skip[k_idx]  # (N, S_k)
         c_out = self.c_out[k_idx].clamp_min(eps_dtype)  # (N, S_k)
-        c_in = self.c_in[k_idx]                    # (N, S_k)
+        c_in = self.c_in[k_idx]  # (N, S_k)
 
         # Broadcast (N, S_k) -> (N, 1, S_k) for the latent dim.
-        st2_ = sigma_tilde2.unsqueeze(1)           # (N, 1, S_k)
+        st2_ = sigma_tilde2.unsqueeze(1)  # (N, 1, S_k)
         cskip_ = c_skip.unsqueeze(1)
         cout_ = c_out.unsqueeze(1)
         cin_ = c_in.unsqueeze(1)
 
-        sigma2_t_ = sigma2_t.unsqueeze(-1)         # (N, d, 1)
-        mu_t_ = mu_t.unsqueeze(-1)                 # (N, d, 1)
+        sigma2_t_ = sigma2_t.unsqueeze(-1)  # (N, d, 1)
+        mu_t_ = mu_t.unsqueeze(-1)  # (N, d, 1)
 
         var_total = (sigma2_t_ + st2_).clamp_min(eps_dtype)  # (N, d, S_k)
-        z_tilde = mu_t_ + var_total.sqrt() * eps             # (N, d, S_k)
+        z_tilde = mu_t_ + var_total.sqrt() * eps  # (N, d, S_k)
 
-        s_q = -(z_tilde - mu_t_) / var_total                 # (N, d, S_k)
-        D_star = z_tilde + st2_ * s_q                        # (N, d, S_k)
-        F_target = (D_star - cskip_ * z_tilde) / cout_       # (N, d, S_k)
-        z_in = cin_ * z_tilde                                # (N, d, S_k)
+        s_q = -(z_tilde - mu_t_) / var_total  # (N, d, S_k)
+        D_star = z_tilde + st2_ * s_q  # (N, d, S_k)
+        F_target = (D_star - cskip_ * z_tilde) / cout_  # (N, d, S_k)
+        z_in = cin_ * z_tilde  # (N, d, S_k)
 
         return z_in, F_target
 
@@ -601,7 +592,9 @@ class DiffusionV2Transition(BaseTransition):
                     tgt_emb = torch.cat([tgt_emb, ctx["target_covariates"]], dim=-1)
                 time_win = torch.cat([hist_emb, tgt_emb], dim=1)
         if time_win is None:
-            raise ValueError("DiffusionV2Transition.sample requires time embeddings in ctx")
+            raise ValueError(
+                "DiffusionV2Transition.sample requires time embeddings in ctx"
+            )
 
         cond_mask = torch.ones(B, d, self.j + 1, device=device, dtype=dtype)
         cond_mask[..., -1] = 0.0
@@ -619,7 +612,7 @@ class DiffusionV2Transition(BaseTransition):
     @torch.no_grad()
     def _vp_pf_sample(
         self,
-        z_hist: torch.Tensor,    # (B, d, j)
+        z_hist: torch.Tensor,  # (B, d, j)
         side_win: torch.Tensor,  # (B, side_dim, d, j+1)
     ) -> torch.Tensor:
         """Reverse-time probability-flow Euler sampler over the precomputed tau grid."""

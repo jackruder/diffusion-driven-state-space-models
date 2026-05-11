@@ -20,68 +20,68 @@ continues to work without change.
 
 from __future__ import annotations
 
+# Re-export upstream Confs that callers import via ``ddssm.conf``
+from ..dssd import REWOConf, DDSSMConf, DDSSMHyperParamsConf
+from ..train import DDSSMTrainerConf
+
 # 1. Infrastructure (creates ``store`` and registers transition/model/trainer groups)
 from ._infra import (
+    StagesConf,
+    StageLrsConf,
+    StageSpecConf,
+    LambdaRampConf,
+    KDDDataModuleConf,
+    ObjectiveSpecConf,
+    NullDataModuleConf,
+    StageSchedulerConf,
+    StageTrainableConf,
+    TrainableJointConf,
     DDSSMTrainerPartial,
     DecoderGaussianConf,
-    DecoderGaussianMLPConf,
     EncoderGaussianConf,
-    EncoderGaussianMLPConf,
-    InitPriorGaussianConf,
-    InitPriorGaussianMLPConf,
-    KDDDataModuleConf,
-    LambdaRampConf,
-    NullDataModuleConf,
-    ObjectiveSpecConf,
-    StageLrsConf,
-    StageSchedulerConf,
-    StageSpecConf,
-    StageTrainableConf,
-    StagesConf,
-    SyntheticDataModuleConf,
-    TrainableJointConf,
+    TrainingScalarsConf,
     TrainableModulesConf,
+    InitPriorGaussianConf,
+    DecoderGaussianMLPConf,
+    EncoderGaussianMLPConf,
     TrainableReconOnlyConf,
     TrainableTransOnlyConf,
-    TrainingScalarsConf,
-    TransitionDiffusionConf,
-    TransitionDiffusionMLPConf,
-    TransitionDiffusionV2Conf,
-    TransitionDiffusionV2MLPConf,
     TransitionGaussianConf,
+    SyntheticDataModuleConf,
+    TransitionDiffusionConf,
+    InitPriorGaussianMLPConf,
+    TransitionDiffusionV2Conf,
     TransitionGaussianMLPConf,
+    TransitionDiffusionMLPConf,
+    TransitionDiffusionV2MLPConf,
+    store,
     _experiment_conf,
     load_yaml_config,
-    store,
 )
-
-# Re-export upstream Confs that callers import via ``ddssm.conf``
-from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
-from ..train import DDSSMTrainerConf
 
 # 2. Eval/viz family defaults
 from ._eval_viz import (
-    BimodalEvalConf,
-    BimodalVizConf,
-    HarmonicEvalConf,
-    HarmonicVizConf,
-    KDDEvalConf,
     KDDVizConf,
-    Robot2DEvalConf,
-    Robot2DVizConf,
-    SynthEvalConf,
+    KDDEvalConf,
     SynthVizConf,
+    SynthEvalConf,
+    BimodalVizConf,
+    Robot2DVizConf,
+    BimodalEvalConf,
+    HarmonicVizConf,
+    Robot2DEvalConf,
+    HarmonicEvalConf,
 )
 
 # 3. Experiment presets (triggers all store(...) registrations)
 from .experiments import (
-    KDDDiffusionExperimentConf,
-    KDDGaussExperimentConf,
-    SyntheticDiffusionExperimentConf,
-    SyntheticGaussExperimentConf,
-    HarmonicExperimentConf,
     BimodalExperimentConf,
     Robot2DExperimentConf,
+    HarmonicExperimentConf,
+    KDDGaussExperimentConf,
+    KDDDiffusionExperimentConf,
+    SyntheticGaussExperimentConf,
+    SyntheticDiffusionExperimentConf,
 )
 
 # 4. Materialise all registered configs into Hydra's ConfigStore.

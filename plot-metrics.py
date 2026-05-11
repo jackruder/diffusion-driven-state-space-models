@@ -1,8 +1,9 @@
+import os
 import csv
 import math
-import os
-import matplotlib.pyplot as plt
 import argparse
+
+import matplotlib.pyplot as plt
 
 
 def plot_metrics(csv_path, save_path, keys=None):

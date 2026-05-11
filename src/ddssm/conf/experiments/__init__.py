@@ -14,21 +14,21 @@ Submodules map to ``verifications.org`` sections
 
 from __future__ import annotations
 
-from . import component, kdd, synthetic
-from .component import SyntheticDiffusionExperimentConf, SyntheticGaussExperimentConf
-from .kdd import KDDDiffusionExperimentConf, KDDGaussExperimentConf
+from . import kdd, component, synthetic
+from .kdd import KDDGaussExperimentConf, KDDDiffusionExperimentConf
+from .component import SyntheticGaussExperimentConf, SyntheticDiffusionExperimentConf
 from .synthetic import (
-    HarmonicExperimentConf,
     BimodalExperimentConf,
     Robot2DExperimentConf,
+    HarmonicExperimentConf,
 )
 
 __all__ = [
-    "SyntheticDiffusionExperimentConf",
-    "SyntheticGaussExperimentConf",
+    "BimodalExperimentConf",
+    "HarmonicExperimentConf",
     "KDDDiffusionExperimentConf",
     "KDDGaussExperimentConf",
-    "HarmonicExperimentConf",
-    "BimodalExperimentConf",
     "Robot2DExperimentConf",
+    "SyntheticDiffusionExperimentConf",
+    "SyntheticGaussExperimentConf", "component", "kdd", "synthetic",
 ]

@@ -1,16 +1,15 @@
 """This file implements common conditional diffusion models for timeseries."""
 
 import math
-from dataclasses import dataclass, field
 from typing import final
+from dataclasses import field, dataclass
 
 import torch
 import torch.nn as nn
+from hydra_zen import builds
 
 # from mamba_ssm import Mamba2
 import torch.nn.functional as F
-
-from hydra_zen import builds
 
 from .net_utils import (
     Conv1d_with_init,
@@ -160,9 +159,7 @@ class FeatureLayer(nn.Module):
 class TransformerFeatureLayer(FeatureLayer):
     def __init__(self, channels: int, nheads: int = 8, layers: int = 1):
         super().__init__()
-        self.layer = get_torch_trans(
-            heads=nheads, layers=layers, channels=channels
-        )
+        self.layer = get_torch_trans(heads=nheads, layers=layers, channels=channels)
 
     def forward(
         self, x_flat: torch.Tensor, base_shape: tuple[int, int, int, int]
@@ -211,7 +208,9 @@ class IdentityLayer(FeatureLayer, TimeLayer):
         return x_flat
 
 
-def build_time_layer(time_type: str, channels: int, kernel_size: int = 3, gru_layers: int = 1) -> TimeLayer:
+def build_time_layer(
+    time_type: str, channels: int, kernel_size: int = 3, gru_layers: int = 1
+) -> TimeLayer:
     """Factory: create a TimeLayer from a type string and shared ``channels``."""
     if time_type == "conv":
         return ConvTimeLayer(channels, kernel_size=kernel_size)
@@ -219,10 +218,14 @@ def build_time_layer(time_type: str, channels: int, kernel_size: int = 3, gru_la
         return GRUTimeLayer(channels, gru_layers=gru_layers)
     if time_type == "identity":
         return IdentityLayer()
-    raise ValueError(f"Unknown time_type: {time_type!r}. Choose from 'conv', 'gru', 'identity'.")
+    raise ValueError(
+        f"Unknown time_type: {time_type!r}. Choose from 'conv', 'gru', 'identity'."
+    )
 
 
-def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_layers: int = 1) -> FeatureLayer:
+def build_feature_layer(
+    feature_type: str, channels: int, nheads: int = 8, n_layers: int = 1
+) -> FeatureLayer:
     """Factory: create a FeatureLayer from a type string and shared ``channels``."""
     if feature_type == "transformer":
         return TransformerFeatureLayer(channels, nheads=nheads, layers=n_layers)
@@ -230,7 +233,9 @@ def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_lay
         return ConvFeatureLayer(channels)
     if feature_type == "identity":
         return IdentityLayer()
-    raise ValueError(f"Unknown feature_type: {feature_type!r}. Choose from 'transformer', 'conv', 'identity'.")
+    raise ValueError(
+        f"Unknown feature_type: {feature_type!r}. Choose from 'transformer', 'conv', 'identity'."
+    )
 
 
 @dataclass
@@ -271,6 +276,7 @@ class DiffResidualBlockConfig:
 
     time: TimeMixerConfig = field(default_factory=TimeMixerConfig)
     feature: FeatureMixerConfig = field(default_factory=FeatureMixerConfig)
+
 
 class DiffusionEmbedding(nn.Module):
     """Continuous EDM conditioning: embeds c_noise scalars into vectors.
@@ -440,24 +446,24 @@ class CSDIUnet(nn.Module):
         self.input_projection = Conv1d_with_init(2, self.channels, 1)
 
         self.residual_layers = nn.ModuleList([
-                DiffResidualBlock(
-                    side_dim=self.side_dim,
-                    channels=self.channels,
-                    diffusion_embedding_dim=self.diffusion_projection_dim,
-                    time_layer=build_time_layer(
-                        residual_block.time.type,
-                        channels,
-                        kernel_size=residual_block.time.kernel_size,
-                        gru_layers=residual_block.time.gru_layers,
-                    ),
-                    feature_layer=build_feature_layer(
-                        residual_block.feature.type,
-                        channels,
-                        nheads=residual_block.feature.nheads,
-                        n_layers=residual_block.feature.n_layers,
-                    ),
-                )
-                for _ in range(self.n_layers)
+            DiffResidualBlock(
+                side_dim=self.side_dim,
+                channels=self.channels,
+                diffusion_embedding_dim=self.diffusion_projection_dim,
+                time_layer=build_time_layer(
+                    residual_block.time.type,
+                    channels,
+                    kernel_size=residual_block.time.kernel_size,
+                    gru_layers=residual_block.time.gru_layers,
+                ),
+                feature_layer=build_feature_layer(
+                    residual_block.feature.type,
+                    channels,
+                    nheads=residual_block.feature.nheads,
+                    n_layers=residual_block.feature.n_layers,
+                ),
+            )
+            for _ in range(self.n_layers)
         ])
         self.output_projection1 = Conv1d_with_init(self.channels, self.channels, 1)
         self.output_projection2 = Conv1d_with_init(self.channels, 1, 1)
@@ -575,7 +581,7 @@ class MLPCSDIUnet(nn.Module):
     ) -> torch.Tensor:
         B, d, L = x.shape
         assert d == self.latent_dim
-        assert L == self.latent_history_len + self.output_len
+        assert self.latent_history_len + self.output_len == L
 
         x_flat = x.reshape(B, -1)
         side_flat = side_info.reshape(B, -1)
@@ -897,7 +903,7 @@ class MLPContextProducer(nn.Module):
     ) -> torch.Tensor:
         B, H_seq, L = combined.shape
         assert H_seq == self.combined_dim
-        assert L == self.combined_len
+        assert self.combined_len == L
 
         if self.skip_mask:
             if mask_embedded is None:
@@ -923,7 +929,9 @@ class MLPContextProducer(nn.Module):
             assert static_embedded.shape == (B, self.static_emb_dim, self.combined_dim)
             static_flat = static_embedded.reshape(B, -1)
         else:
-            static_flat = torch.zeros(B, 0, device=combined.device, dtype=combined.dtype)
+            static_flat = torch.zeros(
+                B, 0, device=combined.device, dtype=combined.dtype
+            )
 
         inp = torch.cat(
             [

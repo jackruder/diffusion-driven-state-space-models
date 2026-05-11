@@ -14,27 +14,22 @@ optionally saves per-sample visualisations.
 
 # filepath: evaluate_models.py
 import os
-import time
 import csv
 import json
-import math
-import argparse
 import random
+import argparse
 from datetime import datetime
-from types import SimpleNamespace
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-import yaml
-
 from ddssm.ddssm import DDSSM_base
-from ddssm.config import DDSSMConfig, load_config_from_files, apply_dot_overrides
+from torch.utils.data import DataLoader
 
-from ddssm.data.synthetic import SyntheticDataset
+from ddssm.config import load_config_from_files
 from ddssm.eval_utils import (
     visualize_results,
 )
+from ddssm.data.synthetic import SyntheticDataset
 
 
 def set_eval_seed(seed: int):
@@ -87,10 +82,10 @@ def mae_metrics(pred_mean: torch.Tensor, y_future: torch.Tensor):
 
 
 def crps_sum_metrics(pred_samples: torch.Tensor, y_future: torch.Tensor):
-    """
-    CRPS-sum as in CSDI: CRPS for the distribution of the sum of all features.
+    """CRPS-sum as in CSDI: CRPS for the distribution of the sum of all features.
     pred_samples: (B,S,D,L2)
     y_future:     (B,D,L2)
+
     Returns:
         crps_sum_global: scalar
         crps_sum_per_t: (L2,)
@@ -123,8 +118,7 @@ def crps_sum_metrics(pred_samples: torch.Tensor, y_future: torch.Tensor):
 
 
 def energy_score_metrics(pred_samples: torch.Tensor, y_future: torch.Tensor):
-    """
-    Multivariate Energy Score over D dimensions.
+    """Multivariate Energy Score over D dimensions.
     pred_samples: (B,S,D,L2)
     y_future:     (B,D,L2)
     """
@@ -207,7 +201,7 @@ def save_outputs(out_dir: str, metrics: dict):
             zip(
                 metrics["mae_per_t"],
                 metrics["sum_crps_per_t"],
-                metrics["energy_score_per_t"],
+                metrics["energy_score_per_t"], strict=False,
             )
         ):
             writer.writerow([t, m, c, e])
@@ -250,7 +244,6 @@ def load_checkpoint(model: torch.nn.Module, ckpt_path: str, device: torch.device
 
 
 def main():
-
     parser = argparse.ArgumentParser(
         description="Evaluate trained DDSSM models (no training)."
     )

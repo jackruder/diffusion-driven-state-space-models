@@ -8,8 +8,7 @@ re-specify metrics or plot lists.
 
 from __future__ import annotations
 
-from ._infra import EvalSpecConf, PlotSpecConf, VizSpecConf
-
+from ._infra import VizSpecConf, EvalSpecConf, PlotSpecConf
 
 # ---------------------------------------------------------------------------
 # Eval / viz defaults for component-test and simple synthetic experiments.
@@ -19,8 +18,11 @@ from ._infra import EvalSpecConf, PlotSpecConf, VizSpecConf
 SynthEvalConf = EvalSpecConf(metrics=["loss_tail", "recon_mse"], split="val")
 SynthVizConf = VizSpecConf(
     plots=[
-        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
-                     kwargs={"keys": ["loss/total"], "log_y": True}),
+        PlotSpecConf(
+            name="metrics_csv",
+            save_filename="train_loss.png",
+            kwargs={"keys": ["loss/total"], "log_y": True},
+        ),
     ],
     split="val",
     num_samples=10,
@@ -34,10 +36,14 @@ SynthVizConf = VizSpecConf(
 KDDEvalConf = EvalSpecConf(metrics=["mae", "crps_sum"], split="test", num_samples=32)
 KDDVizConf = VizSpecConf(
     plots=[
-        PlotSpecConf(name="forecast_1d", save_filename="forecast.png",
-                     kwargs={"n_show": 4}),
-        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
-                     kwargs={"keys": ["loss/total"], "log_y": True}),
+        PlotSpecConf(
+            name="forecast_1d", save_filename="forecast.png", kwargs={"n_show": 4}
+        ),
+        PlotSpecConf(
+            name="metrics_csv",
+            save_filename="train_loss.png",
+            kwargs={"keys": ["loss/total"], "log_y": True},
+        ),
     ],
     split="test",
     num_samples=32,
@@ -53,10 +59,14 @@ HarmonicEvalConf = EvalSpecConf(
 )
 HarmonicVizConf = VizSpecConf(
     plots=[
-        PlotSpecConf(name="forecast_1d", save_filename="forecast.png",
-                     kwargs={"n_show": 4}),
-        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
-                     kwargs={"keys": ["loss/total"], "log_y": True}),
+        PlotSpecConf(
+            name="forecast_1d", save_filename="forecast.png", kwargs={"n_show": 4}
+        ),
+        PlotSpecConf(
+            name="metrics_csv",
+            save_filename="train_loss.png",
+            kwargs={"keys": ["loss/total"], "log_y": True},
+        ),
     ],
     split="val",
     num_samples=32,
@@ -68,10 +78,14 @@ BimodalEvalConf = EvalSpecConf(
 )
 BimodalVizConf = VizSpecConf(
     plots=[
-        PlotSpecConf(name="forecast_1d", save_filename="forecast.png",
-                     kwargs={"n_show": 4}),
-        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
-                     kwargs={"keys": ["loss/total"], "log_y": True}),
+        PlotSpecConf(
+            name="forecast_1d", save_filename="forecast.png", kwargs={"n_show": 4}
+        ),
+        PlotSpecConf(
+            name="metrics_csv",
+            save_filename="train_loss.png",
+            kwargs={"keys": ["loss/total"], "log_y": True},
+        ),
     ],
     split="val",
     num_samples=64,
@@ -83,10 +97,16 @@ Robot2DEvalConf = EvalSpecConf(
 )
 Robot2DVizConf = VizSpecConf(
     plots=[
-        PlotSpecConf(name="forecast_2d_spatial", save_filename="forecast_2d.png",
-                     kwargs={"n_show": 4}),
-        PlotSpecConf(name="metrics_csv", save_filename="train_loss.png",
-                     kwargs={"keys": ["loss/total"], "log_y": True}),
+        PlotSpecConf(
+            name="forecast_2d_spatial",
+            save_filename="forecast_2d.png",
+            kwargs={"n_show": 4},
+        ),
+        PlotSpecConf(
+            name="metrics_csv",
+            save_filename="train_loss.png",
+            kwargs={"keys": ["loss/total"], "log_y": True},
+        ),
     ],
     split="val",
     num_samples=32,

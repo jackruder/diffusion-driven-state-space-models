@@ -1,23 +1,23 @@
 """GluonTS-based data loading utilities: sliding-window loaders, batch parsing, and z-score scaling."""
 
-from dataclasses import dataclass
 from typing import List
+from dataclasses import dataclass
 
 import numpy as np
-import pandas as pd
 import torch
+import pandas as pd
+from torch.utils.data import Dataset, DataLoader
 from pandas.tseries.frequencies import to_offset
-from torch.utils.data import DataLoader, Dataset
 
 _GLUONTS_IMPORT_ERROR: Exception | None = None
 try:
+    from gluonts.transform import InstanceSplitter, AddObservedValuesIndicator
     from gluonts.dataset.common import ListDataset
-    from gluonts.dataset.field_names import FieldName
     from gluonts.dataset.loader import TrainDataLoader, as_stacked_batches
-    from gluonts.dataset.multivariate_grouper import MultivariateGrouper
     from gluonts.torch.batchify import batchify
-    from gluonts.transform import AddObservedValuesIndicator, InstanceSplitter
-    from gluonts.transform.sampler import ExpectedNumInstanceSampler, InstanceSampler
+    from gluonts.transform.sampler import InstanceSampler, ExpectedNumInstanceSampler
+    from gluonts.dataset.field_names import FieldName
+    from gluonts.dataset.multivariate_grouper import MultivariateGrouper
 except (ImportError, ModuleNotFoundError) as err:  # pragma: no cover - GluonTS optional
     _GLUONTS_IMPORT_ERROR = err
     ListDataset = None
@@ -96,13 +96,12 @@ class _WindowSpec:
 
 
 class _GroupedWindowDataset(Dataset):
-    """
-    Returns model-ready dict:
-      observed_data: (D, L1+L2)
-      observation_mask: (D, L1+L2)
-      timepoints: (L1+L2,)
-      covariates: (V, L1+L2) or None
-      static_covariates: (D, V_static) or None
+    """Returns model-ready dict:
+    observed_data: (D, L1+L2)
+    observation_mask: (D, L1+L2)
+    timepoints: (L1+L2,)
+    covariates: (V, L1+L2) or None
+    static_covariates: (D, V_static) or None
     """
 
     def __init__(
@@ -437,12 +436,12 @@ def parse_batch(batch: dict, device: torch.device):
             ),
             "covariates": None,
         }
-        if batch.get("covariates", None) is not None:
+        if batch.get("covariates") is not None:
             out["covariates"] = torch.as_tensor(
                 batch["covariates"], device=device, dtype=torch.float32
             )
 
-        if batch.get("static_covariates", None) is not None:
+        if batch.get("static_covariates") is not None:
             out["static_covariates"] = torch.as_tensor(
                 batch["static_covariates"], device=device, dtype=torch.long
             )

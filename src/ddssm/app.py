@@ -31,9 +31,9 @@ import logging
 
 import hydra
 import torch
-from hydra.core.hydra_config import HydraConfig
 from hydra_zen import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf, DictConfig
+from hydra.core.hydra_config import HydraConfig
 
 # Importing conf populates Hydra's ConfigStore via ``store.add_to_hydra_store``.
 # Must precede @hydra.main so config groups resolve.

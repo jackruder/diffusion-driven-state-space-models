@@ -20,17 +20,16 @@ Two batch formats are advertised so the experiment can pick the right
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Callable, Literal, Protocol, runtime_checkable
+from typing import Literal, Callable, Protocol, runtime_checkable
+from dataclasses import field, dataclass
 
 import numpy as np
-import pandas as pd
 import torch
+import pandas as pd
 from torch.utils.data import DataLoader
 
-from .dataload import build_loaders_for_expt, parse_batch
+from .dataload import parse_batch, build_loaders_for_expt
 from .synthetic import SyntheticDataset
-
 
 BatchFormat = Literal["sequence", "windowed"]
 
@@ -273,7 +272,9 @@ class KDDDataModule:
                 if isinstance(static_covariates, torch.Tensor)
                 else np.asarray(static_covariates)
             )
-            static_cardinalities = tuple(int(arr[:, j].max()) + 1 for j in range(arr.shape[1]))
+            static_cardinalities = tuple(
+                int(arr[:, j].max()) + 1 for j in range(arr.shape[1])
+            )
             static_covariates = arr
 
         if self.eval_step_size == 1:
@@ -339,9 +340,9 @@ class KDDDataModule:
 
 __all__ = [
     "BatchFormat",
-    "DataMetadata",
     "DDSSMDataModule",
+    "DataMetadata",
+    "KDDDataModule",
     "NullDataModule",
     "SyntheticDataModule",
-    "KDDDataModule",
 ]

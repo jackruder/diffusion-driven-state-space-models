@@ -15,19 +15,14 @@ Usage::
 Requires Optuna; results can be monitored with optuna-dashboard.
 """
 
-import argparse
 import json
 import math
-import os
-import subprocess
 from pathlib import Path
+import argparse
+import subprocess
 
 import optuna
-import datetime
 from optuna.trial import FrozenTrial
-
-import numpy as np
-import torch
 
 
 def run_cmd(cmd: list[str]) -> None:

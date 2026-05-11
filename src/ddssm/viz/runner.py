@@ -12,10 +12,10 @@ this file runs during training.
 
 from __future__ import annotations
 
-import logging
 import os
-from dataclasses import dataclass, field
 from typing import Any
+import logging
+from dataclasses import field, dataclass
 
 import torch
 
@@ -80,14 +80,20 @@ def _resolve_T_split(spec: VizSpec, experiment) -> int | None:
     return getattr(meta, "forecast_split", None)
 
 
-def _maybe_load_checkpoint(model: torch.nn.Module, ckpt_path: str | None, device: torch.device) -> None:
+def _maybe_load_checkpoint(
+    model: torch.nn.Module, ckpt_path: str | None, device: torch.device
+) -> None:
     if ckpt_path is None:
         log.warning("No checkpoint provided; visualizing randomly-initialised weights.")
         return
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path!r}")
     payload = torch.load(ckpt_path, map_location=device, weights_only=False)
-    state = payload["model_state"] if isinstance(payload, dict) and "model_state" in payload else payload
+    state = (
+        payload["model_state"]
+        if isinstance(payload, dict) and "model_state" in payload
+        else payload
+    )
     model.load_state_dict(state, strict=True)
     log.info("Loaded checkpoint from %s", ckpt_path)
 

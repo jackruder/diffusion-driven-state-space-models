@@ -15,14 +15,13 @@ spatial path.
 from __future__ import annotations
 
 import csv as _csv
-import math
+from typing import Dict, Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
 
 @dataclass
@@ -67,12 +66,15 @@ def _gather_batch(ctx: PlotContext, sample_indices: list[int] | None):
         raise ValueError("Plot requires a non-empty loader.")
     if sample_indices is not None:
         from torch.utils.data.dataloader import default_collate
+
         items = [ctx.loader.dataset[i] for i in sample_indices]
         return default_collate(items)
     return next(iter(ctx.loader))
 
 
-def _run_recon_and_forecast(ctx: PlotContext, batch: dict, T_split: int, num_samples: int):
+def _run_recon_and_forecast(
+    ctx: PlotContext, batch: dict, T_split: int, num_samples: int
+):
     model, device = ctx.model, ctx.device
     if model is None:
         raise ValueError("Reconstruction/forecast plots need a non-None model.")
@@ -89,6 +91,7 @@ def _run_recon_and_forecast(ctx: PlotContext, batch: dict, T_split: int, num_sam
         z_sample = zs[:, 0, :, :]
 
         from ..net_utils import time_embedding
+
         te = time_embedding(timepoints, model.emb_time_dim, device=device)
 
         recons = []
@@ -150,7 +153,11 @@ def plot_forecast_1d(
     recon = arrs["recon"]
     pred_mean = arrs["pred_mean"]
     pred_samples = arrs["pred_samples"]
-    B = min(n_show, observed.shape[0]) if sample_indices is None else len(sample_indices)
+    B = (
+        min(n_show, observed.shape[0])
+        if sample_indices is None
+        else len(sample_indices)
+    )
     T_split = int(ctx.T_split)
     T_total = observed.shape[-1]
     x_obs = np.arange(T_total) if time_start_at_zero else np.arange(1, T_total + 1)
@@ -220,7 +227,11 @@ def plot_forecast_2d_spatial(
     if observed.shape[1] < 2:
         raise ValueError("forecast_2d_spatial expects D >= 2.")
 
-    B = min(n_show, observed.shape[0]) if sample_indices is None else len(sample_indices)
+    B = (
+        min(n_show, observed.shape[0])
+        if sample_indices is None
+        else len(sample_indices)
+    )
     T_split = int(ctx.T_split)
 
     plt.rcParams.update({"font.size": font_size})
@@ -228,24 +239,50 @@ def plot_forecast_2d_spatial(
     axes = axes.flatten()
 
     import matplotlib.patches as patches
+
     for i in range(B):
         ax = axes[i]
         if obstacle_box is not None:
             x0, y0, w, h = obstacle_box
             rect = patches.Rectangle(
-                (x0, y0), w, h, linewidth=1, edgecolor="black",
-                facecolor="gray", alpha=0.3, label="Obstacle",
+                (x0, y0),
+                w,
+                h,
+                linewidth=1,
+                edgecolor="black",
+                facecolor="gray",
+                alpha=0.3,
+                label="Obstacle",
             )
             ax.add_patch(rect)
-        ax.plot(observed[i, 0, :], observed[i, 1, :], "k-",
-                label="Observed", alpha=0.6, marker=".", markersize=3)
-        ax.plot(recon[i, 0, :], recon[i, 1, :], "b--",
-                label="Reconstruction", alpha=0.7)
-        ax.plot(observed[i, 0, T_split - 1], observed[i, 1, T_split - 1],
-                "go", label="Context End", markersize=8)
+        ax.plot(
+            observed[i, 0, :],
+            observed[i, 1, :],
+            "k-",
+            label="Observed",
+            alpha=0.6,
+            marker=".",
+            markersize=3,
+        )
+        ax.plot(
+            recon[i, 0, :], recon[i, 1, :], "b--", label="Reconstruction", alpha=0.7
+        )
+        ax.plot(
+            observed[i, 0, T_split - 1],
+            observed[i, 1, T_split - 1],
+            "go",
+            label="Context End",
+            markersize=8,
+        )
         for s in range(pred_samples.shape[1]):
-            xs = np.concatenate([[observed[i, 0, T_split - 1]], pred_samples[i, s, 0, :]])
-            ys = np.concatenate([[observed[i, 1, T_split - 1]], pred_samples[i, s, 1, :]])
+            xs = np.concatenate([
+                [observed[i, 0, T_split - 1]],
+                pred_samples[i, s, 0, :],
+            ])
+            ys = np.concatenate([
+                [observed[i, 1, T_split - 1]],
+                pred_samples[i, s, 1, :],
+            ])
             ax.plot(xs, ys, color="red", alpha=0.15, linewidth=1)
         xs_mean = np.concatenate([[observed[i, 0, T_split - 1]], pred_mean[i, 0, :]])
         ys_mean = np.concatenate([[observed[i, 1, T_split - 1]], pred_mean[i, 1, :]])
@@ -255,7 +292,7 @@ def plot_forecast_2d_spatial(
         ax.set_ylim(ylim)
         if i == 0:
             handles, labels = ax.get_legend_handles_labels()
-            by_label = dict(zip(labels, handles))
+            by_label = dict(zip(labels, handles, strict=False))
             ax.legend(by_label.values(), by_label.keys(), loc="upper left")
 
     plt.tight_layout()
@@ -293,17 +330,21 @@ def plot_forecast_distribution(
     batch = _gather_batch(ctx, sample_indices=None)
     arrs = _run_recon_and_forecast(ctx, batch, int(ctx.T_split), ctx.num_samples)
 
-    pred_samples = arrs["pred_samples"]   # (B, S, D, L2)
-    pred_mean = arrs["pred_mean"]         # (B, D, L2)
-    observed = arrs["observed"]           # (B, D, T_total)
+    pred_samples = arrs["pred_samples"]  # (B, S, D, L2)
+    pred_mean = arrs["pred_mean"]  # (B, D, L2)
+    observed = arrs["observed"]  # (B, D, T_total)
     T_split = int(ctx.T_split)
 
     if not (0 <= series_idx < pred_samples.shape[0]):
-        raise IndexError(f"series_idx={series_idx} out of range [0, {pred_samples.shape[0]})")
+        raise IndexError(
+            f"series_idx={series_idx} out of range [0, {pred_samples.shape[0]})"
+        )
     if not (0 <= dim_idx < pred_samples.shape[2]):
         raise IndexError(f"dim_idx={dim_idx} out of range [0, {pred_samples.shape[2]})")
     if not (0 <= t_future_idx < pred_samples.shape[3]):
-        raise IndexError(f"t_future_idx={t_future_idx} out of range [0, {pred_samples.shape[3]})")
+        raise IndexError(
+            f"t_future_idx={t_future_idx} out of range [0, {pred_samples.shape[3]})"
+        )
 
     vals = pred_samples[series_idx, :, dim_idx, t_future_idx]
     mu = float(pred_mean[series_idx, dim_idx, t_future_idx])
@@ -359,7 +400,7 @@ def plot_metrics_csv(
             except (KeyError, ValueError):
                 continue
             steps.append(s)
-            for k, v in zip(valid, vals):
+            for k, v in zip(valid, vals, strict=False):
                 series[k].append(v)
 
     plt.figure(figsize=(10, 6))

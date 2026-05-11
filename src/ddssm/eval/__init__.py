@@ -16,13 +16,13 @@ Train, evaluate, and visualize are independent stages; nothing in
 this module is called from training.
 """
 
-from .metrics import EvalContext, METRIC_REGISTRY, register_metric
 from .runner import EvalSpec, evaluate
+from .metrics import METRIC_REGISTRY, EvalContext, register_metric
 
 __all__ = [
+    "METRIC_REGISTRY",
     "EvalContext",
     "EvalSpec",
-    "METRIC_REGISTRY",
     "evaluate",
     "register_metric",
 ]

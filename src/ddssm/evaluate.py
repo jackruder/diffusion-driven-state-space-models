@@ -24,14 +24,14 @@ Usage::
 
 from __future__ import annotations
 
-import logging
 import os
+import logging
 
 import hydra
 import torch
-from hydra.core.hydra_config import HydraConfig
 from hydra_zen import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf, DictConfig
+from hydra.core.hydra_config import HydraConfig
 
 from . import conf  # noqa: F401  -- registers the ConfigStore
 
