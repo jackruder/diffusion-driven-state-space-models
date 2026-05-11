@@ -7,11 +7,14 @@ here for backward compatibility with the legacy script entry points
 (``scripts/experiments/verifications.py``, ``evaluate_models.py``).
 """
 
+import math
 import warnings
 
-import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import numpy as np
+import yaml
+import ast
 
 
 def visualize_results(
@@ -265,7 +268,7 @@ def visualize_results(
             if i == 0:
                 # Remove duplicate rect labels
                 handles, labels = ax.get_legend_handles_labels()
-                by_label = dict(zip(labels, handles, strict=False))
+                by_label = dict(zip(labels, handles))
                 ax.legend(by_label.values(), by_label.keys(), loc="upper left")
             ax.set_title(f"{plot_title} (2D Spatial Path)")
 

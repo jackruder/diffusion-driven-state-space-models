@@ -2,11 +2,12 @@
 
 import abc
 import math
-from typing import Tuple, Callable
 from functools import partial
+from typing import Callable, Tuple
 
 import torch
 import torch.nn as nn
+
 from hydra_zen import builds
 
 from .diffnets import ContextProducer, ContextProducerConf
@@ -36,7 +37,8 @@ class BaseDecoder(nn.Module, metaclass=abc.ABCMeta):
         time_idx: torch.Tensor,
         covariates: torch.Tensor | None = None,
         static_embed: torch.Tensor | None = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]: ...
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        ...
 
     @abc.abstractmethod
     def log_likelihood(
@@ -48,7 +50,8 @@ class BaseDecoder(nn.Module, metaclass=abc.ABCMeta):
         observation_mask_t: torch.Tensor | None = None,
         covariates: torch.Tensor | None = None,
         static_embed: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        ...
 
 
 class GaussianDecoder(BaseDecoder):

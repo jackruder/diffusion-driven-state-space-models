@@ -64,7 +64,7 @@ def test_esm_target_score_identity(transition):
     z_in, F_target = transition._vp_precondition(mu_t, sigma2_t, k_idx, eps)
 
     sigma_tilde = transition.sigma_tilde[k_val]
-    sigma_tilde2 = sigma_tilde**2
+    sigma_tilde2 = sigma_tilde ** 2
     c_skip = transition.c_skip[k_val]
     c_out = transition.c_out[k_val]
 

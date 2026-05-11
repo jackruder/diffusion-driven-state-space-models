@@ -12,42 +12,43 @@ registrations have run.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, List
-from dataclasses import field, dataclass
 
-from hydra_zen import ZenStore, just, builds  # noqa: F401 — ``just`` re-exported
+from hydra_zen import builds, ZenStore, just  # noqa: F401 — ``just`` re-exported
 from omegaconf import MISSING
 
-from ..dssd import DDSSMConf, DDSSMHyperParamsConf
-from ..train import DDSSMTrainer, DDSSMTrainerConf
-from ..decoder import GaussianDecoder, GaussianDecoderConf
-from ..encoder import (
-    GaussianEncoder,
-    GaussianInitPrior,
-    GaussianEncoderConf,
-    GaussianInitPriorConf,
-)
-from ..diffnets import (
-    CSDIUnetConf,
-    MLPCSDIUnetConf,
-    ContextProducerConf,
-    MLPContextProducerConf,
-)
-from ..gaussians import GaussianHeadConf
-from ..experiment import Experiment, ObjectiveSpec, TrainingScalars, TrainableModules
-from ..viz.runner import VizSpec, PlotSpec
-from ..eval.runner import EvalSpec
 from ..data.datamodule import (
     KDDDataModule,
     NullDataModule,
     SyntheticDataModule,
 )
-from ..transitions.diffusion import DiffusionTransition, DiffusionScheduleConfig
-from ..transitions.transitions import GaussianTransition
-from ..transitions.diffusion_v2 import (
-    DiffusionV2Transition,
-    DiffusionV2ScheduleConfig,
+from ..decoder import GaussianDecoder, GaussianDecoderConf
+from ..diffnets import (
+    ContextProducerConf,
+    CSDIUnetConf,
+    MLPContextProducerConf,
+    MLPCSDIUnetConf,
 )
+from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
+from ..encoder import (
+    GaussianEncoder,
+    GaussianEncoderConf,
+    GaussianInitPrior,
+    GaussianInitPriorConf,
+)
+from ..eval.runner import EvalSpec
+from ..experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
+from ..viz.runner import PlotSpec, VizSpec
+from ..gaussians import GaussianHeadConf
+from ..train import DDSSMTrainer, DDSSMTrainerConf
+from ..transitions.diffusion import DiffusionScheduleConfig, DiffusionTransition
+from ..transitions.diffusion_v2 import (
+    DiffusionV2ScheduleConfig,
+    DiffusionV2Transition,
+)
+from ..transitions.transitions import GaussianTransition
+
 
 # ---------------------------------------------------------------------------
 # Top-level transition Confs for the ``transition`` config group.
@@ -232,15 +233,13 @@ store(DDSSMTrainerConf, group="trainer", name="default")
 
 NullDataModuleConf = builds(NullDataModule, populate_full_signature=True)
 SyntheticDataModuleConf = builds(
-    SyntheticDataModule,
-    populate_full_signature=True,
+    SyntheticDataModule, populate_full_signature=True,
     D="${experiment.data_dim}",
     T=64,
     use_observation_mask="${experiment.use_observation_mask}",
 )
 KDDDataModuleConf = builds(
-    KDDDataModule,
-    populate_full_signature=True,
+    KDDDataModule, populate_full_signature=True,
     use_observation_mask="${experiment.use_observation_mask}",
 )
 
@@ -273,9 +272,7 @@ TrainableTransOnlyConf = TrainableModulesConf(
 # ``build_trainer`` is a partial of DDSSMTrainer that the Experiment
 # completes at run time with model + device + run-dir-derived paths.
 DDSSMTrainerPartial = builds(
-    DDSSMTrainer,
-    populate_full_signature=True,
-    zen_partial=True,
+    DDSSMTrainer, populate_full_signature=True, zen_partial=True,
 )
 
 
@@ -314,9 +311,7 @@ def _experiment_conf(
     explicit conf only when the preset must lock in a specific
     implementation.
     """
-    resolved_transition = (
-        transition_conf if transition_conf is not None else "${transition}"
-    )
+    resolved_transition = transition_conf if transition_conf is not None else "${transition}"
     resolved_encoder = encoder_conf if encoder_conf is not None else "${encoder}"
     resolved_decoder = decoder_conf if decoder_conf is not None else "${decoder}"
     resolved_z_init = z_init_conf if z_init_conf is not None else "${z_init}"
@@ -349,7 +344,6 @@ def _experiment_conf(
 # ---------------------------------------------------------------------------
 # Stages dataclasses (config-only; full logic lives in ddssm.stages)
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class StageLrsConf:
@@ -401,7 +395,6 @@ class StagesConf:
 # ---------------------------------------------------------------------------
 # Convenience helper: load a Hydra YAML and return an instantiable config.
 # ---------------------------------------------------------------------------
-
 
 def load_yaml_config(yaml_path: str) -> Any:
     """Load a Hydra-compatible YAML and return an OmegaConf DictConfig.

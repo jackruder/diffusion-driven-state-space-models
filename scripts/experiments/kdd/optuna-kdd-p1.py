@@ -14,14 +14,16 @@ Usage::
 Requires Optuna and (optionally) optuna-dashboard for live visualisation.
 """
 
-import csv
-import json
-import math
-from pathlib import Path
 import argparse
+import json
+import csv
+import math
+import os
 import subprocess
+from pathlib import Path
 
 import optuna
+import datetime
 from optuna.trial import FrozenTrial
 
 
@@ -192,7 +194,7 @@ def objective_factory(args):
         S_k = 4
 
         overrides = [
-            "hyperparams.lambda_schedule=cosine",
+            f"hyperparams.lambda_schedule=cosine",
             f"hyperparams.lambda_warmup_steps={lambda_warmup_steps}",
             f"hyperparams.lambda_end={lambda_end}",
             f"hyperparams.enc_lr={vae_lr}",

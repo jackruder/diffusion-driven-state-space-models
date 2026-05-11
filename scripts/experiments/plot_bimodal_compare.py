@@ -23,14 +23,14 @@ per coefficient with a ``_aX.png`` suffix appended to each output path.
 
 from __future__ import annotations
 
-import os
-import math
 import argparse
+import math
+import os
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
-from ddssm.eval.metrics import _hist_mass, _jsd_discrete, _bimodal_truth_mass
+from ddssm.eval.metrics import _bimodal_truth_mass, _hist_mass, _jsd_discrete
 
 
 def _suffix_path(path: str, suffix: str) -> str:
@@ -42,9 +42,7 @@ def _ensure_parent(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
 
-def _recompute_for_coef(
-    npz, center_coef: float
-) -> tuple[np.ndarray, np.ndarray, float, float]:
+def _recompute_for_coef(npz, center_coef: float) -> tuple[np.ndarray, np.ndarray, float, float]:
     """Recompute model+truth mean masses and JSD summary at a different center_coef.
 
     The NPZ stores raw forecast samples and x_prev so we can re-bin under a
@@ -62,14 +60,9 @@ def _recompute_for_coef(
     for i in range(len(x_prev)):
         ctr = xhat_samples[i] - center_coef * x_prev[i]
         mm = _hist_mass(ctr, edges)
-        tm = _bimodal_truth_mass(
-            centers,
-            float(x_prev[i]),
-            a=a,
-            step_size=step_size,
-            sigma=sigma,
-            center_coef=center_coef,
-        )
+        tm = _bimodal_truth_mass(centers, float(x_prev[i]),
+                                 a=a, step_size=step_size, sigma=sigma,
+                                 center_coef=center_coef)
         model_masses.append(mm)
         truth_masses.append(tm)
         jsds.append(_jsd_discrete(mm, tm))
@@ -82,9 +75,7 @@ def _recompute_for_coef(
     )
 
 
-def _plot_jsd(
-    out_path: str, labels: list[str], means: list[float], sems: list[float]
-) -> None:
+def _plot_jsd(out_path: str, labels: list[str], means: list[float], sems: list[float]) -> None:
     plt.figure(figsize=(7.2, 0.6 + 0.5 * len(labels)))
     y = np.arange(len(labels), dtype=float)
     plt.errorbar(means, y, xerr=sems, fmt="o", capsize=5, color="black")
@@ -98,24 +89,14 @@ def _plot_jsd(
     plt.close()
 
 
-def _plot_density(
-    out_path: str,
-    centers: np.ndarray,
-    edges: np.ndarray,
-    run_masses: dict[str, np.ndarray],
-    truth_mass: np.ndarray,
-) -> None:
+def _plot_density(out_path: str, centers: np.ndarray, edges: np.ndarray,
+                  run_masses: dict[str, np.ndarray], truth_mass: np.ndarray) -> None:
     bw = float(edges[1] - edges[0])
     plt.figure(figsize=(8.2, 5.0))
     for label, mm in run_masses.items():
         plt.plot(centers, mm / bw, linestyle="-", label=f"{label} (avg forecast)")
-    plt.plot(
-        centers,
-        truth_mass / bw,
-        color="tab:green",
-        linewidth=2,
-        label="DGP truth (analytic avg)",
-    )
+    plt.plot(centers, truth_mass / bw, color="tab:green", linewidth=2,
+             label="DGP truth (analytic avg)")
     plt.xlabel("Δ = xₜ − a·xₜ₋₁")
     plt.ylabel("Average density across examples")
     plt.grid(alpha=0.3)
@@ -138,9 +119,8 @@ def _parse_runs(items: list[str]) -> list[tuple[str, str]]:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument(
-        "--runs", nargs="+", required=True, help="One or more label=path.npz pairs."
-    )
+    p.add_argument("--runs", nargs="+", required=True,
+                   help="One or more label=path.npz pairs.")
     p.add_argument("--out_jsd", required=True)
     p.add_argument("--out_density", required=True)
     p.add_argument("--center_coefs", type=float, nargs="+", default=[0.9])

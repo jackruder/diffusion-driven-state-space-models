@@ -7,19 +7,20 @@ As these have very similar structure (initprior is like an encoder without futur
 """
 
 import abc
-from typing import Dict, Tuple, Callable, Optional
 from functools import partial
+from typing import Callable, Dict, Tuple, Optional
 
 import torch
 import torch.nn as nn
+
 from hydra_zen import builds
 
 from .futsum import FutureSummary, GRUFutureSummary, GRUFutureSummaryConf
 from .diffnets import ContextProducer, ContextProducerConf
 from .gaussians import (
     GaussianHead,
-    GaussianStats,
     GaussianHeadConf,
+    GaussianStats,
     gaussian_entropy,
     gaussian_log_prob,
 )
@@ -457,7 +458,8 @@ class GaussianEncoder(BaseEncoder):
 
         if covariates is not None:
             covariates_expanded = (
-                covariates.unsqueeze(1)
+                covariates
+                .unsqueeze(1)
                 .expand(-1, S, -1, -1)
                 .reshape(BS, covariates.size(1), T)
             )
@@ -478,7 +480,8 @@ class GaussianEncoder(BaseEncoder):
             # Expand to (BS, E_static, hidden_dim)
             E_s = static_context.size(1)
             static_context_expanded = (
-                static_context.unsqueeze(1)
+                static_context
+                .unsqueeze(1)
                 .expand(-1, S, -1, -1)
                 .reshape(BS, E_s, self.hidden_dim)
             )
@@ -716,6 +719,7 @@ class GaussianInitPrior(BaseInitPrior):
         gaussian_head: Callable[..., GaussianHead] | None = None,
         aux_posterior_head: Callable[..., GaussianHead] | None = None,
     ) -> None:
+
         super().__init__()
         if context is None:
             context = partial(ContextProducer, channels=8, num_layers=2)
@@ -881,14 +885,16 @@ class GaussianInitPrior(BaseInitPrior):
         # Flatten B, S
         z_init_bs = z_init.reshape(BS, d, j)  # (BS, d, j)
         time_embed_exp = (
-            time_embed.unsqueeze(1)
+            time_embed
+            .unsqueeze(1)
             .expand(-1, S, -1, -1)
             .reshape(BS, tdim, self.emb_time_dim)
         )
 
         if covariates is not None:
             covariates_exp = (
-                covariates.unsqueeze(1)
+                covariates
+                .unsqueeze(1)
                 .expand(-1, S, -1, -1)
                 .reshape(BS, covariates.size(1), covariates.size(2))
             )
@@ -1076,7 +1082,8 @@ class GaussianInitPrior(BaseInitPrior):
         )
         if covariates is not None:
             covariates_expanded = (
-                covariates.unsqueeze(1)
+                covariates
+                .unsqueeze(1)
                 .expand(-1, S, -1, -1)
                 .reshape(BS, covariates.size(1), T)
             )
@@ -1172,7 +1179,8 @@ class GaussianInitPrior(BaseInitPrior):
 
         BS = B * S
         time_embed_bs = (
-            time_embed.unsqueeze(1)
+            time_embed
+            .unsqueeze(1)
             .expand(B, S, -1, -1)
             .reshape(BS, T, self.emb_time_dim)
         )

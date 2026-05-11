@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-from abc import ABC, abstractmethod
 import csv
 import time
+from abc import ABC, abstractmethod
 from typing import Any, Dict, Callable, Optional
 import fnmatch
 from dataclasses import dataclass
@@ -269,7 +269,7 @@ class TensorBoardLogger(Logger):
         self._active = False
         self.writer = None
         try:
-            from torch.utils.tensorboard import SummaryWriter
+            from torch.utils.tensorboard import SummaryWriter  # noqa: PLC0415
         except ImportError:
             print(
                 "[TensorBoardLogger] tensorboard not installed — logging disabled. "
@@ -342,7 +342,7 @@ class WandbLogger(Logger):
             return
 
         try:
-            import wandb
+            import wandb  # noqa: PLC0415
         except ImportError:
             print(
                 "[WandbLogger] wandb not installed — logging disabled. "
@@ -379,9 +379,7 @@ class WandbLogger(Logger):
         self._wandb = wandb
         self._active = True
 
-    def _log(
-        self, prefix: str, step_key: str, step: int, row: Dict[str, float]
-    ) -> None:
+    def _log(self, prefix: str, step_key: str, step: int, row: Dict[str, float]) -> None:
         if not self._active:
             return
         payload: Dict[str, Any] = {f"{prefix}/{k}": v for k, v in row.items()}

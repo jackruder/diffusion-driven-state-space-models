@@ -10,12 +10,14 @@ Reads per-checkpoint JSD JSON files produced by ``eval_single_jsd.py`` and
 produces a comparison bar or line chart.
 """
 
-import os
-import math
 import argparse
+import math
+import os
+import json
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+
 
 EPS = 1e-12
 

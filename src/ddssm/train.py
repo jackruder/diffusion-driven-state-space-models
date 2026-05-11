@@ -2,32 +2,34 @@
 
 import os
 import math
+import yaml
 from typing import Any, Callable, final
 import tempfile
-from contextlib import nullcontext, contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict
 
-import yaml
 import torch
+
 from torch import optim
-from hydra_zen import builds, instantiate
-from omegaconf import MISSING
+from torch.utils.data import DataLoader
 from torch.profiler import (
-    ProfilerActivity,
     profile,
+    ProfilerActivity,
     schedule,
     tensorboard_trace_handler,
 )
-from torch.utils.data import DataLoader
+
+from hydra_zen import builds, instantiate
+from omegaconf import MISSING
 
 from .dssd import DDSSM_base
 from .loggers import (
     CSVLogger,
     MetricSpec,
     MetricStore,
-    WandbLogger,
     ConsoleLogger,
     TensorBoardLogger,
+    WandbLogger,
 )
 from .train_utils import (
     param_groups_for_adamw,
@@ -102,7 +104,7 @@ class DDSSMTrainer:
             ``entity``, ``name``, ``tags``, ``config``, ``base_url``,
             ``enabled``).  Example::
 
-                wandb_config = {
+                wandb_config={
                     "project": "ddssm",
                     "entity": "my-team",
                     "base_url": "https://wandb.example.com",
@@ -254,7 +256,6 @@ class DDSSMTrainer:
     ) -> "DDSSMTrainer":
         # Local import avoids a cycle: ddssm.conf imports DDSSMTrainerConf from this module.
         from .conf import load_yaml_config
-
         cfg = load_yaml_config(yaml_path)
         model = instantiate(cfg).to(device)
 
@@ -410,8 +411,8 @@ class DDSSMTrainer:
         observed = batch["observed_data"]
         observed_mask = batch["observation_mask"]
         timepoints = batch["timepoints"]
-        covariates = batch.get("covariates")
-        static_covariates = batch.get("static_covariates")
+        covariates = batch.get("covariates", None)
+        static_covariates = batch.get("static_covariates", None)
 
         with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
             _elbo, distortion, rate, metrics, _stats = self.model(
@@ -636,6 +637,7 @@ class DDSSMTrainer:
         - Uses grad accumulation and optional AMP for memory efficiency.
         - Profiles up to `profile_steps` optimizer steps if > 0.
         """
+
         device = self.device
         self.model.to(device)
 

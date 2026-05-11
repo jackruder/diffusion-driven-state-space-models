@@ -10,20 +10,20 @@ handles wiring; this class handles orchestration.
 
 from __future__ import annotations
 
-import os
 import csv
-import math
-import random
-from typing import Any, Callable
 import logging
-from dataclasses import field, dataclass
+import math
+import os
+import random
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 import numpy as np
 import torch
 
+from .data.datamodule import DDSSMDataModule
 from .dssd import DDSSM_base
 from .train import DDSSMTrainer
-from .data.datamodule import DDSSMDataModule
 
 log = logging.getLogger(__name__)
 
@@ -102,10 +102,8 @@ class ObjectiveSpec:
             with open(csv_path, "r", newline="") as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames or []
-                col = (
-                    self.metric
-                    if self.metric in fieldnames
-                    else next((h for h in fieldnames if "loss" in h.lower()), "")
+                col = self.metric if self.metric in fieldnames else next(
+                    (h for h in fieldnames if "loss" in h.lower()), ""
                 )
                 if not col:
                     return float("inf")
@@ -163,9 +161,7 @@ class Experiment:
     build_trainer: Callable[..., DDSSMTrainer]
     training: TrainingScalars = field(default_factory=TrainingScalars)
     objective: ObjectiveSpec | None = None
-    eval: Any = (
-        None  # ddssm.eval.EvalSpec | None -- typed lazily to avoid circular import
-    )
+    eval: Any = None  # ddssm.eval.EvalSpec | None -- typed lazily to avoid circular import
     viz: Any = None  # ddssm.viz.VizSpec | None -- typed lazily to avoid circular import
     seed: int | None = 0
     wandb_config: dict | None = None
@@ -194,9 +190,7 @@ class Experiment:
         csv_log_path = os.path.join(run_dir, "metrics.csv")
         tensorboard_dir = os.path.join(run_dir, "tb_logs")
 
-        log.info(
-            "Model: %d parameters", sum(p.numel() for p in self.model.parameters())
-        )
+        log.info("Model: %d parameters", sum(p.numel() for p in self.model.parameters()))
         wandb_kwargs = self._wandb_kwargs(run_dir)
         trainer = self.build_trainer(
             model=self.model,
@@ -215,9 +209,7 @@ class Experiment:
             log.info("No data attached. Returning trainer without fit().")
             return trainer
 
-        val_loader = (
-            self.data.val_loader() if self.training.validate_every > 0 else None
-        )
+        val_loader = self.data.val_loader() if self.training.validate_every > 0 else None
         log.info(
             "Starting fit (steps=%d, log_every=%d, validate_every=%d, amp=%s)",
             self.training.steps,
@@ -238,10 +230,7 @@ class Experiment:
         value = self.objective.read(csv_log_path)
         log.info(
             "Objective[%s/%s tail=%.2f] = %.6g",
-            self.objective.split,
-            self.objective.metric,
-            self.objective.tail_frac,
-            value,
+            self.objective.split, self.objective.metric, self.objective.tail_frac, value,
         )
         return value
 
@@ -331,7 +320,7 @@ class Experiment:
 
 __all__ = [
     "Experiment",
-    "ObjectiveSpec",
-    "TrainableModules",
     "TrainingScalars",
+    "TrainableModules",
+    "ObjectiveSpec",
 ]

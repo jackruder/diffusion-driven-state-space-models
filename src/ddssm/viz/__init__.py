@@ -16,7 +16,7 @@ runs during training.
 """
 
 from .plots import PLOT_REGISTRY, PlotContext, register_plot
-from .runner import VizSpec, PlotSpec, visualize
+from .runner import PlotSpec, VizSpec, visualize
 
 __all__ = [
     "PLOT_REGISTRY",

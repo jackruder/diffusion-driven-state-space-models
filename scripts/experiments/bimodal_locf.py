@@ -17,46 +17,36 @@ T=32, T_split=31 → strict one-step horizon.
 
 from __future__ import annotations
 
-import os
-import math
 import argparse
+import math
+import os
 
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 
+from ddssm.data.synthetic import SyntheticDataset
 from ddssm.eval.metrics import (
+    _bimodal_truth_mass,
     _hist_mass,
     _jsd_discrete,
-    _bimodal_truth_mass,
 )
-from ddssm.data.synthetic import SyntheticDataset
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out", required=True, help="Output NPZ path.")
-    p.add_argument(
-        "--summary_json",
-        default=None,
-        help="Optional path to write a summary JSON next to the NPZ.",
-    )
+    p.add_argument("--summary_json", default=None,
+                   help="Optional path to write a summary JSON next to the NPZ.")
     p.add_argument("--split", default="val", choices=["train", "val", "test"])
     p.add_argument("--n_per_split", type=int, default=1024)
     p.add_argument("--T", type=int, default=32)
-    p.add_argument(
-        "--T_split",
-        type=int,
-        default=31,
-        help="Past/future boundary index (default 31 → strict one-step).",
-    )
+    p.add_argument("--T_split", type=int, default=31,
+                   help="Past/future boundary index (default 31 → strict one-step).")
     p.add_argument("--D", type=int, default=1)
-    p.add_argument(
-        "--num_samples",
-        type=int,
-        default=1024,
-        help="Forecast samples per series. LOCF is degenerate, so all "
-        "samples are equal; this just controls histogram shape.",
-    )
+    p.add_argument("--num_samples", type=int, default=1024,
+                   help="Forecast samples per series. LOCF is degenerate, so all "
+                        "samples are equal; this just controls histogram shape.")
     p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--dataset_seed", type=int, default=123)
     # Histogram + DGP knobs (must match those in the eval metric for fair compare)
@@ -70,17 +60,11 @@ def main() -> None:
     args = p.parse_args()
 
     if args.T_split >= args.T or args.T_split < 1:
-        raise SystemExit(
-            f"--T_split must be in [1, T-1]; got {args.T_split} for T={args.T}"
-        )
+        raise SystemExit(f"--T_split must be in [1, T-1]; got {args.T_split} for T={args.T}")
 
     ds = SyntheticDataset(
-        mode="bimodal",
-        split=args.split,
-        N_per_split=args.n_per_split,
-        T=args.T,
-        D=args.D,
-        dataset_seed=args.dataset_seed,
+        mode="bimodal", split=args.split, N_per_split=args.n_per_split,
+        T=args.T, D=args.D, dataset_seed=args.dataset_seed,
     )
     dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
 
@@ -103,14 +87,9 @@ def main() -> None:
         for b in range(B):
             ctr = xhat[b] - args.center_coef * x_prev[b]
             mm = _hist_mass(ctr, edges)
-            tm = _bimodal_truth_mass(
-                centers,
-                float(x_prev[b]),
-                a=args.a,
-                step_size=args.step_size,
-                sigma=args.sigma,
-                center_coef=args.center_coef,
-            )
+            tm = _bimodal_truth_mass(centers, float(x_prev[b]),
+                                     a=args.a, step_size=args.step_size,
+                                     sigma=args.sigma, center_coef=args.center_coef)
             jsds.append(_jsd_discrete(mm, tm))
             x_prevs.append(float(x_prev[b]))
             sample_buf.append(xhat[b].astype(np.float32, copy=True))
@@ -148,15 +127,12 @@ def main() -> None:
     }
     if args.summary_json:
         import json
-
         os.makedirs(os.path.dirname(args.summary_json) or ".", exist_ok=True)
         with open(args.summary_json, "w") as f:
             json.dump(summary, f, indent=2)
 
-    print(
-        f"[LOCF] n={n} JSD mean={summary['bimodal_jsd_mean']:.6f} "
-        f"sem={summary['bimodal_jsd_sem']:.6f} median={summary['bimodal_jsd_median']:.6f}"
-    )
+    print(f"[LOCF] n={n} JSD mean={summary['bimodal_jsd_mean']:.6f} "
+          f"sem={summary['bimodal_jsd_sem']:.6f} median={summary['bimodal_jsd_median']:.6f}")
     print(f"[Saved] {args.out}")
 
 

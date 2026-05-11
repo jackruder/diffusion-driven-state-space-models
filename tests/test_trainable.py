@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 import torch
 
-from ddssm.experiment import Experiment, TrainingScalars, TrainableModules
+from ddssm.experiment import Experiment, TrainableModules, TrainingScalars
 
 
 def test_trainable_modules_defaults_all_true():
@@ -27,11 +28,8 @@ def test_train_calls_set_trainable_when_specified():
     expt.wandb_config = None
     expt.objective = None
     expt.training = TrainingScalars(
-        steps=0,
-        log_every=1,
-        trainable=TrainableModules(
-            encoder=True, decoder=True, z_init=True, transition=False
-        ),
+        steps=0, log_every=1,
+        trainable=TrainableModules(encoder=True, decoder=True, z_init=True, transition=False),
     )
 
     fake_data = MagicMock()

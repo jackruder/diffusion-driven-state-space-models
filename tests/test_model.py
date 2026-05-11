@@ -1,29 +1,29 @@
 # tests/test_model.py
-from types import SimpleNamespace
 from functools import partial
-
 import torch
 import pytest
-
-from ddssm.dssd import DDSSM_base
-from ddssm.futsum import GRUFutureSummary
-from ddssm.decoder import GaussianDecoder
+from ddssm.net_utils import get_side_info, time_embedding
 from ddssm.encoder import GaussianEncoder, GaussianInitPrior
+from ddssm.decoder import GaussianDecoder
+from ddssm.transitions.transitions import GaussianTransition
+from ddssm.transitions.diffusion import DiffusionTransition
+from ddssm.transitions.diffusion_v2 import (
+    DiffusionV2ScheduleConfig,
+    DiffusionV2Transition,
+)
+from ddssm.dssd import DDSSM_base
 from ddssm.diffnets import (
-    CSDIUnet,
     ContextProducer,
+    CSDIUnet,
+    DiffResidualBlockConfig,
     FeatureMixerConfig,
     ResidualBlockConfig,
-    DiffResidualBlockConfig,
 )
 from ddssm.gaussians import GaussianHead
-from ddssm.net_utils import get_side_info, time_embedding
-from ddssm.transitions.diffusion import DiffusionTransition, DiffusionScheduleConfig
-from ddssm.transitions.transitions import GaussianTransition
-from ddssm.transitions.diffusion_v2 import (
-    DiffusionV2Transition,
-    DiffusionV2ScheduleConfig,
-)
+from ddssm.futsum import GRUFutureSummary
+from ddssm.transitions.diffusion import DiffusionScheduleConfig
+from types import SimpleNamespace
+
 
 # ---------------------------------------------------------------------------
 # Shared tiny config (channels=8 to keep tests fast; nheads=4 divides 8)
@@ -51,73 +51,42 @@ _FS = partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1)
 
 def make_encoder():
     return GaussianEncoder(
-        data_dim=DATA_DIM,
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
-        use_mask=True,
-        hidden_dim=CHANNELS,
-        context=_CTX,
-        gaussian_head=_GH,
-        fut_summary=_FS,
+        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        use_mask=True, hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH, fut_summary=_FS,
     )
 
 
 def make_decoder():
     return GaussianDecoder(
-        latent_dim=LATENT_DIM,
-        data_dim=DATA_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX,
-        gaussian_head=_GH,
+        context=_CTX, gaussian_head=_GH,
     )
 
 
 def make_zinit():
     return GaussianInitPrior(
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX,
-        aux_context=_CTX,
-        gaussian_head=_GH,
-        aux_posterior_head=_GH,
+        context=_CTX, aux_context=_CTX, gaussian_head=_GH, aux_posterior_head=_GH,
     )
 
 
 def make_gaussian_transition():
     return GaussianTransition(
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX,
-        gaussian_head=_GH,
+        context=_CTX, gaussian_head=_GH,
     )
 
 
 def make_hyperparams():
     return SimpleNamespace(
-        S=1,
-        ema_decay=0.999,
-        weight_decay=1e-2,
-        batch_size=2,
-        grad_accum_steps=1,
-        t_chunk=4,
-        clip_grad_norm=None,
-        lambda_schedule="none",
-        lambda_start=0.001,
-        lambda_end=1.0,
-        lambda_warmup_steps=1,
-        enc_lr=1e-3,
-        dec_lr=1e-3,
-        zinit_lr=1e-3,
-        trans_lr=1e-3,
-        logvar_min=-7.0,
-        logvar_max=7.0,
+        S=1, ema_decay=0.999, weight_decay=1e-2, batch_size=2, grad_accum_steps=1,
+        t_chunk=4, clip_grad_norm=None, lambda_schedule="none", lambda_start=0.001,
+        lambda_end=1.0, lambda_warmup_steps=1, enc_lr=1e-3, dec_lr=1e-3,
+        zinit_lr=1e-3, trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
         rewo=SimpleNamespace(D0=0.1, nu=1e-3, alpha=0.99, tau1=1.0, tau2=1.0),
     )
 
@@ -125,14 +94,9 @@ def make_hyperparams():
 @pytest.fixture
 def model():
     return DDSSM_base(
-        encoder=make_encoder(),
-        decoder=make_decoder(),
-        z_init=make_zinit(),
-        transition=make_gaussian_transition(),
-        j=J,
-        data_dim=DATA_DIM,
-        latent_dim=LATENT_DIM,
-        emb_time_dim=EMB_TIME,
+        encoder=make_encoder(), decoder=make_decoder(),
+        z_init=make_zinit(), transition=make_gaussian_transition(),
+        j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
         hyperparams=make_hyperparams(),
     )
 
@@ -140,7 +104,6 @@ def model():
 # ---------------------------------------------------------------------------
 # net_utils utilities
 # ---------------------------------------------------------------------------
-
 
 def test_time_embedding_shapes():
     B, L, D = 2, 4, 6
@@ -162,7 +125,6 @@ def test_get_side_info_shapes():
 # ---------------------------------------------------------------------------
 # Module shape tests
 # ---------------------------------------------------------------------------
-
 
 def test_encoder_sample_paths():
     enc = make_encoder()
@@ -199,9 +161,7 @@ def test_gaussian_transition_prior_params():
 def test_diffusion_transition_builds():
     """DiffusionTransition should build with config objects and register expected buffers."""
     dt = DiffusionTransition(
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
         unet=partial(
             CSDIUnet,
             channels=CHANNELS,
@@ -221,7 +181,6 @@ def test_diffusion_transition_builds():
 # transition_kl: dict contract for both transitions
 # ---------------------------------------------------------------------------
 
-
 def _make_inputs(B=2, S=2, T=5):
     torch.manual_seed(0)
     zs = torch.randn(B, S, LATENT_DIM, T)
@@ -237,10 +196,7 @@ def test_gaussian_transition_kl_closed_form():
     zs, logq, mus, logvars, time_emb = _make_inputs()
     enc_stats = {"mus": mus, "logvars": logvars}
     out = trans.transition_kl(
-        enc_stats=enc_stats,
-        zs=zs,
-        logq_paths=logq,
-        time_embed=time_emb,
+        enc_stats=enc_stats, zs=zs, logq_paths=logq, time_embed=time_emb,
     )
     # Closed-form path returns only "kl" (no L_p / L_q sub-components)
     assert set(out.keys()) == {"kl"}
@@ -253,10 +209,7 @@ def test_gaussian_transition_kl_mc_fallback():
     trans = make_gaussian_transition()
     zs, logq, _mus, _lv, time_emb = _make_inputs()
     out = trans.transition_kl(
-        enc_stats={},
-        zs=zs,
-        logq_paths=logq,
-        time_embed=time_emb,
+        enc_stats={}, zs=zs, logq_paths=logq, time_embed=time_emb,
     )
     assert set(out.keys()) == {"kl", "L_p", "L_q"}
     for v in out.values():
@@ -267,9 +220,7 @@ def test_gaussian_transition_kl_mc_fallback():
 
 def _make_diffusion_transition():
     return DiffusionTransition(
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
         unet=partial(
             CSDIUnet,
             channels=CHANNELS,
@@ -288,10 +239,7 @@ def test_diffusion_transition_kl_closed_form_entropy():
     zs, logq, _mus, logvars, time_emb = _make_inputs()
     enc_stats = {"logvars": logvars}
     out = trans.transition_kl(
-        enc_stats=enc_stats,
-        zs=zs,
-        logq_paths=logq,
-        time_embed=time_emb,
+        enc_stats=enc_stats, zs=zs, logq_paths=logq, time_embed=time_emb,
     )
     assert set(out.keys()) == {"kl", "L_p", "L_q"}
     for v in out.values():
@@ -303,10 +251,7 @@ def test_diffusion_transition_kl_mc_entropy():
     trans = _make_diffusion_transition()
     zs, logq, _mus, _lv, time_emb = _make_inputs()
     out = trans.transition_kl(
-        enc_stats={},
-        zs=zs,
-        logq_paths=logq,
-        time_embed=time_emb,
+        enc_stats={}, zs=zs, logq_paths=logq, time_embed=time_emb,
     )
     assert set(out.keys()) == {"kl", "L_p", "L_q"}
     assert torch.allclose(out["kl"], out["L_p"] - out["L_q"])
@@ -316,14 +261,11 @@ def test_diffusion_transition_kl_mc_entropy():
 # DiffusionV2Transition (VP-SDE, ESM)
 # ---------------------------------------------------------------------------
 
-
 def _make_diffusion_v2_transition(
     num_steps=4, S_k=1, k_chunk=1, k_sampling_mode="uniform"
 ):
     return DiffusionV2Transition(
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
         unet=partial(
             CSDIUnet,
             channels=CHANNELS,
@@ -334,9 +276,7 @@ def _make_diffusion_v2_transition(
             ),
         ),
         schedule=DiffusionV2ScheduleConfig(
-            num_steps=num_steps,
-            S_k=S_k,
-            k_chunk=k_chunk,
+            num_steps=num_steps, S_k=S_k, k_chunk=k_chunk,
             k_sampling_mode=k_sampling_mode,
         ),
     )
@@ -346,17 +286,8 @@ def test_diffusion_v2_transition_builds():
     """DiffusionV2Transition registers VP-SDE buffers of the expected length."""
     dt = _make_diffusion_v2_transition(num_steps=10)
     expected = (
-        "alpha",
-        "sigma_tilde",
-        "wtilde",
-        "dsigma2_tilde_dtau",
-        "c_skip",
-        "c_out",
-        "c_in",
-        "c_noise",
-        "beta",
-        "tau",
-        "p_k",
+        "alpha", "sigma_tilde", "wtilde", "dsigma2_tilde_dtau",
+        "c_skip", "c_out", "c_in", "c_noise", "beta", "tau", "p_k",
     )
     for buf in expected:
         assert buf in dt._buffers, f"Missing buffer: {buf}"
@@ -384,10 +315,7 @@ def test_diffusion_v2_transition_kl_closed_form_entropy():
     zs, logq, mus, logvars, time_emb = _make_inputs()
     enc_stats = {"mus": mus, "logvars": logvars}
     out = trans.transition_kl(
-        enc_stats=enc_stats,
-        zs=zs,
-        logq_paths=logq,
-        time_embed=time_emb,
+        enc_stats=enc_stats, zs=zs, logq_paths=logq, time_embed=time_emb,
     )
     assert set(out.keys()) == {"kl", "L_p", "L_q"}
     for v in out.values():
@@ -400,10 +328,7 @@ def test_diffusion_v2_transition_kl_mc_entropy():
     trans = _make_diffusion_v2_transition()
     zs, logq, _mus, _lv, time_emb = _make_inputs()
     out = trans.transition_kl(
-        enc_stats={},
-        zs=zs,
-        logq_paths=logq,
-        time_embed=time_emb,
+        enc_stats={}, zs=zs, logq_paths=logq, time_embed=time_emb,
     )
     assert set(out.keys()) == {"kl", "L_p", "L_q"}
     for v in out.values():
@@ -427,7 +352,6 @@ def test_diffusion_v2_log_likelihood_not_implemented():
 # ---------------------------------------------------------------------------
 # DDSSM_base forward pass
 # ---------------------------------------------------------------------------
-
 
 def test_ddssm_forward(model):
     B, T = 2, 5

@@ -77,7 +77,7 @@ def test_run_dir_forwarded_to_wandb_init(fake_wandb):
 
 def test_experiment_disabled_wandb_returns_none(tmp_path):
     """Experiment._wandb_kwargs returns None when wandb_config is disabled."""
-    from ddssm.experiment import Experiment
+    from ddssm.experiment import Experiment, TrainingScalars
 
     expt = Experiment.__new__(Experiment)  # bypass dataclass __init__
     expt.wandb_config = {"enabled": False, "project": "p"}

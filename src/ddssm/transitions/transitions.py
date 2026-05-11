@@ -21,16 +21,18 @@ Defines the ``BaseTransition`` interface and the concrete ``GaussianTransition``
 """
 
 import math
-from typing import Any, Dict, Tuple, Callable, Iterator, Optional
 from functools import partial
+from typing import Any, Callable, Dict, Iterator, Tuple, Optional
 
 import torch
 import torch.nn as nn
+
+
 from hydra_zen import builds
 
 from ..encoder import GaussianHead, ContextProducer
 from ..diffnets import ContextProducerConf
-from ..gaussians import GaussianStats, GaussianHeadConf, gaussian_kl_divergence
+from ..gaussians import GaussianHeadConf, GaussianStats, gaussian_kl_divergence
 from ..torch_compile import maybe_compile
 
 
@@ -71,11 +73,7 @@ class BaseTransition(nn.Module):
         time_chunk_num: Optional[int] = None,
         time_chunk_size: Optional[int] = None,
         covariates: Optional[torch.Tensor] = None,
-    ) -> Iterator[
-        Tuple[
-            int, int, int, int, int, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]
-        ]
-    ]:
+    ) -> Iterator[Tuple[int, int, int, int, int, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]]:
         """Yield per-chunk window tensors + context for the time loop.
 
         Yields tuples ``(B, S, current_chunk_len, t_start, t_end, z_target_flat,
@@ -120,7 +118,8 @@ class BaseTransition(nn.Module):
 
             t_hist_chunk = t_hist_chunk.permute(0, 1, 3, 2)  # (B, chunk_len, j, E)
             t_hist_flat = (
-                t_hist_chunk.unsqueeze(1)
+                t_hist_chunk
+                .unsqueeze(1)
                 .expand(-1, S, -1, -1, -1)
                 .reshape(BS_chunk, j, self.emb_time_dim)
             )
@@ -131,14 +130,16 @@ class BaseTransition(nn.Module):
                 c_hist_chunk = c_hist_chunk[:, :, :current_chunk_len, :]
                 c_hist_chunk = c_hist_chunk.permute(0, 2, 3, 1)  # (B, chunk_len, j, V)
                 c_hist_flat = (
-                    c_hist_chunk.unsqueeze(1)
+                    c_hist_chunk
+                    .unsqueeze(1)
                     .expand(-1, S, -1, -1, -1)
                     .reshape(BS_chunk, j, covariates.size(1))
                 )
 
                 c_target_chunk = covariates[:, :, t_start:t_end].permute(0, 2, 1)
                 c_target_flat = (
-                    c_target_chunk.unsqueeze(1)
+                    c_target_chunk
+                    .unsqueeze(1)
                     .expand(-1, S, -1, -1)
                     .reshape(BS_chunk, 1, covariates.size(1))
                 )
@@ -148,7 +149,8 @@ class BaseTransition(nn.Module):
 
             t_target_chunk = time_embed[:, t_start:t_end, :]
             t_target_flat = (
-                t_target_chunk.unsqueeze(1)
+                t_target_chunk
+                .unsqueeze(1)
                 .expand(-1, S, -1, -1)
                 .reshape(BS_chunk, 1, self.emb_time_dim)
             )
@@ -293,6 +295,7 @@ class BaseTransition(nn.Module):
         Returns:
             Sampled latent trajectories, shape ``(B, S, d, steps)``.
         """
+
         z_hist = self._ensure_seq(z_hist)  # (B, d, j)
         B, d, j = z_hist.shape
         assert j == self.j
@@ -334,7 +337,7 @@ class BaseTransition(nn.Module):
                 raise ValueError(
                     f"hist_valid_len must be (B,); got {tuple(hist_valid_len.shape)}"
                 )
-            mask = (  # TODO fix this. incorrect
+            mask = (  # Todo fix this. incorrect
                 torch.arange(self.j, device=device).view(1, 1, 1, self.j)
                 >= hist_valid_len.view(B, 1, 1, 1).clamp(max=self.j)
             )
@@ -356,7 +359,8 @@ class BaseTransition(nn.Module):
                     ) >= valid_len.view(B, 1, 1).clamp(max=self.j)
                     hist_time = hist_time.masked_fill(tmask, 0)
                 hist_time = (
-                    hist_time.permute(0, 2, 1)  # (B, j, E)
+                    hist_time
+                    .permute(0, 2, 1)  # (B, j, E)
                     .unsqueeze(1)
                     .expand(-1, S, -1, -1)
                     .reshape(B * S, self.j, self.emb_time_dim)
@@ -371,7 +375,8 @@ class BaseTransition(nn.Module):
                     ) >= valid_len.view(B, 1, 1).clamp(max=self.j)
                     hist_cov = hist_cov.masked_fill(tmask, 0)
                 hist_cov = (
-                    hist_cov.permute(0, 2, 1)  # (B, j, V)
+                    hist_cov
+                    .permute(0, 2, 1)  # (B, j, V)
                     .unsqueeze(1)
                     .expand(-1, S, -1, -1)
                     .reshape(B * S, self.j, self.covariate_dim)
@@ -630,9 +635,7 @@ class GaussianTransition(BaseTransition):
                     z_hist_flat,
                     ctx,
                 ) in self._iter_window_chunks(
-                    zs,
-                    time_embed,
-                    covariates=covariates,
+                    zs, time_embed, covariates=covariates,
                 ):
                     # prior params for the chunk's targets, shape (N, d) where
                     # N = B*S*chunk_len
@@ -640,9 +643,15 @@ class GaussianTransition(BaseTransition):
 
                     # encoder stats slices for the same targets:
                     # (B, S, d, chunk_len) -> (B, S, chunk_len, d) -> (N, d)
-                    q_mu = mus[..., t_start:t_end].permute(0, 1, 3, 2).reshape(-1, d)
+                    q_mu = (
+                        mus[..., t_start:t_end]
+                        .permute(0, 1, 3, 2)
+                        .reshape(-1, d)
+                    )
                     q_logvar = (
-                        logvars[..., t_start:t_end].permute(0, 1, 3, 2).reshape(-1, d)
+                        logvars[..., t_start:t_end]
+                        .permute(0, 1, 3, 2)
+                        .reshape(-1, d)
                     )
 
                     kl_flat = gaussian_kl_divergence(

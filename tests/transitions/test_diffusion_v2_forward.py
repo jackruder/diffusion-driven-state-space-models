@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import torch
 import pytest
+import torch
 
 
 def test_forward_marginal_at_tau_max_is_standard_normal(transition):
@@ -15,7 +15,7 @@ def test_forward_marginal_at_tau_max_is_standard_normal(transition):
 
     k_last = transition.num_steps - 1
     alpha_last = transition.alpha[k_last]
-    sigma_last = torch.sqrt(1.0 - alpha_last**2)
+    sigma_last = torch.sqrt(1.0 - alpha_last ** 2)
     eps = torch.randn_like(z0)
     z_tau = alpha_last * z0 + sigma_last * eps
 
@@ -34,7 +34,7 @@ def test_forward_marginal_at_intermediate_tau_matches_closed_form(transition):
     k = transition.num_steps // 2
 
     alpha_k = transition.alpha[k]
-    sigma_k = torch.sqrt(1.0 - alpha_k**2)
+    sigma_k = torch.sqrt(1.0 - alpha_k ** 2)
 
     N = 50_000
     z0 = mu_0 + sigma2_0.sqrt() * torch.randn(N, d)
@@ -42,15 +42,14 @@ def test_forward_marginal_at_intermediate_tau_matches_closed_form(transition):
     z_tau = alpha_k * z0 + sigma_k * eps
 
     expected_mean = alpha_k * mu_0
-    expected_var = alpha_k**2 * sigma2_0 + sigma_k**2
+    expected_var = alpha_k ** 2 * sigma2_0 + sigma_k ** 2
     assert torch.allclose(z_tau.mean(dim=0), expected_mean, atol=0.05)
     assert torch.allclose(z_tau.var(dim=0), expected_var, rtol=0.05)
 
 
 def test_forward_kernel_score_matches_analytical(transition):
     """In the degenerate ESM (mu_t = z_0, sigma2_t = 0) the recovered score is the
-    analytic VE-coord DSM kernel score ``-(z_tilde - z_0) / sigma_tilde**2``.
-    """
+    analytic VE-coord DSM kernel score ``-(z_tilde - z_0) / sigma_tilde**2``."""
     torch.manual_seed(2)
     N, d = 64, transition.latent_dim
     z0 = torch.randn(N, d)
@@ -62,7 +61,7 @@ def test_forward_kernel_score_matches_analytical(transition):
     _, F_target = transition._vp_precondition(z0, sigma2_t, k_idx, eps)
 
     sigma_tilde = transition.sigma_tilde[k_val]
-    sigma_tilde2 = sigma_tilde**2
+    sigma_tilde2 = sigma_tilde ** 2
     c_skip = transition.c_skip[k_val]
     c_out = transition.c_out[k_val]
 
@@ -81,7 +80,7 @@ def test_terminal_marginal_independent_of_initial_distribution(transition):
     d = transition.latent_dim
     k_last = transition.num_steps - 1
     alpha_last = transition.alpha[k_last]
-    sigma_last = torch.sqrt(1.0 - alpha_last**2)
+    sigma_last = torch.sqrt(1.0 - alpha_last ** 2)
 
     z0_a = 10.0 + torch.randn(N, d)
     z0_b = -5.0 + 3.0 * torch.randn(N, d)

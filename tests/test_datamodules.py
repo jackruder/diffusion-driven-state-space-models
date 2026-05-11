@@ -9,15 +9,16 @@ that ``parse_batch`` is a no-op pass-through on those batches.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
-import torch
 import pytest
+import torch
 
 from ddssm.data.datamodule import (
     DataMetadata,
+    DDSSMDataModule,
     KDDDataModule,
     NullDataModule,
-    DDSSMDataModule,
     SyntheticDataModule,
 )
 
@@ -45,7 +46,9 @@ def test_null_datamodule_returns_no_loaders():
 
 
 def test_synthetic_datamodule_smoke():
-    dm = SyntheticDataModule(mode="lgssm", T=16, D=2, N_per_split=8, batch_size=4)
+    dm = SyntheticDataModule(
+        mode="lgssm", T=16, D=2, N_per_split=8, batch_size=4
+    )
     assert isinstance(dm, DDSSMDataModule)
     assert dm.batch_format == "sequence"
 
@@ -99,16 +102,12 @@ def test_datamodule_protocol_runtime_check():
 # verification presets (harmonic, harmonic-noisy, bimodal, robot-basis-pursuit).
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.parametrize(
-    "mode,D",
-    [
-        ("harmonic", 1),
-        ("harmonic-noisy", 1),
-        ("bimodal", 1),
-        ("robot-basis-pursuit", 2),
-    ],
-)
+@pytest.mark.parametrize("mode,D", [
+    ("harmonic",              1),
+    ("harmonic-noisy",        1),
+    ("bimodal",               1),
+    ("robot-basis-pursuit",   2),
+])
 def test_synthetic_datamodule_mode_shapes(mode: str, D: int) -> None:
     """Every verification mode must produce canonical (B, D, T) batches without NaNs."""
     T, N, B = 16, 8, 4
@@ -131,9 +130,7 @@ def test_synthetic_datamodule_mode_shapes(mode: str, D: int) -> None:
 
 def test_synthetic_datamodule_robot_requires_d_ge_2() -> None:
     """robot-basis-pursuit with D=1 must not silently produce wrong-shaped data."""
-    dm = SyntheticDataModule(
-        mode="robot-basis-pursuit", T=16, D=2, N_per_split=8, batch_size=2
-    )
+    dm = SyntheticDataModule(mode="robot-basis-pursuit", T=16, D=2, N_per_split=8, batch_size=2)
     batch = next(iter(dm.train_loader()))
     # X and Y coordinates must both be present
     assert batch["observed_data"].shape[1] == 2
@@ -145,6 +142,4 @@ def test_synthetic_datamodule_bimodal_has_variance() -> None:
     batch = next(iter(dm.train_loader()))
     # Variance across batch and time should be well above noise floor
     std = batch["observed_data"].std().item()
-    assert std > 0.5, (
-        f"bimodal std={std:.3f} suspiciously low — modes may have collapsed"
-    )
+    assert std > 0.5, f"bimodal std={std:.3f} suspiciously low — modes may have collapsed"

@@ -12,19 +12,18 @@ forecast samples, bins them into a histogram, and reports the JSD against the
 analytic mixture distribution.
 """
 
-import os
+import argparse
 import csv
+import os
 import json
 import math
-import argparse
-
 import numpy as np
 import torch
-from ddssm.ddssm import DDSSM_base
 from torch.utils.data import DataLoader
 
-from ddssm.config import load_config_from_files
+from ddssm.ddssm import DDSSM_base
 from ddssm.data.synthetic import SyntheticDataset
+from ddssm.config import load_config_from_files
 
 EPS = 1e-12
 
@@ -199,7 +198,7 @@ def main():
     jsd_arr = np.array([r["jsd"] for r in rows], dtype=np.float64)
     idx_arr = np.array([r["sample_idx"] for r in rows], dtype=np.int64)
 
-    n = len(jsd_arr)
+    n = int(len(jsd_arr))
     mean = float(jsd_arr.mean()) if n > 0 else float("nan")
     std = float(jsd_arr.std()) if n > 0 else float("nan")
     sem = float(std / math.sqrt(n)) if n > 0 else float("nan")
