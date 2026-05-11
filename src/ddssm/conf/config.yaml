@@ -12,5 +12,9 @@ defaults:
   - encoder: gaussian
   - decoder: gaussian
   - z_init: gaussian
+  - context: csdi
+  - unet: csdi
+  - time_mixer: conv
+  - feature_mixer: transformer
   - wandb: disabled
   - _self_

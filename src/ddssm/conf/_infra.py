@@ -25,10 +25,16 @@ from ..data.datamodule import (
 )
 from ..decoder import GaussianDecoder, GaussianDecoderConf
 from ..diffnets import (
+    ContextProducer,
     ContextProducerConf,
+    CSDIUnet,
     CSDIUnetConf,
+    DiffResidualBlockConfig,
+    FeatureMixerConfig,
     MLPContextProducerConf,
     MLPCSDIUnetConf,
+    ResidualBlockConfig,
+    TimeMixerConfig,
 )
 from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
 from ..encoder import (
@@ -65,18 +71,7 @@ TransitionGaussianConf = builds(
     j="${experiment.j}",
     emb_time_dim="${experiment.emb_time_dim}",
     covariate_dim="${experiment.covariate_dim}",
-    context=ContextProducerConf(),
-    gaussian_head=GaussianHeadConf(),
-)
-
-TransitionGaussianMLPConf = builds(
-    GaussianTransition,
-    populate_full_signature=True,
-    latent_dim="${experiment.latent_dim}",
-    j="${experiment.j}",
-    emb_time_dim="${experiment.emb_time_dim}",
-    covariate_dim="${experiment.covariate_dim}",
-    context=MLPContextProducerConf(),
+    context="${context}",
     gaussian_head=GaussianHeadConf(),
 )
 
@@ -87,18 +82,7 @@ TransitionDiffusionConf = builds(
     j="${experiment.j}",
     emb_time_dim="${experiment.emb_time_dim}",
     covariate_dim="${experiment.covariate_dim}",
-    unet=CSDIUnetConf(),
-    schedule=DiffusionScheduleConfig(),
-)
-
-TransitionDiffusionMLPConf = builds(
-    DiffusionTransition,
-    populate_full_signature=True,
-    latent_dim="${experiment.latent_dim}",
-    j="${experiment.j}",
-    emb_time_dim="${experiment.emb_time_dim}",
-    covariate_dim="${experiment.covariate_dim}",
-    unet=MLPCSDIUnetConf(),
+    unet="${unet}",
     schedule=DiffusionScheduleConfig(),
 )
 
@@ -109,18 +93,7 @@ TransitionDiffusionV2Conf = builds(
     j="${experiment.j}",
     emb_time_dim="${experiment.emb_time_dim}",
     covariate_dim="${experiment.covariate_dim}",
-    unet=CSDIUnetConf(),
-    schedule=DiffusionV2ScheduleConfig(),
-)
-
-TransitionDiffusionV2MLPConf = builds(
-    DiffusionV2Transition,
-    populate_full_signature=True,
-    latent_dim="${experiment.latent_dim}",
-    j="${experiment.j}",
-    emb_time_dim="${experiment.emb_time_dim}",
-    covariate_dim="${experiment.covariate_dim}",
-    unet=MLPCSDIUnetConf(),
+    unet="${unet}",
     schedule=DiffusionV2ScheduleConfig(),
 )
 
@@ -130,6 +103,97 @@ TransitionDiffusionV2MLPConf = builds(
 # ---------------------------------------------------------------------------
 
 store = ZenStore(name="ddssm")
+
+
+# ---------------------------------------------------------------------------
+# ``time_mixer`` and ``feature_mixer`` config groups.
+#
+# These select the per-channel mixer architectures used inside the residual
+# blocks of both ``CSDIUnet`` (diffusion U-Net) and ``ContextProducer``
+# (encoder/decoder/init-prior context). Choices are wired in via top-level
+# interpolation so that one CLI flag swaps the mixer everywhere it appears.
+# ---------------------------------------------------------------------------
+
+TimeMixerConvConf = builds(
+    TimeMixerConfig, type="conv", kernel_size=3, populate_full_signature=True,
+)
+TimeMixerGRUConf = builds(
+    TimeMixerConfig, type="gru", gru_layers=1, populate_full_signature=True,
+)
+TimeMixerIdentityConf = builds(
+    TimeMixerConfig, type="identity", populate_full_signature=True,
+)
+
+FeatureMixerTransformerConf = builds(
+    FeatureMixerConfig, type="transformer", nheads=8, n_layers=1,
+    populate_full_signature=True,
+)
+FeatureMixerConvConf = builds(
+    FeatureMixerConfig, type="conv", populate_full_signature=True,
+)
+FeatureMixerIdentityConf = builds(
+    FeatureMixerConfig, type="identity", populate_full_signature=True,
+)
+
+store(TimeMixerConvConf, group="time_mixer", name="conv")
+store(TimeMixerGRUConf, group="time_mixer", name="gru")
+store(TimeMixerIdentityConf, group="time_mixer", name="identity")
+
+store(FeatureMixerTransformerConf, group="feature_mixer", name="transformer")
+store(FeatureMixerConvConf, group="feature_mixer", name="conv")
+store(FeatureMixerIdentityConf, group="feature_mixer", name="identity")
+
+
+# ---------------------------------------------------------------------------
+# ``context`` config group: ``ContextProducer`` (default, CSDI-style residual
+# stack) vs ``MLPContextProducer`` (MLP ablation). The selected entry is
+# threaded into encoder / decoder / z_init / transition via ``${context}``.
+#
+# The CSDI variant interpolates its inner residual block's time/feature
+# mixers from the corresponding groups so that all four module slots share
+# a single ``time_mixer=…`` / ``feature_mixer=…`` override.
+# ---------------------------------------------------------------------------
+
+ResidualBlockConf = builds(
+    ResidualBlockConfig,
+    time="${time_mixer}",
+    feature="${feature_mixer}",
+    populate_full_signature=True,
+)
+
+ContextProducerCSDIConf = builds(
+    ContextProducer,
+    builds_bases=(ContextProducerConf,),
+    residual_block=ResidualBlockConf,
+    zen_partial=True,
+)
+
+store(ContextProducerCSDIConf, group="context", name="csdi")
+store(MLPContextProducerConf, group="context", name="mlp")
+
+
+# ---------------------------------------------------------------------------
+# ``unet`` config group: ``CSDIUnet`` (default residual stack with selectable
+# mixers) vs ``MLPCSDIUnet`` (MLP ablation). Selected via ``${unet}`` inside
+# the diffusion transition Confs.
+# ---------------------------------------------------------------------------
+
+DiffResidualBlockConf = builds(
+    DiffResidualBlockConfig,
+    time="${time_mixer}",
+    feature="${feature_mixer}",
+    populate_full_signature=True,
+)
+
+CSDIUnetGroupConf = builds(
+    CSDIUnet,
+    builds_bases=(CSDIUnetConf,),
+    residual_block=DiffResidualBlockConf,
+    zen_partial=True,
+)
+
+store(CSDIUnetGroupConf, group="unet", name="csdi")
+store(MLPCSDIUnetConf, group="unet", name="mlp")
 
 # ---------------------------------------------------------------------------
 # Encoder / Decoder / InitPrior group Confs.
@@ -151,19 +215,7 @@ EncoderGaussianConf = builds(
     emb_time_dim="${experiment.emb_time_dim}",
     covariate_dim="${experiment.covariate_dim}",
     use_mask="${experiment.use_observation_mask}",
-)
-
-EncoderGaussianMLPConf = builds(
-    GaussianEncoder,
-    builds_bases=(GaussianEncoderConf,),
-    populate_full_signature=True,
-    data_dim="${experiment.data_dim}",
-    latent_dim="${experiment.latent_dim}",
-    j="${experiment.j}",
-    emb_time_dim="${experiment.emb_time_dim}",
-    covariate_dim="${experiment.covariate_dim}",
-    use_mask="${experiment.use_observation_mask}",
-    context=MLPContextProducerConf(),
+    context="${context}",
 )
 
 DecoderGaussianConf = builds(
@@ -175,18 +227,7 @@ DecoderGaussianConf = builds(
     j="${experiment.j}",
     emb_time_dim="${experiment.emb_time_dim}",
     covariate_dim="${experiment.covariate_dim}",
-)
-
-DecoderGaussianMLPConf = builds(
-    GaussianDecoder,
-    builds_bases=(GaussianDecoderConf,),
-    populate_full_signature=True,
-    latent_dim="${experiment.latent_dim}",
-    data_dim="${experiment.data_dim}",
-    j="${experiment.j}",
-    emb_time_dim="${experiment.emb_time_dim}",
-    covariate_dim="${experiment.covariate_dim}",
-    context=MLPContextProducerConf(),
+    context="${context}",
 )
 
 InitPriorGaussianConf = builds(
@@ -197,32 +238,16 @@ InitPriorGaussianConf = builds(
     j="${experiment.j}",
     emb_time_dim="${experiment.emb_time_dim}",
     covariate_dim="${experiment.covariate_dim}",
-)
-
-InitPriorGaussianMLPConf = builds(
-    GaussianInitPrior,
-    builds_bases=(GaussianInitPriorConf,),
-    populate_full_signature=True,
-    latent_dim="${experiment.latent_dim}",
-    j="${experiment.j}",
-    emb_time_dim="${experiment.emb_time_dim}",
-    covariate_dim="${experiment.covariate_dim}",
-    context=MLPContextProducerConf(),
-    aux_context=MLPContextProducerConf(),
+    context="${context}",
+    aux_context="${context}",
 )
 
 store(TransitionGaussianConf, group="transition", name="gaussian")
-store(TransitionGaussianMLPConf, group="transition", name="gaussian_mlp")
 store(TransitionDiffusionConf, group="transition", name="diffusion")
-store(TransitionDiffusionMLPConf, group="transition", name="diffusion_mlp")
 store(TransitionDiffusionV2Conf, group="transition", name="diffusion_v2")
-store(TransitionDiffusionV2MLPConf, group="transition", name="diffusion_v2_mlp")
 store(EncoderGaussianConf, group="encoder", name="gaussian")
-store(EncoderGaussianMLPConf, group="encoder", name="gaussian_mlp")
 store(DecoderGaussianConf, group="decoder", name="gaussian")
-store(DecoderGaussianMLPConf, group="decoder", name="gaussian_mlp")
 store(InitPriorGaussianConf, group="z_init", name="gaussian")
-store(InitPriorGaussianMLPConf, group="z_init", name="gaussian_mlp")
 store(DDSSMHyperParamsConf, group="hyperparams", name="default")
 store(DDSSMConf, group="model", name="default")
 store(DDSSMTrainerConf, group="trainer", name="default")

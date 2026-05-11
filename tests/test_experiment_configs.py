@@ -98,10 +98,13 @@ MODULE_GROUP_OVERRIDES = [
     "z_init=gaussian",
 ]
 
-MLP_MODULE_GROUP_OVERRIDES = [
-    "encoder=gaussian_mlp",
-    "decoder=gaussian_mlp",
-    "z_init=gaussian_mlp",
+# Architecture-ablation overrides: swap the CSDI residual context producer
+# and U-Net for their MLP variants via top-level group selection. The
+# ``context=mlp`` flag propagates into encoder, decoder, z_init and the
+# Gaussian transition; ``unet=mlp`` propagates into the diffusion transition.
+MLP_ARCHITECTURE_OVERRIDES = [
+    "context=mlp",
+    "unet=mlp",
 ]
 
 
@@ -138,9 +141,9 @@ def test_mlp_architecture_ablation_overrides_compose() -> None:
             config_name="config",
             overrides=[
                 "experiment=harmonic",
-                "transition=diffusion_mlp",
+                "transition=diffusion",
             ]
-            + MLP_MODULE_GROUP_OVERRIDES,
+            + MLP_ARCHITECTURE_OVERRIDES,
         )
 
     assert cfg.experiment.model.transition._target_.endswith("DiffusionTransition")
@@ -157,12 +160,49 @@ def test_mlp_architecture_ablation_overrides_instantiate() -> None:
             config_name="config",
             overrides=[
                 "experiment=harmonic",
-                "transition=diffusion_mlp",
+                "transition=diffusion",
             ]
-            + MLP_MODULE_GROUP_OVERRIDES,
+            + MLP_ARCHITECTURE_OVERRIDES,
         )
     expt = instantiate(cfg.experiment)
     assert isinstance(expt, Experiment)
+    n_params = sum(p.numel() for p in expt.model.parameters())
+    assert n_params > 0
+
+
+# ---------------------------------------------------------------------------
+# Mixer config groups (time_mixer / feature_mixer): swap the per-channel
+# mixers used inside ``CSDIUnet`` and ``ContextProducer`` residual blocks.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("time_choice", ["conv", "gru", "identity"])
+@pytest.mark.parametrize("feature_choice", ["transformer", "conv", "identity"])
+def test_mixer_overrides_compose_and_instantiate(
+    time_choice: str, feature_choice: str,
+) -> None:
+    with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
+        cfg = compose(
+            config_name="config",
+            overrides=[
+                "experiment=harmonic",
+                "transition=diffusion",
+                f"time_mixer={time_choice}",
+                f"feature_mixer={feature_choice}",
+            ],
+        )
+    # The interpolation should land in both the CSDI U-Net's residual block
+    # and the encoder's context producer residual block.
+    assert cfg.experiment.model.transition.unet.residual_block.time.type == time_choice
+    assert (
+        cfg.experiment.model.transition.unet.residual_block.feature.type
+        == feature_choice
+    )
+    assert cfg.experiment.model.encoder.context.residual_block.time.type == time_choice
+    assert (
+        cfg.experiment.model.encoder.context.residual_block.feature.type
+        == feature_choice
+    )
+    expt = instantiate(cfg.experiment)
     n_params = sum(p.numel() for p in expt.model.parameters())
     assert n_params > 0
 
