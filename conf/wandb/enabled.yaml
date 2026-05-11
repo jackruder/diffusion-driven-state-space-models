@@ -4,9 +4,9 @@
 # fields at the CLI, e.g.::
 #
 #     python -m ddssm.app wandb=enabled \
-#         wandb.project=my-project \
-#         wandb.entity=my-team \
-#         wandb.tags="['recon','synth']"
+#         experiment.wandb_config.project=my-project \
+#         experiment.wandb_config.entity=my-team \
+#         'experiment.wandb_config.tags=[recon,synth]'
 #
 # Identity is auto-derived from Hydra so multirun trials cluster nicely
 # in the W&B UI:

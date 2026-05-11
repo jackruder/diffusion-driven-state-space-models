@@ -34,7 +34,7 @@ override.
 
 #+BEGIN_SRC sh
 # Enable W&B (opt-in)
-python -m ddssm.app experiment=PRESET wandb=enabled wandb.project=ddssm
+python -m ddssm.app experiment=PRESET wandb=enabled experiment.wandb_config.project=ddssm
 #+END_SRC
 
 W&B is disabled by default (~conf/wandb/disabled.yaml~). Use ~wandb=enabled~ to
@@ -344,6 +344,9 @@ included as a secondary metric.
 
 #+BEGIN_SRC sh
 python -m ddssm.app experiment=bimodal \
+    wandb=enabled \
+    experiment.wandb_config.group=bimodal_v1_v2 \
+    'experiment.wandb_config.tags=[bimodal,gaussian]' \
     hydra.run.dir=runs/bimodal/gauss
 #+END_SRC
 
@@ -375,6 +378,9 @@ python -m ddssm.app experiment=bimodal \
     'experiment.training.steps=2000' \
     'experiment.training.checkpoint_every=500' \
     'experiment.hyperparams.lambda_warmup_steps=400' \
+    wandb=enabled \
+    experiment.wandb_config.group=bimodal_v1_v2 \
+    'experiment.wandb_config.tags=[bimodal,diffusion_v1]' \
     hydra.run.dir=runs/bimodal/diff
 #+END_SRC
 
@@ -509,6 +515,132 @@ python -m ddssm.visualize experiment=bimodal \
 
 The histogram should show two well-separated modes for the diffusion model and
 a single mode (collapsed Gaussian) for the Gaussian transition.
+
+*** Diffusion V2 vs V1 — head-to-head on bimodal
+
+#+BEGIN_QUOTE
+Comparison of the original EDM-style diffusion (~transition=diffusion~, "V1")
+against the VP-SDE / explicit-score-matching variant
+(~transition=diffusion_v2~, "V2") on the bimodal dataset.  V2 differs from V1
+in three places relevant to this comparison:
+
+1. Schedule: variance-preserving (~beta_min, beta_max~) on ~tau in [tau_min, 1]~
+   instead of EDM's ~rho~-power ~sigma~-grid.
+2. Loss: closed-form *explicit* score matching using the encoder posterior
+   ~(mu_t, sigma_t**2)~ at the target step (V1 uses standard DSM around the
+   sampled ~z_t~).
+3. Importance sampling: ~k_sampling_mode=importance~ is currently disabled
+   (raises ~NotImplementedError~) — the previous LSGM-style derivation
+   ~p(tau) ∝ d(sigma_tilde**2)/dtau~ was incorrect and is being re-derived.
+   Use ~k_sampling_mode=uniform~ for V2 runs in the meantime.
+#+END_QUOTE
+
+Both runs share the same encoder/decoder/zinit, the same data module, and the
+same training-step budget; only the transition (and its sampling/loss) changes.
+Use the *same* ~lambda_warmup_steps~ as the V1 baseline so the rate term
+ramps in identically.
+
+All training commands in this section pass ~wandb=enabled
+experiment.wandb_config.group=bimodal_v1_v2~ so the per-step losses (~loss/total~, ~loss/recon~,
+~loss/trans~, ~loss/zinit~, ~loss/L_p~, ~loss/L_q~, etc.) for V1 and V2 all
+show up in the same W&B group and can be overlaid.  Eval and
+visualize stages do not need W&B; the training metrics live in the W&B run for
+each ~hydra.run.dir~.  If you want to retrain the V1 / Gaussian baselines under
+the same group, prepend ~wandb=enabled experiment.wandb_config.group=bimodal_v1_v2~ to those
+commands too (re-run the bimodal section above with that override).
+
+**** 1. Train V2 (uniform tau sampling) — W&B enabled
+
+#+BEGIN_SRC sh
+python -m ddssm.app experiment=bimodal \
+    transition=diffusion_v2 \
+    'transition.schedule.k_sampling_mode=uniform' \
+    'experiment.training.steps=2000' \
+    'experiment.training.checkpoint_every=500' \
+    'experiment.hyperparams.lambda_warmup_steps=400' \
+    wandb=enabled \
+    experiment.wandb_config.group=bimodal_v1_v2 \
+    'experiment.wandb_config.tags=[bimodal,diffusion_v2,uniform]' \
+    hydra.run.dir=runs/bimodal/diff_v2
+#+END_SRC
+
+#+RESULTS:
+:
+
+#+BEGIN_SRC sh
+python -m ddssm.evaluate experiment=bimodal \
+    transition=diffusion_v2 \
+    'transition.schedule.k_sampling_mode=uniform' \
+    +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff_v2/metrics.csv \
+    hydra.run.dir=runs/bimodal/diff_v2
+#+END_SRC
+
+#+RESULTS:
+:
+
+#+BEGIN_SRC sh
+python -m ddssm.visualize experiment=bimodal \
+    transition=diffusion_v2 \
+    'transition.schedule.k_sampling_mode=uniform' \
+    +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff_v2/metrics.csv \
+    hydra.run.dir=runs/bimodal/diff_v2
+#+END_SRC
+
+**** 2. JSD comparison vs V1
+
+Re-use the ~bimodal_jsd~ metric from the V1 section and drop V2 into the
+existing comparison plot.  (The previous LSGM-IS ablation is omitted because
+importance sampling is currently disabled in V2.)
+
+#+BEGIN_SRC sh
+# V2 — uniform tau sampling (already trained above)
+python -m ddssm.evaluate experiment=bimodal \
+    transition=diffusion_v2 \
+    'transition.schedule.k_sampling_mode=uniform' \
+    +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff_v2/metrics.csv \
+    'experiment.eval.metrics=[bimodal_jsd]' \
+    'experiment.eval.num_samples=1024' \
+    'experiment.eval.T_split=63' \
+    'experiment.eval.kwargs={bimodal_jsd: {npz_path: bimodal_jsd.npz}}' \
+    hydra.run.dir=runs/bimodal/diff_v2
+#+END_SRC
+
+**** 3. Cross-model comparison plot (V1 vs V2 vs LOCF)
+
+#+BEGIN_SRC sh
+python scripts/experiments/plot_bimodal_compare.py \
+    --runs gauss=runs/bimodal/gauss/bimodal_jsd.npz \
+           v1=runs/bimodal/diff/bimodal_jsd.npz \
+           v2=runs/bimodal/diff_v2/bimodal_jsd.npz \
+           locf=runs/bimodal/locf/bimodal_jsd.npz \
+    --out_jsd     runs/bimodal/compare_v2/jsd.png \
+    --out_density runs/bimodal/compare_v2/density.png \
+    --center_coefs 0.9 1.0
+#+END_SRC
+
+**** 4. Single-point forecast distribution (V2)
+
+#+BEGIN_SRC sh
+python -m ddssm.visualize experiment=bimodal \
+    transition=diffusion_v2 \
+    'transition.schedule.k_sampling_mode=uniform' \
+    +checkpoint=runs/bimodal/diff_v2/checkpoints/ckpt_latest.pth \
+    +csv_path=runs/bimodal/diff_v2/metrics.csv \
+    'experiment.viz.plots=[{name: forecast_distribution, save_filename: dist_v2.png, kwargs: {series_idx: 0, dim_idx: 0, t_future_idx: 0}}]' \
+    'experiment.viz.num_samples=1024' \
+    hydra.run.dir=runs/bimodal/diff_v2
+#+END_SRC
+
+**** Expected behavior
+
+- Both diffusion variants resolve both modes; the Gaussian baseline collapses.
+- *V2* should match or improve on V1 in mean JSD across timesteps once a
+  corrected importance-sampling schedule lands; with the current uniform
+  ~tau~ sampling, V2 may exhibit higher MC variance in the ESM loss than the
+  eventual IS-corrected version.
 
 ** Robot Navigation 2D
 

@@ -50,8 +50,12 @@ class EvalSpec:
     num_samples: int = 1
     T_split: int | None = None
     output_filename: str = "metrics.json"
-    # Bare ``dict`` so OmegaConf accepts arbitrarily-nested per-metric kwargs.
-    kwargs: dict = field(default_factory=dict)
+    # ``Any`` (not ``dict`` or ``dict[str, Any]``) is required here.
+    # OmegaConf sets struct=True on DictConfig values inside structured
+    # configs regardless of the dict key/value type parameters.  Only
+    # ``Any`` fully escapes struct checking, letting CLI overrides like
+    # ``experiment.eval.kwargs={metric: {key: val}}`` add arbitrary keys.
+    kwargs: Any = field(default_factory=dict)
 
 
 def _select_loader(experiment, split: str):

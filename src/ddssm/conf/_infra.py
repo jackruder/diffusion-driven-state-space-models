@@ -31,6 +31,10 @@ from ..viz.runner import PlotSpec, VizSpec
 from ..gaussians import GaussianHeadConf
 from ..train import DDSSMTrainer, DDSSMTrainerConf
 from ..transitions.diffusion import DiffusionScheduleConfig, DiffusionTransition
+from ..transitions.diffusion_v2 import (
+    DiffusionV2ScheduleConfig,
+    DiffusionV2Transition,
+)
 from ..transitions.transitions import GaussianTransition
 
 
@@ -63,6 +67,17 @@ TransitionDiffusionConf = builds(
     schedule=DiffusionScheduleConfig(),
 )
 
+TransitionDiffusionV2Conf = builds(
+    DiffusionV2Transition,
+    populate_full_signature=True,
+    latent_dim="${experiment.latent_dim}",
+    j="${experiment.j}",
+    emb_time_dim="${experiment.emb_time_dim}",
+    covariate_dim="${experiment.covariate_dim}",
+    unet=CSDIUnetConf(),
+    schedule=DiffusionV2ScheduleConfig(),
+)
+
 
 # ---------------------------------------------------------------------------
 # ZenStore (shared singleton — all experiment modules append to this store).
@@ -72,6 +87,7 @@ store = ZenStore(name="ddssm")
 
 store(TransitionGaussianConf, group="transition", name="gaussian")
 store(TransitionDiffusionConf, group="transition", name="diffusion")
+store(TransitionDiffusionV2Conf, group="transition", name="diffusion_v2")
 store(DDSSMHyperParamsConf, group="hyperparams", name="default")
 store(DDSSMConf, group="model", name="default")
 store(DDSSMTrainerConf, group="trainer", name="default")

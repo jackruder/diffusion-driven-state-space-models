@@ -27,6 +27,11 @@ dependencies = [
 # WandbLogger silently no-ops if the package is missing.
 wandb = ["wandb>=0.19"]
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
 [tool.basedpyright]
 include = ["src"]
 extraPaths = ["src"]

@@ -7,6 +7,10 @@ from ddssm.encoder import GaussianEncoder, GaussianInitPrior
 from ddssm.decoder import Decoder
 from ddssm.transitions.transitions import GaussianTransition
 from ddssm.transitions.diffusion import DiffusionTransition
+from ddssm.transitions.diffusion_v2 import (
+    DiffusionV2ScheduleConfig,
+    DiffusionV2Transition,
+)
 from ddssm.dssd import DDSSM_base
 from ddssm.diffnets import (
     ContextProducer,
@@ -251,6 +255,98 @@ def test_diffusion_transition_kl_mc_entropy():
     )
     assert set(out.keys()) == {"kl", "L_p", "L_q"}
     assert torch.allclose(out["kl"], out["L_p"] - out["L_q"])
+
+
+# ---------------------------------------------------------------------------
+# DiffusionV2Transition (VP-SDE, ESM)
+# ---------------------------------------------------------------------------
+
+def _make_diffusion_v2_transition(
+    num_steps=4, S_k=1, k_chunk=1, k_sampling_mode="uniform"
+):
+    return DiffusionV2Transition(
+        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        unet=partial(
+            CSDIUnet,
+            channels=CHANNELS,
+            n_layers=1,
+            embedding_dim=CHANNELS,
+            residual_block=DiffResidualBlockConfig(
+                feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+            ),
+        ),
+        schedule=DiffusionV2ScheduleConfig(
+            num_steps=num_steps, S_k=S_k, k_chunk=k_chunk,
+            k_sampling_mode=k_sampling_mode,
+        ),
+    )
+
+
+def test_diffusion_v2_transition_builds():
+    """DiffusionV2Transition registers VP-SDE buffers of the expected length."""
+    dt = _make_diffusion_v2_transition(num_steps=10)
+    expected = (
+        "alpha", "sigma_tilde", "wtilde", "dsigma2_tilde_dtau",
+        "c_skip", "c_out", "c_in", "c_noise", "beta", "tau", "p_k",
+    )
+    for buf in expected:
+        assert buf in dt._buffers, f"Missing buffer: {buf}"
+        assert dt._buffers[buf].shape == (10,), (
+            f"Buffer {buf} has wrong shape: {dt._buffers[buf].shape}"
+        )
+    # p_k is uniform by default, sums to 1.
+    assert torch.allclose(dt.p_k.sum(), torch.tensor(1.0))
+
+
+def test_diffusion_v2_importance_mode_raises():
+    """`importance` sampling is currently disabled in V2 (raises on construction)."""
+    with pytest.raises(NotImplementedError):
+        _make_diffusion_v2_transition(num_steps=8, k_sampling_mode="importance")
+
+
+def test_diffusion_v2_transition_kl_importance_mode_raises():
+    """End-to-end build with importance mode also raises (mirrors above)."""
+    with pytest.raises(NotImplementedError):
+        _make_diffusion_v2_transition(k_sampling_mode="importance")
+
+
+def test_diffusion_v2_transition_kl_closed_form_entropy():
+    trans = _make_diffusion_v2_transition()
+    zs, logq, mus, logvars, time_emb = _make_inputs()
+    enc_stats = {"mus": mus, "logvars": logvars}
+    out = trans.transition_kl(
+        enc_stats=enc_stats, zs=zs, logq_paths=logq, time_embed=time_emb,
+    )
+    assert set(out.keys()) == {"kl", "L_p", "L_q"}
+    for v in out.values():
+        assert v.ndim == 0
+        assert torch.isfinite(v).item()
+    assert torch.allclose(out["kl"], out["L_p"] - out["L_q"])
+
+
+def test_diffusion_v2_transition_kl_mc_entropy():
+    trans = _make_diffusion_v2_transition()
+    zs, logq, _mus, _lv, time_emb = _make_inputs()
+    out = trans.transition_kl(
+        enc_stats={}, zs=zs, logq_paths=logq, time_embed=time_emb,
+    )
+    assert set(out.keys()) == {"kl", "L_p", "L_q"}
+    for v in out.values():
+        assert v.ndim == 0
+        assert torch.isfinite(v).item()
+    assert torch.allclose(out["kl"], out["L_p"] - out["L_q"])
+
+
+def test_diffusion_v2_log_likelihood_not_implemented():
+    trans = _make_diffusion_v2_transition()
+    z = torch.randn(2, LATENT_DIM)
+    z_hist = torch.randn(2, LATENT_DIM, J)
+    with pytest.raises(NotImplementedError):
+        trans.log_prob(z=z, z_hist=z_hist, ctx=None)
+    with pytest.raises(NotImplementedError):
+        trans.forward_kl_loss(z)
+    with pytest.raises(NotImplementedError):
+        trans.log_likelihood()
 
 
 # ---------------------------------------------------------------------------
