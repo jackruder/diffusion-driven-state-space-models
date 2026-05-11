@@ -354,7 +354,7 @@ if __name__ == "__main__":
         help="Training strategy: joint (joint only), recon_only, or trans_only.",
     )
 
-    parser.add_argument(  # if passed, sets args.quiet to True suppressing console logging
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="If set, suppress console logging.",
