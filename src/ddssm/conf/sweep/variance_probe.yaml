@@ -1,0 +1,31 @@
+# @package _global_
+#
+# Config preset for running the variance-probe experiments with W&B logging.
+# Activates with ``+sweep=variance_probe``::
+#
+#     python -m ddssm.app --multirun \
+#         experiment=variance_probe_lgssm,variance_probe_bimodal_clean,variance_probe_bimodal_noisy,variance_probe_nonlinear_bimodal_lift \
+#         +sweep=variance_probe \
+#         hydra.sweeper.study_name=variance_probe
+#
+# Or for a single experiment::
+#
+#     python -m ddssm.app \
+#         experiment=variance_probe_lgssm \
+#         +sweep=variance_probe
+#
+# Override project/entity/tags at the CLI as usual::
+#
+#     python -m ddssm.app experiment=variance_probe_lgssm \
+#         +sweep=variance_probe \
+#         'experiment.wandb_config.project=my-project' \
+#         'experiment.wandb_config.entity=my-team' \
+#         'experiment.wandb_config.tags=[variance-probe,lgssm]'
+
+defaults:
+  - override /wandb: enabled
+
+experiment:
+  wandb_config:
+    project: ddssm-variance-probe
+    tags: [variance-probe]
