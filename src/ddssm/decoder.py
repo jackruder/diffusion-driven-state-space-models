@@ -1,5 +1,6 @@
 """Decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history."""
 
+import abc
 import math
 from functools import partial
 from typing import Callable, Tuple
@@ -15,7 +16,45 @@ from .net_utils import hist_abs_time_tokens
 from .torch_compile import maybe_compile
 
 
-class Decoder(nn.Module):
+class BaseDecoder(nn.Module, metaclass=abc.ABCMeta):
+    """Common interface for decoders p_θ(x_t | z_{t-j+1:t}, ...).
+
+    Implementations must provide ``forward`` returning ``(mu, logvar)``
+    Gaussian observation parameters of shape ``(B, D)`` and
+    ``log_likelihood`` returning ``(logp_t, mu_x, logvar_x, obs_count_t)``
+    suitable for masked Gaussian observation models.
+
+    Concrete decoders are registered with the ``decoder`` Hydra config
+    group (see :mod:`ddssm.conf._infra`) so they are plug-and-play with
+    ``decoder=NAME`` overrides.
+    """
+
+    @abc.abstractmethod
+    def forward(
+        self,
+        z: torch.Tensor,
+        time_embed: torch.Tensor,
+        time_idx: torch.Tensor,
+        covariates: torch.Tensor | None = None,
+        static_embed: torch.Tensor | None = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        ...
+
+    @abc.abstractmethod
+    def log_likelihood(
+        self,
+        x_t: torch.Tensor,
+        z_hist: torch.Tensor,
+        time_embed: torch.Tensor,
+        time_idx: torch.Tensor,
+        observation_mask_t: torch.Tensor | None = None,
+        covariates: torch.Tensor | None = None,
+        static_embed: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        ...
+
+
+class Decoder(BaseDecoder):
     """Decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history.
 
     - Treats z_{t-j+1:t} as a short sequence of length j.

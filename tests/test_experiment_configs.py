@@ -74,6 +74,53 @@ def test_default_experiment_is_synthetic_gauss() -> None:
         cfg = compose(config_name="config")
     assert cfg.experiment.data._target_.endswith("SyntheticDataModule")
     assert cfg.experiment.model.transition._target_.endswith("GaussianTransition")
+    assert cfg.experiment.model.encoder._target_.endswith("GaussianEncoder")
+    assert cfg.experiment.model.decoder._target_.endswith("Decoder")
+    assert cfg.experiment.model.z_init._target_.endswith("GaussianInitPrior")
+
+
+# ---------------------------------------------------------------------------
+# Encoder / Decoder / InitPrior plug-and-play overrides.
+#
+# Mirrors the existing ``transition=…`` override coverage: each module
+# slot is a Hydra config group, so ``encoder=NAME``, ``decoder=NAME``, and
+# ``z_init=NAME`` overrides must compose and instantiate cleanly on every
+# registered experiment.
+# ---------------------------------------------------------------------------
+
+MODULE_GROUP_OVERRIDES = [
+    "encoder=gaussian",
+    "decoder=default",
+    "z_init=gaussian",
+]
+
+
+@pytest.mark.parametrize("name", EXPERIMENTS)
+def test_module_group_overrides_compose(name: str) -> None:
+    with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
+        cfg = compose(
+            config_name="config",
+            overrides=[f"experiment={name}"] + MODULE_GROUP_OVERRIDES,
+        )
+    assert cfg.experiment.model.encoder._target_.endswith("GaussianEncoder")
+    assert cfg.experiment.model.decoder._target_.endswith("Decoder")
+    assert cfg.experiment.model.z_init._target_.endswith("GaussianInitPrior")
+
+
+@pytest.mark.parametrize("name", EXPERIMENTS)
+def test_module_group_overrides_instantiate(name: str) -> None:
+    """Model still builds with non-empty parameter count when each module
+    slot is selected via its config group instead of the hard-coded path."""
+    with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
+        cfg = compose(
+            config_name="config",
+            overrides=[f"experiment={name}"] + MODULE_GROUP_OVERRIDES,
+        )
+    expt = instantiate(cfg.experiment)
+    assert isinstance(expt, Experiment)
+    n_params = sum(p.numel() for p in expt.model.parameters())
+    assert n_params > 0
+
 
 def test_objective_returns_inf_on_missing_csv(tmp_path) -> None:
     obj = ObjectiveSpec(metric="loss/total", split="train", tail_frac=0.1)
