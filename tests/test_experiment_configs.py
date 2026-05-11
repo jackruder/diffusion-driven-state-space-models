@@ -33,6 +33,10 @@ EXPERIMENTS = [
     "harmonic",
     "bimodal",
     "robot_2d",
+    "variance_probe_lgssm",
+    "variance_probe_bimodal_clean",
+    "variance_probe_bimodal_noisy",
+    "variance_probe_nonlinear_bimodal_lift",
 ]
 
 SWEEPS = ["synthetic_lr", "kdd_phase1"]

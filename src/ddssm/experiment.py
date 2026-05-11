@@ -163,6 +163,7 @@ class Experiment:
     objective: ObjectiveSpec | None = None
     eval: Any = None  # ddssm.eval.EvalSpec | None -- typed lazily to avoid circular import
     viz: Any = None  # ddssm.viz.VizSpec | None -- typed lazily to avoid circular import
+    variance: Any = None  # ddssm.variance.ProbeSpec | None -- typed lazily
     seed: int | None = 0
     wandb_config: dict | None = None
 
@@ -295,6 +296,29 @@ class Experiment:
             run_dir=run_dir,
             checkpoint_path=checkpoint_path,
             csv_path=csv_path,
+        )
+
+    def variance_probe(
+        self,
+        *,
+        device: torch.device,
+        run_dir: str,
+        checkpoint_path: str | None = None,
+    ) -> dict:
+        """Run the modular variance probe stage and persist outputs."""
+        if self.variance is None:
+            raise ValueError(
+                "Experiment.variance_probe called but self.variance is None. "
+                "Set a ProbeSpec on the experiment."
+            )
+        from .variance import variance as _run_variance
+
+        return _run_variance(
+            self,
+            self.variance,
+            device=device,
+            run_dir=run_dir,
+            checkpoint_path=checkpoint_path,
         )
 
     def _wandb_kwargs(self, run_dir: str) -> dict | None:

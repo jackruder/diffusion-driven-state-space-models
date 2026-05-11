@@ -27,6 +27,7 @@ from ..diffnets import ContextProducerConf, CSDIUnetConf
 from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
 from ..eval.runner import EvalSpec
 from ..experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
+from ..variance.runner import ProbeCell, ProbeMetricSpec, ProbePlotSpec, ProbeSpec
 from ..viz.runner import PlotSpec, VizSpec
 from ..gaussians import GaussianHeadConf
 from ..train import DDSSMTrainer, DDSSMTrainerConf
@@ -124,6 +125,10 @@ ObjectiveSpecConf = builds(ObjectiveSpec, populate_full_signature=True)
 EvalSpecConf = builds(EvalSpec, populate_full_signature=True)
 PlotSpecConf = builds(PlotSpec, populate_full_signature=True)
 VizSpecConf = builds(VizSpec, populate_full_signature=True)
+ProbeCellConf = builds(ProbeCell, populate_full_signature=True)
+ProbeMetricSpecConf = builds(ProbeMetricSpec, populate_full_signature=True)
+ProbePlotSpecConf = builds(ProbePlotSpec, populate_full_signature=True)
+ProbeSpecConf = builds(ProbeSpec, populate_full_signature=True)
 
 # Pre-built ``trainable`` masks.  Each experiment can pick one with
 # ``training=...`` style overrides or by passing the conf directly.
@@ -150,6 +155,7 @@ def _experiment_conf(
     objective_conf=None,
     eval_conf=None,
     viz_conf=None,
+    variance_conf=None,
     data_dim: int,
     latent_dim: int,
     j: int = 1,
@@ -184,6 +190,7 @@ def _experiment_conf(
         objective=objective_conf,
         eval=eval_conf,
         viz=viz_conf,
+        variance=variance_conf,
         seed=seed,
         data_dim=data_dim,
         latent_dim=latent_dim,

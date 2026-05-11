@@ -106,6 +106,8 @@ def test_datamodule_protocol_runtime_check():
     ("harmonic",              1),
     ("harmonic-noisy",        1),
     ("bimodal",               1),
+    ("bimodal-noisy",         1),
+    ("nonlinear-bimodal-lift", 4),
     ("robot-basis-pursuit",   2),
 ])
 def test_synthetic_datamodule_mode_shapes(mode: str, D: int) -> None:

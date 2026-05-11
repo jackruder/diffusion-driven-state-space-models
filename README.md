@@ -33,6 +33,7 @@ src/ddssm/
   eval_metrics.py    # MAE / CRPS-sum metrics + recon-divergence detection
   eval/              # Hydra evaluation stage (runner + metric registry)
   viz/               # Hydra visualisation stage (runner + plot registry)
+  variance/          # Hydra variance probe stage (runner + metric/plot registries)
   data/              # Dataset loaders (GluonTS, PM2.5, KDD, synthetic)
 ```
 
@@ -82,6 +83,9 @@ python -m ddssm.app experiment=synthetic_gauss
 # Override anything the experiment sets
 python -m ddssm.app experiment=synthetic_diffusion \
     experiment.training.steps=2000 experiment.hyperparams.batch_size=64
+
+# Variance probe stage (offline metric/variance analysis)
+python -m ddssm.variance experiment=variance_probe_lgssm
 ```
 
 When `cfg.experiment.data` is a `NullDataModule`, `ddssm.app` builds the model and

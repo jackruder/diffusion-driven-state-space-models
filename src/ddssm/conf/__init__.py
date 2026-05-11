@@ -39,7 +39,12 @@ from ._infra import (
     TrainableTransOnlyConf,
     TrainingScalarsConf,
     TransitionDiffusionConf,
+    TransitionDiffusionV2Conf,
     TransitionGaussianConf,
+    ProbeCellConf,
+    ProbeMetricSpecConf,
+    ProbePlotSpecConf,
+    ProbeSpecConf,
     _experiment_conf,
     load_yaml_config,
     store,
@@ -62,6 +67,12 @@ from ._eval_viz import (
     SynthEvalConf,
     SynthVizConf,
 )
+from ._variance import (
+    BimodalCleanVarianceConf,
+    BimodalNoisyVarianceConf,
+    LGSSMVarianceConf,
+    NonlinearBimodalLiftVarianceConf,
+)
 
 # 3. Experiment presets (triggers all store(...) registrations)
 from .experiments import (
@@ -72,6 +83,10 @@ from .experiments import (
     HarmonicExperimentConf,
     BimodalExperimentConf,
     Robot2DExperimentConf,
+    VarianceProbeBimodalCleanExperimentConf,
+    VarianceProbeBimodalNoisyExperimentConf,
+    VarianceProbeLGSSMExperimentConf,
+    VarianceProbeNonlinearBimodalLiftExperimentConf,
 )
 
 # 4. Materialise all registered configs into Hydra's ConfigStore.
@@ -89,6 +104,7 @@ __all__ = [
     # Transitions
     "TransitionGaussianConf",
     "TransitionDiffusionConf",
+    "TransitionDiffusionV2Conf",
     # Data modules
     "NullDataModuleConf",
     "SyntheticDataModuleConf",
@@ -100,6 +116,10 @@ __all__ = [
     "TrainableTransOnlyConf",
     "TrainingScalarsConf",
     "ObjectiveSpecConf",
+    "ProbeCellConf",
+    "ProbeMetricSpecConf",
+    "ProbePlotSpecConf",
+    "ProbeSpecConf",
     # Eval/viz family defaults
     "SynthEvalConf",
     "SynthVizConf",
@@ -111,6 +131,10 @@ __all__ = [
     "BimodalVizConf",
     "Robot2DEvalConf",
     "Robot2DVizConf",
+    "LGSSMVarianceConf",
+    "BimodalCleanVarianceConf",
+    "BimodalNoisyVarianceConf",
+    "NonlinearBimodalLiftVarianceConf",
     # Component / smoke-test experiments
     "SyntheticGaussExperimentConf",
     "SyntheticDiffusionExperimentConf",
@@ -121,6 +145,10 @@ __all__ = [
     "HarmonicExperimentConf",
     "BimodalExperimentConf",
     "Robot2DExperimentConf",
+    "VarianceProbeLGSSMExperimentConf",
+    "VarianceProbeBimodalCleanExperimentConf",
+    "VarianceProbeBimodalNoisyExperimentConf",
+    "VarianceProbeNonlinearBimodalLiftExperimentConf",
     # Stages dataclasses
     "StageLrsConf",
     "StageTrainableConf",

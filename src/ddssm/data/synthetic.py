@@ -148,6 +148,13 @@ class SyntheticDataset(Dataset):
                 z[:, :, t] = 0.9 * z[:, :, t - 1] + 4.0 * s
 
             data = z + 0.2 * torch.randn(self.N_total, self.D, self.T)
+        elif self.mode == "bimodal-noisy":
+            z = torch.zeros(self.N_total, self.D, self.T)
+            z[:, :, 0] = torch.randn(self.N_total, self.D)
+            for t in range(1, self.T):
+                s = (torch.randint(0, 2, (self.N_total, self.D)).float() * 2.0) - 1.0
+                z[:, :, t] = 0.9 * z[:, :, t - 1] + 4.0 * s
+            data = z + 0.5 * torch.randn(self.N_total, self.D, self.T)
 
         elif self.mode == "bimodal-block":
             # Bimodal with changes only every `block` steps.
@@ -169,6 +176,37 @@ class SyntheticDataset(Dataset):
                 )
 
             data = z
+        elif self.mode == "nonlinear-bimodal-lift":
+            # Latent:
+            #   z_t = tanh(z_{t-1}) + delta * s_t + sigma_z * eta_t
+            # with s_t in {-1, +1}.
+            # Observation:
+            #   x_t = W2 @ tanh(W1 @ z_t + b1) + b2 + sigma_x * xi_t
+            # where (W1, b1, W2, b2) are sampled once per dataset.
+            delta = 2.0
+            sigma_z = 0.1
+            sigma_x = 0.1
+            hidden_dim = 8
+
+            z = torch.zeros(self.N_total, 1, self.T)
+            z[:, :, 0] = torch.randn(self.N_total, 1)
+            for t in range(1, self.T):
+                s_t = (torch.randint(0, 2, (self.N_total, 1)).float() * 2.0) - 1.0
+                z[:, :, t] = (
+                    torch.tanh(z[:, :, t - 1])
+                    + delta * s_t
+                    + sigma_z * torch.randn(self.N_total, 1)
+                )
+
+            W1 = torch.randn(hidden_dim, 1)
+            b1 = torch.randn(hidden_dim)
+            W2 = torch.randn(self.D, hidden_dim)
+            b2 = torch.randn(self.D)
+
+            for t in range(self.T):
+                h_t = torch.tanh(z[:, :, t] @ W1.t() + b1)
+                x_t = h_t @ W2.t() + b2
+                data[:, :, t] = x_t + sigma_x * torch.randn(self.N_total, self.D)
 
         elif self.mode == "robot-basis-pursuit":
             assert self.D >= 2, "robot-basis-pursuit requires D>=2 (X and Y)"

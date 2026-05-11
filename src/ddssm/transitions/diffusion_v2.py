@@ -324,6 +324,8 @@ class DiffusionV2Transition(BaseTransition):
         logq_paths: torch.Tensor,  # (B, S, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
         covariates: Optional[torch.Tensor] = None,
+        mc_override: Optional[Dict[str, torch.Tensor | str]] = None,
+        return_per_sample: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Closed-form ESM regression loss IS the transition KL.
 
@@ -355,7 +357,20 @@ class DiffusionV2Transition(BaseTransition):
         # already baked into the CE decomposition).  We accumulate it
         # under the name ``kl_sum`` to make the semantics explicit.
         kl_sum = torch.zeros((), device=device, dtype=dtype)
+        per_sample_chunks: list[torch.Tensor] = []
         n_target_steps = max(0, T - j)
+        objective = self.objective
+        if mc_override is not None and "objective" in mc_override:
+            objective_raw = mc_override["objective"]
+            if not isinstance(objective_raw, str):
+                raise TypeError(
+                    "mc_override['objective'] must be a string in {'esm', 'dsm'}."
+                )
+            if objective_raw not in ("esm", "dsm"):
+                raise ValueError(
+                    f"mc_override['objective'] must be 'esm' or 'dsm'; got {objective_raw!r}"
+                )
+            objective = objective_raw
 
         if n_target_steps > 0:
             for (
@@ -367,10 +382,10 @@ class DiffusionV2Transition(BaseTransition):
                 z_target_flat,  # (BS*chunk_len, d) — used only as DSM fallback
                 z_hist_flat,    # (BS*chunk_len, d, j)
                 ctx,
-            ) in self._iter_window_chunks(
-                zs, time_embed, covariates=covariates,
-            ):
-                use_esm = self.objective == "esm" and have_stats
+                ) in self._iter_window_chunks(
+                    zs, time_embed, covariates=covariates,
+                ):
+                use_esm = objective == "esm" and have_stats
                 if use_esm:
                     # ESM: use encoder marginal stats, integrate z_t
                     # analytically via the Gaussian convolution
@@ -391,12 +406,19 @@ class DiffusionV2Transition(BaseTransition):
                     mu_t_flat = z_target_flat
                     sigma2_t_flat = torch.zeros_like(z_target_flat)
 
-                kl_sum = kl_sum + self._esm_chunk_loss(
+                chunk_loss = self._esm_chunk_loss(
                     mu_t=mu_t_flat,
                     sigma2_t=sigma2_t_flat,
                     z_hist=z_hist_flat,
                     ctx=ctx,
+                    mc_override=mc_override,
+                    return_per_sample=return_per_sample,
                 )
+                if return_per_sample:
+                    kl_sum = kl_sum + chunk_loss.sum()
+                    per_sample_chunks.append(chunk_loss)
+                else:
+                    kl_sum = kl_sum + chunk_loss
 
         # mean over (B, S, n_target_steps): _esm_chunk_loss returns the
         # weighted-sum-of-squared-errors over the chunk's BS*chunk_len rows
@@ -420,7 +442,13 @@ class DiffusionV2Transition(BaseTransition):
         # the V1 invariant.
         L_p = kl + L_q
 
-        return {"kl": kl, "L_p": L_p, "L_q": L_q}
+        out = {"kl": kl, "L_p": L_p, "L_q": L_q}
+        if return_per_sample:
+            if per_sample_chunks:
+                out["L_p_per_sample"] = torch.cat(per_sample_chunks, dim=0) / denom
+            else:
+                out["L_p_per_sample"] = torch.zeros(0, device=device, dtype=dtype)
+        return out
 
     # ------------------------------------------------------------------ #
     # Per-chunk ESM loss.
@@ -431,6 +459,8 @@ class DiffusionV2Transition(BaseTransition):
         sigma2_t: torch.Tensor,    # (N, d)  >= 0
         z_hist: torch.Tensor,      # (N, d, j)
         ctx: Dict[str, torch.Tensor],
+        mc_override: Optional[Dict[str, torch.Tensor | str]] = None,
+        return_per_sample: bool = False,
     ) -> torch.Tensor:
         """Return scalar = sum over the N rows of (mean-over-S_k weighted sq.err)."""
         N, d = mu_t.shape
@@ -464,15 +494,49 @@ class DiffusionV2Transition(BaseTransition):
         k_chunk = max(1, min(int(self.schedule.k_chunk), int(self.S_k)))
         total_sqerr = torch.zeros(N, device=device, dtype=dtype)
 
+        override_k_idx = None
+        override_eps = None
+        if mc_override is not None:
+            override_k_idx = mc_override.get("k_idx")
+            override_eps = mc_override.get("eps")
+            if override_k_idx is not None:
+                if not isinstance(override_k_idx, torch.Tensor):
+                    raise TypeError("mc_override['k_idx'] must be a torch.Tensor.")
+                if override_k_idx.shape != (N, int(self.S_k)):
+                    raise ValueError(
+                        f"mc_override['k_idx'] must have shape {(N, int(self.S_k))}, "
+                        f"got {tuple(override_k_idx.shape)}"
+                    )
+            if override_eps is not None:
+                if not isinstance(override_eps, torch.Tensor):
+                    raise TypeError("mc_override['eps'] must be a torch.Tensor.")
+                if override_eps.shape != (N, d, int(self.S_k)):
+                    raise ValueError(
+                        f"mc_override['eps'] must have shape {(N, d, int(self.S_k))}, "
+                        f"got {tuple(override_eps.shape)}"
+                    )
+
         remaining_k = int(self.S_k)
+        k_cursor = 0
         while remaining_k > 0:
             kc = min(k_chunk, remaining_k)
             remaining_k -= kc
 
-            k_idx = torch.multinomial(self.p_k, N * kc, replacement=True).view(
-                N, kc
-            )  # (N, kc)
-            eps_n = torch.randn(N, d, kc, device=device, dtype=dtype)
+            if override_k_idx is not None:
+                k_idx = override_k_idx[:, k_cursor: k_cursor + kc].to(device=device)
+                if k_idx.dtype != torch.long:
+                    k_idx = k_idx.long()
+            else:
+                k_idx = torch.multinomial(self.p_k, N * kc, replacement=True).view(
+                    N, kc
+                )  # (N, kc)
+            if override_eps is not None:
+                eps_n = override_eps[:, :, k_cursor: k_cursor + kc].to(
+                    device=device, dtype=dtype
+                )
+            else:
+                eps_n = torch.randn(N, d, kc, device=device, dtype=dtype)
+            k_cursor += kc
 
             z_in, F_target = self._vp_precondition(
                 mu_t=mu_t, sigma2_t=sigma2_t, k_idx=k_idx, eps=eps_n
@@ -515,8 +579,11 @@ class DiffusionV2Transition(BaseTransition):
             sqerr = (F_pred - F_tgt_flat).pow(2).sum(dim=1) * weights  # (N*kc,)
             total_sqerr = total_sqerr + sqerr.view(N, kc).sum(dim=1)
 
-        # mean over S_k, then sum over N (caller divides by B*S*T_target)
-        return (total_sqerr / float(self.S_k)).sum()
+        # mean over S_k, then optionally sum over N (caller divides by B*S*T_target)
+        per_sample = total_sqerr / float(self.S_k)
+        if return_per_sample:
+            return per_sample
+        return per_sample.sum()
 
     def _vp_precondition(
         self,
