@@ -73,7 +73,7 @@ DIFFUSION_V2 = ConfigGroups(transition=TransitionDiffusionV2Conf)
 
 @dataclass(frozen=True)
 class _RunSpec:
-    config: object
+    experiment_config: object
     run_dir: str
     identity: str
     groups: ConfigGroups | None = None
@@ -144,7 +144,7 @@ component_runs = [
 #+BEGIN_SRC python
 for run in component_runs:
     train_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         groups=run.groups,
         updates=run.updates,
@@ -157,7 +157,7 @@ for run in component_runs:
 #+BEGIN_SRC python
 for run in component_runs:
     evaluate_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         checkpoint_path=run.checkpoint_path,
         csv_path=run.csv_path,
@@ -172,7 +172,7 @@ for run in component_runs:
 #+BEGIN_SRC python
 for run in component_runs:
     visualize_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         checkpoint_path=run.checkpoint_path,
         csv_path=run.csv_path,
@@ -272,7 +272,7 @@ synthetic_runs = [
 #+BEGIN_SRC python
 for run in synthetic_runs:
     train_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         groups=run.groups,
         updates=run.updates,
@@ -285,7 +285,7 @@ for run in synthetic_runs:
 #+BEGIN_SRC python
 for run in synthetic_runs:
     evaluate_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         checkpoint_path=run.checkpoint_path,
         csv_path=run.csv_path,
@@ -300,7 +300,7 @@ for run in synthetic_runs:
 #+BEGIN_SRC python
 for run in synthetic_runs:
     visualize_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         checkpoint_path=run.checkpoint_path,
         csv_path=run.csv_path,
@@ -334,7 +334,7 @@ jsd_updates = {
 
 for run in (r for r in synthetic_runs if "jsd" in r.tags):
     evaluate_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         checkpoint_path=run.checkpoint_path,
         csv_path=run.csv_path,
@@ -374,7 +374,7 @@ kdd_runs = [
 
 #+BEGIN_SRC python
 for run in kdd_runs:
-    train_config(run.config, run_dir=run.run_dir, metadata=run.metadata)
+    train_config(run.experiment_config, run_dir=run.run_dir, metadata=run.metadata)
 #+END_SRC
 
 ** Evaluate
@@ -382,7 +382,7 @@ for run in kdd_runs:
 #+BEGIN_SRC python
 for run in kdd_runs:
     evaluate_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         checkpoint_path=run.checkpoint_path,
         csv_path=run.csv_path,
@@ -395,7 +395,7 @@ for run in kdd_runs:
 #+BEGIN_SRC python
 for run in kdd_runs:
     visualize_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         checkpoint_path=run.checkpoint_path,
         csv_path=run.csv_path,
@@ -430,7 +430,7 @@ variance_runs = [
 
 #+BEGIN_SRC python
 for run in variance_runs:
-    train_config(run.config, run_dir=run.run_dir, metadata=run.metadata)
+    train_config(run.experiment_config, run_dir=run.run_dir, metadata=run.metadata)
 #+END_SRC
 
 ** Probe
@@ -438,7 +438,7 @@ for run in variance_runs:
 #+BEGIN_SRC python
 for run in variance_runs:
     variance_config(
-        run.config,
+        run.experiment_config,
         run_dir=run.run_dir,
         checkpoint_path=run.checkpoint_path,
         metadata=run.metadata,

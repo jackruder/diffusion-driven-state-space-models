@@ -59,7 +59,9 @@ from ..transitions.diffusion_v2 import (
 # Hydra-Zen config fragments can be generated config classes, initialized
 # generated-config objects, structured dataclass instances, primitive containers,
 # or interpolation strings.  ``object`` is intentionally used instead of ``Any``
-# so callers must still type-check operations before inspecting a fragment.
+# so callers must type-narrow with ``isinstance`` checks before inspecting a
+# fragment, or pass it through to framework functions such as
+# ``OmegaConf.structured`` / ``hydra_zen.instantiate``.
 type HydraZenConfig = object
 
 # ---------------------------------------------------------------------------
