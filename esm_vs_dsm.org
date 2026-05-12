@@ -1,6 +1,6 @@
 #+TITLE: ESM vs DSM Gradient Variance Experiments
 #+AUTHOR: Jack Ruder
-#+PROPERTY: header-args:sh :async t :results none :exports both
+#+PROPERTY: header-args:sh :async :results none :exports both
 
 * Overview
 
@@ -12,11 +12,11 @@ vs. denoising-score-matching (DSM) *gradient* variance. The
 trajectory plot showing how the variance gap closes as the score
 net learns.
 
-Hit ~C-c C-c~ on any cell — ob-async (~:async t~) dispatches each
-command via ~async-start~ and the org buffer returns immediately.
-The Python process writes its own ~cli.log~ inside
-~hydra.run.dir~; ~tail -f runs/variance_probe/<name>/cli.log~ to
-watch progress.
+Hit ~C-c C-c~ on any cell — ob-async (bare ~:async~ flag in the
+file-level header-args) dispatches each command via
+~async-start~, and the org buffer returns immediately. The Python
+process writes its own ~cli.log~ inside ~hydra.run.dir~; tail
+~runs/variance_probe/<name>/cli.log~ to watch progress.
 
 Four datasets, all using ``Probe300`` training scalars
 (300 steps, ``checkpoint_every=25`` → 12 step checkpoints):
@@ -50,28 +50,28 @@ ob-async; safe to fire all four in parallel.
 ** lgssm
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=variance_probe_lgssm \
+uv run python -m ddssm.app experiment=variance_probe_lgssm \
     hydra.run.dir=runs/variance_probe/lgssm
 #+END_SRC
 
 ** bimodal_clean
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=variance_probe_bimodal_clean \
+uv run python -m ddssm.app experiment=variance_probe_bimodal_clean \
     hydra.run.dir=runs/variance_probe/bimodal_clean
 #+END_SRC
 
 ** bimodal_noisy
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=variance_probe_bimodal_noisy \
+uv run python -m ddssm.app experiment=variance_probe_bimodal_noisy \
     hydra.run.dir=runs/variance_probe/bimodal_noisy
 #+END_SRC
 
 ** nonlinear_bimodal_lift
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=variance_probe_nonlinear_bimodal_lift \
+uv run python -m ddssm.app experiment=variance_probe_nonlinear_bimodal_lift \
     hydra.run.dir=runs/variance_probe/nonlinear_bimodal_lift
 #+END_SRC
 
@@ -89,7 +89,7 @@ experiment.
 ** lgssm
 
 #+BEGIN_SRC sh
-python -m ddssm.variance experiment=variance_probe_lgssm \
+uv run python -m ddssm.variance experiment=variance_probe_lgssm \
     +per_step=true \
     hydra.run.dir=runs/variance_probe/lgssm
 #+END_SRC
@@ -97,7 +97,7 @@ python -m ddssm.variance experiment=variance_probe_lgssm \
 ** bimodal_clean
 
 #+BEGIN_SRC sh
-python -m ddssm.variance experiment=variance_probe_bimodal_clean \
+uv run python -m ddssm.variance experiment=variance_probe_bimodal_clean \
     +per_step=true \
     hydra.run.dir=runs/variance_probe/bimodal_clean
 #+END_SRC
@@ -105,7 +105,7 @@ python -m ddssm.variance experiment=variance_probe_bimodal_clean \
 ** bimodal_noisy
 
 #+BEGIN_SRC sh
-python -m ddssm.variance experiment=variance_probe_bimodal_noisy \
+uv run python -m ddssm.variance experiment=variance_probe_bimodal_noisy \
     +per_step=true \
     hydra.run.dir=runs/variance_probe/bimodal_noisy
 #+END_SRC
@@ -113,7 +113,7 @@ python -m ddssm.variance experiment=variance_probe_bimodal_noisy \
 ** nonlinear_bimodal_lift
 
 #+BEGIN_SRC sh
-python -m ddssm.variance experiment=variance_probe_nonlinear_bimodal_lift \
+uv run python -m ddssm.variance experiment=variance_probe_nonlinear_bimodal_lift \
     +per_step=true \
     hydra.run.dir=runs/variance_probe/nonlinear_bimodal_lift
 #+END_SRC
@@ -124,19 +124,19 @@ Synchronous so the result lands in the org buffer.
 
 ** Static trajectory plots
 
-#+BEGIN_SRC sh :async no :results output
+#+BEGIN_SRC sh :results output
 ls -lh runs/variance_probe/*/ratio_trajectory_grad_lsgm_is.png
 #+END_SRC
 
 ** Animated GIFs
 
-#+BEGIN_SRC sh :async no :results output
+#+BEGIN_SRC sh :results output
 ls -lh runs/variance_probe/*/*.gif
 #+END_SRC
 
 ** Per-step probe artifacts (one experiment at a time)
 
-#+BEGIN_SRC sh :async no :results output
+#+BEGIN_SRC sh :results output
 ls runs/variance_probe/lgssm/probe/
 #+END_SRC
 
@@ -150,10 +150,15 @@ done
 
 * Notes
 
-- Cells run via ob-async (~:async t~ in the header-args property).
-  ~C-c C-c~ dispatches the command and returns immediately. Output
-  lands wherever Hydra was told to write — usually
+- Cells run via ob-async (bare ~:async~ flag in the file-level
+  ~header-args~). ~C-c C-c~ dispatches the command via
+  ~async-start~ and returns immediately. Output lands wherever
+  Hydra was told to write — usually
   ~runs/variance_probe/<name>/cli.log~.
+- If Emacs freezes on ~C-c C-c~, confirm ~ob-async~ is installed
+  *and* the file-level ~#+PROPERTY: header-args:sh :async …~ line
+  is in effect (~C-c C-x p~ shows the active properties).
+  ~:async t~ does not work — ob-async looks for the bare key.
 - The probe stage auto-trains if no ~ckpt_step*.pth~ files exist
   yet — see ~ddssm/variance/cli.py::_probe_per_step~.
 - Stop a running job: ~pgrep -f variance_probe_lgssm | xargs kill~.
