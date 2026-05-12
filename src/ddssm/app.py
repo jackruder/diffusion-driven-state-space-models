@@ -30,34 +30,31 @@ from __future__ import annotations
 import logging
 
 import hydra
-import torch
 from hydra.core.hydra_config import HydraConfig
-from hydra_zen import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 # Importing conf populates Hydra's ConfigStore via ``store.add_to_hydra_store``.
 # Must precede @hydra.main so config groups resolve.
 from . import conf  # noqa: F401
+from .workflow import RunMetadata, train_config
 
 log = logging.getLogger(__name__)
 
 
 @hydra.main(config_path="./conf", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
-    log.info("Resolved config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    run_dir = HydraConfig.get().runtime.output_dir
-    log.info("Device=%s run_dir=%s", device, run_dir)
-
-    try:
-        with open(f"{run_dir}/resolved_config.yaml", "w") as f:
-            f.write(OmegaConf.to_yaml(cfg, resolve=True))
-    except OSError as e:
-        log.warning("Could not persist resolved_config.yaml: %s", e)
-
-    experiment = instantiate(cfg.experiment)
-    return experiment.train(device=device, run_dir=run_dir)
+    hydra_cfg = HydraConfig.get()
+    run_dir = hydra_cfg.runtime.output_dir
+    choices = hydra_cfg.runtime.choices
+    log.info("run_dir=%s", run_dir)
+    return train_config(
+        cfg,
+        run_dir=run_dir,
+        metadata=RunMetadata(
+            config_identity=f"hydra:experiment={choices.get('experiment', 'unknown')}",
+            overrides=tuple(hydra_cfg.overrides.task),
+        ),
+    )
 
 
 if __name__ == "__main__":

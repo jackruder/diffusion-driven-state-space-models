@@ -8,7 +8,7 @@ from .._infra import (
     SyntheticDataModuleConf,
     TrainingScalarsConf,
     TransitionDiffusionV2Conf,
-    _experiment_conf,
+    build_experiment_conf,
     store,
 )
 from .._variance import (
@@ -39,7 +39,7 @@ _HP = DDSSMHyperParamsConf(
     S=1,
 )
 
-VarianceProbeLGSSMExperimentConf = _experiment_conf(
+VarianceProbeLGSSMExperimentConf = build_experiment_conf(
     data_conf=SyntheticDataModuleConf(mode="lgssm", T=64, D=1, N_per_split=256, batch_size=32),
     transition_conf=TransitionDiffusionV2Conf,
     hyperparams_conf=_HP,
@@ -55,7 +55,7 @@ VarianceProbeLGSSMExperimentConf = _experiment_conf(
 )
 store(VarianceProbeLGSSMExperimentConf, group="experiment", name="variance_probe_lgssm")
 
-VarianceProbeBimodalCleanExperimentConf = _experiment_conf(
+VarianceProbeBimodalCleanExperimentConf = build_experiment_conf(
     data_conf=SyntheticDataModuleConf(mode="bimodal", T=64, D=1, N_per_split=256, batch_size=32),
     transition_conf=TransitionDiffusionV2Conf,
     hyperparams_conf=_HP,
@@ -75,7 +75,7 @@ store(
     name="variance_probe_bimodal_clean",
 )
 
-VarianceProbeBimodalNoisyExperimentConf = _experiment_conf(
+VarianceProbeBimodalNoisyExperimentConf = build_experiment_conf(
     data_conf=SyntheticDataModuleConf(mode="bimodal-noisy", T=64, D=1, N_per_split=256, batch_size=32),
     transition_conf=TransitionDiffusionV2Conf,
     hyperparams_conf=_HP,
@@ -95,7 +95,7 @@ store(
     name="variance_probe_bimodal_noisy",
 )
 
-VarianceProbeNonlinearBimodalLiftExperimentConf = _experiment_conf(
+VarianceProbeNonlinearBimodalLiftExperimentConf = build_experiment_conf(
     data_conf=SyntheticDataModuleConf(
         mode="nonlinear-bimodal-lift",
         T=64,

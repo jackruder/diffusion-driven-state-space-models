@@ -1,8 +1,8 @@
 """Infrastructure layer for the DDSSM Hydra configuration.
 
-Defines the ``ZenStore``, all primitive config classes (transitions,
-data-modules, trainable masks, trainer partial, stages), and the
-``_experiment_conf`` composer helper.
+Defines the ``ZenStore`` plus the primitive config classes used by
+Python-authored experiment configs: transitions, data modules, trainable
+masks, trainer partials, and stages.
 
 Nothing in this module registers experiment presets with the store —
 that is done in the ``experiments/`` subpackage.  The store is
@@ -306,7 +306,7 @@ DDSSMTrainerPartial = builds(
 )
 
 
-def _experiment_conf(
+def build_experiment_conf(
     *,
     data_conf,
     hyperparams_conf,
@@ -328,10 +328,11 @@ def _experiment_conf(
     decoder_conf=None,
     z_init_conf=None,
 ):
-    """Compose an Experiment config from its parts.
+    """Compose an instantiable :class:`Experiment` config from Python parts.
 
-    Centralizes the wiring so each preset is a one-liner pointing at
-    the right Confs.
+    Experiment presets call this directly with all important knobs visible in
+    Python source.  That keeps presets Pyright-friendly while preserving Hydra
+    config-group interpolation for CLI overrides.
 
     ``transition_conf``, ``encoder_conf``, ``decoder_conf`` and
     ``z_init_conf`` are all optional.  When omitted the experiment uses
@@ -423,19 +424,3 @@ class StagesConf:
     stage_3: StageSpecConf | None = None
     run: List[str] = field(default_factory=lambda: ["stage_1", "stage_2", "stage_3"])
 
-
-# ---------------------------------------------------------------------------
-# Convenience helper: load a Hydra YAML and return an instantiable config.
-# ---------------------------------------------------------------------------
-
-def load_yaml_config(yaml_path: str) -> Any:
-    """Load a Hydra-compatible YAML and return an OmegaConf DictConfig.
-
-    The returned object can be passed to ``hydra_zen.instantiate(cfg.model)``
-    (or any sub-key) to construct the corresponding object.
-    """
-    from omegaconf import OmegaConf
-
-    with open(yaml_path, "r") as f:
-        cfg = OmegaConf.load(f)
-    return cfg

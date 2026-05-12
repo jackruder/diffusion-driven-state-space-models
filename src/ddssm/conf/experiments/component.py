@@ -13,7 +13,7 @@ Registered experiment names
 from __future__ import annotations
 
 from .._infra import (
-    _experiment_conf,
+    build_experiment_conf,
     DDSSMHyperParamsConf,
     ObjectiveSpecConf,
     SyntheticDataModuleConf,
@@ -29,7 +29,7 @@ from .._eval_viz import SynthEvalConf, SynthVizConf
 # Synthetic + Gaussian transition — small LGSSM run for smoke tests / CI.
 # ---------------------------------------------------------------------------
 
-SyntheticGaussExperimentConf = _experiment_conf(
+SyntheticGaussExperimentConf = build_experiment_conf(
     data_conf=SyntheticDataModuleConf(mode="lgssm", T=64, N_per_split=512, batch_size=32),
     transition_conf=TransitionGaussianConf,
     hyperparams_conf=DDSSMHyperParamsConf(
@@ -52,7 +52,7 @@ store(SyntheticGaussExperimentConf, group="experiment", name="synthetic_gauss")
 # Synthetic + Diffusion transition.
 # ---------------------------------------------------------------------------
 
-SyntheticDiffusionExperimentConf = _experiment_conf(
+SyntheticDiffusionExperimentConf = build_experiment_conf(
     data_conf=SyntheticDataModuleConf(mode="lgssm", T=64, N_per_split=512, batch_size=32),
     transition_conf=TransitionDiffusionConf,
     hyperparams_conf=DDSSMHyperParamsConf(

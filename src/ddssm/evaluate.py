@@ -28,23 +28,20 @@ import logging
 import os
 
 import hydra
-import torch
 from hydra.core.hydra_config import HydraConfig
-from hydra_zen import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 from . import conf  # noqa: F401  -- registers the ConfigStore
+from .workflow import RunMetadata, evaluate_config
 
 log = logging.getLogger(__name__)
 
 
 @hydra.main(config_path="./conf", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
-    log.info("Resolved config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    run_dir = HydraConfig.get().runtime.output_dir
-    log.info("Device=%s run_dir=%s", device, run_dir)
+    hydra_cfg = HydraConfig.get()
+    run_dir = hydra_cfg.runtime.output_dir
+    log.info("run_dir=%s", run_dir)
 
     orig_cwd = hydra.utils.get_original_cwd()
     checkpoint_path = cfg.get("checkpoint", None)
@@ -54,12 +51,17 @@ def main(cfg: DictConfig):
     if csv_path is not None and not os.path.isabs(csv_path):
         csv_path = os.path.join(orig_cwd, csv_path)
 
-    experiment = instantiate(cfg.experiment)
-    return experiment.evaluate(
-        device=device,
+    return evaluate_config(
+        cfg,
         run_dir=run_dir,
         checkpoint_path=checkpoint_path,
         csv_path=csv_path,
+        metadata=RunMetadata(
+            config_identity=(
+                f"hydra:experiment={hydra_cfg.runtime.choices.get('experiment', 'unknown')}"
+            ),
+            overrides=tuple(hydra_cfg.overrides.task),
+        ),
     )
 
 

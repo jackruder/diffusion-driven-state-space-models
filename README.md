@@ -47,9 +47,10 @@ Requires Python 3.13 and PyTorch ≥ 2.9.
 
 ## Running experiments
 
-`python -m ddssm.app` is the single Hydra-native entry point. All experiment
-configuration is composed from the hydra-zen `ConfigStore` registered in
-`src/ddssm/conf/`; there is no separate Pydantic config layer.
+Experiments can be run either from the Hydra CLI (`python -m ddssm.app`) or
+directly from Python-authored Hydra-Zen configs. The Python path is preferred
+for literate verification source blocks because Pyright can check imports,
+config names, and nested config constructors without introducing YAML files.
 
 ### Hydra experiment presets
 
@@ -73,6 +74,28 @@ python -m ddssm.app experiment=synthetic_gauss
 python -m ddssm.app experiment=synthetic_diffusion \
     experiment.training.steps=2000 experiment.hyperparams.batch_size=64
 ```
+
+The same run can be defined in a Python source block:
+
+```python
+from ddssm.conf import TrainingScalarsConf, TransitionDiffusionConf
+from ddssm.conf.experiments.synthetic import HarmonicExperimentConf
+from ddssm.workflow import ConfigGroups, train_config
+
+cfg = HarmonicExperimentConf(
+    training=TrainingScalarsConf(steps=2000, checkpoint_every=500),
+)
+
+train_config(
+    cfg,
+    groups=ConfigGroups(transition=TransitionDiffusionConf),
+    run_dir="runs/harmonic/diff",
+)
+```
+
+Every workflow stage writes `resolved_config.yaml` and `experiment_log.json`
+under the run directory. The experiment log records the config identity,
+overrides, resolved config artifact path, run directory, and key stage metrics.
 
 ### Architecture config groups
 
@@ -194,22 +217,14 @@ Metrics are written to TensorBoard and CSV by default; **W&B is opt-in**.
 pip install -e .[wandb]
 ```
 
-Pass a ``wandb_config`` dict to ``DDSSMTrainer`` to activate it, or use the
-``--wandb_project`` flag on the argparse-based ``verifications.py`` script:
+Pass `wandb=enabled` on the Hydra CLI, or set `experiment.wandb_config` in the
+Python config object before calling `train_config`:
 
-```bash
-# Cloud W&B
-python scripts/experiments/verifications.py \
-    --config configs/synthetic_gauss.yaml \
-    --mode lgssm \
-    --wandb_project ddssm
-
-# Self-hosted W&B server
-python scripts/experiments/verifications.py \
-    --config configs/synthetic_gauss.yaml \
-    --mode bimodal \
-    --wandb_project ddssm \
-    --wandb_base_url https://wandb.example.com
+```python
+cfg = HarmonicExperimentConf(
+    wandb_config={"enabled": True, "project": "ddssm", "tags": ["harmonic"]},
+)
+train_config(cfg, run_dir="runs/harmonic/wandb")
 ```
 
 W&B is a *soft dependency*: if the ``wandb`` package isn't installed the

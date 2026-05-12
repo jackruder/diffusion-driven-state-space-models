@@ -1,33 +1,23 @@
-"""DDSSM Hydra configuration package.
+"""Public DDSSM configuration surface.
 
-Structure
----------
-conf/
-    _infra.py        — ZenStore, transition/data-module/trainer Confs,
-                       TrainableModulesConf, Stages dataclasses, helpers
-    _eval_viz.py     — eval/viz family defaults (SynthEvalConf, etc.)
-    experiments/
-        component.py — synthetic_gauss, synthetic_diffusion
-        synthetic.py — harmonic_*, bimodal_*, robot_*
-        kdd.py       — kdd_gauss, kdd_diffusion
-
-Importing this package (``import ddssm.conf``) is sufficient to register
-all experiment presets with Hydra's ConfigStore.  All public names from
-``_infra``, ``_eval_viz``, and the ``experiments`` subpackage are
-re-exported here so that external code using ``from ddssm.conf import X``
-continues to work without change.
+Importing :mod:`ddssm.conf` registers the Hydra config groups.  Experiment
+presets live in ``ddssm.conf.experiments.*`` so source-block configs can import
+only the preset module they need.
 """
 
 from __future__ import annotations
 
-# 1. Infrastructure (creates ``store`` and registers transition/model/trainer groups)
+from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
+from ..train import DDSSMTrainerConf
 from ._infra import (
+    ContextProducerCSDIConf,
+    CSDIUnetGroupConf,
     DDSSMTrainerPartial,
     DecoderGaussianConf,
     EncoderGaussianConf,
+    FeatureMixerTransformerConf,
     InitPriorGaussianConf,
     KDDDataModuleConf,
-    LambdaRampConf,
     NullDataModuleConf,
     ObjectiveSpecConf,
     StageLrsConf,
@@ -36,6 +26,7 @@ from ._infra import (
     StageTrainableConf,
     StagesConf,
     SyntheticDataModuleConf,
+    TimeMixerConvConf,
     TrainableJointConf,
     TrainableModulesConf,
     TrainableReconOnlyConf,
@@ -44,148 +35,44 @@ from ._infra import (
     TransitionDiffusionConf,
     TransitionDiffusionV2Conf,
     TransitionGaussianConf,
-    ContextProducerCSDIConf,
-    CSDIUnetGroupConf,
-    DiffResidualBlockConf,
-    ResidualBlockConf,
-    TimeMixerConvConf,
-    TimeMixerGRUConf,
-    TimeMixerIdentityConf,
-    FeatureMixerTransformerConf,
-    FeatureMixerConvConf,
-    FeatureMixerIdentityConf,
-    ProbeCellConf,
-    ProbeMetricSpecConf,
-    ProbePlotSpecConf,
-    ProbeSpecConf,
-    _experiment_conf,
-    load_yaml_config,
+    build_experiment_conf,
     store,
 )
+from ._registry import register_configs
 
-# Re-export upstream Confs that callers import via ``ddssm.conf``
-from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
-from ..train import DDSSMTrainerConf
-
-# 2. Eval/viz family defaults
-from ._eval_viz import (
-    BimodalEvalConf,
-    BimodalVizConf,
-    HarmonicEvalConf,
-    HarmonicVizConf,
-    KDDEvalConf,
-    KDDVizConf,
-    Robot2DEvalConf,
-    Robot2DVizConf,
-    SynthEvalConf,
-    SynthVizConf,
-)
-from ._variance import (
-    BimodalCleanVarianceConf,
-    BimodalNoisyVarianceConf,
-    LGSSMVarianceConf,
-    NonlinearBimodalLiftVarianceConf,
-)
-
-# 3. Experiment presets (triggers all store(...) registrations)
-from .experiments import (
-    KDDDiffusionExperimentConf,
-    KDDGaussExperimentConf,
-    SyntheticDiffusionExperimentConf,
-    SyntheticGaussExperimentConf,
-    HarmonicExperimentConf,
-    BimodalExperimentConf,
-    Robot2DExperimentConf,
-    VarianceProbeBimodalCleanExperimentConf,
-    VarianceProbeBimodalNoisyExperimentConf,
-    VarianceProbeLGSSMExperimentConf,
-    VarianceProbeNonlinearBimodalLiftExperimentConf,
-)
-
-# 4. Materialise all registered configs into Hydra's ConfigStore.
-#    This must run after every store(...) call in the experiments subpackage.
-store.add_to_hydra_store(overwrite_ok=True)
-
+register_configs()
 
 __all__ = [
-    # Re-exported upstream Confs
     "DDSSMConf",
     "DDSSMHyperParamsConf",
     "DDSSMTrainerConf",
     "DDSSMTrainerPartial",
     "REWOConf",
-    # Transitions
     "TransitionGaussianConf",
     "TransitionDiffusionConf",
     "TransitionDiffusionV2Conf",
-    # Encoder / Decoder / InitPrior groups
+    "ContextProducerCSDIConf",
+    "CSDIUnetGroupConf",
+    "TimeMixerConvConf",
+    "FeatureMixerTransformerConf",
     "EncoderGaussianConf",
     "DecoderGaussianConf",
     "InitPriorGaussianConf",
-    # Architecture sub-groups (context, unet, time/feature mixers)
-    "ContextProducerCSDIConf",
-    "CSDIUnetGroupConf",
-    "ResidualBlockConf",
-    "DiffResidualBlockConf",
-    "TimeMixerConvConf",
-    "TimeMixerGRUConf",
-    "TimeMixerIdentityConf",
-    "FeatureMixerTransformerConf",
-    "FeatureMixerConvConf",
-    "FeatureMixerIdentityConf",
-    # Data modules
     "NullDataModuleConf",
     "SyntheticDataModuleConf",
     "KDDDataModuleConf",
-    # Experiment building blocks
     "TrainableModulesConf",
     "TrainableJointConf",
     "TrainableReconOnlyConf",
     "TrainableTransOnlyConf",
     "TrainingScalarsConf",
     "ObjectiveSpecConf",
-    "ProbeCellConf",
-    "ProbeMetricSpecConf",
-    "ProbePlotSpecConf",
-    "ProbeSpecConf",
-    # Eval/viz family defaults
-    "SynthEvalConf",
-    "SynthVizConf",
-    "KDDEvalConf",
-    "KDDVizConf",
-    "HarmonicEvalConf",
-    "HarmonicVizConf",
-    "BimodalEvalConf",
-    "BimodalVizConf",
-    "Robot2DEvalConf",
-    "Robot2DVizConf",
-    "LGSSMVarianceConf",
-    "BimodalCleanVarianceConf",
-    "BimodalNoisyVarianceConf",
-    "NonlinearBimodalLiftVarianceConf",
-    # Component / smoke-test experiments
-    "SyntheticGaussExperimentConf",
-    "SyntheticDiffusionExperimentConf",
-    # KDD experiments
-    "KDDGaussExperimentConf",
-    "KDDDiffusionExperimentConf",
-    # synthetic confs
-    "HarmonicExperimentConf",
-    "BimodalExperimentConf",
-    "Robot2DExperimentConf",
-    "VarianceProbeLGSSMExperimentConf",
-    "VarianceProbeBimodalCleanExperimentConf",
-    "VarianceProbeBimodalNoisyExperimentConf",
-    "VarianceProbeNonlinearBimodalLiftExperimentConf",
-    # Stages dataclasses
     "StageLrsConf",
     "StageTrainableConf",
     "StageSchedulerConf",
-    "LambdaRampConf",
     "StageSpecConf",
     "StagesConf",
-    # Utilities
-    "load_yaml_config",
+    "build_experiment_conf",
+    "register_configs",
     "store",
-    "_experiment_conf",
 ]

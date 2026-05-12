@@ -45,7 +45,7 @@ Registered experiment names
 from __future__ import annotations
 
 from .._infra import (
-    _experiment_conf,
+    build_experiment_conf,
     DDSSMHyperParamsConf,
     ObjectiveSpecConf,
     SyntheticDataModuleConf,
@@ -71,7 +71,7 @@ from .._eval_viz import (
 #                 experiment.hyperparams.lambda_warmup_steps=400
 # ---------------------------------------------------------------------------
 
-HarmonicExperimentConf = _experiment_conf(
+HarmonicExperimentConf = build_experiment_conf(
     data_conf=SyntheticDataModuleConf(mode="harmonic", T=64, N_per_split=1024, batch_size=32),
     hyperparams_conf=DDSSMHyperParamsConf(
         batch_size=32, grad_accum_steps=1, lambda_schedule="cosine",
@@ -96,7 +96,7 @@ store(HarmonicExperimentConf, group="experiment", name="harmonic")
 #             experiment.hyperparams.lambda_warmup_steps=400
 # ---------------------------------------------------------------------------
 
-BimodalExperimentConf = _experiment_conf(
+BimodalExperimentConf = build_experiment_conf(
     data_conf=SyntheticDataModuleConf(mode="bimodal", T=64, N_per_split=1024, batch_size=32),
     hyperparams_conf=DDSSMHyperParamsConf(
         batch_size=32, grad_accum_steps=1, lambda_schedule="cosine",
@@ -120,7 +120,7 @@ store(BimodalExperimentConf, group="experiment", name="bimodal")
 #             experiment.hyperparams.lambda_warmup_steps=800
 # ---------------------------------------------------------------------------
 
-Robot2DExperimentConf = _experiment_conf(
+Robot2DExperimentConf = build_experiment_conf(
     data_conf=SyntheticDataModuleConf(mode="robot-basis-pursuit", T=64, D=2,
                                       N_per_split=1024, batch_size=32),
     hyperparams_conf=DDSSMHyperParamsConf(

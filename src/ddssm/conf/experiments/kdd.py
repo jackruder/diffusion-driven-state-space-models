@@ -12,7 +12,7 @@ Registered experiment names
 from __future__ import annotations
 
 from .._infra import (
-    _experiment_conf,
+    build_experiment_conf,
     DDSSMHyperParamsConf,
     KDDDataModuleConf,
     ObjectiveSpecConf,
@@ -28,7 +28,7 @@ from .._eval_viz import KDDEvalConf, KDDVizConf
 # KDD + Gaussian transition (real data via data/kdd.pt).
 # ---------------------------------------------------------------------------
 
-KDDGaussExperimentConf = _experiment_conf(
+KDDGaussExperimentConf = build_experiment_conf(
     data_conf=KDDDataModuleConf(batch_size=128, eval_step_size=24),
     transition_conf=TransitionGaussianConf,
     hyperparams_conf=DDSSMHyperParamsConf(
@@ -51,7 +51,7 @@ store(KDDGaussExperimentConf, group="experiment", name="kdd_gauss")
 # KDD + Diffusion transition.
 # ---------------------------------------------------------------------------
 
-KDDDiffusionExperimentConf = _experiment_conf(
+KDDDiffusionExperimentConf = build_experiment_conf(
     data_conf=KDDDataModuleConf(batch_size=64, eval_step_size=24),
     transition_conf=TransitionDiffusionConf,
     hyperparams_conf=DDSSMHyperParamsConf(

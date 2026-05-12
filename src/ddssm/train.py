@@ -20,7 +20,7 @@ from torch.profiler import (
 )
 
 from hydra_zen import builds, instantiate
-from omegaconf import MISSING
+from omegaconf import MISSING, OmegaConf
 
 from .dssd import DDSSM_base
 from .loggers import (
@@ -254,9 +254,7 @@ class DDSSMTrainer:
         optimizer: optim.Optimizer | None = None,
         **kwargs,
     ) -> "DDSSMTrainer":
-        # Local import avoids a cycle: ddssm.conf imports DDSSMTrainerConf from this module.
-        from .conf import load_yaml_config
-        cfg = load_yaml_config(yaml_path)
+        cfg = OmegaConf.load(yaml_path)
         model = instantiate(cfg).to(device)
 
         return cls(model, device, optimizer=optimizer, **kwargs)
