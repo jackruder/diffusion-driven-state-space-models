@@ -4,10 +4,72 @@
 
 * Overview
 
-This notebook documents component tests and synthetic-data comparisons for
-DDSSM using the Hydra-based three-stage CLI. Each experiment is a named preset
-in ~ddssm.conf~; train, evaluate, and visualize are independent stages that can
-be run in any order provided a checkpoint exists.
+This notebook documents component tests and synthetic-data comparisons
+for DDSSM. Each experiment is a plain Python file under
+~experiments/~ in the repo root that calls ~make_experiment(...)~
+from ~experiments/_make.py~ to compose an ~Experiment~. The Hydra CLI
+auto-discovers every ~experiments/<name>.py~ at startup, so
+~experiment=NAME~ Just Works.
+
+Train, evaluate, and visualize are independent stages — run any of
+them once you have a checkpoint.
+
+** Where experiments live
+
+#+BEGIN_SRC text
+experiments/
+    _make.py                       # make_experiment, run, to_yaml, ...
+    harmonic_gauss.py              # one experiment per file
+    harmonic_diffusion.py
+    bimodal_gauss.py
+    bimodal_diffusion.py
+    robot_2d_gauss.py
+    robot_2d_diffusion.py
+    synthetic_gauss.py
+    synthetic_diffusion.py
+    kdd_gauss.py
+    kdd_diffusion.py
+    variance_probe_*.py
+    log.org                        # the experiment log
+#+END_SRC
+
+To override a parameter (e.g. ~Schedule.sigma_min~), edit the file
+or pass a Hydra CLI override:
+
+#+BEGIN_SRC sh
+python -m ddssm.app experiment=harmonic_diffusion \
+    experiment.model.transition.schedule.sigma_min=0.001 \
+    experiment.training.steps=200
+#+END_SRC
+
+To add a new experiment, drop ~experiments/foo.py~ exposing ~exp~:
+
+#+BEGIN_SRC python
+from ddssm.builders import (
+    DiffTransition, Eval, Hparams, Plot, Schedule, Synthetic,
+    Training, Unet, Viz,
+)
+from experiments._make import make_experiment, run
+
+exp = make_experiment(
+    data_dim=1, latent_dim=4, j=1, emb_time_dim=16,
+    data=Synthetic(mode="harmonic", T=64, N_per_split=1024, batch_size=32),
+    hparams=Hparams(S=1, batch_size=32, enc_lr=5e-4),
+    training=Training(steps=2000, log_every=25),
+    transition=DiffTransition(
+        unet=Unet(channels=128, n_layers=6),
+        schedule=Schedule(sigma_min=0.001, S_k=20),
+    ),
+    eval=Eval(metrics=["mae", "crps_sum"], split="val", T_split=32),
+    viz=Viz(plots=[Plot("forecast_1d", "forecast.png", kwargs={"n_show": 4})]),
+)
+
+if __name__ == "__main__":
+    run(exp, run_dir="runs/foo")
+#+END_SRC
+
+No ~store()~ calls, no config groups, no presets. ~python -m
+ddssm.app experiment=foo~ now works.
 
 ** Three-stage pattern
 
@@ -25,6 +87,29 @@ python -m ddssm.visualize experiment=PRESET \
     +checkpoint=outputs/<run_dir>/checkpoints/ckpt_latest.pth \
     +csv_path=outputs/<run_dir>/metrics.csv
 #+END_SRC
+
+** Migration note (old → new experiment names)
+
+The old single-transition presets (e.g. ~experiment=harmonic
+transition=diffusion~) are now split: pick the right variant directly.
+
+| Old CLI                                 | New CLI                          |
+|-----------------------------------------+----------------------------------|
+| ~experiment=harmonic~                   | ~experiment=harmonic_gauss~      |
+| ~experiment=harmonic transition=diff~   | ~experiment=harmonic_diffusion~  |
+| ~experiment=bimodal~                    | ~experiment=bimodal_gauss~       |
+| ~experiment=bimodal transition=diff~    | ~experiment=bimodal_diffusion~   |
+| ~experiment=robot_2d~                   | ~experiment=robot_2d_gauss~      |
+| ~experiment=robot_2d transition=diff~   | ~experiment=robot_2d_diffusion~  |
+
+Architectural ablations (~unet=mlp~, ~context=mlp~, ~time_mixer=...~,
+~feature_mixer=...~) no longer come from config groups — set them on
+the model parts directly inside the experiment file, or override
+their nested fields on the CLI (e.g.
+~experiment.model.transition.unet.channels=128~).
+
+Below sections may still reference the old transition= flag pattern;
+substitute the table above when running.
 
 Hydra writes all outputs (CSV log, checkpoints, PNGs, ~metrics.json~) under
 ~outputs/<date>/<time>/~ by default.  Pass ~hydra.run.dir=runs/my_run~ to

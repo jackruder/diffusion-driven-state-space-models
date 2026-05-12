@@ -1,0 +1,102 @@
+#+TITLE: DDSSM experiment log
+#+PROPERTY: header-args:python :results output :exports both :session log
+#+PROPERTY: header-args:sh :results output :exports both
+
+* How to use this log
+
+One headline per experiment, dated. Each headline holds:
+
+1. A Python src block that constructs the experiment (or tweaks an
+   existing one from ~experiments/<name>.py~). Tangle with ~C-c C-v t~
+   to write a runnable script under ~runs/~ next to the results.
+2. A shell src block invoking the experiment.
+3. A short results table or note: what the metric was, what changed
+   versus the baseline, what to try next.
+
+The log is append-only; never edit a finished entry, add a follow-up
+headline instead. Keep entries small enough to scan in a minute.
+
+** Setup (run once per Emacs session)
+
+#+BEGIN_SRC python
+import sys
+sys.path.insert(0, "src")  # ddssm package
+sys.path.insert(0, ".")    # experiments package
+import dataclasses
+from experiments._make import make_experiment, run, to_yaml, save_yaml
+from ddssm.builders import (
+    DiffTransition, DiffV2Transition, Eval, GaussTransition, Hparams,
+    KDD, Plot, Schedule, ScheduleV2, Synthetic, Training, Unet, Viz,
+)
+print("ready")
+#+END_SRC
+
+* Template — copy this headline to start a new entry
+
+** YYYY-MM-DD <one-sentence hypothesis>
+
+Hypothesis: <what we expect to see and why>
+
+#+BEGIN_SRC python :tangle runs/REPLACE_ME/conf.py :mkdirp yes
+from experiments.harmonic_diffusion import exp as base
+import dataclasses
+exp = dataclasses.replace(
+    base,
+    # … tweak fields here. e.g.:
+    # training=dataclasses.replace(base.training, steps=200),
+)
+print(to_yaml(exp)[:400])
+#+END_SRC
+
+#+BEGIN_SRC sh
+PYTHONPATH=src:. python -m experiments.<name>  # or:
+PYTHONPATH=src:. python -c "from runs.REPLACE_ME.conf import exp; \
+    from experiments._make import run; run(exp, run_dir='runs/REPLACE_ME')"
+#+END_SRC
+
+Results:
+
+| metric         | value |
+|----------------+-------|
+| loss/total     |       |
+| crps_sum       |       |
+
+Notes: …
+
+* Worked example — harmonic + diffusion, low sigma_min
+
+** 2026-05-12 sigma_min=0.001 vs default 2e-3
+
+Hypothesis: a smaller noise floor sharpens the score near the data
+manifold and should lower CRPS on the harmonic eval.
+
+#+BEGIN_SRC python :tangle runs/harm_diff_low_sigma/conf.py :mkdirp yes
+from experiments.harmonic_diffusion import exp as base
+from ddssm.builders import Schedule
+import dataclasses
+exp = dataclasses.replace(
+    base,
+    model=dataclasses.replace(
+        base.model,
+        transition=dataclasses.replace(
+            base.model.transition,
+            schedule=Schedule(sigma_min=0.001, S_k=20),
+        ),
+    ),
+    training=dataclasses.replace(base.training, steps=500, log_every=25),
+)
+#+END_SRC
+
+#+BEGIN_SRC sh
+PYTHONPATH=src:. python -c "from runs.harm_diff_low_sigma.conf import exp; \
+    from experiments._make import run; run(exp, run_dir='runs/harm_diff_low_sigma')"
+#+END_SRC
+
+Results:
+
+| metric     | baseline | this run |
+|------------+----------+----------|
+| loss/total |          |          |
+| crps_sum   |          |          |
+
+Notes: …
