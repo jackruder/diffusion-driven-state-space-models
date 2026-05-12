@@ -22,6 +22,9 @@ canonical verification workflow.
 
 * Shared Python helpers
 
+This shared block centralizes imports used throughout the verification sections;
+individual source blocks can copy only the imports they need.
+
 #+BEGIN_SRC python
 from __future__ import annotations
 

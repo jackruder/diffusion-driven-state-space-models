@@ -43,6 +43,9 @@ class ConfigGroups:
     feature_mixer: Any = FeatureMixerTransformerConf
 
 
+DEFAULT_CONFIG_GROUPS = ConfigGroups()
+
+
 @dataclass(frozen=True)
 class RunMetadata:
     """Identity and override metadata persisted with each stage run."""
@@ -63,7 +66,7 @@ def compose_experiment_config(
     groups needed to resolve presets that contain ``${transition}``,
     ``${encoder}``, and similar interpolations.
     """
-    group_choices = groups or ConfigGroups()
+    group_choices = groups or DEFAULT_CONFIG_GROUPS
     cfg = OmegaConf.create({
         "experiment": OmegaConf.structured(experiment_config),
         "transition": OmegaConf.structured(group_choices.transition),
@@ -270,6 +273,7 @@ def _key_metrics(result: Any) -> dict[str, Any]:
 
 
 __all__ = [
+    "DEFAULT_CONFIG_GROUPS",
     "ConfigGroups",
     "RunMetadata",
     "compose_experiment_config",

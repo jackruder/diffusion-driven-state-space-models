@@ -1,8 +1,8 @@
 """Infrastructure layer for the DDSSM Hydra configuration.
 
 Defines the ``ZenStore`` plus the primitive config classes used by
-Python-authored experiment configs: transitions, data modules, trainable
-masks, trainer partials, and stages.
+Python-authored experiment configs: transitions, architecture groups, data
+modules, trainable masks, trainer partials, and stages.
 
 Nothing in this module registers experiment presets with the store —
 that is done in the ``experiments/`` subpackage.  The store is
