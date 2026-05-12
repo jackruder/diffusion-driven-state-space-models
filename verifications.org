@@ -794,6 +794,156 @@ python -m ddssm.visualize experiment=kdd_diffusion \
     hydra.run.dir=runs/kdd/diff
 #+END_SRC
 
+* Variance Probes
+
+Diagnostic experiments that measure the per-time-step variance of the
+transition-loss gradient estimator under the DiffusionV2 transition.
+Used to compare *(objective, k-sampling)* cells — ESM vs. DSM under
+uniform sampling vs. an importance-sampled scheme — and to spot
+τ-regimes where the estimator is noisy.
+
+Four registered experiments cover the standard probe budgets:
+
+| Name                                       | Dataset (mode)              | Model       | D | latent\_dim |
+|--------------------------------------------+-----------------------------+-------------+---+-------------|
+| ~variance_probe_lgssm~                     | LGSSM                       | ProbeSmall  | 1 |           4 |
+| ~variance_probe_bimodal_clean~             | bimodal                     | ProbeSmall  | 1 |           4 |
+| ~variance_probe_bimodal_noisy~             | bimodal-noisy               | ProbeSmall  | 1 |           4 |
+| ~variance_probe_nonlinear_bimodal_lift~    | nonlinear-bimodal-lift      | ProbeMedium | 4 |           8 |
+
+Each ships with the default ~Probe()~ spec — four cells (ESM /
+DSM × uniform / lsgm_is sampling), ~R=128~ samples per batch,
+~seeds=[0, 1, 2]~, ~split="train"~. Training settles in 300 steps
+(~training=Probe300~ from ~experiments/variance_probe/training.py~).
+
+** Two-stage workflow
+
+The probe runs *after* training: stage 1 fits the score model, stage 2
+re-loads the checkpoint and computes per-cell variance.
+
+#+BEGIN_SRC sh
+# Stage 1 — train the DiffusionV2 model (300 steps, ~30s on CPU).
+python -m ddssm.app experiment=variance_probe_lgssm \
+    hydra.run.dir=runs/variance_probe/lgssm
+
+# Stage 2 — load the checkpoint and run the probe.
+python -m ddssm.variance experiment=variance_probe_lgssm \
+    +checkpoint=runs/variance_probe/lgssm/checkpoints/ckpt_latest.pth \
+    hydra.run.dir=runs/variance_probe/lgssm
+#+END_SRC
+
+The second command writes its artifacts into the *same* ~run_dir~, so
+the probe outputs land next to the training checkpoint and CSV.
+
+** Outputs
+
+Every probe run produces, under ~run_dir~:
+
+| File                       | What                                                                 |
+|----------------------------+----------------------------------------------------------------------|
+| ~variance_raw.csv~         | One row per (cell, batch, seed, τ-bin) — raw per-step measurements   |
+| ~variance_summary.json~    | Per-cell summary stats + metrics + ~checkpoint_path~                 |
+| ~var_grad_vs_tau.png~      | Variance of the gradient estimator across τ, per cell                |
+| ~var_loss_vs_tau.png~      | Variance of the loss estimator across τ                              |
+| ~ratio_vs_tau.png~         | ESM / DSM variance ratio across τ                                    |
+| ~summary_table.png~        | Text-rendered table of the JSON summary                              |
+
+Filenames for the four default plots come from ~Probe().plots~; rename
+them or add new plots by overriding ~experiment.variance.plots~ on
+the CLI (see "Customising the probe" below).
+
+** Running all four probes
+
+A short loop covers the full matrix. Each pair takes 1–2 min on CPU.
+
+#+BEGIN_SRC sh
+for name in variance_probe_lgssm \
+            variance_probe_bimodal_clean \
+            variance_probe_bimodal_noisy \
+            variance_probe_nonlinear_bimodal_lift; do
+    python -m ddssm.app experiment=$name \
+        hydra.run.dir=runs/variance_probe/$name
+    python -m ddssm.variance experiment=$name \
+        +checkpoint=runs/variance_probe/$name/checkpoints/ckpt_latest.pth \
+        hydra.run.dir=runs/variance_probe/$name
+done
+#+END_SRC
+
+** Customising the probe
+
+~experiment.variance~ is a regular ~ProbeSpec~; every leaf is
+CLI-overridable.
+
+#+BEGIN_SRC sh
+# Cheaper probe: 32 samples × 1 seed (matches the +sweep=variance_probe preset).
+python -m ddssm.variance experiment=variance_probe_lgssm \
+    +checkpoint=runs/variance_probe/lgssm/checkpoints/ckpt_latest.pth \
+    experiment.variance.R=32 \
+    experiment.variance.seeds=[0]
+
+# Single cell (ESM + uniform only) to isolate one estimator.
+python -m ddssm.variance experiment=variance_probe_lgssm \
+    +checkpoint=runs/variance_probe/lgssm/checkpoints/ckpt_latest.pth \
+    'experiment.variance.cells=[{objective:esm,k_sampling_mode:uniform}]'
+
+# Custom plot list — only the summary table.
+python -m ddssm.variance experiment=variance_probe_lgssm \
+    +checkpoint=runs/variance_probe/lgssm/checkpoints/ckpt_latest.pth \
+    'experiment.variance.plots=[{name:summary_table,save_filename:summary.png}]'
+#+END_SRC
+
+The five registered probe-plot names live in
+~src/ddssm/variance/plots.py~:
+
+| Plot name             | What it shows                                          |
+|-----------------------+--------------------------------------------------------|
+| ~var_grad_vs_tau~     | Variance of the gradient estimator vs noise level τ    |
+| ~var_loss_vs_tau~     | Variance of the loss estimator vs τ                    |
+| ~ratio_vs_tau~        | ESM / DSM variance ratio vs τ                          |
+| ~summary_table~       | JSON summary rendered as a text PNG                    |
+| ~var_grad_vs_step~    | Variance vs training step (checkpoint sweep)           |
+
+** ~+sweep=variance_probe~ — fast preset + W&B
+
+For a quick scan with W&B logging on, layer the preset (it sets
+~R=32~, ~seeds=[0]~, enables W&B, tags the run ~variance-probe~).
+
+#+BEGIN_SRC sh
+# Train with the preset (logs to W&B under project=ddssm-variance-probe).
+python -m ddssm.app experiment=variance_probe_lgssm +sweep=variance_probe \
+    hydra.run.dir=runs/variance_probe/lgssm
+
+# Probe with the preset — same R/seeds + same W&B project.
+python -m ddssm.variance experiment=variance_probe_lgssm +sweep=variance_probe \
+    +checkpoint=runs/variance_probe/lgssm/checkpoints/ckpt_latest.pth \
+    hydra.run.dir=runs/variance_probe/lgssm
+#+END_SRC
+
+Pass W&B credentials / project name as additional overrides at the CLI:
+
+#+BEGIN_SRC sh
+python -m ddssm.variance experiment=variance_probe_lgssm +sweep=variance_probe \
+    +checkpoint=runs/variance_probe/lgssm/checkpoints/ckpt_latest.pth \
+    'experiment.wandb_config.project=my-project' \
+    'experiment.wandb_config.entity=my-team' \
+    'experiment.wandb_config.tags=[variance-probe,lgssm]'
+#+END_SRC
+
+** Expected behaviour
+
+- *LGSSM* (~lgssm~) — variance is low across all τ; ESM and DSM
+  agree closely. Useful sanity check.
+- *Bimodal clean* — ESM should outperform (lower variance) DSM at
+  small τ where the bimodal structure is most visible.
+- *Bimodal noisy* — both estimators noisier across the τ range;
+  the ESM advantage narrows.
+- *Nonlinear-bimodal-lift* (D=4) — measures how the variance
+  story degrades with shape; expect higher variance per cell.
+
+If ~ratio_vs_tau.png~ stays close to 1.0, the two estimators are
+indistinguishable in that regime; spikes toward 0 or ∞ flag a
+τ-band where one estimator dominates.
+
 * Results
 
 ** Synthetic
