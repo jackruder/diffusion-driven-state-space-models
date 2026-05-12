@@ -72,7 +72,7 @@ DIFFUSION_V2 = ConfigGroups(transition=TransitionDiffusionV2Conf)
 
 
 @dataclass(frozen=True)
-class RunSpec:
+class _RunSpec:
     config: object
     run_dir: str
     identity: str
@@ -110,7 +110,7 @@ class RunSpec:
 
 #+BEGIN_SRC python
 component_runs = [
-    RunSpec(
+    _RunSpec(
         SyntheticGaussExperimentConf(
             training=TrainingScalarsConf(
                 steps=500,
@@ -126,12 +126,12 @@ component_runs = [
         "runs/component/recon_only",
         "python:component.recon_only",
     ),
-    RunSpec(
+    _RunSpec(
         SyntheticGaussExperimentConf,
         "runs/component/gaussian_joint",
         "python:component.synthetic_gauss",
     ),
-    RunSpec(
+    _RunSpec(
         SyntheticDiffusionExperimentConf,
         "runs/component/diffusion_joint",
         "python:component.synthetic_diffusion",
@@ -190,36 +190,36 @@ Expected behavior:
 
 #+BEGIN_SRC python
 synthetic_runs = [
-    RunSpec(HarmonicExperimentConf, "runs/harmonic/gauss", "python:harmonic.gauss", groups=GAUSSIAN),
-    RunSpec(
+    _RunSpec(HarmonicExperimentConf, "runs/harmonic/gauss", "python:harmonic.gauss", groups=GAUSSIAN),
+    _RunSpec(
         HarmonicExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
         "runs/harmonic/diff",
         "python:harmonic.diffusion",
         groups=DIFFUSION,
         updates={"experiment": {"hyperparams": {"lambda_warmup_steps": 400}}},
     ),
-    RunSpec(
+    _RunSpec(
         HarmonicExperimentConf,
         "runs/harmonic/gauss_j2",
         "python:harmonic.gauss_j2",
         groups=GAUSSIAN,
         updates={"experiment": {"j": 2}},
     ),
-    RunSpec(
+    _RunSpec(
         HarmonicExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
         "runs/harmonic/diff_j2",
         "python:harmonic.diffusion_j2",
         groups=DIFFUSION,
         updates={"experiment": {"j": 2, "hyperparams": {"lambda_warmup_steps": 400}}},
     ),
-    RunSpec(
+    _RunSpec(
         HarmonicExperimentConf,
         "runs/harmonic_noisy/gauss",
         "python:harmonic_noisy.gauss",
         groups=GAUSSIAN,
         updates={"experiment": {"data": {"mode": "harmonic-noisy"}}},
     ),
-    RunSpec(
+    _RunSpec(
         HarmonicExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
         "runs/harmonic_noisy/diff",
         "python:harmonic_noisy.diffusion",
@@ -231,14 +231,14 @@ synthetic_runs = [
             }
         },
     ),
-    RunSpec(
+    _RunSpec(
         BimodalExperimentConf,
         "runs/bimodal/gauss",
         "python:bimodal.gauss",
         groups=GAUSSIAN,
         tags=("jsd",),
     ),
-    RunSpec(
+    _RunSpec(
         BimodalExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
         "runs/bimodal/diff",
         "python:bimodal.diffusion_v1",
@@ -246,7 +246,7 @@ synthetic_runs = [
         updates={"experiment": {"hyperparams": {"lambda_warmup_steps": 400}}},
         tags=("jsd",),
     ),
-    RunSpec(
+    _RunSpec(
         BimodalExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
         "runs/bimodal/diff_v2",
         "python:bimodal.diffusion_v2_uniform",
@@ -256,8 +256,8 @@ synthetic_runs = [
             "experiment": {"hyperparams": {"lambda_warmup_steps": 400}},
         },
     ),
-    RunSpec(Robot2DExperimentConf, "runs/robot_2d/gauss", "python:robot_2d.gauss", groups=GAUSSIAN),
-    RunSpec(
+    _RunSpec(Robot2DExperimentConf, "runs/robot_2d/gauss", "python:robot_2d.gauss", groups=GAUSSIAN),
+    _RunSpec(
         Robot2DExperimentConf(training=TrainingScalarsConf(steps=4000, checkpoint_every=500)),
         "runs/robot_2d/diff",
         "python:robot_2d.diffusion",
@@ -365,8 +365,8 @@ python scripts/experiments/plot_bimodal_compare.py \
 
 #+BEGIN_SRC python
 kdd_runs = [
-    RunSpec(KDDGaussExperimentConf, "runs/kdd/gauss", "python:kdd.gauss"),
-    RunSpec(KDDDiffusionExperimentConf, "runs/kdd/diff", "python:kdd.diffusion"),
+    _RunSpec(KDDGaussExperimentConf, "runs/kdd/gauss", "python:kdd.gauss"),
+    _RunSpec(KDDDiffusionExperimentConf, "runs/kdd/diff", "python:kdd.diffusion"),
 ]
 #+END_SRC
 
@@ -407,18 +407,18 @@ for run in kdd_runs:
 
 #+BEGIN_SRC python
 variance_runs = [
-    RunSpec(VarianceProbeLGSSMExperimentConf, "runs/variance_probe/lgssm", "python:variance_probe.lgssm"),
-    RunSpec(
+    _RunSpec(VarianceProbeLGSSMExperimentConf, "runs/variance_probe/lgssm", "python:variance_probe.lgssm"),
+    _RunSpec(
         VarianceProbeBimodalCleanExperimentConf,
         "runs/variance_probe/bimodal_clean",
         "python:variance_probe.bimodal_clean",
     ),
-    RunSpec(
+    _RunSpec(
         VarianceProbeBimodalNoisyExperimentConf,
         "runs/variance_probe/bimodal_noisy",
         "python:variance_probe.bimodal_noisy",
     ),
-    RunSpec(
+    _RunSpec(
         VarianceProbeNonlinearBimodalLiftExperimentConf,
         "runs/variance_probe/nonlinear_bimodal_lift",
         "python:variance_probe.nonlinear_bimodal_lift",
@@ -457,7 +457,7 @@ python -m ddssm.app --multirun experiment=bimodal \
 
 * Adding new verification experiments
 
-1. Decide whether the experiment needs only a new ~RunSpec~ in this document or
+1. Decide whether the experiment needs only a new ~_RunSpec~ in this document or
    a reusable preset in ~src/ddssm/conf/experiments/*.py~.
 2. For reusable presets, compose the preset with ~build_experiment_conf(...)~ and
    register it with the shared config store.

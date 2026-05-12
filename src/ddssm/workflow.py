@@ -26,6 +26,9 @@ from .conf import (
 
 log = logging.getLogger(__name__)
 
+# Workflow APIs accept Hydra-Zen generated config classes, initialized config
+# objects, OmegaConf nodes, and primitive stage results.  ``object`` keeps that
+# dynamic surface explicit without letting callers perform unchecked operations.
 type ConfigInput = object
 type StageResult = object
 
