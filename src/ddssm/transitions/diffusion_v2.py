@@ -82,9 +82,7 @@ from typing import Any, Callable, Dict, Optional, final
 import torch
 import torch.nn as nn
 
-from hydra_zen import builds
-
-from ..diffnets import CSDIUnet, CSDIUnetConf
+from ..diffnets import CSDIUnet
 from ..gaussians import GaussianStats, gaussian_entropy
 from ..net_utils import get_side_info
 from ..torch_compile import maybe_compile
@@ -730,13 +728,3 @@ class DiffusionV2Transition(BaseTransition):
         return x
 
 
-# ---------------------------------------------------------------------------
-# Hydra-zen config
-# ---------------------------------------------------------------------------
-
-DiffusionV2TransitionConf = builds(
-    DiffusionV2Transition,
-    unet=CSDIUnetConf(),
-    schedule=DiffusionV2ScheduleConfig(),
-    populate_full_signature=True,
-)

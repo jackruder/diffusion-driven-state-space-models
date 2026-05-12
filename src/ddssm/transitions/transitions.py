@@ -28,11 +28,8 @@ import torch
 import torch.nn as nn
 
 
-from hydra_zen import builds
-
 from ..encoder import GaussianHead, ContextProducer
-from ..diffnets import ContextProducerConf
-from ..gaussians import GaussianHeadConf, GaussianStats, gaussian_kl_divergence
+from ..gaussians import GaussianStats, gaussian_kl_divergence
 from ..torch_compile import maybe_compile
 
 
@@ -688,13 +685,3 @@ class GaussianTransition(BaseTransition):
         return mu.unsqueeze(1) + sigma.unsqueeze(1) * eps
 
 
-# ---------------------------------------------------------------------------
-# Hydra-zen config for GaussianTransition
-# ---------------------------------------------------------------------------
-
-GaussianTransitionConf = builds(
-    GaussianTransition,
-    context=ContextProducerConf(),
-    gaussian_head=GaussianHeadConf(),  # default clamp_logvar_min=-9.0 matches old config
-    populate_full_signature=True,
-)

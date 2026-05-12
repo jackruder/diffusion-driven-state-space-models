@@ -1,8 +1,59 @@
 """Multi-stage training orchestration via StageOrchestrator."""
 
 import math
+from dataclasses import dataclass, field
+from typing import List
+
+from omegaconf import MISSING
 
 from .train import DDSSMTrainer
+
+
+@dataclass
+class StageLrsConf:
+    dec_lr: float = 5e-4
+    zinit_lr: float = 5e-4
+    trans_lr: float = 0.0
+
+
+@dataclass
+class StageTrainableConf:
+    decoder: bool = True
+    z_init: bool = True
+    transition: bool = False
+
+
+@dataclass
+class StageSchedulerConf:
+    warmup_steps: int = 0
+    final_lr_scale: float = 1.0
+
+
+@dataclass
+class LambdaRampConf:
+    end: float | None = 1.0
+    delay: int = 0
+    steps: int | None = None
+
+
+@dataclass
+class StageSpecConf:
+    steps: int = MISSING
+    trainable: StageTrainableConf = field(default_factory=StageTrainableConf)
+    lrs: StageLrsConf = field(default_factory=StageLrsConf)
+    scheduler: StageSchedulerConf = field(default_factory=StageSchedulerConf)
+    carry_diff_moments: bool = False
+    lambda_ramp: LambdaRampConf = field(default_factory=LambdaRampConf)
+    log_every: int = 10
+    val_every: int = 100
+    checkpoint_every: int = 1000
+
+
+@dataclass
+class StagesConf:
+    stage_2: StageSpecConf | None = None
+    stage_3: StageSpecConf | None = None
+    run: List[str] = field(default_factory=lambda: ["stage_1", "stage_2", "stage_3"])
 
 
 def make_lambda_cosine(spec, total_steps: int, default_end: float) -> callable:

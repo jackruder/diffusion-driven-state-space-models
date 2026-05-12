@@ -146,14 +146,6 @@ class Experiment:
     The trainer is constructed lazily inside :meth:`run` because it
     needs the device and the per-trial run directory — both of which
     are owned by :mod:`ddssm.app`.
-
-    The shape fields (``data_dim``, ``latent_dim`` etc.) are the single
-    source of truth for downstream interpolation: ``DDSSMConf`` and the
-    transition Confs read ``${experiment.data_dim}`` etc., so changing
-    a value here propagates to the model + transition without
-    duplication. The :class:`Experiment` instance carries them as
-    plain fields so they remain inspectable at runtime (logging,
-    debugging, checkpoints).
     """
 
     data: DDSSMDataModule
@@ -166,22 +158,6 @@ class Experiment:
     variance: Any = None  # ddssm.variance.ProbeSpec | None -- typed lazily
     seed: int | None = 0
     wandb_config: dict | None = None
-
-    # Shape / wiring fields consumed by Hydra interpolation. These are
-    # not used directly by ``run`` — they exist so ``DDSSMConf`` and the
-    # transition Confs can interpolate from a single source of truth.
-    data_dim: int = 1
-    latent_dim: int = 4
-    j: int = 1
-    emb_time_dim: int = 16
-    covariate_dim: int = 0
-    use_observation_mask: bool = False
-    checkpoint_dir: str = "./checkpoints"
-    transition: Any = None
-    encoder: Any = None
-    decoder: Any = None
-    z_init: Any = None
-    hyperparams: Any = None
 
     def train(self, *, device: torch.device, run_dir: str) -> float | DDSSMTrainer:
         """Run training only. Eval and visualization are separate stages."""

@@ -3,7 +3,8 @@
 import pytest
 from omegaconf import OmegaConf
 
-from ddssm.conf import DDSSMHyperParamsConf, StageSpecConf
+from ddssm.dssd import DDSSMHyperParamsConf
+from ddssm.stages import StageSpecConf
 
 
 def test_hyperparams_defaults():

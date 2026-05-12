@@ -13,13 +13,10 @@ from typing import Callable, Dict, Tuple, Optional
 import torch
 import torch.nn as nn
 
-from hydra_zen import builds
-
-from .futsum import FutureSummary, GRUFutureSummary, GRUFutureSummaryConf
-from .diffnets import ContextProducer, ContextProducerConf
+from .futsum import FutureSummary, GRUFutureSummary
+from .diffnets import ContextProducer
 from .gaussians import (
     GaussianHead,
-    GaussianHeadConf,
     GaussianStats,
     gaussian_entropy,
     gaussian_log_prob,
@@ -572,19 +569,6 @@ class GaussianEncoder(BaseEncoder):
         lv = logvars[:, :, :, :steps]  # (B, S, d, steps)
         H_per_bs = gaussian_entropy(lv)  # (B, S)
         return H_per_bs.mean()  # Mean over B, S
-
-
-# ---------------------------------------------------------------------------
-# Hydra-zen config for GaussianEncoder
-# ---------------------------------------------------------------------------
-
-GaussianEncoderConf = builds(
-    GaussianEncoder,
-    context=ContextProducerConf(),
-    gaussian_head=GaussianHeadConf(clamp_logvar_min=-10.0),
-    fut_summary=GRUFutureSummaryConf(),
-    populate_full_signature=True,
-)
 
 
 # ---- Initial Prior Interface ---- ####
@@ -1219,15 +1203,3 @@ class GaussianInitPrior(BaseInitPrior):
         }
 
 
-# ---------------------------------------------------------------------------
-# Hydra-zen config for GaussianInitPrior
-# ---------------------------------------------------------------------------
-
-GaussianInitPriorConf = builds(
-    GaussianInitPrior,
-    context=ContextProducerConf(),
-    aux_context=ContextProducerConf(),
-    gaussian_head=GaussianHeadConf(clamp_logvar_min=-10.0),
-    aux_posterior_head=GaussianHeadConf(clamp_logvar_min=-10.0),
-    populate_full_signature=True,
-)

@@ -8,8 +8,6 @@ produce latent distributions q_ϕ(z_t | ·).
 import torch
 import torch.nn as nn
 
-from hydra_zen import builds
-
 from .diffnets import TimeLayer, ConvTimeLayer, IdentityLayer  # , MambaTimeLayer
 
 
@@ -175,24 +173,3 @@ class TransformerFutureSummary(FutureSummary):
         return self.encoder(x, mask=causal_mask)
 
 
-# ---------------------------------------------------------------------------
-# Hydra-zen partial configs: parents fill in shape kwargs (data_dim,
-# emb_time_dim, use_mask, static_embed_dim) at construction time.
-# Variant selection is now via Hydra config groups / explicit _target_
-# rather than a type-string discriminator + factory function.
-# ---------------------------------------------------------------------------
-
-GRUFutureSummaryConf = builds(
-    GRUFutureSummary,
-    summary_dim=64,
-    num_layers=2,
-    populate_full_signature=True,
-    zen_partial=True,
-)
-TransformerFutureSummaryConf = builds(
-    TransformerFutureSummary,
-    summary_dim=64,
-    num_layers=2,
-    populate_full_signature=True,
-    zen_partial=True,
-)

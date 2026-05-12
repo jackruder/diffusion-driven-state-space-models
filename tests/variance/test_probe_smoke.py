@@ -6,8 +6,10 @@ import torch
 from hydra import compose, initialize_config_dir
 from hydra_zen import instantiate
 
-import ddssm.conf  # noqa: F401
+from ddssm._experiment_registry import register_experiments
 from ddssm.variance.runner import ProbeCell, ProbePlotSpec, ProbeSpec, variance
+
+register_experiments()
 
 CONF_DIR = (Path(__file__).resolve().parents[2] / "src" / "ddssm" / "conf").as_posix()
 
