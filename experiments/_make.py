@@ -1,16 +1,17 @@
 """Slim composer + run/override/serialise helpers for DDSSM experiments.
 
-The named models and datasets live in :mod:`experiments._models` and
-:mod:`experiments._datasets`. To define an experiment, import a model
-+ a dataset and call :func:`experiment` (it ties them together and
-keeps ``model.hyperparams`` in sync with the experiment's
-``hparams``)::
+The named models and datasets live under
+``experiments/{synthetic,variance_probe,kdd}/`` — each registers
+itself to the relevant store in :mod:`conf.registry` on import. To
+define a new experiment, import a registered model + dataset and
+call :func:`experiment` (it ties them together and keeps
+``model.hyperparams`` in sync with the experiment's ``hparams``)::
 
     from ddssm.builders import Eval, Hparams, Plot, Training, Viz
+    from conf.registry import experiment_store
     from experiments._make import experiment, run
-    from experiments._models import SmallGauss
-    from experiments._datasets import Harmonic
-    from experiments._registry import experiment_store
+    from experiments.synthetic.models import SmallGauss
+    from experiments.synthetic.datasets import Harmonic
 
     exp = experiment(
         data=Harmonic, model=SmallGauss,

@@ -14,7 +14,7 @@ overrides::
 Shape kwargs (``data_dim``, ``latent_dim``, ``j``, ``emb_time_dim``,
 ``covariate_dim``, ``use_mask``) default to OmegaConf ``MISSING`` so
 users can construct a slot builder without specifying them up front;
-:func:`experiments._make.make_experiment` fills them in based on the
+:func:`experiments._make.experiment` fills them in based on the
 top-level experiment shape, eliminating any need for
 ``${experiment.*}`` interpolation.
 """
@@ -138,7 +138,7 @@ TransformerFutSum = builds(
 # ---------------------------------------------------------------------------
 
 # All shape-related kwargs are MISSING by default so
-# ``experiments._make.make_experiment`` can fill them in one place.
+# ``experiments._make.experiment`` can fill them in one place.
 
 _SHAPE_ENC = dict(
     data_dim=MISSING, latent_dim=MISSING, j=MISSING,
@@ -257,7 +257,7 @@ Probe = builds(ProbeSpec, populate_full_signature=True)
 
 # ---------------------------------------------------------------------------
 # Experiment composer (raw builds() — caller passes every slot explicitly).
-# Most users will go through ``experiments._make.make_experiment`` which
+# Most users will go through ``experiments._make.experiment`` which
 # wraps this with shape-baking convenience.
 # ---------------------------------------------------------------------------
 

@@ -1,25 +1,23 @@
-"""Compose-and-instantiate tests for the notebook-style experiments.
+"""Compose-and-instantiate tests for the named experiments.
 
-Every ``experiments/<name>.py`` module exposes a ``exp`` config that
+Each preset registered to ``experiment_store`` (group=``experiment``)
 must:
 
-* Import cleanly (no missing kwargs, no MISSING leftovers).
-* Yield a real :class:`Experiment` instance via ``instantiate(exp)``,
+* Compose to an :class:`Experiment` instance via ``instantiate(node)``,
   with populated ``data``, ``model``, ``training``, and a non-empty
   model parameter count.
-* Compose correctly through the Hydra CLI bridge
+* Resolve through the Hydra CLI bridge
   (``ddssm._experiment_registry.register_experiments`` →
   ``compose(config_name='config', overrides=[experiment=NAME])``).
 """
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
-from hydra_zen import instantiate
+from hydra_zen import instantiate, store
 import pytest
 
 from ddssm._experiment_registry import register_experiments
@@ -28,22 +26,22 @@ from ddssm.experiment import Experiment, ObjectiveSpec, TrainingScalars
 
 CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
 
-EXPERIMENTS = [
-    "synthetic_gauss",
-    "synthetic_diffusion",
-    "kdd_gauss",
-    "kdd_diffusion",
-    "harmonic_gauss",
-    "harmonic_diffusion",
-    "bimodal_gauss",
-    "bimodal_diffusion",
-    "robot_2d_gauss",
-    "robot_2d_diffusion",
-    "variance_probe_lgssm",
-    "variance_probe_bimodal_clean",
-    "variance_probe_bimodal_noisy",
-    "variance_probe_nonlinear_bimodal_lift",
-]
+
+def _registered_experiment_names() -> list[str]:
+    """Pull the live experiment-group entries out of the zen-store singleton."""
+    register_experiments()
+    group = store["experiment"]   # tuple-keyed dict ((group, name) -> node)
+    return sorted(name for _, name in group)
+
+
+def _exp(name: str):
+    """Look up the registered experiment Conf node by name."""
+    return store["experiment"][("experiment", name)]
+
+
+# Populated once at collection time so ``parametrize`` sees the same list
+# the runtime registry exposes — no hardcoded names.
+EXPERIMENTS = _registered_experiment_names()
 
 SWEEPS = ["synthetic_lr", "kdd_phase1"]
 
@@ -58,16 +56,14 @@ def _clear_global_hydra():
         GlobalHydra.instance().clear()
 
 
-@pytest.mark.parametrize("name", EXPERIMENTS)
-def test_experiment_module_imports(name: str) -> None:
-    mod = importlib.import_module(f"experiments.{name}")
-    assert hasattr(mod, "exp"), f"experiments/{name}.py must expose `exp`"
+def test_experiments_registered() -> None:
+    """All 14 named presets are reachable through the experiment store."""
+    assert len(EXPERIMENTS) == 14, EXPERIMENTS
 
 
 @pytest.mark.parametrize("name", EXPERIMENTS)
 def test_experiment_instantiates(name: str) -> None:
-    mod = importlib.import_module(f"experiments.{name}")
-    expt = instantiate(mod.exp)
+    expt = instantiate(_exp(name))
     assert isinstance(expt, Experiment)
     assert isinstance(expt.data, DDSSMDataModule)
     assert isinstance(expt.training, TrainingScalars)
@@ -103,12 +99,12 @@ def test_default_experiment_is_harmonic_gauss() -> None:
 ])
 def test_experiment_shape_baked_in(name: str, expected_dim: int, expected_j: int) -> None:
     """Shapes are resolved to concrete ints, not interpolation strings."""
-    mod = importlib.import_module(f"experiments.{name}")
-    assert mod.exp.model.data_dim == expected_dim
-    assert mod.exp.model.j == expected_j
-    assert mod.exp.model.encoder.data_dim == expected_dim
-    assert mod.exp.model.encoder.j == expected_j
-    assert mod.exp.model.transition.j == expected_j
+    exp = _exp(name)
+    assert exp.model.data_dim == expected_dim
+    assert exp.model.j == expected_j
+    assert exp.model.encoder.data_dim == expected_dim
+    assert exp.model.encoder.j == expected_j
+    assert exp.model.transition.j == expected_j
 
 
 def test_objective_returns_inf_on_missing_csv(tmp_path) -> None:
@@ -136,8 +132,7 @@ def test_sweep_preset_composes(name: str) -> None:
     ("robot_2d_gauss", ["energy_score", "crps_sum"]),
 ])
 def test_eval_metrics(name: str, expected_metrics: list) -> None:
-    mod = importlib.import_module(f"experiments.{name}")
-    assert list(mod.exp.eval.metrics) == expected_metrics
+    assert list(_exp(name).eval.metrics) == expected_metrics
 
 
 @pytest.mark.parametrize("name,expected_first_plot", [
@@ -146,5 +141,4 @@ def test_eval_metrics(name: str, expected_metrics: list) -> None:
     ("robot_2d_gauss", "forecast_2d_spatial"),
 ])
 def test_viz_first_plot(name: str, expected_first_plot: str) -> None:
-    mod = importlib.import_module(f"experiments.{name}")
-    assert mod.exp.viz.plots[0].name == expected_first_plot
+    assert _exp(name).viz.plots[0].name == expected_first_plot

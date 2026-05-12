@@ -2,7 +2,7 @@
 #
 # Experiments are notebook-first: each file under ``experiments/`` in
 # the repo root composes an ``Experiment`` via
-# :func:`experiments._make.make_experiment`. The default selects
+# :func:`experiments._make.experiment`. The default selects
 # ``experiments/harmonic_gauss.py``; switch with ``experiment=NAME``
 # where ``NAME`` is the module name (no ``.py``). To tweak a knob,
 # either edit the experiment file or override on the CLI with dotted

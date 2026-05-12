@@ -5,918 +5,53 @@
 
 * Overview
 
-This file is the source of truth for every DDSSM experiment. Each
-named model, dataset, and experiment is defined below in a Python
-src block whose ~:tangle~ argument writes a file into
-~experiments/~. Tangle with ~C-c C-v t~; the resulting modules are
-picked up by the Hydra CLI, by tests, and by notebook imports.
+DDSSM experiments are organised as a package-by-domain Python tree
+under ~experiments/~, with three subpackages: ~synthetic/~,
+~variance_probe/~, ~kdd/~. Every named encoder, decoder, transition,
+schedule, hparams, training/eval/viz spec, dataset, model, and
+experiment registers itself with the matching hydra-zen ~store(group=...)~
+handle in [[file:conf/registry.py][conf/registry.py]] when its module is imported.
 
-Three hydra-zen ~store()~ groups carry the named configs:
-
-| Group        | What lives there            | CLI                       |
-|--------------+-----------------------------+---------------------------|
-| ~model~      | full :class:`DDSSM` configs | ~model=small_diff~        |
-| ~data~       | data modules                | ~data=harmonic~           |
-| ~experiment~ | bundled (model + data + …)  | ~experiment=harmonic_gauss~ |
-
-Train / evaluate / visualise are independent stages — run any once
-you have a checkpoint:
+Importing the ~experiments~ package (triggered automatically by
+~ddssm._experiment_registry.register_experiments~) populates every
+store; one ~store.add_to_hydra_store()~ call publishes the union to
+Hydra. The CLI then resolves each group by name:
 
 #+BEGIN_SRC sh
-python -m ddssm.app      experiment=harmonic_diffusion
-python -m ddssm.evaluate experiment=harmonic_diffusion \
-    +checkpoint=outputs/<run_dir>/checkpoints/ckpt_latest.pth
-python -m ddssm.visualize experiment=harmonic_diffusion \
-    +checkpoint=outputs/<run_dir>/checkpoints/ckpt_latest.pth
+python -m ddssm.app experiment=harmonic_diffusion
+python -m ddssm.app experiment=harmonic_gauss model=small_diff
+python -m ddssm.app experiment=harmonic_gauss data=bimodal
 #+END_SRC
 
-W&B is opt-in (disabled by default); enable per-run with
-~wandb=enabled experiment.wandb_config.project=ddssm~.
+** Layout
 
-* Config groups (tangle source)
+#+BEGIN_SRC text
+conf/
+└── registry.py                              # all stores (group="model", ...)
 
-This section is the source for every preset that ships in this
-repository. After editing any block, ~C-c C-v t~ to retangle the
-whole buffer. The Hydra CLI auto-discovers the result.
-
-** The store idiom
-
-Following the hydra-zen tutorial on config groups, every named
-preset lives in a pre-grouped store. The three stores are defined
-once and imported everywhere:
-
-#+BEGIN_SRC python :tangle experiments/_registry.py :mkdirp yes
-"""Hydra-zen config-group stores for DDSSM.
-
-Three groups, three stores. Every named preset registers itself with
-its store at import time; ``ddssm._experiment_registry`` pushes the
-union into Hydra's ConfigStore at CLI startup.
-
-* ``model_store``      — full :class:`DDSSM` compositions (shape +
-                          encoder/decoder/z_init/transition baked in).
-* ``data_store``       — :class:`Synthetic` / :class:`KDD` data modules.
-* ``experiment_store`` — :class:`ExperimentC` instances that tie a
-                          model + dataset + training/eval/viz together.
-
-Defined in :file:`verifications.org`; tangled here.
-"""
-
-from __future__ import annotations
-
-from hydra_zen import store
-
-model_store = store(group="model")
-data_store = store(group="data")
-experiment_store = store(group="experiment")
-
-__all__ = ["model_store", "data_store", "experiment_store"]
+experiments/
+├── _make.py                                 # experiment(), override(), run(), to_yaml()
+├── synthetic/                               # 1D + 2D synthetic family
+│   ├── {encoders,decoders,z_inits,unets,schedules,transitions}.py
+│   ├── {hparams,training,evals,vizs,datasets}.py
+│   ├── models.py                            # composed DDSSM Confs
+│   └── experiments.py                       # composed ExperimentC Confs
+├── variance_probe/                          # DiffusionV2 + Probe spec
+└── kdd/                                     # KDD Cup 2018 PM2.5
 #+END_SRC
 
-
-Every model / dataset / experiment block below ends with a visible
-~store(thing, name=…)~ call so registration shows up in source, not
-in an import-time walk.
-
-** Models
-
-A model bakes its shape (~data_dim~, ~latent_dim~, ~j~,
-~emb_time_dim~, ~covariate_dim~) into every leaf
-(~encoder~/~decoder~/~z_init~/~transition~) and ships with a default
-~Hparams()~. Experiments override hparams as needed via
-~dataclasses.replace~ at composition time.
-
-Eight models cover four shape families × two transitions, plus two
-DiffusionV2 ``probe'' variants:
-
-| Name           | D | d | j | et | cov | Transition     |
-|----------------+---+---+---+----+-----+----------------|
-| ~small_gauss~  | 1 | 4 | 1 | 16 |   0 | Gaussian       |
-| ~small_diff~   | 1 | 4 | 1 | 16 |   0 | Diffusion      |
-| ~probe_small~  | 1 | 4 | 1 | 16 |   0 | Diffusion-V2   |
-| ~robot2d_gauss~| 2 | 6 | 2 | 16 |   0 | Gaussian       |
-| ~robot2d_diff~ | 2 | 6 | 2 | 16 |   0 | Diffusion      |
-| ~kdd_gauss~    | 6 | 8 | 1 | 32 |   3 | Gaussian       |
-| ~kdd_diff~     | 6 | 8 | 1 | 32 |   3 | Diffusion      |
-| ~probe_medium~ | 4 | 8 | 1 | 16 |   0 | Diffusion-V2   |
-
-#+BEGIN_SRC python :tangle experiments/_models.py :mkdirp yes
-"""Named :class:`DDSSM` configs — one per (shape, transition) combination.
-
-Each model bakes shape (``data_dim``, ``latent_dim``, ``j``,
-``emb_time_dim``, ``covariate_dim``) into every leaf and ships with
-default :class:`Hparams`. Experiments override hparams when needed via
-``dataclasses.replace`` or :func:`experiments._make.override`.
-
-Registered under ``group="model"``. Reach them via
-``python -m ddssm.app model=<name>`` or
-``from experiments._models import SmallGauss``.
-
-Defined in :file:`verifications.org`; tangled here.
-"""
-
-from __future__ import annotations
-
-from ddssm.builders import (
-    DDSSM, Decoder, DiffTransition, DiffV2Transition, Encoder,
-    GaussTransition, Hparams, Schedule, ScheduleV2, Unet, ZInit,
-)
-
-from experiments._registry import model_store
-
-
-# ---------------------------------------------------------------------------
-# 1D synthetic (D=1, d=4, j=1, emb_time_dim=16) — covers
-# {lgssm, harmonic, bimodal, bimodal-noisy}.
-# ---------------------------------------------------------------------------
-
-def _ddssm_1d(transition):
-    return DDSSM(
-        data_dim=1, latent_dim=4, j=1, emb_time_dim=16, covariate_dim=0,
-        encoder=Encoder(data_dim=1, latent_dim=4, j=1, emb_time_dim=16,
-                        covariate_dim=0, use_mask=False),
-        decoder=Decoder(data_dim=1, latent_dim=4, j=1, emb_time_dim=16,
-                        covariate_dim=0),
-        z_init=ZInit(latent_dim=4, j=1, emb_time_dim=16, covariate_dim=0),
-        transition=transition,
-        hyperparams=Hparams(),
-        use_observation_mask=False,
-    )
-
-
-SmallGauss = _ddssm_1d(GaussTransition(
-    latent_dim=4, j=1, emb_time_dim=16, covariate_dim=0,
-))
-SmallDiff = _ddssm_1d(DiffTransition(
-    latent_dim=4, j=1, emb_time_dim=16, covariate_dim=0,
-    unet=Unet(), schedule=Schedule(),
-))
-ProbeSmall = _ddssm_1d(DiffV2Transition(
-    latent_dim=4, j=1, emb_time_dim=16, covariate_dim=0,
-    unet=Unet(), schedule=ScheduleV2(),
-))
-
-
-# ---------------------------------------------------------------------------
-# 2D robot navigation (D=2, d=6, j=2, emb_time_dim=16).
-# ---------------------------------------------------------------------------
-
-def _ddssm_robot2d(transition):
-    return DDSSM(
-        data_dim=2, latent_dim=6, j=2, emb_time_dim=16, covariate_dim=0,
-        encoder=Encoder(data_dim=2, latent_dim=6, j=2, emb_time_dim=16,
-                        covariate_dim=0, use_mask=False),
-        decoder=Decoder(data_dim=2, latent_dim=6, j=2, emb_time_dim=16,
-                        covariate_dim=0),
-        z_init=ZInit(latent_dim=6, j=2, emb_time_dim=16, covariate_dim=0),
-        transition=transition,
-        hyperparams=Hparams(),
-        use_observation_mask=False,
-    )
-
-
-Robot2DGauss = _ddssm_robot2d(GaussTransition(
-    latent_dim=6, j=2, emb_time_dim=16, covariate_dim=0,
-))
-Robot2DDiff = _ddssm_robot2d(DiffTransition(
-    latent_dim=6, j=2, emb_time_dim=16, covariate_dim=0,
-    unet=Unet(), schedule=Schedule(),
-))
-
-
-# ---------------------------------------------------------------------------
-# KDD Cup 2018 (D=6, d=8, j=1, emb_time_dim=32, covariate_dim=3).
-# ---------------------------------------------------------------------------
-
-def _ddssm_kdd(transition):
-    return DDSSM(
-        data_dim=6, latent_dim=8, j=1, emb_time_dim=32, covariate_dim=3,
-        encoder=Encoder(data_dim=6, latent_dim=8, j=1, emb_time_dim=32,
-                        covariate_dim=3, use_mask=False),
-        decoder=Decoder(data_dim=6, latent_dim=8, j=1, emb_time_dim=32,
-                        covariate_dim=3),
-        z_init=ZInit(latent_dim=8, j=1, emb_time_dim=32, covariate_dim=3),
-        transition=transition,
-        hyperparams=Hparams(),
-        use_observation_mask=False,
-    )
-
-
-KDDGauss = _ddssm_kdd(GaussTransition(
-    latent_dim=8, j=1, emb_time_dim=32, covariate_dim=3,
-))
-KDDDiff = _ddssm_kdd(DiffTransition(
-    latent_dim=8, j=1, emb_time_dim=32, covariate_dim=3,
-    unet=Unet(), schedule=Schedule(),
-))
-
-
-# ---------------------------------------------------------------------------
-# Variance-probe D=4 (nonlinear-bimodal-lift only).
-# ---------------------------------------------------------------------------
-
-ProbeMedium = DDSSM(
-    data_dim=4, latent_dim=8, j=1, emb_time_dim=16, covariate_dim=0,
-    encoder=Encoder(data_dim=4, latent_dim=8, j=1, emb_time_dim=16,
-                    covariate_dim=0, use_mask=False),
-    decoder=Decoder(data_dim=4, latent_dim=8, j=1, emb_time_dim=16,
-                    covariate_dim=0),
-    z_init=ZInit(latent_dim=8, j=1, emb_time_dim=16, covariate_dim=0),
-    transition=DiffV2Transition(
-        latent_dim=8, j=1, emb_time_dim=16, covariate_dim=0,
-        unet=Unet(), schedule=ScheduleV2(),
-    ),
-    hyperparams=Hparams(),
-    use_observation_mask=False,
-)
-
-
-model_store(SmallGauss, name="small_gauss")
-model_store(SmallDiff, name="small_diff")
-model_store(ProbeSmall, name="probe_small")
-model_store(Robot2DGauss, name="robot2d_gauss")
-model_store(Robot2DDiff, name="robot2d_diff")
-model_store(KDDGauss, name="kdd_gauss")
-model_store(KDDDiff, name="kdd_diff")
-model_store(ProbeMedium, name="probe_medium")
-
-
-__all__ = [
-    "SmallGauss", "SmallDiff", "ProbeSmall",
-    "Robot2DGauss", "Robot2DDiff",
-    "KDDGauss", "KDDDiff", "ProbeMedium",
-]
-#+END_SRC
-
-
-** Datasets
-
-Each dataset is a fully-configured ~Synthetic~ / ~KDD~ data module
-with the standard ~T=64~ horizon and per-mode dataset size.
-
-| Name                       | Mode                     | D | N_per_split |
-|----------------------------+--------------------------+---+-------------|
-| ~lgssm~                    | lgssm                    | 1 |         512 |
-| ~harmonic~                 | harmonic                 | 1 |        1024 |
-| ~bimodal~                  | bimodal                  | 1 |        1024 |
-| ~bimodal_noisy~            | bimodal-noisy            | 1 |        1024 |
-| ~robot2d~                  | robot-basis-pursuit      | 2 |        1024 |
-| ~nonlinear_bimodal_lift~   | nonlinear-bimodal-lift   | 4 |         256 |
-| ~probe_lgssm~              | lgssm (probe budget)     | 1 |         256 |
-| ~probe_bimodal~            | bimodal (probe budget)   | 1 |         256 |
-| ~probe_bimodal_noisy~      | bimodal-noisy (probe)    | 1 |         256 |
-| ~kdd~                      | KDD Cup 2018 PM2.5       | 6 | (real data) |
-
-#+BEGIN_SRC python :tangle experiments/_datasets.py :mkdirp yes
-"""Named data-module configs — one per dataset.
-
-Registered under ``group="data"``. Reach them via
-``python -m ddssm.app data=<name>`` or
-``from experiments._datasets import Harmonic``.
-
-Defined in :file:`verifications.org`; tangled here.
-"""
-
-from __future__ import annotations
-
-from ddssm.builders import KDD, Synthetic
-
-from experiments._registry import data_store
-
-
-# ---------------------------------------------------------------------------
-# 1D synthetic time series — generated on the fly from a closed-form mode.
-# ---------------------------------------------------------------------------
-
-LGSSM = Synthetic(mode="lgssm", D=1, T=64, N_per_split=512, batch_size=32)
-Harmonic = Synthetic(mode="harmonic", D=1, T=64, N_per_split=1024, batch_size=32)
-Bimodal = Synthetic(mode="bimodal", D=1, T=64, N_per_split=1024, batch_size=32)
-BimodalNoisy = Synthetic(mode="bimodal-noisy", D=1, T=64, N_per_split=1024, batch_size=32)
-
-
-# ---------------------------------------------------------------------------
-# 2D robot trajectories.
-# ---------------------------------------------------------------------------
-
-Robot2D = Synthetic(mode="robot-basis-pursuit", D=2, T=64,
-                    N_per_split=1024, batch_size=32)
-
-
-# ---------------------------------------------------------------------------
-# Lift to D=4 (nonlinear-bimodal-lift for variance probe).
-# ---------------------------------------------------------------------------
-
-NonlinearBimodalLift = Synthetic(
-    mode="nonlinear-bimodal-lift", D=4, T=64,
-    N_per_split=256, batch_size=32,
-)
-
-
-# ---------------------------------------------------------------------------
-# Variance-probe versions of the 1D modes (smaller dataset, fewer epochs).
-# ---------------------------------------------------------------------------
-
-ProbeLGSSM = Synthetic(mode="lgssm", D=1, T=64, N_per_split=256, batch_size=32)
-ProbeBimodal = Synthetic(mode="bimodal", D=1, T=64, N_per_split=256, batch_size=32)
-ProbeBimodalNoisy = Synthetic(mode="bimodal-noisy", D=1, T=64,
-                              N_per_split=256, batch_size=32)
-
-
-# ---------------------------------------------------------------------------
-# Real benchmark: KDD Cup 2018 PM2.5.
-# ---------------------------------------------------------------------------
-
-KDDData = KDD(batch_size=128, eval_step_size=24)
-
-
-data_store(LGSSM, name="lgssm")
-data_store(Harmonic, name="harmonic")
-data_store(Bimodal, name="bimodal")
-data_store(BimodalNoisy, name="bimodal_noisy")
-data_store(Robot2D, name="robot2d")
-data_store(NonlinearBimodalLift, name="nonlinear_bimodal_lift")
-data_store(ProbeLGSSM, name="probe_lgssm")
-data_store(ProbeBimodal, name="probe_bimodal")
-data_store(ProbeBimodalNoisy, name="probe_bimodal_noisy")
-data_store(KDDData, name="kdd")
-
-
-__all__ = [
-    "LGSSM", "Harmonic", "Bimodal", "BimodalNoisy",
-    "Robot2D", "NonlinearBimodalLift",
-    "ProbeLGSSM", "ProbeBimodal", "ProbeBimodalNoisy",
-    "KDDData",
-]
-#+END_SRC
-
-
-** Experiments
-
-Each experiment imports a model + a dataset and calls
-~experiment(...)~ from ~experiments._make~ to bundle them with
-training / eval / viz scalars. The result is registered to
-~experiment_store~ under its preset name.
-
-The ~experiment()~ helper keeps ~model.hyperparams~ in sync with the
-experiment-level ~hparams~ field — the trainer reads one, the DDSSM
-internals read the other.
-
-*** Synthetic 1D smoke (LGSSM)
-
-LGSSM mode trains in a few hundred steps; useful for CI.
-
-#+BEGIN_SRC python :tangle experiments/synthetic_gauss.py :mkdirp yes
-"""LGSSM smoke test + Gaussian transition (500 steps)."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import SmallGauss
-from experiments._datasets import LGSSM
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=LGSSM,
-    model=SmallGauss,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=200,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=500, log_every=25, amp=False),
-    eval=Eval(metrics=["loss_tail", "recon_mse"], split="val"),
-    viz=Viz(
-        plots=[Plot(name="metrics_csv", save_filename="train_loss.png",
-                    kwargs={"keys": ["loss/total"], "log_y": True})],
-        split="val", num_samples=10, T_split=32,
-    ),
-)
-experiment_store(exp, name="synthetic_gauss")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/synthetic_gauss")
-#+END_SRC
-
-
-#+BEGIN_SRC python :tangle experiments/synthetic_diffusion.py :mkdirp yes
-"""LGSSM smoke test + Diffusion transition (1000 steps)."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import SmallDiff
-from experiments._datasets import LGSSM
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=LGSSM,
-    model=SmallDiff,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=300,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=1000, log_every=25, amp=False),
-    eval=Eval(metrics=["loss_tail", "recon_mse"], split="val"),
-    viz=Viz(
-        plots=[Plot(name="metrics_csv", save_filename="train_loss.png",
-                    kwargs={"keys": ["loss/total"], "log_y": True})],
-        split="val", num_samples=10, T_split=32,
-    ),
-)
-experiment_store(exp, name="synthetic_diffusion")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/synthetic_diffusion")
-#+END_SRC
-
-
-*** Harmonic 1D (clean sine)
-
-#+BEGIN_SRC python :tangle experiments/harmonic_gauss.py :mkdirp yes
-"""Harmonic synthetic + Gaussian transition (D=1, j=1)."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import SmallGauss
-from experiments._datasets import Harmonic
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=Harmonic,
-    model=SmallGauss,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=200,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=1000, log_every=25, checkpoint_every=200, amp=False),
-    eval=Eval(metrics=["mae", "crps_sum"], split="val", num_samples=32, T_split=32),
-    viz=Viz(
-        plots=[
-            Plot(name="forecast_1d", save_filename="forecast.png",
-                 kwargs={"n_show": 4}),
-            Plot(name="metrics_csv", save_filename="train_loss.png",
-                 kwargs={"keys": ["loss/total"], "log_y": True}),
-        ],
-        split="val", num_samples=32, T_split=32,
-    ),
-)
-experiment_store(exp, name="harmonic_gauss")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/harmonic_gauss")
-#+END_SRC
-
-
-#+BEGIN_SRC python :tangle experiments/harmonic_diffusion.py :mkdirp yes
-"""Harmonic synthetic + Diffusion transition (D=1, j=1)."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import SmallDiff
-from experiments._datasets import Harmonic
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=Harmonic,
-    model=SmallDiff,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=400,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=2000, log_every=25, checkpoint_every=500, amp=False),
-    eval=Eval(metrics=["mae", "crps_sum"], split="val", num_samples=32, T_split=32),
-    viz=Viz(
-        plots=[
-            Plot(name="forecast_1d", save_filename="forecast.png",
-                 kwargs={"n_show": 4}),
-            Plot(name="metrics_csv", save_filename="train_loss.png",
-                 kwargs={"keys": ["loss/total"], "log_y": True}),
-        ],
-        split="val", num_samples=32, T_split=32,
-    ),
-)
-experiment_store(exp, name="harmonic_diffusion")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/harmonic_diffusion")
-#+END_SRC
-
-
-*** Bimodal 1D (energy-score, S=4)
-
-The bimodal series exercises the energy-score path through ~S=4~
-particles per step.
-
-#+BEGIN_SRC python :tangle experiments/bimodal_gauss.py :mkdirp yes
-"""Bimodal synthetic + Gaussian transition (D=1, j=1, S=4)."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import SmallGauss
-from experiments._datasets import Bimodal
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=Bimodal,
-    model=SmallGauss,
-    hparams=Hparams(
-        S=4, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=200,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=1000, log_every=25, checkpoint_every=200, amp=False),
-    eval=Eval(metrics=["energy_score", "crps_sum"], split="val", num_samples=64, T_split=32),
-    viz=Viz(
-        plots=[
-            Plot(name="forecast_1d", save_filename="forecast.png",
-                 kwargs={"n_show": 4}),
-            Plot(name="metrics_csv", save_filename="train_loss.png",
-                 kwargs={"keys": ["loss/total"], "log_y": True}),
-        ],
-        split="val", num_samples=64, T_split=32,
-    ),
-)
-experiment_store(exp, name="bimodal_gauss")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/bimodal_gauss")
-#+END_SRC
-
-
-#+BEGIN_SRC python :tangle experiments/bimodal_diffusion.py :mkdirp yes
-"""Bimodal synthetic + Diffusion transition (D=1, j=1, S=4)."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import SmallDiff
-from experiments._datasets import Bimodal
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=Bimodal,
-    model=SmallDiff,
-    hparams=Hparams(
-        S=4, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=400,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=2000, log_every=25, checkpoint_every=500, amp=False),
-    eval=Eval(metrics=["energy_score", "crps_sum"], split="val", num_samples=64, T_split=32),
-    viz=Viz(
-        plots=[
-            Plot(name="forecast_1d", save_filename="forecast.png",
-                 kwargs={"n_show": 4}),
-            Plot(name="metrics_csv", save_filename="train_loss.png",
-                 kwargs={"keys": ["loss/total"], "log_y": True}),
-        ],
-        split="val", num_samples=64, T_split=32,
-    ),
-)
-experiment_store(exp, name="bimodal_diffusion")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/bimodal_diffusion")
-#+END_SRC
-
-
-*** Robot navigation 2D (j=2)
-
-#+BEGIN_SRC python :tangle experiments/robot_2d_gauss.py :mkdirp yes
-"""Robot navigation 2D + Gaussian transition (D=2, j=2)."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import Robot2DGauss
-from experiments._datasets import Robot2D
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=Robot2D,
-    model=Robot2DGauss,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=400,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=2000, log_every=50, checkpoint_every=500, amp=False),
-    eval=Eval(metrics=["energy_score", "crps_sum"], split="val", num_samples=32, T_split=32),
-    viz=Viz(
-        plots=[
-            Plot(name="forecast_2d_spatial", save_filename="forecast_2d.png",
-                 kwargs={"n_show": 4}),
-            Plot(name="metrics_csv", save_filename="train_loss.png",
-                 kwargs={"keys": ["loss/total"], "log_y": True}),
-        ],
-        split="val", num_samples=32, T_split=32,
-    ),
-)
-experiment_store(exp, name="robot_2d_gauss")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/robot_2d_gauss")
-#+END_SRC
-
-
-#+BEGIN_SRC python :tangle experiments/robot_2d_diffusion.py :mkdirp yes
-"""Robot navigation 2D + Diffusion transition (D=2, j=2)."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import Robot2DDiff
-from experiments._datasets import Robot2D
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=Robot2D,
-    model=Robot2DDiff,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=800,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=4000, log_every=50, checkpoint_every=500, amp=False),
-    eval=Eval(metrics=["energy_score", "crps_sum"], split="val", num_samples=32, T_split=32),
-    viz=Viz(
-        plots=[
-            Plot(name="forecast_2d_spatial", save_filename="forecast_2d.png",
-                 kwargs={"n_show": 4}),
-            Plot(name="metrics_csv", save_filename="train_loss.png",
-                 kwargs={"keys": ["loss/total"], "log_y": True}),
-        ],
-        split="val", num_samples=32, T_split=32,
-    ),
-)
-experiment_store(exp, name="robot_2d_diffusion")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/robot_2d_diffusion")
-#+END_SRC
-
-
-*** KDD Cup 2018 PM2.5 (covariates, AMP)
-
-#+BEGIN_SRC python :tangle experiments/kdd_gauss.py :mkdirp yes
-"""KDD Cup 2018 PM2.5 + Gaussian transition (D=6, j=1, covariates=3)."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import KDDGauss
-from experiments._datasets import KDDData
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=KDDData,
-    model=KDDGauss,
-    hparams=Hparams(
-        S=1, batch_size=128, grad_accum_steps=1,
-        lambda_schedule="linear", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=500,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=5000, log_every=50, checkpoint_every=500, amp=True),
-    eval=Eval(metrics=["mae", "crps_sum"], split="test", num_samples=32),
-    viz=Viz(
-        plots=[
-            Plot(name="forecast_1d", save_filename="forecast.png",
-                 kwargs={"n_show": 4}),
-            Plot(name="metrics_csv", save_filename="train_loss.png",
-                 kwargs={"keys": ["loss/total"], "log_y": True}),
-        ],
-        split="test", num_samples=32,
-    ),
-)
-experiment_store(exp, name="kdd_gauss")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/kdd_gauss")
-#+END_SRC
-
-
-#+BEGIN_SRC python :tangle experiments/kdd_diffusion.py :mkdirp yes
-"""KDD Cup 2018 PM2.5 + Diffusion transition."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz
-
-from experiments._make import experiment, run
-from experiments._models import KDDDiff
-from experiments._datasets import KDDData
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=KDDData,
-    model=KDDDiff,
-    hparams=Hparams(
-        S=1, batch_size=128, grad_accum_steps=1,
-        lambda_schedule="linear", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=500,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=8000, log_every=50, checkpoint_every=500, amp=True),
-    eval=Eval(metrics=["mae", "crps_sum"], split="test", num_samples=32),
-    viz=Viz(
-        plots=[
-            Plot(name="forecast_1d", save_filename="forecast.png",
-                 kwargs={"n_show": 4}),
-            Plot(name="metrics_csv", save_filename="train_loss.png",
-                 kwargs={"keys": ["loss/total"], "log_y": True}),
-        ],
-        split="test", num_samples=32,
-    ),
-)
-experiment_store(exp, name="kdd_diffusion")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/kdd_diffusion")
-#+END_SRC
-
-
-*** Variance probes (Diffusion-V2 + Probe spec)
-
-These are tiny 300-step runs that compute per-step variance
-diagnostics for the v2 schedule. No eval / no viz — only the probe
-artifacts written by ~Probe()~.
-
-#+BEGIN_SRC python :tangle experiments/variance_probe_lgssm.py :mkdirp yes
-"""Variance probe: LGSSM synthetic + Diffusion-V2 transition."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz, Objective, Probe
-
-from experiments._make import experiment, run
-from experiments._models import ProbeSmall
-from experiments._datasets import ProbeLGSSM
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=ProbeLGSSM,
-    model=ProbeSmall,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=50,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=300, log_every=20, checkpoint_every=100, amp=False),
-    eval=None,
-    viz=None,
-    objective=Objective(metric="loss/total", split="train", tail_frac=0.1),
-    variance=Probe(),
-)
-experiment_store(exp, name="variance_probe_lgssm")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/variance_probe_lgssm")
-#+END_SRC
-
-
-#+BEGIN_SRC python :tangle experiments/variance_probe_bimodal_clean.py :mkdirp yes
-"""Variance probe: bimodal synthetic + Diffusion-V2 transition."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz, Objective, Probe
-
-from experiments._make import experiment, run
-from experiments._models import ProbeSmall
-from experiments._datasets import ProbeBimodal
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=ProbeBimodal,
-    model=ProbeSmall,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=50,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=300, log_every=20, checkpoint_every=100, amp=False),
-    eval=None,
-    viz=None,
-    objective=Objective(metric="loss/total", split="train", tail_frac=0.1),
-    variance=Probe(),
-)
-experiment_store(exp, name="variance_probe_bimodal_clean")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/variance_probe_bimodal_clean")
-#+END_SRC
-
-
-#+BEGIN_SRC python :tangle experiments/variance_probe_bimodal_noisy.py :mkdirp yes
-"""Variance probe: bimodal-noisy synthetic + Diffusion-V2 transition."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz, Objective, Probe
-
-from experiments._make import experiment, run
-from experiments._models import ProbeSmall
-from experiments._datasets import ProbeBimodalNoisy
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=ProbeBimodalNoisy,
-    model=ProbeSmall,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=50,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=300, log_every=20, checkpoint_every=100, amp=False),
-    eval=None,
-    viz=None,
-    objective=Objective(metric="loss/total", split="train", tail_frac=0.1),
-    variance=Probe(),
-)
-experiment_store(exp, name="variance_probe_bimodal_noisy")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/variance_probe_bimodal_noisy")
-#+END_SRC
-
-
-#+BEGIN_SRC python :tangle experiments/variance_probe_nonlinear_bimodal_lift.py :mkdirp yes
-"""Variance probe: nonlinear-bimodal-lift synthetic + Diffusion-V2."""
-
-from ddssm.builders import Eval, Hparams, Plot, Training, Viz, Objective, Probe
-
-from experiments._make import experiment, run
-from experiments._models import ProbeMedium
-from experiments._datasets import NonlinearBimodalLift
-from experiments._registry import experiment_store
-
-
-exp = experiment(
-    data=NonlinearBimodalLift,
-    model=ProbeMedium,
-    hparams=Hparams(
-        S=1, batch_size=32, grad_accum_steps=1,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=50,
-        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-    ),
-    training=Training(steps=300, log_every=20, checkpoint_every=100, amp=False),
-    eval=None,
-    viz=None,
-    objective=Objective(metric="loss/total", split="train", tail_frac=0.1),
-    variance=Probe(),
-)
-experiment_store(exp, name="variance_probe_nonlinear_bimodal_lift")
-
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/variance_probe_nonlinear_bimodal_lift")
-#+END_SRC
-
+Each leaf module imports the matching store from ~conf.registry~ and
+calls ~<store>(thing, name=...)~ for every Conf it defines, so
+registration is visible in source next to the definition.
 
 ** Deriving an ad-hoc variant — ~override()~
 
-For one-off variants that don't deserve a name, import a registered
-experiment and tweak it in place. ~override()~ accepts Hydra-CLI
-strings (YAML-parsed values) and dicts (Python objects):
+For one-off variants in a notebook / org block / sweep, import a
+registered experiment and tweak fields with ~override()~
+(Hydra-CLI-style strings for scalars, dicts for Python objects):
 
 #+BEGIN_SRC python
-from experiments.harmonic_diffusion import exp as A
+from experiments.synthetic.experiments import harmonic_diffusion as A
 from experiments._make import override, run
 from ddssm.builders import MLPUnet
 
@@ -928,30 +63,58 @@ for sigma in [1e-4, 1e-3, 1e-2, 1e-1]:
     exp = override(A, f"model.transition.schedule.sigma_min={sigma}")
     run(exp, run_dir=f"runs/sigma_{sigma}")
 
-# swap a builder (dict form — needs a Python object)
+# swap a builder (Python object — dict form)
 C = override(A, {"model.transition.unet": MLPUnet(channels=64, n_layers=3)})
 #+END_SRC
 
-When a variant becomes worth keeping: add a new headline in the
-"Experiments" section above and re-tangle. The Hydra CLI and pytest
-pick it up automatically because of the visible
-~experiment_store(exp, name="…")~ call.
+The Hydra CLI does the same job for the registered groups — you can
+mix-and-match named handles without restarting Python:
 
-** Plumbing (no tangle)
+#+BEGIN_SRC sh
+# swap the model group on a named experiment
+python -m ddssm.app experiment=harmonic_diffusion model=small_gauss
 
-~experiments/_make.py~ provides the ~experiment()~ composer +
-~override()~, ~run()~, ~to_yaml()~, ~save_yaml()~. It is plain
-Python (not tangled from here):
+# swap the dataset
+python -m ddssm.app experiment=harmonic_diffusion data=bimodal
 
-#+BEGIN_SRC python
-from experiments._make import experiment, override, run, to_yaml, save_yaml
+# scalar override
+python -m ddssm.app experiment=harmonic_diffusion training.steps=500
 #+END_SRC
 
-~ddssm/_experiment_registry.py~ imports every ~experiments/<name>.py~
-at CLI startup, then calls ~experiment_store.add_to_hydra_store()~
-to publish the union of all three groups into Hydra's
-~ConfigStore~.
+** Promoting a variant to a named preset
 
+When a derived variant becomes worth keeping, add a block to the
+appropriate subpackage (e.g. ~experiments/synthetic/experiments.py~):
+
+#+BEGIN_SRC python
+my_variant = experiment(
+    data=Harmonic, model=SmallDiff,
+    hparams=Base1D,
+    training=Training(steps=500),
+    eval=EvalForecast1D, viz=VizForecast1D,
+)
+experiment_store(my_variant, name="harmonic_diffusion_short")
+#+END_SRC
+
+The Hydra CLI / pytest pick it up automatically on the next
+~register_experiments()~ call because of the visible
+~experiment_store(...)~ line.
+
+** Three-stage CLI workflow
+
+Train / evaluate / visualise are independent stages — run any once
+you have a checkpoint:
+
+#+BEGIN_SRC sh
+python -m ddssm.app       experiment=harmonic_diffusion
+python -m ddssm.evaluate  experiment=harmonic_diffusion \
+    +checkpoint=outputs/<run_dir>/checkpoints/ckpt_latest.pth
+python -m ddssm.visualize experiment=harmonic_diffusion \
+    +checkpoint=outputs/<run_dir>/checkpoints/ckpt_latest.pth
+#+END_SRC
+
+W&B is opt-in (disabled by default); enable per-run with
+~wandb=enabled experiment.wandb_config.project=ddssm~.
 
 * Component Tests
 

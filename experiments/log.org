@@ -5,10 +5,10 @@
 * How to use this log
 
 This file holds the running record of sweeps, tweaks, and one-off
-runs. The named experiments live in [[file:../experiments.org][../experiments.org]]; that's where
-new presets get tangled into ~experiments/<name>.py~. This file
-imports those presets and derives variants from them via
-~override()~.
+runs. The named experiments are plain Python under
+~experiments/{synthetic,variance_probe,kdd}/experiments.py~ — see
+[[file:../verifications.org][../verifications.org]] for the framework writeup. This file imports
+those presets and derives variants from them via ~override()~.
 
 One headline per entry. Inside the headline:
 
@@ -41,7 +41,7 @@ print("ready")
 | Loop one knob across N values        | ~for v in [...]: override(exp, f"key={v}")~                         |
 | Swap a submodule (Python object)     | ~override(exp, {"model.transition.unet": MLPUnet(channels=64)})~    |
 | Combine string and dict overrides    | ~override(exp, "training.steps=42", {"model...": SomeObj()})~       |
-| Promote a variant to a named preset  | Add a new headline in [[file:../experiments.org][experiments.org]] and tangle it                |
+| Promote a variant to a named preset  | Add a block to ~experiments/<family>/experiments.py~                |
 
 * Template — copy this headline for a new entry
 
@@ -50,7 +50,7 @@ print("ready")
 Hypothesis: <what we expect and why>
 
 #+BEGIN_SRC python :tangle no
-from experiments.harmonic_diffusion import exp as base
+from experiments.synthetic.experiments import harmonic_diffusion as base
 exp = override(base,
     # "training.steps=500",
     # "model.transition.schedule.sigma_min=0.001",
@@ -74,7 +74,7 @@ Hypothesis: smaller noise floor sharpens the score near the data
 manifold; expect lower CRPS at sigma_min ≤ 1e-3.
 
 #+BEGIN_SRC python :tangle no
-from experiments.harmonic_diffusion import exp as base
+from experiments.synthetic.experiments import harmonic_diffusion as base
 for sigma in [1e-4, 1e-3, 1e-2, 1e-1]:
     exp = override(base,
         f"model.transition.schedule.sigma_min={sigma}",
@@ -96,7 +96,7 @@ Hypothesis: the harmonic_diffusion preset generalises to the other
 synthetic modes without retuning.
 
 #+BEGIN_SRC python :tangle no
-from experiments.harmonic_diffusion import exp as base
+from experiments.synthetic.experiments import harmonic_diffusion as base
 modes = ["harmonic", "harmonic-noisy", "bimodal", "robot-basis-pursuit",
          "nonlinear-bimodal-lift"]
 for mode in modes:
@@ -118,7 +118,7 @@ Hypothesis: the MLP U-Net captures the same harmonic structure with
 fewer parameters; expect comparable CRPS, lower wall-clock.
 
 #+BEGIN_SRC python :tangle no
-from experiments.harmonic_diffusion import exp as base
+from experiments.synthetic.experiments import harmonic_diffusion as base
 exp_csdi = base  # the as-shipped preset
 exp_mlp  = override(base, {"model.transition.unet": MLPUnet(channels=64, n_layers=3)})
 

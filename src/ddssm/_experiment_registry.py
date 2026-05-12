@@ -1,39 +1,27 @@
-"""Bridge the hydra-zen ``experiment_store`` to Hydra's ConfigStore.
+"""Bridge the hydra-zen ``store`` singleton to Hydra's ConfigStore.
 
-Each ``experiments/<name>.py`` module ends with a visible
-
-    experiment_store(exp, name="<name>")
-
-call against the pre-grouped store defined in
-:mod:`experiments._registry`. Importing every experiment module
-therefore populates that store; we then ask hydra-zen to push the
-accumulated entries into Hydra's ConfigStore. The Hydra CLI
-(``python -m ddssm.app experiment=NAME``) resolves them like any
-other preset.
-
-No per-module ``cs.store(...)`` boilerplate, no attribute-sniffing
-walk: registration is *visible in source*.
+Importing :mod:`experiments` runs every ``<store>(thing, name=...)``
+call in the three family subpackages
+(:mod:`experiments.synthetic`, :mod:`experiments.variance_probe`,
+:mod:`experiments.kdd`). The default :obj:`hydra_zen.store`
+singleton then holds the full registry across every group; one
+``store.add_to_hydra_store()`` call publishes the whole thing into
+Hydra's :class:`ConfigStore`. The Hydra CLI
+(``python -m ddssm.app experiment=NAME model=NAME data=NAME ...``)
+resolves them like any preset.
 """
 
 from __future__ import annotations
 
-import importlib
 import logging
 import os
-import pkgutil
 import sys
 
 log = logging.getLogger(__name__)
 
 
 def _ensure_experiments_on_path() -> None:
-    """Put the repo root on ``sys.path`` so ``import experiments`` works.
-
-    The ``experiments/`` package lives at the repository root, not
-    inside ``src/ddssm``. ``python -m ddssm.app`` from the repo root
-    needs that root on the path; we add it eagerly so users do not
-    have to set ``PYTHONPATH``.
-    """
+    """Put the repo root on ``sys.path`` so ``import experiments`` works."""
     candidates = [os.getcwd()]
     here = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
@@ -47,10 +35,10 @@ def _ensure_experiments_on_path() -> None:
 
 
 def register_experiments() -> None:
-    """Import every experiment module, then push the zen-store to Hydra."""
+    """Import the experiments package and push every store entry to Hydra."""
     _ensure_experiments_on_path()
     try:
-        import experiments
+        import experiments  # noqa: F401 — its __init__ imports every subpackage
     except ModuleNotFoundError:
         log.warning(
             "No experiments/ package found on sys.path. "
@@ -58,16 +46,8 @@ def register_experiments() -> None:
         )
         return
 
-    for _, name, ispkg in pkgutil.iter_modules(experiments.__path__):
-        if ispkg or name.startswith("_"):
-            continue
-        try:
-            importlib.import_module(f"experiments.{name}")
-        except Exception as e:  # pragma: no cover -- defensive
-            log.warning("Skipping experiments/%s.py: %s", name, e)
-
-    from experiments._registry import experiment_store
-    experiment_store.add_to_hydra_store(overwrite_ok=True)
+    from hydra_zen import store
+    store.add_to_hydra_store(overwrite_ok=True)
 
 
 __all__ = ["register_experiments"]
