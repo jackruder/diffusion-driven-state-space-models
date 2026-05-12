@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 import os
+import logging
 
 import hydra
-from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
+from hydra.core.hydra_config import HydraConfig
 
 from ddssm import conf  # noqa: F401
 from ddssm.workflow import RunMetadata, variance_config
@@ -16,7 +16,8 @@ log = logging.getLogger(__name__)
 
 
 @hydra.main(config_path="../conf", config_name="config", version_base="1.3")
-def main(cfg: DictConfig):
+def main(cfg: DictConfig) -> object:
+    """Run the variance probe from a Hydra-composed experiment config."""
     hydra_cfg = HydraConfig.get()
     run_dir = hydra_cfg.runtime.output_dir
     log.info("run_dir=%s", run_dir)

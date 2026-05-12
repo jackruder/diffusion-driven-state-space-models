@@ -1,4 +1,4 @@
-"""Hydra entry point for DDSSM training.
+r"""Hydra entry point for DDSSM training.
 
 Usage::
 
@@ -30,8 +30,8 @@ from __future__ import annotations
 import logging
 
 import hydra
-from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
+from hydra.core.hydra_config import HydraConfig
 
 # Importing conf populates Hydra's ConfigStore via ``store.add_to_hydra_store``.
 # Must precede @hydra.main so config groups resolve.
@@ -42,7 +42,8 @@ log = logging.getLogger(__name__)
 
 
 @hydra.main(config_path="./conf", config_name="config", version_base="1.3")
-def main(cfg: DictConfig):
+def main(cfg: DictConfig) -> object:
+    """Run training from a Hydra-composed experiment config."""
     hydra_cfg = HydraConfig.get()
     run_dir = hydra_cfg.runtime.output_dir
     choices = hydra_cfg.runtime.choices

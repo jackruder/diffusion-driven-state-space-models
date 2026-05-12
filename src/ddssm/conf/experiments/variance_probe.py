@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 from .._infra import (
-    DDSSMHyperParamsConf,
     ObjectiveSpecConf,
-    SyntheticDataModuleConf,
     TrainingScalarsConf,
+    DDSSMHyperParamsConf,
+    SyntheticDataModuleConf,
     TransitionDiffusionV2Conf,
-    build_experiment_conf,
     store,
+    build_experiment_conf,
 )
 from .._variance import (
+    LGSSMVarianceConf,
     BimodalCleanVarianceConf,
     BimodalNoisyVarianceConf,
-    LGSSMVarianceConf,
     NonlinearBimodalLiftVarianceConf,
 )
-
 
 _TRAINING = TrainingScalarsConf(
     steps=300,
@@ -40,7 +39,9 @@ _HP = DDSSMHyperParamsConf(
 )
 
 VarianceProbeLGSSMExperimentConf = build_experiment_conf(
-    data_conf=SyntheticDataModuleConf(mode="lgssm", T=64, D=1, N_per_split=256, batch_size=32),
+    data_conf=SyntheticDataModuleConf(
+        mode="lgssm", T=64, D=1, N_per_split=256, batch_size=32
+    ),
     transition_conf=TransitionDiffusionV2Conf,
     hyperparams_conf=_HP,
     training_conf=_TRAINING,
@@ -56,7 +57,9 @@ VarianceProbeLGSSMExperimentConf = build_experiment_conf(
 store(VarianceProbeLGSSMExperimentConf, group="experiment", name="variance_probe_lgssm")
 
 VarianceProbeBimodalCleanExperimentConf = build_experiment_conf(
-    data_conf=SyntheticDataModuleConf(mode="bimodal", T=64, D=1, N_per_split=256, batch_size=32),
+    data_conf=SyntheticDataModuleConf(
+        mode="bimodal", T=64, D=1, N_per_split=256, batch_size=32
+    ),
     transition_conf=TransitionDiffusionV2Conf,
     hyperparams_conf=_HP,
     training_conf=_TRAINING,
@@ -76,7 +79,9 @@ store(
 )
 
 VarianceProbeBimodalNoisyExperimentConf = build_experiment_conf(
-    data_conf=SyntheticDataModuleConf(mode="bimodal-noisy", T=64, D=1, N_per_split=256, batch_size=32),
+    data_conf=SyntheticDataModuleConf(
+        mode="bimodal-noisy", T=64, D=1, N_per_split=256, batch_size=32
+    ),
     transition_conf=TransitionDiffusionV2Conf,
     hyperparams_conf=_HP,
     training_conf=_TRAINING,

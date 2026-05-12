@@ -10,52 +10,53 @@ finalised (``add_to_hydra_store``) by ``conf/__init__.py`` after all
 registrations have run.
 """
 
+# ruff: noqa: ANN401
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any, List
+from dataclasses import field, dataclass
 
-from hydra_zen import builds, ZenStore, just  # noqa: F401 — ``just`` re-exported
+from hydra_zen import ZenStore, just, builds  # noqa: F401 — ``just`` re-exported
 from omegaconf import MISSING
 
+from ..dssd import DDSSMConf, DDSSMHyperParamsConf
+from ..train import DDSSMTrainer, DDSSMTrainerConf
+from ..decoder import GaussianDecoder, GaussianDecoderConf
+from ..encoder import (
+    GaussianEncoder,
+    GaussianInitPrior,
+    GaussianEncoderConf,
+    GaussianInitPriorConf,
+)
+from ..diffnets import (
+    CSDIUnet,
+    CSDIUnetConf,
+    ContextProducer,
+    MLPCSDIUnetConf,
+    TimeMixerConfig,
+    FeatureMixerConfig,
+    ContextProducerConf,
+    ResidualBlockConfig,
+    MLPContextProducerConf,
+    DiffResidualBlockConfig,
+)
+from ..gaussians import GaussianHeadConf
+from ..experiment import Experiment, ObjectiveSpec, TrainingScalars, TrainableModules
+from ..viz.runner import VizSpec, PlotSpec
+from ..eval.runner import EvalSpec
 from ..data.datamodule import (
     KDDDataModule,
     NullDataModule,
     SyntheticDataModule,
 )
-from ..decoder import GaussianDecoder, GaussianDecoderConf
-from ..diffnets import (
-    ContextProducer,
-    ContextProducerConf,
-    CSDIUnet,
-    CSDIUnetConf,
-    DiffResidualBlockConfig,
-    FeatureMixerConfig,
-    MLPContextProducerConf,
-    MLPCSDIUnetConf,
-    ResidualBlockConfig,
-    TimeMixerConfig,
-)
-from ..dssd import DDSSMConf, DDSSMHyperParamsConf, REWOConf
-from ..encoder import (
-    GaussianEncoder,
-    GaussianEncoderConf,
-    GaussianInitPrior,
-    GaussianInitPriorConf,
-)
-from ..eval.runner import EvalSpec
-from ..experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
-from ..variance.runner import ProbeCell, ProbeMetricSpec, ProbePlotSpec, ProbeSpec
-from ..viz.runner import PlotSpec, VizSpec
-from ..gaussians import GaussianHeadConf
-from ..train import DDSSMTrainer, DDSSMTrainerConf
-from ..transitions.diffusion import DiffusionScheduleConfig, DiffusionTransition
-from ..transitions.diffusion_v2 import (
-    DiffusionV2ScheduleConfig,
-    DiffusionV2Transition,
-)
+from ..variance.runner import ProbeCell, ProbeSpec, ProbePlotSpec, ProbeMetricSpec
+from ..transitions.diffusion import DiffusionTransition, DiffusionScheduleConfig
 from ..transitions.transitions import GaussianTransition
-
+from ..transitions.diffusion_v2 import (
+    DiffusionV2Transition,
+    DiffusionV2ScheduleConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Top-level transition Confs for the ``transition`` config group.
@@ -115,24 +116,39 @@ store = ZenStore(name="ddssm")
 # ---------------------------------------------------------------------------
 
 TimeMixerConvConf = builds(
-    TimeMixerConfig, type="conv", kernel_size=3, populate_full_signature=True,
+    TimeMixerConfig,
+    type="conv",
+    kernel_size=3,
+    populate_full_signature=True,
 )
 TimeMixerGRUConf = builds(
-    TimeMixerConfig, type="gru", gru_layers=1, populate_full_signature=True,
+    TimeMixerConfig,
+    type="gru",
+    gru_layers=1,
+    populate_full_signature=True,
 )
 TimeMixerIdentityConf = builds(
-    TimeMixerConfig, type="identity", populate_full_signature=True,
+    TimeMixerConfig,
+    type="identity",
+    populate_full_signature=True,
 )
 
 FeatureMixerTransformerConf = builds(
-    FeatureMixerConfig, type="transformer", nheads=8, n_layers=1,
+    FeatureMixerConfig,
+    type="transformer",
+    nheads=8,
+    n_layers=1,
     populate_full_signature=True,
 )
 FeatureMixerConvConf = builds(
-    FeatureMixerConfig, type="conv", populate_full_signature=True,
+    FeatureMixerConfig,
+    type="conv",
+    populate_full_signature=True,
 )
 FeatureMixerIdentityConf = builds(
-    FeatureMixerConfig, type="identity", populate_full_signature=True,
+    FeatureMixerConfig,
+    type="identity",
+    populate_full_signature=True,
 )
 
 store(TimeMixerConvConf, group="time_mixer", name="conv")
@@ -259,13 +275,15 @@ store(DDSSMTrainerConf, group="trainer", name="default")
 
 NullDataModuleConf = builds(NullDataModule, populate_full_signature=True)
 SyntheticDataModuleConf = builds(
-    SyntheticDataModule, populate_full_signature=True,
+    SyntheticDataModule,
+    populate_full_signature=True,
     D="${experiment.data_dim}",
     T=64,
     use_observation_mask="${experiment.use_observation_mask}",
 )
 KDDDataModuleConf = builds(
-    KDDDataModule, populate_full_signature=True,
+    KDDDataModule,
+    populate_full_signature=True,
     use_observation_mask="${experiment.use_observation_mask}",
 )
 
@@ -302,19 +320,21 @@ TrainableTransOnlyConf = TrainableModulesConf(
 # ``build_trainer`` is a partial of DDSSMTrainer that the Experiment
 # completes at run time with model + device + run-dir-derived paths.
 DDSSMTrainerPartial = builds(
-    DDSSMTrainer, populate_full_signature=True, zen_partial=True,
+    DDSSMTrainer,
+    populate_full_signature=True,
+    zen_partial=True,
 )
 
 
 def build_experiment_conf(
     *,
-    data_conf,
-    hyperparams_conf,
-    training_conf,
-    objective_conf=None,
-    eval_conf=None,
-    viz_conf=None,
-    variance_conf=None,
+    data_conf: Any,
+    hyperparams_conf: Any,
+    training_conf: Any,
+    objective_conf: Any = None,
+    eval_conf: Any = None,
+    viz_conf: Any = None,
+    variance_conf: Any = None,
     data_dim: int,
     latent_dim: int,
     j: int = 1,
@@ -323,11 +343,11 @@ def build_experiment_conf(
     use_observation_mask: bool = False,
     checkpoint_dir: str = "./checkpoints",
     seed: int = 0,
-    transition_conf=None,
-    encoder_conf=None,
-    decoder_conf=None,
-    z_init_conf=None,
-):
+    transition_conf: Any = None,
+    encoder_conf: Any = None,
+    decoder_conf: Any = None,
+    z_init_conf: Any = None,
+) -> Any:
     """Compose an instantiable :class:`Experiment` config from Python parts.
 
     Experiment presets call this directly with all important knobs visible in
@@ -343,7 +363,9 @@ def build_experiment_conf(
     explicit conf only when the preset must lock in a specific
     implementation.
     """
-    resolved_transition = transition_conf if transition_conf is not None else "${transition}"
+    resolved_transition = (
+        transition_conf if transition_conf is not None else "${transition}"
+    )
     resolved_encoder = encoder_conf if encoder_conf is not None else "${encoder}"
     resolved_decoder = decoder_conf if decoder_conf is not None else "${decoder}"
     resolved_z_init = z_init_conf if z_init_conf is not None else "${z_init}"
@@ -377,6 +399,7 @@ def build_experiment_conf(
 # ---------------------------------------------------------------------------
 # Stages dataclasses (config-only; full logic lives in ddssm.stages)
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class StageLrsConf:
@@ -423,4 +446,3 @@ class StagesConf:
     stage_2: StageSpecConf | None = None
     stage_3: StageSpecConf | None = None
     run: List[str] = field(default_factory=lambda: ["stage_1", "stage_2", "stage_3"])
-

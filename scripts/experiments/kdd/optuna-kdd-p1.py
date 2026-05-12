@@ -9,6 +9,7 @@ from __future__ import annotations
 
 
 def main() -> None:
+    """Exit with guidance for the supported sweep workflow."""
     raise SystemExit(
         "This legacy driver has been retired. Use Hydra multirun sweeps with "
         "`python -m ddssm.app --multirun ...`."

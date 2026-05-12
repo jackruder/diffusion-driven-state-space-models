@@ -13,7 +13,7 @@ def register_configs() -> None:
     if _REGISTERED:
         return
 
-    from .experiments import component, kdd, synthetic, variance_probe  # noqa: F401
+    from .experiments import kdd, component, synthetic, variance_probe  # noqa: F401
 
     store.add_to_hydra_store(overwrite_ok=True)
     _REGISTERED = True
