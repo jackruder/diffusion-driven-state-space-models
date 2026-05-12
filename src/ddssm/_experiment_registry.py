@@ -1,16 +1,18 @@
-"""Discover and register notebook-style experiment configs for Hydra.
+"""Bridge the hydra-zen ``experiment_store`` to Hydra's ConfigStore.
 
-Each ``experiments/<name>.py`` file at the top of the repository
-exposes a module-level ``exp`` variable holding an already-composed
-:class:`Experiment` builds-dataclass. This module walks that package
-on import, registers every ``exp`` it finds with Hydra's ConfigStore
-under ``group="experiment", name="<module name>"``, and then the Hydra
-CLI (``python -m ddssm.app experiment=NAME``) resolves it like any
-ordinary preset.
+Each ``experiments/<name>.py`` module ends with a visible
 
-There is no separate ``store()`` call needed inside an experiment
-file — adding ``experiments/foo.py`` with an ``exp`` variable is
-enough.
+    experiment_store(exp, name="<name>")
+
+call against the pre-grouped store defined in
+:mod:`experiments._registry`. Importing every experiment module
+therefore populates that store; we then ask hydra-zen to push the
+accumulated entries into Hydra's ConfigStore. The Hydra CLI
+(``python -m ddssm.app experiment=NAME``) resolves them like any
+other preset.
+
+No per-module ``cs.store(...)`` boilerplate, no attribute-sniffing
+walk: registration is *visible in source*.
 """
 
 from __future__ import annotations
@@ -20,8 +22,6 @@ import logging
 import os
 import pkgutil
 import sys
-
-from hydra.core.config_store import ConfigStore
 
 log = logging.getLogger(__name__)
 
@@ -35,8 +35,6 @@ def _ensure_experiments_on_path() -> None:
     have to set ``PYTHONPATH``.
     """
     candidates = [os.getcwd()]
-    # When installed editable, walk up from this file to find the repo root
-    # by looking for an ``experiments`` sibling.
     here = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
         here = os.path.dirname(here)
@@ -49,14 +47,10 @@ def _ensure_experiments_on_path() -> None:
 
 
 def register_experiments() -> None:
-    """Import every ``experiments/<name>.py`` and register ``exp``.
-
-    Idempotent: re-running is a no-op for entries already in the
-    ConfigStore.
-    """
+    """Import every experiment module, then push the zen-store to Hydra."""
     _ensure_experiments_on_path()
     try:
-        import experiments  # noqa: F401  -- triggers package init
+        import experiments
     except ModuleNotFoundError:
         log.warning(
             "No experiments/ package found on sys.path. "
@@ -64,19 +58,16 @@ def register_experiments() -> None:
         )
         return
 
-    cs = ConfigStore.instance()
     for _, name, ispkg in pkgutil.iter_modules(experiments.__path__):
         if ispkg or name.startswith("_"):
             continue
         try:
-            mod = importlib.import_module(f"experiments.{name}")
+            importlib.import_module(f"experiments.{name}")
         except Exception as e:  # pragma: no cover -- defensive
             log.warning("Skipping experiments/%s.py: %s", name, e)
-            continue
-        if not hasattr(mod, "exp"):
-            continue
-        cs.store(group="experiment", name=name, node=mod.exp)
-        log.debug("Registered experiment=%s", name)
+
+    from experiments._registry import experiment_store
+    experiment_store.add_to_hydra_store(overwrite_ok=True)
 
 
 __all__ = ["register_experiments"]

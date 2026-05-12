@@ -7,8 +7,9 @@
 This notebook documents component tests and synthetic-data comparisons
 for DDSSM. Each experiment is a plain Python file under
 ~experiments/~ in the repo root that calls ~make_experiment(...)~
-from ~experiments/_make.py~ to compose an ~Experiment~. The Hydra CLI
-auto-discovers every ~experiments/<name>.py~ at startup, so
+from ~experiments/_make.py~ to compose an ~Experiment~, then
+registers itself with the hydra-zen ~experiment_store~. The Hydra
+CLI bridges that store into its own ~ConfigStore~ at startup, so
 ~experiment=NAME~ Just Works.
 
 Train, evaluate, and visualize are independent stages — run any of
@@ -29,32 +30,59 @@ file with ~C-c C-v t~; the resulting modules become:
 Supporting plumbing lives in plain Python:
 
 #+BEGIN_SRC text
-ddssm/builders.py     — Conf builders (Encoder, Unet, MLPUnet, ...)
-experiments/_make.py  — make_experiment, override, run, to_yaml
-experiments/_bases.py — harmonic_base, bimodal_base, kdd_base, ...
-experiments.org       — experiment definitions, source of truth
-experiments/*.py      — tangled output of the org file
-experiments/log.org   — running log of sweeps + one-offs
+ddssm/builders.py        — Conf builders (Encoder, Unet, MLPUnet, …)
+experiments/_make.py     — make_experiment, override, run, to_yaml
+experiments/_bases.py    — harmonic_base, bimodal_base, kdd_base, …
+experiments/_registry.py — experiment_store = store(group="experiment")
+experiments.org          — experiment definitions, source of truth
+experiments/*.py         — tangled output of the org file
+experiments/log.org      — running log of sweeps + one-offs
 #+END_SRC
 
-Tangled variant files end up tiny — the body lives in ~_bases.py~:
+** Registration via hydra-zen ~store()~
+
+We use the canonical hydra-zen idiom — a pre-grouped store that
+every preset registers itself with by name. The store lives in
+~experiments/_registry.py~:
+
+#+BEGIN_SRC python
+# experiments/_registry.py
+from hydra_zen import store
+experiment_store = store(group="experiment")
+#+END_SRC
+
+Every tangled experiment file ends with a visible registration call:
 
 #+BEGIN_SRC python
 # experiments/harmonic_gauss.py — tangled from experiments.org
 from ddssm.builders import GaussTransition
 from experiments._bases import harmonic_base
+from experiments._registry import experiment_store
+
 exp = harmonic_base(GaussTransition())
+experiment_store(exp, name="harmonic_gauss")
 #+END_SRC
 
 #+BEGIN_SRC python
 # experiments/harmonic_diffusion.py — tangled from experiments.org
 from ddssm.builders import DiffTransition, Schedule, Unet
 from experiments._bases import harmonic_base
+from experiments._registry import experiment_store
+
 exp = harmonic_base(
     DiffTransition(unet=Unet(), schedule=Schedule()),
     steps=2000, checkpoint_every=500, lambda_warmup_steps=400,
 )
+experiment_store(exp, name="harmonic_diffusion")
 #+END_SRC
+
+At CLI startup ~ddssm._experiment_registry~ imports every file in
+~experiments/~ (so each ~experiment_store(...)~ call runs), then
+issues a single ~experiment_store.add_to_hydra_store()~ to publish
+the entries into Hydra's ConfigStore. ~python -m ddssm.app
+experiment=harmonic_gauss~ picks them up from there. No per-module
+~ConfigStore.store(...)~ boilerplate; the registration is in source
+where you can see it.
 
 ** Deriving a variant — ~override()~
 
@@ -116,9 +144,12 @@ B = override(A,
 
 When a derived variant becomes worth keeping, give it a name by
 adding a new headline in ~experiments.org~ and re-tangling. The
-tangled file follows the existing 4-line pattern and gets picked up
-by the CLI / pytest automatically — no ~store()~ call, no config
-group, no registration boilerplate.
+tangled file follows the existing 5-line pattern (~import~,
+~exp = ...~, ~experiment_store(exp, name="…")~) and gets picked up
+by the CLI / pytest automatically. The only registration call is
+the visible ~experiment_store(...)~ at the bottom of the file — no
+~ConfigStore.store(...)~ boilerplate, no Hydra config group to
+declare; the group is preset by ~_registry.py~.
 
 ** Direct ~builds()~ — when you want every leaf visible
 

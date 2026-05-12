@@ -9,8 +9,7 @@ Each headline below holds a Python src block whose ~:tangle~ argument
 writes a runnable ~experiments/<name>.py~ file. Tangle the whole
 buffer with ~C-c C-v t~; the resulting ~.py~ files are picked up by:
 
-- ~python -m ddssm.app experiment=NAME~ — Hydra CLI auto-discovery
-  (via ~ddssm._experiment_registry~).
+- ~python -m ddssm.app experiment=NAME~ — Hydra CLI.
 - ~from experiments.NAME import exp~ — programmatic use in
   notebooks / org src blocks / sweeps.
 - ~pytest tests/test_experiment_configs.py~ — instantiate-and-train
@@ -21,19 +20,44 @@ Don't edit ~experiments/*.py~ directly; edit this file and re-tangle.
 ** Layers
 
 #+BEGIN_SRC text
-ddssm/builders.py     — Encoder, Decoder, Unet, MLPUnet, Schedule, ... (Conf builders)
-experiments/_make.py  — make_experiment, override, run, to_yaml      (composer)
-experiments/_bases.py — harmonic_base, bimodal_base, ...              (per-family bases)
-experiments.org       — THIS FILE: experiment definitions             (source of truth)
-experiments/*.py      — tangled output of this file                   (generated)
-experiments/log.org   — running experiment log                        (sweeps & results)
+ddssm/builders.py        — Encoder, Decoder, Unet, MLPUnet, Schedule, …  (Conf builders)
+experiments/_make.py     — make_experiment, override, run, to_yaml       (composer)
+experiments/_bases.py    — harmonic_base, bimodal_base, …                (per-family bases)
+experiments/_registry.py — experiment_store = store(group="experiment")  (zen-store)
+experiments.org          — THIS FILE: experiment definitions             (source of truth)
+experiments/*.py         — tangled output of this file                   (generated)
+experiments/log.org      — running experiment log                        (sweeps & results)
 #+END_SRC
+
+** The store() idiom
+
+We follow the hydra-zen pattern of an explicit, pre-grouped store:
+
+#+BEGIN_SRC python
+# experiments/_registry.py
+from hydra_zen import store
+experiment_store = store(group="experiment")
+#+END_SRC
+
+Every experiment file ends with a visible registration call:
+
+#+BEGIN_SRC python
+exp = harmonic_base(GaussTransition())
+experiment_store(exp, name="harmonic_gauss")
+#+END_SRC
+
+At CLI startup ~ddssm._experiment_registry~ imports every
+~experiments/<name>.py~ (triggering its ~experiment_store(...)~
+call), then issues a single ~experiment_store.add_to_hydra_store()~
+to publish the group into Hydra's ConfigStore. No per-module
+~cs.store(...)~ boilerplate; the registration is in the source where
+you can see it.
 
 ** Deriving variants on the fly
 
-~override(exp, "path.to.field=value", ...)~ returns a fresh
-experiment with the listed fields changed. CLI strings parse YAML
-scalars; pass a dict to swap in Python objects:
+For ad-hoc tweaks that don't deserve a name, use ~override()~. It
+returns a fresh experiment with the listed fields changed; CLI
+strings parse YAML scalars, dicts let you pass Python objects:
 
 #+BEGIN_SRC python
 from experiments.harmonic_diffusion import exp as A
@@ -70,8 +94,10 @@ LGSSM mode, Gaussian transition, 500 steps. CI smoke test.
 from ddssm.builders import GaussTransition
 from experiments._bases import synthetic_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = synthetic_base(GaussTransition())
+experiment_store(exp, name="synthetic_gauss")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/synthetic_gauss")
@@ -87,11 +113,13 @@ LGSSM mode, Diffusion transition, 1000 steps.
 from ddssm.builders import DiffTransition, Schedule, Unet
 from experiments._bases import synthetic_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = synthetic_base(
     DiffTransition(unet=Unet(), schedule=Schedule()),
     steps=1000, lambda_warmup_steps=300,
 )
+experiment_store(exp, name="synthetic_diffusion")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/synthetic_diffusion")
@@ -107,8 +135,10 @@ if __name__ == "__main__":
 from ddssm.builders import GaussTransition
 from experiments._bases import harmonic_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = harmonic_base(GaussTransition())
+experiment_store(exp, name="harmonic_gauss")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/harmonic_gauss")
@@ -122,11 +152,13 @@ if __name__ == "__main__":
 from ddssm.builders import DiffTransition, Schedule, Unet
 from experiments._bases import harmonic_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = harmonic_base(
     DiffTransition(unet=Unet(), schedule=Schedule()),
     steps=2000, checkpoint_every=500, lambda_warmup_steps=400,
 )
+experiment_store(exp, name="harmonic_diffusion")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/harmonic_diffusion")
@@ -142,8 +174,10 @@ if __name__ == "__main__":
 from ddssm.builders import GaussTransition
 from experiments._bases import bimodal_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = bimodal_base(GaussTransition())
+experiment_store(exp, name="bimodal_gauss")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/bimodal_gauss")
@@ -157,11 +191,13 @@ if __name__ == "__main__":
 from ddssm.builders import DiffTransition, Schedule, Unet
 from experiments._bases import bimodal_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = bimodal_base(
     DiffTransition(unet=Unet(), schedule=Schedule()),
     steps=2000, checkpoint_every=500, lambda_warmup_steps=400,
 )
+experiment_store(exp, name="bimodal_diffusion")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/bimodal_diffusion")
@@ -177,8 +213,10 @@ if __name__ == "__main__":
 from ddssm.builders import GaussTransition
 from experiments._bases import robot_2d_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = robot_2d_base(GaussTransition())
+experiment_store(exp, name="robot_2d_gauss")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/robot_2d_gauss")
@@ -192,11 +230,13 @@ if __name__ == "__main__":
 from ddssm.builders import DiffTransition, Schedule, Unet
 from experiments._bases import robot_2d_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = robot_2d_base(
     DiffTransition(unet=Unet(), schedule=Schedule()),
     steps=4000, lambda_warmup_steps=800,
 )
+experiment_store(exp, name="robot_2d_diffusion")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/robot_2d_diffusion")
@@ -212,8 +252,10 @@ if __name__ == "__main__":
 from ddssm.builders import GaussTransition
 from experiments._bases import kdd_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = kdd_base(GaussTransition())
+experiment_store(exp, name="kdd_gauss")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/kdd_gauss")
@@ -227,11 +269,13 @@ if __name__ == "__main__":
 from ddssm.builders import DiffTransition, Schedule, Unet
 from experiments._bases import kdd_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = kdd_base(
     DiffTransition(unet=Unet(), schedule=Schedule()),
     steps=8000, batch_size=64,
 )
+experiment_store(exp, name="kdd_diffusion")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/kdd_diffusion")
@@ -246,8 +290,10 @@ if __name__ == "__main__":
 
 from experiments._bases import variance_probe_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = variance_probe_base(name="variance_probe_lgssm", mode="lgssm")
+experiment_store(exp, name="variance_probe_lgssm")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/variance_probe_lgssm")
@@ -260,10 +306,12 @@ if __name__ == "__main__":
 
 from experiments._bases import variance_probe_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = variance_probe_base(
     name="variance_probe_bimodal_clean", mode="bimodal",
 )
+experiment_store(exp, name="variance_probe_bimodal_clean")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/variance_probe_bimodal_clean")
@@ -276,10 +324,12 @@ if __name__ == "__main__":
 
 from experiments._bases import variance_probe_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = variance_probe_base(
     name="variance_probe_bimodal_noisy", mode="bimodal-noisy",
 )
+experiment_store(exp, name="variance_probe_bimodal_noisy")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/variance_probe_bimodal_noisy")
@@ -292,12 +342,14 @@ if __name__ == "__main__":
 
 from experiments._bases import variance_probe_base
 from experiments._make import run
+from experiments._registry import experiment_store
 
 exp = variance_probe_base(
     name="variance_probe_nonlinear_bimodal_lift",
     mode="nonlinear-bimodal-lift",
     data_dim=4, latent_dim=8,
 )
+experiment_store(exp, name="variance_probe_nonlinear_bimodal_lift")
 
 if __name__ == "__main__":
     run(exp, run_dir="runs/variance_probe_nonlinear_bimodal_lift")
