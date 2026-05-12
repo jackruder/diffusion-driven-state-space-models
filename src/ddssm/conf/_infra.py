@@ -351,9 +351,10 @@ def build_experiment_conf(
     """Compose an instantiable :class:`Experiment` config from Python parts.
 
     Experiment presets call this directly with all important knobs visible in
-    Python source.  Each ``*_conf`` argument is a Hydra-Zen config fragment:
-    usually a config class returned by ``builds(...)``, an initialized config
-    object from such a class, or ``None`` for optional stage specs. That keeps
+    Python source.  Each required ``*_conf`` argument is a Hydra-Zen config
+    fragment: usually a config class returned by ``builds(...)`` or an
+    initialized config object from such a class. Optional stage specs and
+    explicit module choices accept ``None`` to defer to defaults. That keeps
     presets Pyright-friendly while preserving Hydra config-group interpolation
     for CLI overrides.
 

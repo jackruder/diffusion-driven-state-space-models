@@ -78,6 +78,7 @@ class RunSpec:
     identity: str
     groups: ConfigGroups | None = None
     updates: Mapping[str, object] | None = None
+    tags: tuple[str, ...] = ()
 
     @property
     def metadata(self) -> RunMetadata:
@@ -230,13 +231,20 @@ synthetic_runs = [
             }
         },
     ),
-    RunSpec(BimodalExperimentConf, "runs/bimodal/gauss", "python:bimodal.gauss", groups=GAUSSIAN),
+    RunSpec(
+        BimodalExperimentConf,
+        "runs/bimodal/gauss",
+        "python:bimodal.gauss",
+        groups=GAUSSIAN,
+        tags=("jsd",),
+    ),
     RunSpec(
         BimodalExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
         "runs/bimodal/diff",
         "python:bimodal.diffusion_v1",
         groups=DIFFUSION,
         updates={"experiment": {"hyperparams": {"lambda_warmup_steps": 400}}},
+        tags=("jsd",),
     ),
     RunSpec(
         BimodalExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
@@ -324,7 +332,7 @@ jsd_updates = {
     }
 }
 
-for run in [r for r in synthetic_runs if r.run_dir in {"runs/bimodal/gauss", "runs/bimodal/diff"}]:
+for run in [r for r in synthetic_runs if "jsd" in r.tags]:
     evaluate_config(
         run.config,
         run_dir=run.run_dir,
