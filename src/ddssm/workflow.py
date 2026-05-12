@@ -1,6 +1,8 @@
 """Run DDSSM experiments from Python-authored Hydra-Zen configs."""
 
 # ruff: noqa: ANN401
+# Workflow entry points intentionally accept Hydra-Zen config classes,
+# structured config instances, and DictConfig roots.
 
 from __future__ import annotations
 

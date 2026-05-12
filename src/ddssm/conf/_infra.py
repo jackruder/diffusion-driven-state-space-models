@@ -11,6 +11,8 @@ registrations have run.
 """
 
 # ruff: noqa: ANN401
+# Hydra-Zen config fragments are generated classes/instances whose concrete
+# types vary by caller, so the config builder accepts them as Any.
 
 from __future__ import annotations
 
