@@ -1,0 +1,166 @@
+#+TITLE: ESM vs DSM Gradient Variance Experiments
+#+AUTHOR: Jack Ruder
+#+PROPERTY: header-args:sh :async t :results none :exports both
+
+* Overview
+
+Runbook for the four variance-probe experiments. Each pulls a
+DiffusionV2 transition through a short training run, then walks every
+step checkpoint to measure the per-τ explicit-score-matching (ESM)
+vs. denoising-score-matching (DSM) *gradient* variance. The
+~+per_step=true~ stage assembles GIF animations + a static
+trajectory plot showing how the variance gap closes as the score
+net learns.
+
+Hit ~C-c C-c~ on any cell — ob-async (~:async t~) dispatches each
+command via ~async-start~ and the org buffer returns immediately.
+The Python process writes its own ~cli.log~ inside
+~hydra.run.dir~; ~tail -f runs/variance_probe/<name>/cli.log~ to
+watch progress.
+
+Four datasets, all using ``Probe300`` training scalars
+(300 steps, ``checkpoint_every=25`` → 12 step checkpoints):
+
+| Name                                    | Mode                   | D | latent\_dim |
+|-----------------------------------------+------------------------+---+-------------|
+| ~variance_probe_lgssm~                  | lgssm                  | 1 |           4 |
+| ~variance_probe_bimodal_clean~          | bimodal                | 1 |           4 |
+| ~variance_probe_bimodal_noisy~          | bimodal-noisy          | 1 |           4 |
+| ~variance_probe_nonlinear_bimodal_lift~ | nonlinear-bimodal-lift | 4 |           8 |
+
+** Outputs
+
+After the probe stage each ~runs/variance_probe/<name>/~ contains:
+
+| File                                 | What                                                                  |
+|--------------------------------------+-----------------------------------------------------------------------|
+| ~checkpoints/ckpt_step{N}.pth~       | One per checkpoint_every (12 files for ~Probe300~).                   |
+| ~probe/step_{N:06d}/~                | Per-checkpoint probe outputs (raw CSV, summary JSON, four PNGs).      |
+| ~var_grad_vs_tau.gif~                | Gradient variance per τ, animated across training steps.              |
+| ~var_loss_vs_tau.gif~                | Loss variance per τ, animated across training steps.                  |
+| ~ratio_vs_tau.gif~                   | ESM/DSM ratio per τ, animated across training steps.                  |
+| ~summary_table.gif~                  | JSON summary, animated.                                               |
+| ~ratio_trajectory_grad_lsgm_is.png~  | Static: every checkpoint's grad-ratio per τ, coloured by step (warm). |
+
+* Training
+
+Each cell launches ~ddssm.app~ for one experiment. Backgrounded by
+ob-async; safe to fire all four in parallel.
+
+** lgssm
+
+#+BEGIN_SRC sh
+python -m ddssm.app experiment=variance_probe_lgssm \
+    hydra.run.dir=runs/variance_probe/lgssm
+#+END_SRC
+
+** bimodal_clean
+
+#+BEGIN_SRC sh
+python -m ddssm.app experiment=variance_probe_bimodal_clean \
+    hydra.run.dir=runs/variance_probe/bimodal_clean
+#+END_SRC
+
+** bimodal_noisy
+
+#+BEGIN_SRC sh
+python -m ddssm.app experiment=variance_probe_bimodal_noisy \
+    hydra.run.dir=runs/variance_probe/bimodal_noisy
+#+END_SRC
+
+** nonlinear_bimodal_lift
+
+#+BEGIN_SRC sh
+python -m ddssm.app experiment=variance_probe_nonlinear_bimodal_lift \
+    hydra.run.dir=runs/variance_probe/nonlinear_bimodal_lift
+#+END_SRC
+
+* Probe + GIFs + trajectory plot
+
+The ~+per_step=true~ mode probes *every* ~ckpt_step{N}.pth~ under
+~<run_dir>/checkpoints/~, writes per-checkpoint outputs into
+~<run_dir>/probe/step_{N:06d}/~, then stitches one GIF per plot
+type into ~<run_dir>/~ plus the static
+~ratio_trajectory_grad_lsgm_is.png~. Each cell auto-trains if the
+matching training cell hasn't been run yet, so you can skip the
+Training section entirely if you want a single command per
+experiment.
+
+** lgssm
+
+#+BEGIN_SRC sh
+python -m ddssm.variance experiment=variance_probe_lgssm \
+    +per_step=true \
+    hydra.run.dir=runs/variance_probe/lgssm
+#+END_SRC
+
+** bimodal_clean
+
+#+BEGIN_SRC sh
+python -m ddssm.variance experiment=variance_probe_bimodal_clean \
+    +per_step=true \
+    hydra.run.dir=runs/variance_probe/bimodal_clean
+#+END_SRC
+
+** bimodal_noisy
+
+#+BEGIN_SRC sh
+python -m ddssm.variance experiment=variance_probe_bimodal_noisy \
+    +per_step=true \
+    hydra.run.dir=runs/variance_probe/bimodal_noisy
+#+END_SRC
+
+** nonlinear_bimodal_lift
+
+#+BEGIN_SRC sh
+python -m ddssm.variance experiment=variance_probe_nonlinear_bimodal_lift \
+    +per_step=true \
+    hydra.run.dir=runs/variance_probe/nonlinear_bimodal_lift
+#+END_SRC
+
+* Inspect outputs
+
+Synchronous so the result lands in the org buffer.
+
+** Static trajectory plots
+
+#+BEGIN_SRC sh :async no :results output
+ls -lh runs/variance_probe/*/ratio_trajectory_grad_lsgm_is.png
+#+END_SRC
+
+** Animated GIFs
+
+#+BEGIN_SRC sh :async no :results output
+ls -lh runs/variance_probe/*/*.gif
+#+END_SRC
+
+** Per-step probe artifacts (one experiment at a time)
+
+#+BEGIN_SRC sh :async no :results output
+ls runs/variance_probe/lgssm/probe/
+#+END_SRC
+
+** Open everything (Linux; swap ~xdg-open~ for ~open~ on macOS)
+
+#+BEGIN_SRC sh
+for d in runs/variance_probe/*/; do
+    xdg-open "$d/ratio_trajectory_grad_lsgm_is.png" &
+done
+#+END_SRC
+
+* Notes
+
+- Cells run via ob-async (~:async t~ in the header-args property).
+  ~C-c C-c~ dispatches the command and returns immediately. Output
+  lands wherever Hydra was told to write — usually
+  ~runs/variance_probe/<name>/cli.log~.
+- The probe stage auto-trains if no ~ckpt_step*.pth~ files exist
+  yet — see ~ddssm/variance/cli.py::_probe_per_step~.
+- Stop a running job: ~pgrep -f variance_probe_lgssm | xargs kill~.
+- To trim training cost, override ~experiment.training.steps~ /
+  ~experiment.training.checkpoint_every~ on the command line. The
+  probe loop picks up whatever step checkpoints land in the run
+  dir.
+- For one-off probes against a different checkpoint, drop
+  ~+per_step=true~ and add ~+checkpoint=path/to/ckpt.pth~ — see
+  ~src/ddssm/variance/cli.py~ for the full CLI surface.
