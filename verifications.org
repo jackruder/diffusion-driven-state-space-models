@@ -18,8 +18,9 @@ them once you have a checkpoint.
 
 #+BEGIN_SRC text
 experiments/
-    _make.py                       # make_experiment, run, to_yaml, ...
-    harmonic_gauss.py              # one experiment per file
+    _make.py                       # make_experiment, run, to_yaml, tweak
+    _bases.py                      # one base() function per dataset family
+    harmonic_gauss.py              # one variant per file (3-5 lines each)
     harmonic_diffusion.py
     bimodal_gauss.py
     bimodal_diffusion.py
@@ -33,35 +34,125 @@ experiments/
     log.org                        # the experiment log
 #+END_SRC
 
-To override a parameter (e.g. ~Schedule.sigma_min~), edit the file
-or pass a Hydra CLI override:
+Each *base* in ~_bases.py~ (~harmonic_base~, ~bimodal_base~, …) is a
+function that takes the variable slot (~transition~) plus a few
+training/hparams knobs that diverge between Gaussian and diffusion
+variants. Each *variant file* is a 3-5 line diff:
 
-#+BEGIN_SRC sh
-python -m ddssm.app experiment=harmonic_diffusion \
-    experiment.model.transition.schedule.sigma_min=0.001 \
-    experiment.training.steps=200
+#+BEGIN_SRC python
+# experiments/harmonic_gauss.py
+from ddssm.builders import GaussTransition
+from experiments._bases import harmonic_base
+exp = harmonic_base(GaussTransition())
+
+# experiments/harmonic_diffusion.py
+from ddssm.builders import DiffTransition, Schedule, Unet
+from experiments._bases import harmonic_base
+exp = harmonic_base(
+    DiffTransition(unet=Unet(), schedule=Schedule()),
+    steps=2000, checkpoint_every=500, lambda_warmup_steps=400,
+)
 #+END_SRC
 
-To add a new experiment, drop ~experiments/foo.py~ exposing ~exp~:
+** Tweaking a single parameter
+
+Use ~tweak()~ for nested overrides via ~__~-separated paths. The
+original ~exp~ is not mutated; ~tweak~ returns a fresh dataclass.
+
+#+BEGIN_SRC python
+from experiments.harmonic_diffusion import exp as base
+from experiments._make import tweak, run
+
+# One knob deep in the schedule:
+exp = tweak(base, model__transition__schedule__sigma_min=0.001)
+
+# Several at once:
+exp = tweak(base,
+    training__steps=500,
+    hparams__lambda_warmup_steps=100,
+    model__transition__schedule__sigma_min=0.001,
+)
+run(exp, run_dir="runs/harm_diff_sigma_low")
+#+END_SRC
+
+** Swapping CSDI for MLP variants
+
+Each ablation network ships as a separate builder; pass it in
+directly. No store(), no group override:
+
+#+BEGIN_SRC python
+from ddssm.builders import DiffTransition, MLPUnet, MLPContext, Unet
+from experiments._bases import harmonic_base
+
+# Replace the diffusion U-Net with the MLP ablation:
+exp = harmonic_base(
+    DiffTransition(unet=MLPUnet(channels=64, n_layers=2)),
+)
+
+# Or swap the encoder/decoder/z_init context producer for MLPs by
+# passing a custom transition AND custom slots — see "Direct builds()"
+# below.
+#+END_SRC
+
+Or apply to a derived experiment:
+
+#+BEGIN_SRC python
+from experiments.harmonic_diffusion import exp as base
+from experiments._make import tweak
+from ddssm.builders import MLPUnet
+exp = tweak(base, model__transition__unet=MLPUnet(channels=32, n_layers=3))
+#+END_SRC
+
+** Direct ~builds()~ — no ~make_experiment~ at all
+
+~make_experiment~ is convenience; you can also assemble an experiment
+by hand. The shape kwargs just appear at every slot:
 
 #+BEGIN_SRC python
 from ddssm.builders import (
-    DiffTransition, Eval, Hparams, Plot, Schedule, Synthetic,
-    Training, Unet, Viz,
+    DDSSM, Decoder, DiffTransition, Encoder, ExperimentC, Hparams,
+    Schedule, Synthetic, Training, TrainerPartial, Unet, ZInit,
 )
-from experiments._make import make_experiment, run
 
-exp = make_experiment(
-    data_dim=1, latent_dim=4, j=1, emb_time_dim=16,
-    data=Synthetic(mode="harmonic", T=64, N_per_split=1024, batch_size=32),
-    hparams=Hparams(S=1, batch_size=32, enc_lr=5e-4),
-    training=Training(steps=2000, log_every=25),
-    transition=DiffTransition(
-        unet=Unet(channels=128, n_layers=6),
-        schedule=Schedule(sigma_min=0.001, S_k=20),
+D, d, j, et = 1, 4, 1, 16  # shapes in one place
+
+exp = ExperimentC(
+    data=Synthetic(mode="harmonic", T=64),
+    model=DDSSM(
+        data_dim=D, latent_dim=d, j=j, emb_time_dim=et,
+        encoder=Encoder(data_dim=D, latent_dim=d, j=j, emb_time_dim=et,
+                        covariate_dim=0, use_mask=False),
+        decoder=Decoder(data_dim=D, latent_dim=d, j=j, emb_time_dim=et,
+                        covariate_dim=0),
+        z_init=ZInit(latent_dim=d, j=j, emb_time_dim=et, covariate_dim=0),
+        transition=DiffTransition(latent_dim=d, j=j, emb_time_dim=et,
+                                  covariate_dim=0,
+                                  unet=Unet(), schedule=Schedule()),
+        hyperparams=Hparams(),
     ),
-    eval=Eval(metrics=["mae", "crps_sum"], split="val", T_split=32),
-    viz=Viz(plots=[Plot("forecast_1d", "forecast.png", kwargs={"n_show": 4})]),
+    build_trainer=TrainerPartial(),
+    training=Training(steps=1000),
+    hparams=Hparams(),
+)
+#+END_SRC
+
+This is exactly what ~make_experiment~ generates, with the shape
+kwargs threaded by hand. Use this when you want the full thing on
+screen at once — e.g. one-off notebook experiments.
+
+** Adding a brand-new experiment
+
+Drop ~experiments/foo.py~ exposing ~exp~:
+
+#+BEGIN_SRC python
+from ddssm.builders import DiffTransition, Schedule, Unet
+from experiments._bases import harmonic_base
+from experiments._make import run, tweak
+
+exp = harmonic_base(
+    DiffTransition(unet=Unet(channels=128, n_layers=6),
+                   schedule=Schedule(sigma_min=0.001, S_k=20)),
+    steps=3000, lambda_warmup_steps=600,
 )
 
 if __name__ == "__main__":

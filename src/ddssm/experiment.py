@@ -158,6 +158,11 @@ class Experiment:
     variance: Any = None  # ddssm.variance.ProbeSpec | None -- typed lazily
     seed: int | None = 0
     wandb_config: dict | None = None
+    # Convenience: same Hparams instance the trainer reads via
+    # ``self.model.config.hyperparams``. Exposed here so callers can
+    # ``exp.hparams.lambda_warmup_steps=...`` or ``tweak(exp,
+    # hparams__lr=1e-3)`` without descending into ``model.config``.
+    hparams: Any = None
 
     def train(self, *, device: torch.device, run_dir: str) -> float | DDSSMTrainer:
         """Run training only. Eval and visualization are separate stages."""
@@ -166,6 +171,13 @@ class Experiment:
         os.makedirs(run_dir, exist_ok=True)
         csv_log_path = os.path.join(run_dir, "metrics.csv")
         tensorboard_dir = os.path.join(run_dir, "tb_logs")
+
+        # The trainer reads ``model.config.hyperparams.*``. When the caller
+        # passed an :class:`Experiment`-level ``hparams`` (e.g. via
+        # ``tweak(exp, hparams__lr=1e-3)``), make that the authoritative
+        # value seen by the trainer.
+        if self.hparams is not None:
+            self.model.config.hyperparams = self.hparams
 
         log.info("Model: %d parameters", sum(p.numel() for p in self.model.parameters()))
         wandb_kwargs = self._wandb_kwargs(run_dir)

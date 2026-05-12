@@ -157,12 +157,45 @@ def make_experiment(
         variance=variance,
         seed=seed,
         wandb_config=wandb_config,
+        hparams=hparams,
     )
 
 
 def to_yaml(exp: Any, *, resolve: bool = True) -> str:
     """Serialize a config to YAML for inspection or saving."""
     return _zen_to_yaml(exp, resolve=resolve)
+
+
+def tweak(obj: Any, **overrides: Any) -> Any:
+    """Apply nested overrides to a builds() dataclass via ``__`` separators.
+
+    Example::
+
+        tweak(exp,
+              training__steps=2000,
+              training__checkpoint_every=500,
+              hparams__lambda_warmup_steps=400,
+              model__transition__schedule__sigma_min=0.001)
+
+    Each ``__``-separated path descends one level. Leaf values may be
+    scalars or fresh builds() dataclass instances. Returns a new object
+    (via :func:`dataclasses.replace`) — the original is untouched.
+    """
+    nested: dict[str, Any] = {}
+    for path, value in overrides.items():
+        if "__" not in path:
+            nested[path] = value
+            continue
+        head, rest = path.split("__", 1)
+        nested.setdefault(head, {})[rest] = value
+    updates: dict[str, Any] = {}
+    for k, v in nested.items():
+        if isinstance(v, dict):
+            cur = getattr(obj, k)
+            updates[k] = tweak(cur, **v)
+        else:
+            updates[k] = v
+    return dataclasses.replace(obj, **updates)
 
 
 def save_yaml(exp: Any, path: str, *, resolve: bool = True) -> None:
@@ -204,4 +237,4 @@ def run(
     return experiment.train(device=device, run_dir=run_dir)
 
 
-__all__ = ["make_experiment", "run", "to_yaml", "save_yaml", "from_yaml"]
+__all__ = ["make_experiment", "run", "to_yaml", "save_yaml", "from_yaml", "tweak"]

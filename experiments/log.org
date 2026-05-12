@@ -39,11 +39,11 @@ Hypothesis: <what we expect to see and why>
 
 #+BEGIN_SRC python :tangle runs/REPLACE_ME/conf.py :mkdirp yes
 from experiments.harmonic_diffusion import exp as base
-import dataclasses
-exp = dataclasses.replace(
-    base,
-    # … tweak fields here. e.g.:
-    # training=dataclasses.replace(base.training, steps=200),
+from experiments._make import tweak
+exp = tweak(base,
+    # training__steps=200,
+    # hparams__lambda_warmup_steps=100,
+    # model__transition__schedule__sigma_min=0.001,
 )
 print(to_yaml(exp)[:400])
 #+END_SRC
@@ -72,18 +72,11 @@ manifold and should lower CRPS on the harmonic eval.
 
 #+BEGIN_SRC python :tangle runs/harm_diff_low_sigma/conf.py :mkdirp yes
 from experiments.harmonic_diffusion import exp as base
-from ddssm.builders import Schedule
-import dataclasses
-exp = dataclasses.replace(
-    base,
-    model=dataclasses.replace(
-        base.model,
-        transition=dataclasses.replace(
-            base.model.transition,
-            schedule=Schedule(sigma_min=0.001, S_k=20),
-        ),
-    ),
-    training=dataclasses.replace(base.training, steps=500, log_every=25),
+from experiments._make import tweak
+exp = tweak(base,
+    model__transition__schedule__sigma_min=0.001,
+    model__transition__schedule__S_k=20,
+    training__steps=500,
 )
 #+END_SRC
 
