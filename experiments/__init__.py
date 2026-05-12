@@ -21,8 +21,8 @@ The Hydra CLI (``python -m ddssm.app experiment=NAME``) discovers
 modules in this package by name; see :mod:`ddssm.app` for the bridge.
 """
 
-from ._make import from_yaml, make_experiment, override, run, save_yaml, to_yaml
+from ._make import experiment, from_yaml, override, run, save_yaml, to_yaml
 
 __all__ = [
-    "make_experiment", "run", "to_yaml", "save_yaml", "from_yaml", "override",
+    "experiment", "run", "to_yaml", "save_yaml", "from_yaml", "override",
 ]

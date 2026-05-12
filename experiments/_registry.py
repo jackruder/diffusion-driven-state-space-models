@@ -1,25 +1,24 @@
-"""Hydra-zen store for the named experiment presets.
+"""Hydra-zen config-group stores for DDSSM.
 
-Each ``experiments/<name>.py`` module ends with::
+Three groups, three stores. Every named preset registers itself with
+its store at import time; ``ddssm._experiment_registry`` pushes the
+union into Hydra's ConfigStore at CLI startup.
 
-    experiment_store(exp, name="<name>")
+* ``model_store``      — full :class:`DDSSM` compositions (shape +
+                          encoder/decoder/z_init/transition baked in).
+* ``data_store``       — :class:`Synthetic` / :class:`KDD` data modules.
+* ``experiment_store`` — :class:`ExperimentC` instances that tie a
+                          model + dataset + training/eval/viz together.
 
-That call adds the composed :class:`Experiment` config to a
-pre-grouped hydra-zen store. At CLI time
-(:mod:`ddssm._experiment_registry`) we import every experiment
-module — triggering its ``experiment_store(...)`` call — and then
-push the accumulated entries into Hydra's ConfigStore with a single
-``store.add_to_hydra_store()`` call.
-
-The result: every preset is reachable as
-``python -m ddssm.app experiment=<name>``, and registration is
-*visible in source* rather than hidden in an auto-discovery walk.
+Defined in :file:`verifications.org`; tangled here.
 """
 
 from __future__ import annotations
 
 from hydra_zen import store
 
+model_store = store(group="model")
+data_store = store(group="data")
 experiment_store = store(group="experiment")
 
-__all__ = ["experiment_store"]
+__all__ = ["model_store", "data_store", "experiment_store"]
