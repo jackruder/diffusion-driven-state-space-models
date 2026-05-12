@@ -87,7 +87,7 @@ class DDSSMTrainer:
     """Training harness for ``DDSSM_base``.
 
     Handles the full training lifecycle: gradient accumulation, optional AMP,
-    EMA tracking, REWO / scheduled λ weighting, step-level metric logging to
+    EMA tracking, scheduled λ weighting, step-level metric logging to
     CSV and TensorBoard, and atomic checkpoint save/restore.
 
     Args:
@@ -179,15 +179,6 @@ class DDSSMTrainer:
         )
 
         self.checkpoint_dir = model.config.checkpoint_dir
-
-        # initialize REWO state
-        if self.config.hyperparams.lambda_schedule == "rewo":
-            self.rewo_lambda = 1.0
-            self.rewo_D_bar = None
-            self.rewo_initial_phase = True
-            self.rewo = True
-        else:
-            self.rewo = False
 
     def get_batch_size(self) -> int:
         return self.model.config.hyperparams.batch_size
@@ -311,12 +302,6 @@ class DDSSMTrainer:
             "global_step": int(self.global_step),
             "grad_accum_steps": int(self.grad_accum_steps),
         }
-        if self.rewo:
-            payload["rewo_state"] = {
-                "lambda": self.rewo_lambda,
-                "D_bar": self.rewo_D_bar,
-                "initial_phase": self.rewo_initial_phase,
-            }
         self._atomic_save(payload, path)
 
     def restore_from_checkpoint(self, path: str, strict: bool = True):
@@ -338,13 +323,6 @@ class DDSSMTrainer:
             self.ema_decay = ckpt.get("ema_decay", self.ema_decay)
 
         self.global_step = int(ckpt.get("global_step", 0))
-
-        # Restore REWO state
-        if self.rewo:
-            rewo = ckpt.get("rewo_state", {})
-            self.rewo_lambda = rewo.get("lambda", 1.0)
-            self.rewo_D_bar = rewo.get("D_bar", None)
-            self.rewo_initial_phase = rewo.get("initial_phase", True)
 
         return {
             "grad_accum_steps": ckpt.get("grad_accum_steps", self.grad_accum_steps),
@@ -378,8 +356,6 @@ class DDSSMTrainer:
                 warmup_steps=self.config.hyperparams.lambda_warmup_steps,
                 step=step,
             )
-        if self.config.hyperparams.lambda_schedule == "rewo":
-            return None
         return lambda step: 1.0
 
     def _move_batch_to_device(self, batch: dict, device: torch.device) -> dict:
@@ -405,7 +381,6 @@ class DDSSMTrainer:
         lambda_schedule,
         compute_recon: bool,
         compute_trans: bool,
-        rewo,
     ):
         observed = batch["observed_data"]
         observed_mask = batch["observation_mask"]
@@ -426,46 +401,11 @@ class DDSSMTrainer:
                 report_scaled=False,
             )
 
-        if not self.rewo:
-            assert lambda_schedule is not None
-            sched_step = self.global_step + 1
-            current_lambda = lambda_schedule(sched_step)
-            loss = distortion + current_lambda * rate
-            metrics["optim/lambda"] = torch.tensor(current_lambda)
-        else:
-            assert rewo is not None
-            d_val = distortion.detach()
-            if self.rewo_D_bar is None:
-                self.rewo_D_bar = d_val
-            else:
-                self.rewo_D_bar = (
-                    1 - rewo.alpha
-                ) * d_val + rewo.alpha * self.rewo_D_bar
-
-            delta = self.rewo_D_bar - rewo.D0
-            H_delta = 1.0 if delta > 0 else 0.0
-            lam_safe = max(self.rewo_lambda, 1e-6)
-            term1 = (1 - H_delta) * math.tanh(rewo.tau1 * (1.0 / lam_safe - 1.0))
-            term2 = rewo.tau2 * H_delta
-            f_lambda = term1 - term2
-
-            self.rewo_lambda = self.rewo_lambda * math.exp(
-                -rewo.nu * f_lambda * float(delta)
-            )
-
-            if self.rewo_D_bar <= rewo.D0:
-                self.rewo_initial_phase = False
-
-            if self.rewo_initial_phase:
-                loss = distortion
-            else:
-                loss = rate + self.rewo_lambda * distortion
-
-            metrics["rewo/lambda"] = torch.tensor(self.rewo_lambda)
-            metrics["rewo/D_bar"] = self.rewo_D_bar
-            metrics["rewo/initial_phase"] = torch.tensor(
-                1.0 if self.rewo_initial_phase else 0.0
-            )
+        assert lambda_schedule is not None
+        sched_step = self.global_step + 1
+        current_lambda = lambda_schedule(sched_step)
+        loss = distortion + current_lambda * rate
+        metrics["optim/lambda"] = torch.tensor(current_lambda)
 
         return loss, metrics, observed.size(0)
 
@@ -640,9 +580,6 @@ class DDSSMTrainer:
         device = self.device
         self.model.to(device)
 
-        # --- REWO Initialization ---
-        rewo = self.model.config.hyperparams.rewo if self.rewo else None
-
         lambda_schedule = self._build_lambda_schedule()
 
         # Make the console logger print every `log_every` steps
@@ -701,7 +638,6 @@ class DDSSMTrainer:
                             lambda_schedule=lambda_schedule,
                             compute_recon=compute_recon,
                             compute_trans=compute_trans,
-                            rewo=rewo,
                         )
 
                         self._backward_loss(loss, scaler=scaler, amp=amp)

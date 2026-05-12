@@ -37,7 +37,7 @@ from .diffnets import (
     ResidualBlockConfig,
     TimeMixerConfig,
 )
-from .dssd import DDSSM_base, DDSSMHyperParamsConf, REWOConf  # dataclasses
+from .dssd import DDSSM_base, DDSSMHyperParamsConf  # dataclasses
 from .encoder import GaussianEncoder, GaussianInitPrior
 from .eval.runner import EvalSpec
 from .experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
@@ -221,7 +221,6 @@ Null = builds(NullDataModule, populate_full_signature=True)
 # ---------------------------------------------------------------------------
 
 Hparams = builds(DDSSMHyperParamsConf, populate_full_signature=True)
-Rewo = builds(REWOConf, populate_full_signature=True)
 
 Trainable = builds(TrainableModules, populate_full_signature=True)
 Training = builds(
@@ -278,7 +277,7 @@ __all__ = [
     # Data modules
     "Synthetic", "KDD", "Null",
     # Model + training
-    "DDSSM", "Hparams", "Rewo",
+    "DDSSM", "Hparams",
     "Trainable", "Training", "Objective",
     "TrainerPartial",
     # Eval / viz / variance
