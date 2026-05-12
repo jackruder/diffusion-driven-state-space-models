@@ -43,6 +43,12 @@ viz_store = store(group="viz")
 objective_store = store(group="objective")
 variance_store = store(group="variance")
 
+# Multirun / Optuna sweep presets. Entries are merged at root via
+# ``package="_global_"`` so each preset can set top-level
+# ``hydra.sweeper.*`` keys (matching the legacy ``# @package _global_``
+# YAML semantic). Activate with ``+sweep=<name>``.
+sweep_store = store(group="sweep", package="_global_")
+
 
 __all__ = [
     "model_store", "data_store", "experiment_store",
@@ -51,4 +57,5 @@ __all__ = [
     "hparams_store", "training_store",
     "eval_store", "viz_store",
     "objective_store", "variance_store",
+    "sweep_store",
 ]

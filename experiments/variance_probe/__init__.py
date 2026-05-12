@@ -12,8 +12,9 @@ from . import schedules, hparams, training, datasets
 from . import transitions
 from . import models
 from . import experiments
+from . import sweeps
 
 __all__ = [
     "schedules", "hparams", "training", "datasets",
-    "transitions", "models", "experiments",
+    "transitions", "models", "experiments", "sweeps",
 ]

@@ -18,8 +18,11 @@ from . import transitions
 from . import models
 from . import experiments
 
+# Optuna sweep presets.
+from . import sweeps
+
 __all__ = [
     "encoders", "decoders", "z_inits", "unets", "schedules",
     "hparams", "training", "evals", "vizs", "datasets",
-    "transitions", "models", "experiments",
+    "transitions", "models", "experiments", "sweeps",
 ]

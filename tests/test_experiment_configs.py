@@ -27,11 +27,12 @@ from ddssm.experiment import Experiment, ObjectiveSpec, TrainingScalars
 CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
 
 
-def _registered_experiment_names() -> list[str]:
-    """Pull the live experiment-group entries out of the zen-store singleton."""
+def _registered_names(group: str) -> list[str]:
+    """Pull the live entries of a zen-store group as a sorted name list."""
     register_experiments()
-    group = store["experiment"]   # tuple-keyed dict ((group, name) -> node)
-    return sorted(name for _, name in group)
+    if group not in store:
+        return []
+    return sorted(name for _, name in store[group])
 
 
 def _exp(name: str):
@@ -41,9 +42,8 @@ def _exp(name: str):
 
 # Populated once at collection time so ``parametrize`` sees the same list
 # the runtime registry exposes — no hardcoded names.
-EXPERIMENTS = _registered_experiment_names()
-
-SWEEPS = ["synthetic_lr", "kdd_phase1"]
+EXPERIMENTS = _registered_names("experiment")
+SWEEPS = _registered_names("sweep")
 
 
 @pytest.fixture(autouse=True)
@@ -114,6 +114,13 @@ def test_objective_returns_inf_on_missing_csv(tmp_path) -> None:
 
 @pytest.mark.parametrize("name", SWEEPS)
 def test_sweep_preset_composes(name: str) -> None:
+    """Every registered sweep preset composes via ``+sweep=NAME``.
+
+    Optuna search presets (``synthetic_lr``, ``kdd_phase1``)
+    additionally swap in the ``ddssm_optuna`` sweeper and populate a
+    non-empty search space; config-preset sweeps (``variance_probe``)
+    only tweak experiment fields and leave the sweeper at defaults.
+    """
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(
             config_name="config",
@@ -121,9 +128,11 @@ def test_sweep_preset_composes(name: str) -> None:
             return_hydra_config=True,
         )
     sweeper = cfg.hydra.sweeper
-    assert "optuna" in sweeper._target_.lower()
-    assert sweeper.direction == "minimize"
-    assert len(sweeper.params) > 0
+    if sweeper.params:
+        # Optuna search-space preset.
+        assert "optuna" in sweeper._target_.lower()
+        assert sweeper.direction == "minimize"
+        assert len(sweeper.params) > 0
 
 
 @pytest.mark.parametrize("name,expected_metrics", [

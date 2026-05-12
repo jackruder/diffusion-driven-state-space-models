@@ -10,9 +10,10 @@ from . import hparams, training, evals, vizs, datasets
 from . import transitions
 from . import models
 from . import experiments
+from . import sweeps
 
 __all__ = [
     "encoders", "decoders", "z_inits",
     "hparams", "training", "evals", "vizs", "datasets",
-    "transitions", "models", "experiments",
+    "transitions", "models", "experiments", "sweeps",
 ]
