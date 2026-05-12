@@ -69,6 +69,8 @@ def _plot_var_per_k(
     metric_key: str,
     title: str,
     ylabel: str,
+    ylim: tuple[float, float] | None = None,
+    xlim: tuple[float, float] | None = None,
 ) -> None:
     var = ctx.metrics.get(metric_key, {})
     if not var:
@@ -103,6 +105,10 @@ def _plot_var_per_k(
     )
     ax.set_ylabel(ylabel)
     ax.set_yscale("log")
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    if xlim is not None:
+        ax.set_xlim(*xlim)
     ax.set_title(title)
     ax.grid(True, which="both", alpha=0.3)
     leg = ax.legend(fontsize=8, title="objective : k-sampling", loc="best")
@@ -122,7 +128,12 @@ def _plot_var_per_k(
 
 
 @register_probe_plot("var_grad_vs_tau")
-def plot_var_grad_vs_tau(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
+def plot_var_grad_vs_tau(
+    ctx: ProbePlotContext, save_path: str,
+    *, ylim: tuple[float, float] | None = None,
+    xlim: tuple[float, float] | None = None,
+    **_: Any,
+) -> None:
     _plot_var_per_k(
         ctx, save_path,
         metric_key="grad_var_per_tau",
@@ -132,21 +143,33 @@ def plot_var_grad_vs_tau(ctx: ProbePlotContext, save_path: str, **_: Any) -> Non
             r"(\nabla_\theta \mathcal{L}_p)$"
             "\n(mean across score-net parameters)"
         ),
+        ylim=ylim, xlim=xlim,
     )
 
 
 @register_probe_plot("var_loss_vs_tau")
-def plot_var_loss_vs_tau(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
+def plot_var_loss_vs_tau(
+    ctx: ProbePlotContext, save_path: str,
+    *, ylim: tuple[float, float] | None = None,
+    xlim: tuple[float, float] | None = None,
+    **_: Any,
+) -> None:
     _plot_var_per_k(
         ctx, save_path,
         metric_key="loss_var_per_tau",
         title=r"Loss variance per $\tau$-bin (forced $k$)",
         ylabel=r"$\mathrm{Var}_{\mathrm{seed,batch}}\,(\mathcal{L}_p)$",
+        ylim=ylim, xlim=xlim,
     )
 
 
 @register_probe_plot("ratio_vs_tau")
-def plot_ratio_vs_tau(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
+def plot_ratio_vs_tau(
+    ctx: ProbePlotContext, save_path: str,
+    *, ylim: tuple[float, float] | None = None,
+    xlim: tuple[float, float] | None = None,
+    **_: Any,
+) -> None:
     """Per-k ESM/DSM variance ratio (loss + grad), as a function of τ."""
     rpt = ctx.metrics.get("ratio_per_tau", {})
     if not rpt or not (rpt.get("loss") or rpt.get("grad")):
@@ -184,6 +207,10 @@ def plot_ratio_vs_tau(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
     ax.set_xlabel(r"$\tau$-bin index $k$")
     ax.set_ylabel("ESM / DSM variance ratio")
     ax.set_yscale("log")
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    if xlim is not None:
+        ax.set_xlim(*xlim)
     ax.set_title(r"ESM vs DSM variance ratio per $\tau$-bin")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(fontsize=8, loc="best")

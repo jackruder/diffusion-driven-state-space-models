@@ -18,7 +18,9 @@ Three modes, selected by CLI flags:
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import os
 import re
 
@@ -30,6 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 from PIL import Image, ImageDraw, ImageFont
 
 from .._experiment_registry import register_experiments
+from .plots import PROBE_PLOT_REGISTRY, ProbePlotContext
 
 register_experiments()
 
@@ -84,6 +87,61 @@ def _annotate_frame(png_path: str, step: int) -> Image.Image:
     )
     draw.text((x, y), text, fill=(20, 20, 20), font=font)
     return img
+
+
+def _collect_pos_values(d, out: list[float]) -> None:
+    """Recurse a nested dict, appending finite positive numeric leaves to ``out``."""
+    if isinstance(d, dict):
+        for v in d.values():
+            _collect_pos_values(v, out)
+        return
+    if isinstance(d, (list, tuple)):
+        for v in d:
+            _collect_pos_values(v, out)
+        return
+    try:
+        x = float(d)
+    except (TypeError, ValueError):
+        return
+    if math.isfinite(x) and x > 0:
+        out.append(x)
+
+
+def _global_ylim(metric_dicts: list[dict], metric_key: str,
+                 pad: float = 3.0, anchors: tuple[float, ...] = ()) -> tuple[float, float] | None:
+    """Compute a stable [low, high] log-axis bound across many metric snapshots.
+
+    ``pad`` multiplies above the max and divides below the min so the
+    extremes don't sit flush against the axis. ``anchors`` are points
+    that must lie inside the returned range (e.g. parity=1.0 for ratio
+    plots).
+    """
+    values: list[float] = []
+    for m in metric_dicts:
+        _collect_pos_values(m.get(metric_key, {}), values)
+    if not values:
+        return None
+    lo, hi = min(values), max(values)
+    for a in anchors:
+        lo = min(lo, a)
+        hi = max(hi, a)
+    return (lo / pad, hi * pad)
+
+
+def _global_bounds(per_step_data: list[tuple[int, dict]]) -> dict[str, dict]:
+    """Per-plot fixed bounds so GIF frames don't jitter."""
+    metrics_list = [data.get("metrics", {}) for _, data in per_step_data]
+    bounds: dict[str, dict] = {}
+    yl = _global_ylim(metrics_list, "grad_var_per_tau")
+    if yl is not None:
+        bounds["var_grad_vs_tau"] = {"ylim": yl}
+    yl = _global_ylim(metrics_list, "loss_var_per_tau")
+    if yl is not None:
+        bounds["var_loss_vs_tau"] = {"ylim": yl}
+    yl = _global_ylim(metrics_list, "ratio_per_tau", anchors=(1.0,))
+    if yl is not None:
+        bounds["ratio_vs_tau"] = {"ylim": yl}
+    return bounds
 
 
 def _compile_gif(
@@ -146,6 +204,32 @@ def _probe_per_step(experiment, device: torch.device, run_dir: str) -> dict:
             checkpoint_path=ckpt_path,
         )
         step_outputs.append((step, sub_dir))
+
+    # Re-render per-step plots with globally-fixed axes so each GIF
+    # frame uses identical scales (otherwise the animation jitters as
+    # matplotlib auto-scales each frame independently).
+    log.info("Re-rendering per-step plots with fixed axes")
+    per_step_data: list[tuple[int, dict]] = []
+    for step, sub_dir in step_outputs:
+        summary_path = os.path.join(sub_dir, "variance_summary.json")
+        try:
+            with open(summary_path) as f:
+                per_step_data.append((step, json.load(f)))
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            log.warning("Could not load %s for axis bounds: %s", summary_path, exc)
+
+    bounds = _global_bounds(per_step_data)
+    for step, data in per_step_data:
+        sub_dir = next(d for s, d in step_outputs if s == step)
+        ctx = ProbePlotContext(
+            rows=[],
+            summary=data.get("summary", {}),
+            metrics=data.get("metrics", {}),
+        )
+        for plot_name in ("var_grad_vs_tau", "var_loss_vs_tau", "ratio_vs_tau"):
+            kwargs = bounds.get(plot_name, {})
+            png_path = os.path.join(sub_dir, f"{plot_name}.png")
+            PROBE_PLOT_REGISTRY[plot_name](ctx, png_path, **kwargs)
 
     log.info("Stitching GIFs across %d step(s)", len(step_outputs))
     for plot_name in _PLOT_NAMES:
