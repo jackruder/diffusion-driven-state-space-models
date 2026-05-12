@@ -1,13 +1,14 @@
-#+TITLE: Verifications — Python Config Workflow
+#+TITLE: Verifications — Separate Python Config Stages
 #+AUTHOR: Jack Ruder
 #+PROPERTY: header-args:python :results output :exports both
 
 * Overview
 
-Verifications are authored as Python source blocks, not YAML.  The config
-objects below are Hydra-Zen configs imported from ~ddssm.conf.experiments.*~,
-so Pyright can check imports and constructor names while the workflow functions
-still produce the same resolved Hydra config artifacts as the CLI.
+Verifications are authored as Python source blocks around Hydra-Zen config
+objects from ~ddssm.conf.experiments.*~.  Train, evaluation, visualization, and
+variance probing are intentionally separate source blocks: rerun only the stage
+you are changing.  For example, if you tweak plots in ~experiment.viz~, rerun the
+visualization block against the existing checkpoint instead of retraining.
 
 Each stage writes under its ~run_dir~:
 
@@ -17,19 +18,17 @@ Each stage writes under its ~run_dir~:
 - stage outputs such as ~metrics.csv~, checkpoints, ~metrics.json~, PNGs, or
   variance probe summaries.
 
-The CLI remains available for sweeps and batch jobs, but this document is the
-canonical verification workflow.
+The Hydra CLI remains available for sweeps and batch jobs.  These source blocks
+are the canonical interactive verification workflow.
 
-* Shared Python helpers
-
-This shared block centralizes imports used throughout the verification sections;
-individual source blocks can copy only the imports they need.
+* Shared Python setup
 
 #+BEGIN_SRC python
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from collections.abc import Mapping
 
 from ddssm.conf import (
     TrainableModulesConf,
@@ -72,36 +71,25 @@ DIFFUSION = ConfigGroups(transition=TransitionDiffusionConf)
 DIFFUSION_V2 = ConfigGroups(transition=TransitionDiffusionV2Conf)
 
 
-def run_train_eval_viz(
-    cfg: Any,
-    run_dir: str,
-    *,
-    groups: ConfigGroups | None = None,
-    updates: Mapping[str, Any] | None = None,
-    identity: str,
-) -> None:
-    metadata = RunMetadata(config_identity=identity)
-    train_config(cfg, run_dir=run_dir, groups=groups, updates=updates, metadata=metadata)
-    checkpoint = str(Path(run_dir) / "checkpoints" / "ckpt_latest.pth")
-    csv_path = str(Path(run_dir) / "metrics.csv")
-    evaluate_config(
-        cfg,
-        run_dir=run_dir,
-        checkpoint_path=checkpoint,
-        csv_path=csv_path,
-        groups=groups,
-        updates=updates,
-        metadata=metadata,
-    )
-    visualize_config(
-        cfg,
-        run_dir=run_dir,
-        checkpoint_path=checkpoint,
-        csv_path=csv_path,
-        groups=groups,
-        updates=updates,
-        metadata=metadata,
-    )
+@dataclass(frozen=True)
+class RunSpec:
+    config: object
+    run_dir: str
+    identity: str
+    groups: ConfigGroups | None = None
+    updates: Mapping[str, object] | None = None
+
+    @property
+    def metadata(self) -> RunMetadata:
+        return RunMetadata(config_identity=self.identity)
+
+    @property
+    def checkpoint_path(self) -> str:
+        return str(Path(self.run_dir) / "checkpoints" / "ckpt_latest.pth")
+
+    @property
+    def csv_path(self) -> str:
+        return str(Path(self.run_dir) / "metrics.csv")
 #+END_SRC
 
 * Experiment presets quick reference
@@ -119,167 +107,210 @@ def run_train_eval_viz(
 
 * Component tests
 
-** Encoder / decoder reconstruction only
+#+BEGIN_SRC python
+component_runs = [
+    RunSpec(
+        SyntheticGaussExperimentConf(
+            training=TrainingScalarsConf(
+                steps=500,
+                trainable=TrainableModulesConf(
+                    encoder=True,
+                    decoder=True,
+                    z_init=True,
+                    transition=False,
+                ),
+                compute_trans=False,
+            )
+        ),
+        "runs/component/recon_only",
+        "python:component.recon_only",
+    ),
+    RunSpec(
+        SyntheticGaussExperimentConf,
+        "runs/component/gaussian_joint",
+        "python:component.synthetic_gauss",
+    ),
+    RunSpec(
+        SyntheticDiffusionExperimentConf,
+        "runs/component/diffusion_joint",
+        "python:component.synthetic_diffusion",
+    ),
+]
+#+END_SRC
+
+** Train
 
 #+BEGIN_SRC python
-cfg = SyntheticGaussExperimentConf(
-    training=TrainingScalarsConf(
-        steps=500,
-        trainable=TrainableModulesConf(
-            encoder=True,
-            decoder=True,
-            z_init=True,
-            transition=False,
-        ),
-        compute_trans=False,
+for run in component_runs:
+    train_config(
+        run.config,
+        run_dir=run.run_dir,
+        groups=run.groups,
+        updates=run.updates,
+        metadata=run.metadata,
     )
-)
+#+END_SRC
 
-run_train_eval_viz(
-    cfg,
-    "runs/component/recon_only",
-    identity="python:component.recon_only",
-)
+** Evaluate
+
+#+BEGIN_SRC python
+for run in component_runs:
+    evaluate_config(
+        run.config,
+        run_dir=run.run_dir,
+        checkpoint_path=run.checkpoint_path,
+        csv_path=run.csv_path,
+        groups=run.groups,
+        updates=run.updates,
+        metadata=run.metadata,
+    )
+#+END_SRC
+
+** Visualize
+
+#+BEGIN_SRC python
+for run in component_runs:
+    visualize_config(
+        run.config,
+        run_dir=run.run_dir,
+        checkpoint_path=run.checkpoint_path,
+        csv_path=run.csv_path,
+        groups=run.groups,
+        updates=run.updates,
+        metadata=run.metadata,
+    )
 #+END_SRC
 
 Expected behavior:
-- ~loss/recon~ decreases steadily; ~loss/trans~ stays near 0.
-- Reconstruction plot shows overlap between observed and decoded posterior.
-
-** Gaussian transition joint training
-
-#+BEGIN_SRC python
-run_train_eval_viz(
-    SyntheticGaussExperimentConf,
-    "runs/component/gaussian_joint",
-    identity="python:component.synthetic_gauss",
-)
-#+END_SRC
-
-** Diffusion transition joint training
-
-#+BEGIN_SRC python
-run_train_eval_viz(
-    SyntheticDiffusionExperimentConf,
-    "runs/component/diffusion_joint",
-    identity="python:component.synthetic_diffusion",
-)
-#+END_SRC
+- Recon-only runs reduce ~loss/recon~ while ~loss/trans~ stays near zero.
+- Gaussian and diffusion joint runs complete end-to-end on synthetic LGSSM data.
 
 * Synthetic experiments
 
-** Harmonic signal
-
 #+BEGIN_SRC python
-run_train_eval_viz(
-    HarmonicExperimentConf,
-    "runs/harmonic/gauss",
-    groups=GAUSSIAN,
-    identity="python:harmonic.gauss",
-)
-
-run_train_eval_viz(
-    HarmonicExperimentConf(
-        training=TrainingScalarsConf(steps=2000, checkpoint_every=500),
+synthetic_runs = [
+    RunSpec(HarmonicExperimentConf, "runs/harmonic/gauss", "python:harmonic.gauss", groups=GAUSSIAN),
+    RunSpec(
+        HarmonicExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
+        "runs/harmonic/diff",
+        "python:harmonic.diffusion",
+        groups=DIFFUSION,
+        updates={"experiment": {"hyperparams": {"lambda_warmup_steps": 400}}},
     ),
-    "runs/harmonic/diff",
-    groups=DIFFUSION,
-    updates={"experiment": {"hyperparams": {"lambda_warmup_steps": 400}}},
-    identity="python:harmonic.diffusion",
-)
+    RunSpec(
+        HarmonicExperimentConf,
+        "runs/harmonic/gauss_j2",
+        "python:harmonic.gauss_j2",
+        groups=GAUSSIAN,
+        updates={"experiment": {"j": 2}},
+    ),
+    RunSpec(
+        HarmonicExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
+        "runs/harmonic/diff_j2",
+        "python:harmonic.diffusion_j2",
+        groups=DIFFUSION,
+        updates={"experiment": {"j": 2, "hyperparams": {"lambda_warmup_steps": 400}}},
+    ),
+    RunSpec(
+        HarmonicExperimentConf,
+        "runs/harmonic_noisy/gauss",
+        "python:harmonic_noisy.gauss",
+        groups=GAUSSIAN,
+        updates={"experiment": {"data": {"mode": "harmonic-noisy"}}},
+    ),
+    RunSpec(
+        HarmonicExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
+        "runs/harmonic_noisy/diff",
+        "python:harmonic_noisy.diffusion",
+        groups=DIFFUSION,
+        updates={
+            "experiment": {
+                "data": {"mode": "harmonic-noisy"},
+                "hyperparams": {"lambda_warmup_steps": 400},
+            }
+        },
+    ),
+    RunSpec(BimodalExperimentConf, "runs/bimodal/gauss", "python:bimodal.gauss", groups=GAUSSIAN),
+    RunSpec(
+        BimodalExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
+        "runs/bimodal/diff",
+        "python:bimodal.diffusion_v1",
+        groups=DIFFUSION,
+        updates={"experiment": {"hyperparams": {"lambda_warmup_steps": 400}}},
+    ),
+    RunSpec(
+        BimodalExperimentConf(training=TrainingScalarsConf(steps=2000, checkpoint_every=500)),
+        "runs/bimodal/diff_v2",
+        "python:bimodal.diffusion_v2_uniform",
+        groups=DIFFUSION_V2,
+        updates={
+            "transition": {"schedule": {"k_sampling_mode": "uniform"}},
+            "experiment": {"hyperparams": {"lambda_warmup_steps": 400}},
+        },
+    ),
+    RunSpec(Robot2DExperimentConf, "runs/robot_2d/gauss", "python:robot_2d.gauss", groups=GAUSSIAN),
+    RunSpec(
+        Robot2DExperimentConf(training=TrainingScalarsConf(steps=4000, checkpoint_every=500)),
+        "runs/robot_2d/diff",
+        "python:robot_2d.diffusion",
+        groups=DIFFUSION,
+        updates={"experiment": {"hyperparams": {"lambda_warmup_steps": 800}}},
+    ),
+]
 #+END_SRC
 
-** Higher-order AR latent (~j=2~)
+** Train
 
 #+BEGIN_SRC python
-run_train_eval_viz(
-    HarmonicExperimentConf,
-    "runs/harmonic/gauss_j2",
-    groups=GAUSSIAN,
-    updates={"experiment": {"j": 2}},
-    identity="python:harmonic.gauss_j2",
-)
+for run in synthetic_runs:
+    train_config(
+        run.config,
+        run_dir=run.run_dir,
+        groups=run.groups,
+        updates=run.updates,
+        metadata=run.metadata,
+    )
+#+END_SRC
 
-run_train_eval_viz(
-    HarmonicExperimentConf(
-        training=TrainingScalarsConf(steps=2000, checkpoint_every=500),
-    ),
-    "runs/harmonic/diff_j2",
-    groups=DIFFUSION,
-    updates={"experiment": {"j": 2, "hyperparams": {"lambda_warmup_steps": 400}}},
-    identity="python:harmonic.diffusion_j2",
-)
+** Evaluate
+
+#+BEGIN_SRC python
+for run in synthetic_runs:
+    evaluate_config(
+        run.config,
+        run_dir=run.run_dir,
+        checkpoint_path=run.checkpoint_path,
+        csv_path=run.csv_path,
+        groups=run.groups,
+        updates=run.updates,
+        metadata=run.metadata,
+    )
+#+END_SRC
+
+** Visualize
+
+#+BEGIN_SRC python
+for run in synthetic_runs:
+    visualize_config(
+        run.config,
+        run_dir=run.run_dir,
+        checkpoint_path=run.checkpoint_path,
+        csv_path=run.csv_path,
+        groups=run.groups,
+        updates=run.updates,
+        metadata=run.metadata,
+    )
 #+END_SRC
 
 Expected behavior:
 - ~j=2~ improves periodic forecasts by exposing position and velocity.
-- Diffusion + ~j=2~ should give the sharpest samples.
+- Bimodal Gaussian forecast samples collapse to one mode; diffusion samples span both modes.
+- Robot diffusion samples should branch into distinct obstacle-avoidance paths.
 
-** Harmonic noisy signal
+** Bimodal JSD analysis
 
-#+BEGIN_SRC python
-noisy = {"experiment": {"data": {"mode": "harmonic-noisy"}}}
-
-run_train_eval_viz(
-    HarmonicExperimentConf,
-    "runs/harmonic_noisy/gauss",
-    groups=GAUSSIAN,
-    updates=noisy,
-    identity="python:harmonic_noisy.gauss",
-)
-
-run_train_eval_viz(
-    HarmonicExperimentConf(
-        training=TrainingScalarsConf(steps=2000, checkpoint_every=500),
-    ),
-    "runs/harmonic_noisy/diff",
-    groups=DIFFUSION,
-    updates={
-        "experiment": {
-            "data": {"mode": "harmonic-noisy"},
-            "hyperparams": {"lambda_warmup_steps": 400},
-        }
-    },
-    identity="python:harmonic_noisy.diffusion",
-)
-#+END_SRC
-
-** Bimodal multimodality comparison
-
-#+BEGIN_SRC python
-run_train_eval_viz(
-    BimodalExperimentConf,
-    "runs/bimodal/gauss",
-    groups=GAUSSIAN,
-    identity="python:bimodal.gauss",
-)
-
-run_train_eval_viz(
-    BimodalExperimentConf(
-        training=TrainingScalarsConf(steps=2000, checkpoint_every=500),
-        wandb_config={
-            "enabled": True,
-            "project": "ddssm",
-            "group": "bimodal_v1_v2",
-            "tags": ["bimodal", "diffusion_v1"],
-        },
-    ),
-    "runs/bimodal/diff",
-    groups=DIFFUSION,
-    updates={"experiment": {"hyperparams": {"lambda_warmup_steps": 400}}},
-    identity="python:bimodal.diffusion_v1",
-)
-#+END_SRC
-
-Expected behavior:
-- Gaussian forecast samples collapse to one mode; energy score is high.
-- Diffusion samples span both modes; energy score is substantially lower.
-
-*** JSD analysis
-
-The ~bimodal_jsd~ metric writes ~bimodal_jsd.npz~ in the run directory.  This
-replaces the legacy ~bimodal_jsd.py~ / ~plot_bimodal_jsd.py~ training path with
-the normal Python config workflow.
+The ~bimodal_jsd~ metric writes ~bimodal_jsd.npz~ in the run directory.  This is
+an evaluation-only rerun against existing checkpoints.
 
 #+BEGIN_SRC python
 jsd_updates = {
@@ -293,29 +324,20 @@ jsd_updates = {
     }
 }
 
-evaluate_config(
-    BimodalExperimentConf,
-    run_dir="runs/bimodal/gauss",
-    checkpoint_path="runs/bimodal/gauss/checkpoints/ckpt_latest.pth",
-    csv_path="runs/bimodal/gauss/metrics.csv",
-    groups=GAUSSIAN,
-    updates=jsd_updates,
-    metadata=RunMetadata(config_identity="python:bimodal.gauss_jsd"),
-)
-
-evaluate_config(
-    BimodalExperimentConf,
-    run_dir="runs/bimodal/diff",
-    checkpoint_path="runs/bimodal/diff/checkpoints/ckpt_latest.pth",
-    csv_path="runs/bimodal/diff/metrics.csv",
-    groups=DIFFUSION,
-    updates=jsd_updates,
-    metadata=RunMetadata(config_identity="python:bimodal.diffusion_jsd"),
-)
+for run in [r for r in synthetic_runs if r.run_dir in {"runs/bimodal/gauss", "runs/bimodal/diff"}]:
+    evaluate_config(
+        run.config,
+        run_dir=run.run_dir,
+        checkpoint_path=run.checkpoint_path,
+        csv_path=run.csv_path,
+        groups=run.groups,
+        updates=jsd_updates,
+        metadata=RunMetadata(config_identity=f"{run.identity}_jsd"),
+    )
 #+END_SRC
 
 The LOCF baseline and cross-model comparison scripts are standalone analysis
-utilities and remain outside the training workflow:
+utilities and remain outside the training stage:
 
 #+BEGIN_SRC sh :results output :exports both
 python scripts/experiments/bimodal_locf.py \
@@ -331,93 +353,87 @@ python scripts/experiments/plot_bimodal_compare.py \
     --center_coefs 0.9 1.0
 #+END_SRC
 
-*** Diffusion V2 vs V1
-
-#+BEGIN_SRC python
-v2_updates = {
-    "transition": {"schedule": {"k_sampling_mode": "uniform"}},
-    "experiment": {"hyperparams": {"lambda_warmup_steps": 400}},
-}
-
-run_train_eval_viz(
-    BimodalExperimentConf(
-        training=TrainingScalarsConf(steps=2000, checkpoint_every=500),
-        wandb_config={
-            "enabled": True,
-            "project": "ddssm",
-            "group": "bimodal_v1_v2",
-            "tags": ["bimodal", "diffusion_v2", "uniform"],
-        },
-    ),
-    "runs/bimodal/diff_v2",
-    groups=DIFFUSION_V2,
-    updates=v2_updates,
-    identity="python:bimodal.diffusion_v2_uniform",
-)
-#+END_SRC
-
-* Robot navigation 2D
-
-#+BEGIN_SRC python
-run_train_eval_viz(
-    Robot2DExperimentConf,
-    "runs/robot_2d/gauss",
-    groups=GAUSSIAN,
-    identity="python:robot_2d.gauss",
-)
-
-run_train_eval_viz(
-    Robot2DExperimentConf(
-        training=TrainingScalarsConf(steps=4000, checkpoint_every=500),
-    ),
-    "runs/robot_2d/diff",
-    groups=DIFFUSION,
-    updates={"experiment": {"hyperparams": {"lambda_warmup_steps": 800}}},
-    identity="python:robot_2d.diffusion",
-)
-#+END_SRC
-
-Expected behavior:
-- Gaussian forecast mean averages obstacle-avoidance routes.
-- Diffusion samples should branch into distinct obstacle-avoidance paths.
-
 * KDD Cup 2018
 
 #+BEGIN_SRC python
-run_train_eval_viz(
-    KDDGaussExperimentConf,
-    "runs/kdd/gauss",
-    identity="python:kdd.gauss",
-)
+kdd_runs = [
+    RunSpec(KDDGaussExperimentConf, "runs/kdd/gauss", "python:kdd.gauss"),
+    RunSpec(KDDDiffusionExperimentConf, "runs/kdd/diff", "python:kdd.diffusion"),
+]
+#+END_SRC
 
-run_train_eval_viz(
-    KDDDiffusionExperimentConf,
-    "runs/kdd/diff",
-    identity="python:kdd.diffusion",
-)
+** Train
+
+#+BEGIN_SRC python
+for run in kdd_runs:
+    train_config(run.config, run_dir=run.run_dir, metadata=run.metadata)
+#+END_SRC
+
+** Evaluate
+
+#+BEGIN_SRC python
+for run in kdd_runs:
+    evaluate_config(
+        run.config,
+        run_dir=run.run_dir,
+        checkpoint_path=run.checkpoint_path,
+        csv_path=run.csv_path,
+        metadata=run.metadata,
+    )
+#+END_SRC
+
+** Visualize
+
+#+BEGIN_SRC python
+for run in kdd_runs:
+    visualize_config(
+        run.config,
+        run_dir=run.run_dir,
+        checkpoint_path=run.checkpoint_path,
+        csv_path=run.csv_path,
+        metadata=run.metadata,
+    )
 #+END_SRC
 
 * Variance probe workflow
 
 #+BEGIN_SRC python
-variance_presets = [
-    (VarianceProbeLGSSMExperimentConf, "runs/variance_probe/lgssm"),
-    (VarianceProbeBimodalCleanExperimentConf, "runs/variance_probe/bimodal_clean"),
-    (VarianceProbeBimodalNoisyExperimentConf, "runs/variance_probe/bimodal_noisy"),
-    (
+variance_runs = [
+    RunSpec(VarianceProbeLGSSMExperimentConf, "runs/variance_probe/lgssm", "python:variance_probe.lgssm"),
+    RunSpec(
+        VarianceProbeBimodalCleanExperimentConf,
+        "runs/variance_probe/bimodal_clean",
+        "python:variance_probe.bimodal_clean",
+    ),
+    RunSpec(
+        VarianceProbeBimodalNoisyExperimentConf,
+        "runs/variance_probe/bimodal_noisy",
+        "python:variance_probe.bimodal_noisy",
+    ),
+    RunSpec(
         VarianceProbeNonlinearBimodalLiftExperimentConf,
         "runs/variance_probe/nonlinear_bimodal_lift",
+        "python:variance_probe.nonlinear_bimodal_lift",
     ),
 ]
+#+END_SRC
 
-for cfg, run_dir in variance_presets:
-    metadata = RunMetadata(config_identity=f"python:variance_probe.{Path(run_dir).name}")
-    train_config(cfg, run_dir=run_dir, metadata=metadata)
+** Train
+
+#+BEGIN_SRC python
+for run in variance_runs:
+    train_config(run.config, run_dir=run.run_dir, metadata=run.metadata)
+#+END_SRC
+
+** Probe
+
+#+BEGIN_SRC python
+for run in variance_runs:
     variance_config(
-        cfg,
-        run_dir=run_dir,
-        checkpoint_path=str(Path(run_dir) / "checkpoints" / "ckpt_latest.pth"),
-        metadata=metadata,
+        run.config,
+        run_dir=run.run_dir,
+        checkpoint_path=run.checkpoint_path,
+        metadata=run.metadata,
     )
 #+END_SRC
 
@@ -428,25 +444,15 @@ sweeper and launcher are Hydra plugins:
 
 #+BEGIN_SRC sh :results output :exports both
 python -m ddssm.app --multirun experiment=bimodal \
-    transition=diffusion \
-    'experiment.training.steps=2000' \
-    'experiment.training.checkpoint_every=500' \
-    'experiment.hyperparams.lambda_warmup_steps=400' \
-    'experiment.hyperparams.enc_lr=tag(log, interval(1e-5, 1e-3))' \
-    'experiment.hyperparams.trans_lr=tag(log, interval(1e-5, 1e-3))' \
-    hydra/sweeper=ddssm_optuna \
-    hydra.sweeper.n_trials=20 \
-    hydra.sweeper.study_name=bimodal_lr_sweep
+    +sweep=synthetic_lr hydra.sweeper.n_trials=20
 #+END_SRC
 
-* Adding a new experiment
+* Adding new verification experiments
 
-1. Add any new data-generating process to ~src/ddssm/data/synthetic.py~ or a new
-   data module.
-2. Define eval/viz defaults in ~src/ddssm/conf/_eval_viz.py~ when needed.
-3. Add an explicit Python config object in the appropriate
-   ~src/ddssm/conf/experiments/*.py~ module using ~build_experiment_conf(...)~.
-4. Register it with ~store(..., group="experiment", name="my_preset")~ so the
-   same config works from the CLI.
-5. Add composition coverage to ~tests/test_experiment_configs.py~ and a
-   verification source block here.
+1. Decide whether the experiment needs only a new ~RunSpec~ in this document or
+   a reusable preset in ~src/ddssm/conf/experiments/*.py~.
+2. For reusable presets, compose the preset with ~build_experiment_conf(...)~ and
+   register it with the shared config store.
+3. Add composition coverage to ~tests/test_experiment_configs.py~.
+4. Keep train/evaluate/visualize/probe blocks separate so plotting and metrics
+   can be iterated without rerunning training.

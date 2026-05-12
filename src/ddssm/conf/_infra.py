@@ -10,13 +10,9 @@ finalised (``add_to_hydra_store``) by ``conf/__init__.py`` after all
 registrations have run.
 """
 
-# ruff: noqa: ANN401
-# Hydra-Zen config fragments are generated classes/instances whose concrete
-# types vary by caller, so the config builder accepts them as Any.
-
 from __future__ import annotations
 
-from typing import Any, List
+from typing import List
 from dataclasses import field, dataclass
 
 from hydra_zen import ZenStore, just, builds  # noqa: F401 — ``just`` re-exported
@@ -59,6 +55,8 @@ from ..transitions.diffusion_v2 import (
     DiffusionV2Transition,
     DiffusionV2ScheduleConfig,
 )
+
+type ConfigFragment = object
 
 # ---------------------------------------------------------------------------
 # Top-level transition Confs for the ``transition`` config group.
@@ -330,13 +328,13 @@ DDSSMTrainerPartial = builds(
 
 def build_experiment_conf(
     *,
-    data_conf: Any,
-    hyperparams_conf: Any,
-    training_conf: Any,
-    objective_conf: Any = None,
-    eval_conf: Any = None,
-    viz_conf: Any = None,
-    variance_conf: Any = None,
+    data_conf: ConfigFragment,
+    hyperparams_conf: ConfigFragment,
+    training_conf: ConfigFragment,
+    objective_conf: ConfigFragment | None = None,
+    eval_conf: ConfigFragment | None = None,
+    viz_conf: ConfigFragment | None = None,
+    variance_conf: ConfigFragment | None = None,
     data_dim: int,
     latent_dim: int,
     j: int = 1,
@@ -345,16 +343,19 @@ def build_experiment_conf(
     use_observation_mask: bool = False,
     checkpoint_dir: str = "./checkpoints",
     seed: int = 0,
-    transition_conf: Any = None,
-    encoder_conf: Any = None,
-    decoder_conf: Any = None,
-    z_init_conf: Any = None,
-) -> Any:
+    transition_conf: ConfigFragment | None = None,
+    encoder_conf: ConfigFragment | None = None,
+    decoder_conf: ConfigFragment | None = None,
+    z_init_conf: ConfigFragment | None = None,
+) -> type[object]:
     """Compose an instantiable :class:`Experiment` config from Python parts.
 
     Experiment presets call this directly with all important knobs visible in
-    Python source.  That keeps presets Pyright-friendly while preserving Hydra
-    config-group interpolation for CLI overrides.
+    Python source.  Each ``*_conf`` argument is a Hydra-Zen config fragment:
+    usually a config class returned by ``builds(...)``, an initialized config
+    object from such a class, or ``None`` for optional stage specs. That keeps
+    presets Pyright-friendly while preserving Hydra config-group interpolation
+    for CLI overrides.
 
     ``transition_conf``, ``encoder_conf``, ``decoder_conf`` and
     ``z_init_conf`` are all optional.  When omitted the experiment uses
