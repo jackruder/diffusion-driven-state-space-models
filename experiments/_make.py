@@ -19,10 +19,10 @@ call :func:`experiment` (it ties them together and keeps
                         enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4),
         training=Training(steps=1000, log_every=25, checkpoint_every=200),
         eval=Eval(metrics=["mae", "crps_sum"], split="val",
-                  num_samples=32, T_split=32),
+                  num_samples=32, T_split=16),
         viz=Viz(plots=[Plot("forecast_1d", "forecast.png",
                             kwargs={"n_show": 4})],
-                split="val", num_samples=32, T_split=32),
+                split="val", num_samples=32, T_split=16),
     )
     experiment_store(exp, name="harmonic_gauss")
     run(exp, run_dir="runs/harmonic_gauss")

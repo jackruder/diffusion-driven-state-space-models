@@ -23,22 +23,22 @@ _LOSS_CSV = Plot(
 
 Forecast1D = Viz(
     plots=[_FORECAST_1D, _LOSS_CSV],
-    split="val", num_samples=32, T_split=32,
+    split="val", num_samples=32, T_split=16,
 )
 
 BimodalForecast1D = Viz(
     plots=[_FORECAST_1D, _LOSS_CSV],
-    split="val", num_samples=64, T_split=32,
+    split="val", num_samples=64, T_split=16,
 )
 
 Robot2DForecast = Viz(
     plots=[_FORECAST_2D, _LOSS_CSV],
-    split="val", num_samples=32, T_split=32,
+    split="val", num_samples=32, T_split=16,
 )
 
 LGSSM = Viz(
     plots=[_LOSS_CSV],
-    split="val", num_samples=10, T_split=32,
+    split="val", num_samples=10, T_split=16,
 )
 
 viz_store(Forecast1D, name="forecast_1d")
