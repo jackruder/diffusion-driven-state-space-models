@@ -816,24 +816,41 @@ DSM × uniform / lsgm_is sampling), ~R=128~ samples per batch,
 ~seeds=[0, 1, 2]~, ~split="train"~. Training settles in 300 steps
 (~training=Probe300~ from ~experiments/variance_probe/training.py~).
 
-** Two-stage workflow
+** One-shot or two-stage workflow
 
-The probe runs *after* training: stage 1 fits the score model, stage 2
-re-loads the checkpoint and computes per-cell variance.
+The probe runs *after* training. The variance CLI auto-trains if no
+checkpoint exists under the run dir yet, so a single command suffices
+for a fresh run:
 
 #+BEGIN_SRC sh
-# Stage 1 — train the DiffusionV2 model (300 steps, ~30s on CPU).
-python -m ddssm.app experiment=variance_probe_lgssm \
+# One-shot — train (300 steps, ~30s on CPU) then probe.
+python -m ddssm.variance experiment=variance_probe_lgssm \
     hydra.run.dir=runs/variance_probe/lgssm
+#+END_SRC
 
-# Stage 2 — load the checkpoint and run the probe.
+If you've already trained and want to probe again (e.g. with
+different ~R~/~seeds~/~plots~), point at the existing checkpoint:
+
+#+BEGIN_SRC sh
+# Stage 2 only — re-use an existing checkpoint.
 python -m ddssm.variance experiment=variance_probe_lgssm \
     +checkpoint=runs/variance_probe/lgssm/checkpoints/ckpt_latest.pth \
     hydra.run.dir=runs/variance_probe/lgssm
 #+END_SRC
 
-The second command writes its artifacts into the *same* ~run_dir~, so
-the probe outputs land next to the training checkpoint and CSV.
+If you want training and probing as separate commands (e.g. to share
+a checkpoint across multiple probe sweeps), run them explicitly:
+
+#+BEGIN_SRC sh
+python -m ddssm.app      experiment=variance_probe_lgssm \
+    hydra.run.dir=runs/variance_probe/lgssm
+python -m ddssm.variance experiment=variance_probe_lgssm \
+    +checkpoint=runs/variance_probe/lgssm/checkpoints/ckpt_latest.pth \
+    hydra.run.dir=runs/variance_probe/lgssm
+#+END_SRC
+
+Every variant writes its artifacts into the same ~run_dir~, so the
+probe outputs land next to the training checkpoint and CSV.
 
 ** Outputs
 
@@ -854,17 +871,17 @@ the CLI (see "Customising the probe" below).
 
 ** Running all four probes
 
-A short loop covers the full matrix. Each pair takes 1–2 min on CPU.
+A short loop covers the full matrix. Each takes 1–2 min on CPU (the
+single command trains and probes; if a checkpoint already lives at
+~runs/variance_probe/$name/checkpoints/ckpt_latest.pth~ it skips the
+training stage).
 
 #+BEGIN_SRC sh
 for name in variance_probe_lgssm \
             variance_probe_bimodal_clean \
             variance_probe_bimodal_noisy \
             variance_probe_nonlinear_bimodal_lift; do
-    python -m ddssm.app experiment=$name \
-        hydra.run.dir=runs/variance_probe/$name
     python -m ddssm.variance experiment=$name \
-        +checkpoint=runs/variance_probe/$name/checkpoints/ckpt_latest.pth \
         hydra.run.dir=runs/variance_probe/$name
 done
 #+END_SRC
