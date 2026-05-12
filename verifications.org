@@ -944,6 +944,14 @@ Tune frame coverage by overriding ``experiment.training.steps`` or
 ``experiment.training.checkpoint_every`` — the probe loop picks up
 whatever step-checkpoints land in ``<run_dir>/checkpoints/``.
 
+Alongside the four GIFs the sweep also writes a static *trajectory*
+plot ``ratio_trajectory_grad_lsgm_is.png``: every checkpoint's
+ESM/DSM gradient-variance ratio overlaid on one figure, with each
+curve coloured on a yellow → dark-red sequential scale (light =
+early training, dark = late). A colorbar maps colour back to step
+number. Reading it as a single image is usually clearer than
+scrubbing the GIF for "where does the advantage close up?".
+
 ** Customising the probe
 
 ~experiment.variance~ is a regular ~ProbeSpec~; every leaf is

@@ -25,9 +25,12 @@ import os
 import re
 
 import hydra
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from hydra.core.hydra_config import HydraConfig
 from hydra_zen import instantiate
+from matplotlib.colors import LinearSegmentedColormap
 from omegaconf import DictConfig, OmegaConf
 from PIL import Image, ImageDraw, ImageFont
 
@@ -144,6 +147,100 @@ def _global_bounds(per_step_data: list[tuple[int, dict]]) -> dict[str, dict]:
     return bounds
 
 
+def _render_ratio_trajectory(
+    run_dir: str,
+    per_step_data: list[tuple[int, dict]],
+    *,
+    kind: str = "grad",
+    mode: str = "lsgm_is",
+) -> None:
+    """One static plot, one curve per checkpoint.
+
+    ESM/DSM ``kind``-variance ratio across τ-bins, with ``mode`` fixed
+    (so every curve uses the same k-sampling). Curves are coloured by
+    training step on a warm sequential colormap — earlier checkpoints
+    sit at the cool end of the palette, the final checkpoint at the
+    hot end. A colorbar maps colour back to step number.
+    """
+    step_curves: list[tuple[int, np.ndarray, np.ndarray]] = []
+    for step, data in per_step_data:
+        kvals = (
+            data.get("metrics", {})
+                .get("ratio_per_tau", {})
+                .get(kind, {})
+                .get(mode, {})
+        )
+        if not kvals:
+            continue
+        items = sorted(kvals.items(), key=lambda kv: int(kv[0]))
+        xs = np.array([int(k) for k, _ in items], dtype=int)
+        ys = np.array([float(v) for _, v in items], dtype=float)
+        step_curves.append((step, xs, ys))
+
+    if not step_curves:
+        log.warning(
+            "No ratio_per_tau[%s][%s] data — skipping trajectory plot", kind, mode,
+        )
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+
+    # Truncate the YlOrRd colormap to the warm half so the early
+    # (lightest) checkpoint isn't near-white on a white background.
+    base = plt.colormaps["YlOrRd"]
+    cmap = LinearSegmentedColormap.from_list(
+        "ylorrd_warm", base(np.linspace(0.25, 1.0, 256)),
+    )
+    steps = [s for s, _, _ in step_curves]
+    vmin = min(steps) if len(set(steps)) > 1 else min(steps) - 1
+    vmax = max(steps)
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+
+    for step, xs, ys in step_curves:
+        ax.plot(
+            xs, ys,
+            color=cmap(norm(step)),
+            linewidth=1.4,
+            alpha=0.85,
+        )
+
+    ax.axhline(
+        1.0, color="grey", linestyle=":", linewidth=1.2, alpha=0.7,
+        label="parity (ESM = DSM)",
+    )
+    ax.set_xlabel(r"$\tau$-bin index $k$")
+    ax.set_ylabel(f"ESM / DSM {kind} variance ratio")
+    ax.set_yscale("log")
+    ax.set_title(
+        f"ESM vs DSM {kind}-variance ratio per "
+        rf"$\tau$, across training steps"
+        f"\n(k-sampling mode: {mode})"
+    )
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize=8, loc="best")
+
+    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, pad=0.02)
+    cbar.set_label("training step")
+    # Tick at each available step so a reader can map colour → step.
+    cbar.set_ticks(steps)
+    cbar.ax.tick_params(labelsize=8)
+
+    fig.text(
+        0.01, 0.01,
+        "Lines run from light (early training) to dark (late). "
+        "< 1 → ESM has lower variance; > 1 → DSM has lower variance.",
+        fontsize=7, style="italic", color="dimgrey",
+    )
+    plt.tight_layout(rect=(0, 0.03, 1, 1))
+
+    out_path = os.path.join(run_dir, f"ratio_trajectory_{kind}_{mode}.png")
+    fig.savefig(out_path, dpi=110)
+    plt.close(fig)
+    log.info("Saved trajectory plot %s (%d curves)", out_path, len(step_curves))
+
+
 def _compile_gif(
     plot_name: str, step_frames: list[tuple[int, str]], out_path: str,
     *, frame_ms: int = 600,
@@ -237,6 +334,10 @@ def _probe_per_step(experiment, device: torch.device, run_dir: str) -> dict:
                   for step, sub_dir in step_outputs]
         gif_path = os.path.join(run_dir, f"{plot_name}.gif")
         _compile_gif(plot_name, frames, gif_path)
+
+    # Static trajectory plot — all checkpoints overlaid, coloured by step.
+    log.info("Rendering ratio trajectory plot")
+    _render_ratio_trajectory(run_dir, per_step_data, kind="grad", mode="lsgm_is")
 
     return {
         "per_step_dir": per_step_dir,
