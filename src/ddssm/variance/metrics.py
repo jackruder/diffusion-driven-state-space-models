@@ -83,14 +83,44 @@ def metric_ratio_esm_dsm(ctx: ProbeContext) -> dict[str, Any]:
     return {"ratio_esm_dsm": out}
 
 
-@register_probe_metric("var_per_tau")
-def metric_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+def _loss_var_per_tau(ctx: ProbeContext) -> dict[str, dict[str, float]]:
+    """Per-(cell, k) variance of the per-batch loss mean across seeds/batches.
+
+    Returns NaN where fewer than two samples are available (otherwise
+    ``np.var`` silently reports 0, which looks like a confidently flat
+    estimator instead of an undersampled one).
+    """
     rows = [r for r in ctx.rows if r["kind"] == "forced_k"]
     bucket: dict[str, dict[int, list[float]]] = {}
     for r in rows:
         key = f"{r['objective']}:{r['k_sampling_mode']}"
         bucket.setdefault(key, {}).setdefault(int(r["k_idx"]), []).append(float(r["L_p"]))
-    out: dict[str, Any] = {}
+    out: dict[str, dict[str, float]] = {}
     for cell, kmap in bucket.items():
-        out[cell] = {str(k): float(np.var(vals)) for k, vals in sorted(kmap.items())}
-    return {"var_per_tau": out}
+        out[cell] = {
+            str(k): float(np.var(vals)) if len(vals) >= 2 else float("nan")
+            for k, vals in sorted(kmap.items())
+        }
+    return out
+
+
+@register_probe_metric("loss_var_per_tau")
+def metric_loss_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    return {"loss_var_per_tau": _loss_var_per_tau(ctx)}
+
+
+# Back-compat alias — old configs referenced ``var_per_tau``. Drops in
+# the same value under the legacy key.
+@register_probe_metric("var_per_tau")
+def metric_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    return {"var_per_tau": _loss_var_per_tau(ctx)}
+
+
+@register_probe_metric("grad_var_per_tau")
+def metric_grad_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    """Per-(cell, k) gradient variance, populated by the force_per_k loop."""
+    raw = ctx.summary.get("per_k_grad_var", {})
+    out: dict[str, dict[str, float]] = {}
+    for cell, kmap in raw.items():
+        out[cell] = {str(k): float(v) for k, v in sorted(kmap.items())}
+    return {"grad_var_per_tau": out}

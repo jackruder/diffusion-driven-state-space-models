@@ -104,6 +104,9 @@ def run_probe(
 
     rows: list[dict[str, Any]] = []
     cell_grads: dict[tuple[str, str], list[np.ndarray]] = defaultdict(list)
+    # per-(cell, k) grad vectors collected during the force_per_k loop —
+    # variance is taken across (seed, batch) per (cell, k).
+    per_k_cell_grads: dict[tuple[str, str, int], list[np.ndarray]] = defaultdict(list)
 
     seeds = list(spec.seeds)
     n_seeds = len(seeds)
@@ -205,6 +208,7 @@ def run_probe(
                     forced_eps = torch.randn(bs, d, sk, device=device)
                     for cell in spec.cells:
                         trans = transitions[cell.k_sampling_mode]
+                        trans.zero_grad(set_to_none=True)
                         out = trans.transition_kl(
                             **probe_batch.as_kwargs(),
                             mc_override={
@@ -213,6 +217,12 @@ def run_probe(
                                 "objective": cell.objective,
                             },
                             return_per_sample=True,
+                        )
+                        out["L_p"].backward()
+                        g = _grad_vector(trans.diffmodel)
+                        g_norm = float(g.norm().item())
+                        per_k_cell_grads[(cell.objective, cell.k_sampling_mode, int(k))].append(
+                            g.cpu().numpy()
                         )
                         per_sample = out["L_p_per_sample"].detach().cpu().numpy()
                         rows.append({
@@ -226,7 +236,7 @@ def run_probe(
                             "sample_idx": -1,
                             "L_p": float(np.mean(per_sample)),
                             "L_p_scalar": float(out["L_p"].item()),
-                            "grad_norm": math.nan,
+                            "grad_norm": g_norm,
                         })
 
     log.info(
@@ -243,5 +253,23 @@ def run_probe(
             "grad_variance": float(np.var(grad_arr, axis=0).mean()),
         }
 
-    summary = {"cells": summary_cells}
+    # Per-(cell, k) gradient variance from the force_per_k loop. Variance
+    # is taken across the (seed, batch) samples per (cell, k); with only
+    # n_seeds × n_batches samples the estimate is noisy — bump
+    # ``seeds`` for a tighter read.
+    per_k_grad_var: dict[str, dict[int, float]] = {}
+    for (objective, mode, k), grad_list in per_k_cell_grads.items():
+        cell_key = f"{objective}:{mode}"
+        if len(grad_list) < 2:
+            # Variance is undefined with a single sample; record NaN so
+            # plots / metrics surface the underspecification instead of
+            # silently showing 0.
+            per_k_grad_var.setdefault(cell_key, {})[k] = float("nan")
+            continue
+        grad_arr = np.stack(grad_list, axis=0)
+        per_k_grad_var.setdefault(cell_key, {})[k] = float(
+            np.var(grad_arr, axis=0).mean()
+        )
+
+    summary = {"cells": summary_cells, "per_k_grad_var": per_k_grad_var}
     return rows, summary, transitions
