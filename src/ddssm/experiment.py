@@ -179,6 +179,12 @@ class Experiment:
         if self.hparams is not None:
             self.model.config.hyperparams = self.hparams
 
+        # Anchor the checkpoint directory inside ``run_dir`` so a run's
+        # outputs are self-contained — Hydra defaults to ``chdir=False``,
+        # so the model's class-default ``./checkpoints`` would otherwise
+        # land next to the invocation CWD rather than the run.
+        self.model.config.checkpoint_dir = os.path.join(run_dir, "checkpoints")
+
         log.info("Model: %d parameters", sum(p.numel() for p in self.model.parameters()))
         wandb_kwargs = self._wandb_kwargs(run_dir)
         trainer = self.build_trainer(
