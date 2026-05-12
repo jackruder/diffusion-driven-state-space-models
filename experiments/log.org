@@ -4,17 +4,18 @@
 
 * How to use this log
 
-One headline per experiment, dated. Each headline holds:
+This file holds the running record of sweeps, tweaks, and one-off
+runs. The named experiments live in [[file:../experiments.org][../experiments.org]]; that's where
+new presets get tangled into ~experiments/<name>.py~. This file
+imports those presets and derives variants from them via
+~override()~.
 
-1. A Python src block that constructs the experiment (or tweaks an
-   existing one from ~experiments/<name>.py~). Tangle with ~C-c C-v t~
-   to write a runnable script under ~runs/~ next to the results.
-2. A shell src block invoking the experiment.
-3. A short results table or note: what the metric was, what changed
-   versus the baseline, what to try next.
+One headline per entry. Inside the headline:
 
-The log is append-only; never edit a finished entry, add a follow-up
-headline instead. Keep entries small enough to scan in a minute.
+1. A Python src block that derives + runs the variant.
+2. A results table or note.
+
+Append-only. Never rewrite a finished entry; add a follow-up.
 
 ** Setup (run once per Emacs session)
 
@@ -22,74 +23,110 @@ headline instead. Keep entries small enough to scan in a minute.
 import sys
 sys.path.insert(0, "src")  # ddssm package
 sys.path.insert(0, ".")    # experiments package
-import dataclasses
-from experiments._make import make_experiment, run, to_yaml, save_yaml
+from experiments._make import override, run, to_yaml
 from ddssm.builders import (
-    DiffTransition, DiffV2Transition, Eval, GaussTransition, Hparams,
-    KDD, Plot, Schedule, ScheduleV2, Synthetic, Training, Unet, Viz,
+    DiffTransition, GaussTransition, MLPContext, MLPUnet, Schedule,
+    ScheduleV2, Unet,
 )
 print("ready")
 #+END_SRC
 
-* Template — copy this headline to start a new entry
+** The patterns
 
-** YYYY-MM-DD <one-sentence hypothesis>
+| What you want                        | How                                                                 |
+|--------------------------------------+---------------------------------------------------------------------|
+| Run a named experiment as-is         | ~run(exp, run_dir="...")~                                           |
+| Change a scalar                      | ~override(exp, "training.steps=200")~                               |
+| Change several scalars               | ~override(exp, "training.steps=200", "hparams.S=4")~                |
+| Loop one knob across N values        | ~for v in [...]: override(exp, f"key={v}")~                         |
+| Swap a submodule (Python object)     | ~override(exp, {"model.transition.unet": MLPUnet(channels=64)})~    |
+| Combine string and dict overrides    | ~override(exp, "training.steps=42", {"model...": SomeObj()})~       |
+| Promote a variant to a named preset  | Add a new headline in [[file:../experiments.org][experiments.org]] and tangle it                |
 
-Hypothesis: <what we expect to see and why>
+* Template — copy this headline for a new entry
 
-#+BEGIN_SRC python :tangle runs/REPLACE_ME/conf.py :mkdirp yes
+** YYYY-MM-DD <hypothesis in one sentence>
+
+Hypothesis: <what we expect and why>
+
+#+BEGIN_SRC python :tangle no
 from experiments.harmonic_diffusion import exp as base
-from experiments._make import tweak
-exp = tweak(base,
-    # training__steps=200,
-    # hparams__lambda_warmup_steps=100,
-    # model__transition__schedule__sigma_min=0.001,
+exp = override(base,
+    # "training.steps=500",
+    # "model.transition.schedule.sigma_min=0.001",
 )
 print(to_yaml(exp)[:400])
+# run(exp, run_dir="runs/REPLACE_ME")
 #+END_SRC
 
-#+BEGIN_SRC sh
-PYTHONPATH=src:. python -m experiments.<name>  # or:
-PYTHONPATH=src:. python -c "from runs.REPLACE_ME.conf import exp; \
-    from experiments._make import run; run(exp, run_dir='runs/REPLACE_ME')"
-#+END_SRC
-
-Results:
-
-| metric         | value |
-|----------------+-------|
-| loss/total     |       |
-| crps_sum       |       |
+| metric         | baseline | this run |
+|----------------+----------+----------|
+| loss/total     |          |          |
+| crps_sum       |          |          |
 
 Notes: …
 
-* Worked example — harmonic + diffusion, low sigma_min
+* Worked examples
 
-** 2026-05-12 sigma_min=0.001 vs default 2e-3
+** 2026-05-12 sigma_min sweep on harmonic_diffusion
 
-Hypothesis: a smaller noise floor sharpens the score near the data
-manifold and should lower CRPS on the harmonic eval.
+Hypothesis: smaller noise floor sharpens the score near the data
+manifold; expect lower CRPS at sigma_min ≤ 1e-3.
 
-#+BEGIN_SRC python :tangle runs/harm_diff_low_sigma/conf.py :mkdirp yes
+#+BEGIN_SRC python :tangle no
 from experiments.harmonic_diffusion import exp as base
-from experiments._make import tweak
-exp = tweak(base,
-    model__transition__schedule__sigma_min=0.001,
-    model__transition__schedule__S_k=20,
-    training__steps=500,
-)
+for sigma in [1e-4, 1e-3, 1e-2, 1e-1]:
+    exp = override(base,
+        f"model.transition.schedule.sigma_min={sigma}",
+        "training.steps=500",  # short runs for the sweep
+    )
+    run(exp, run_dir=f"runs/sigma_{sigma}")
 #+END_SRC
 
-#+BEGIN_SRC sh
-PYTHONPATH=src:. python -c "from runs.harm_diff_low_sigma.conf import exp; \
-    from experiments._make import run; run(exp, run_dir='runs/harm_diff_low_sigma')"
+| sigma_min | crps_sum | loss/total |
+|-----------+----------+------------|
+| 1e-4      |          |            |
+| 1e-3      |          |            |
+| 1e-2      |          |            |
+| 1e-1      |          |            |
+
+** 2026-05-12 Harmonic+diff across data modes (one base, five datasets)
+
+Hypothesis: the harmonic_diffusion preset generalises to the other
+synthetic modes without retuning.
+
+#+BEGIN_SRC python :tangle no
+from experiments.harmonic_diffusion import exp as base
+modes = ["harmonic", "harmonic-noisy", "bimodal", "robot-basis-pursuit",
+         "nonlinear-bimodal-lift"]
+for mode in modes:
+    exp = override(base, f"data.mode={mode}", "training.steps=500")
+    run(exp, run_dir=f"runs/cross/{mode}")
 #+END_SRC
 
-Results:
+| dataset                | crps_sum |
+|------------------------+----------|
+| harmonic               |          |
+| harmonic-noisy         |          |
+| bimodal                |          |
+| robot-basis-pursuit    |          |
+| nonlinear-bimodal-lift |          |
 
-| metric     | baseline | this run |
-|------------+----------+----------|
-| loss/total |          |          |
-| crps_sum   |          |          |
+** 2026-05-12 CSDI U-Net vs MLP ablation on harmonic_diffusion
 
-Notes: …
+Hypothesis: the MLP U-Net captures the same harmonic structure with
+fewer parameters; expect comparable CRPS, lower wall-clock.
+
+#+BEGIN_SRC python :tangle no
+from experiments.harmonic_diffusion import exp as base
+exp_csdi = base  # the as-shipped preset
+exp_mlp  = override(base, {"model.transition.unet": MLPUnet(channels=64, n_layers=3)})
+
+for name, exp in [("csdi", exp_csdi), ("mlp", exp_mlp)]:
+    run(override(exp, "training.steps=500"), run_dir=f"runs/unet_{name}")
+#+END_SRC
+
+| unet | n_params | crps_sum | wall_s |
+|------+----------+----------+--------|
+| csdi |          |          |        |
+| mlp  |          |          |        |

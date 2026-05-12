@@ -16,36 +16,38 @@ them once you have a checkpoint.
 
 ** Where experiments live
 
+The source of truth is [[file:experiments.org][experiments.org]] (this file is for the
+verifications narrative). Each headline there contains a Python src
+block that *tangles* to ~experiments/<name>.py~. Tangle the whole
+file with ~C-c C-v t~; the resulting modules become:
+
+- importable: ~from experiments.harmonic_diffusion import exp~,
+- CLI-runnable: ~python -m ddssm.app experiment=harmonic_diffusion~,
+- pytest-covered: ~tests/test_experiment_configs.py~ instantiates
+  every one and verifies training composes.
+
+Supporting plumbing lives in plain Python:
+
 #+BEGIN_SRC text
-experiments/
-    _make.py                       # make_experiment, run, to_yaml, tweak
-    _bases.py                      # one base() function per dataset family
-    harmonic_gauss.py              # one variant per file (3-5 lines each)
-    harmonic_diffusion.py
-    bimodal_gauss.py
-    bimodal_diffusion.py
-    robot_2d_gauss.py
-    robot_2d_diffusion.py
-    synthetic_gauss.py
-    synthetic_diffusion.py
-    kdd_gauss.py
-    kdd_diffusion.py
-    variance_probe_*.py
-    log.org                        # the experiment log
+ddssm/builders.py     — Conf builders (Encoder, Unet, MLPUnet, ...)
+experiments/_make.py  — make_experiment, override, run, to_yaml
+experiments/_bases.py — harmonic_base, bimodal_base, kdd_base, ...
+experiments.org       — experiment definitions, source of truth
+experiments/*.py      — tangled output of the org file
+experiments/log.org   — running log of sweeps + one-offs
 #+END_SRC
 
-Each *base* in ~_bases.py~ (~harmonic_base~, ~bimodal_base~, …) is a
-function that takes the variable slot (~transition~) plus a few
-training/hparams knobs that diverge between Gaussian and diffusion
-variants. Each *variant file* is a 3-5 line diff:
+Tangled variant files end up tiny — the body lives in ~_bases.py~:
 
 #+BEGIN_SRC python
-# experiments/harmonic_gauss.py
+# experiments/harmonic_gauss.py — tangled from experiments.org
 from ddssm.builders import GaussTransition
 from experiments._bases import harmonic_base
 exp = harmonic_base(GaussTransition())
+#+END_SRC
 
-# experiments/harmonic_diffusion.py
+#+BEGIN_SRC python
+# experiments/harmonic_diffusion.py — tangled from experiments.org
 from ddssm.builders import DiffTransition, Schedule, Unet
 from experiments._bases import harmonic_base
 exp = harmonic_base(
@@ -54,59 +56,74 @@ exp = harmonic_base(
 )
 #+END_SRC
 
-** Tweaking a single parameter
+** Deriving a variant — ~override()~
 
-Use ~tweak()~ for nested overrides via ~__~-separated paths. The
-original ~exp~ is not mutated; ~tweak~ returns a fresh dataclass.
+For an ad-hoc variant in a notebook / org block / log entry, derive
+from a named experiment with Hydra-CLI-style overrides:
 
 #+BEGIN_SRC python
-from experiments.harmonic_diffusion import exp as base
-from experiments._make import tweak, run
+from experiments.harmonic_diffusion import exp as A
+from experiments._make import override, run
 
-# One knob deep in the schedule:
-exp = tweak(base, model__transition__schedule__sigma_min=0.001)
+# One knob:
+B = override(A, "model.transition.schedule.sigma_min=0.001")
 
 # Several at once:
-exp = tweak(base,
-    training__steps=500,
-    hparams__lambda_warmup_steps=100,
-    model__transition__schedule__sigma_min=0.001,
+B = override(A,
+    "training.steps=500",
+    "hparams.lambda_warmup_steps=100",
+    "model.transition.schedule.sigma_min=0.001",
 )
-run(exp, run_dir="runs/harm_diff_sigma_low")
+run(B, run_dir="runs/B")
 #+END_SRC
 
-** Swapping CSDI for MLP variants
-
-Each ablation network ships as a separate builder; pass it in
-directly. No store(), no group override:
+** Looping across datasets (or any other knob)
 
 #+BEGIN_SRC python
-from ddssm.builders import DiffTransition, MLPUnet, MLPContext, Unet
-from experiments._bases import harmonic_base
-
-# Replace the diffusion U-Net with the MLP ablation:
-exp = harmonic_base(
-    DiffTransition(unet=MLPUnet(channels=64, n_layers=2)),
-)
-
-# Or swap the encoder/decoder/z_init context producer for MLPs by
-# passing a custom transition AND custom slots — see "Direct builds()"
-# below.
+from experiments.harmonic_diffusion import exp as A
+for mode in ["harmonic", "bimodal", "robot-basis-pursuit",
+             "nonlinear-bimodal-lift"]:
+    exp = override(A, f"data.mode={mode}")
+    run(exp, run_dir=f"runs/cross/{mode}")
 #+END_SRC
 
-Or apply to a derived experiment:
+#+BEGIN_SRC python
+for sigma in [1e-4, 1e-3, 1e-2, 1e-1]:
+    exp = override(A, f"model.transition.schedule.sigma_min={sigma}")
+    run(exp, run_dir=f"runs/sigma_{sigma}")
+#+END_SRC
+
+** Swapping CSDI U-Net for the MLP ablation
+
+Builder swaps need a Python object, not a string — pass a dict:
 
 #+BEGIN_SRC python
-from experiments.harmonic_diffusion import exp as base
-from experiments._make import tweak
 from ddssm.builders import MLPUnet
-exp = tweak(base, model__transition__unet=MLPUnet(channels=32, n_layers=3))
+B = override(A, {"model.transition.unet": MLPUnet(channels=64, n_layers=3)})
+run(B, run_dir="runs/B_mlp")
 #+END_SRC
 
-** Direct ~builds()~ — no ~make_experiment~ at all
+Strings and dicts mix freely:
 
-~make_experiment~ is convenience; you can also assemble an experiment
-by hand. The shape kwargs just appear at every slot:
+#+BEGIN_SRC python
+B = override(A,
+    "training.steps=200",
+    {"model.transition.unet": MLPUnet(channels=32, n_layers=2)},
+)
+#+END_SRC
+
+** Promoting a variant to a named preset
+
+When a derived variant becomes worth keeping, give it a name by
+adding a new headline in ~experiments.org~ and re-tangling. The
+tangled file follows the existing 4-line pattern and gets picked up
+by the CLI / pytest automatically — no ~store()~ call, no config
+group, no registration boilerplate.
+
+** Direct ~builds()~ — when you want every leaf visible
+
+For one-off experiments where you'd rather see the full tree than
+hide bits in a base, write it by hand:
 
 #+BEGIN_SRC python
 from ddssm.builders import (
@@ -136,31 +153,7 @@ exp = ExperimentC(
 )
 #+END_SRC
 
-This is exactly what ~make_experiment~ generates, with the shape
-kwargs threaded by hand. Use this when you want the full thing on
-screen at once — e.g. one-off notebook experiments.
-
-** Adding a brand-new experiment
-
-Drop ~experiments/foo.py~ exposing ~exp~:
-
-#+BEGIN_SRC python
-from ddssm.builders import DiffTransition, Schedule, Unet
-from experiments._bases import harmonic_base
-from experiments._make import run, tweak
-
-exp = harmonic_base(
-    DiffTransition(unet=Unet(channels=128, n_layers=6),
-                   schedule=Schedule(sigma_min=0.001, S_k=20)),
-    steps=3000, lambda_warmup_steps=600,
-)
-
-if __name__ == "__main__":
-    run(exp, run_dir="runs/foo")
-#+END_SRC
-
-No ~store()~ calls, no config groups, no presets. ~python -m
-ddssm.app experiment=foo~ now works.
+This is the same shape ~make_experiment~ produces, threaded by hand.
 
 ** Three-stage pattern
 

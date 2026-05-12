@@ -166,35 +166,77 @@ def to_yaml(exp: Any, *, resolve: bool = True) -> str:
     return _zen_to_yaml(exp, resolve=resolve)
 
 
-def tweak(obj: Any, **overrides: Any) -> Any:
-    """Apply nested overrides to a builds() dataclass via ``__`` separators.
+def override(obj: Any, *overrides: Any) -> Any:
+    """Derive a new experiment by applying Hydra-CLI-style overrides.
 
-    Example::
+    Each positional argument is either:
 
-        tweak(exp,
-              training__steps=2000,
-              training__checkpoint_every=500,
-              hparams__lambda_warmup_steps=400,
-              model__transition__schedule__sigma_min=0.001)
+    * A CLI-style string ``"path.to.field=value"``. The value side is
+      YAML-parsed, so ``"training.steps=200"``, ``"data.mode=harmonic"``,
+      ``"hparams.S=4"`` and ``"training.amp=true"`` all work.
 
-    Each ``__``-separated path descends one level. Leaf values may be
-    scalars or fresh builds() dataclass instances. Returns a new object
-    (via :func:`dataclasses.replace`) — the original is untouched.
+    * A dict ``{"path.to.field": value}``. Use this form when ``value``
+      is a Python object (a builder instance, a callable, etc.) that
+      cannot live in a string — e.g.::
+
+          override(exp, {"model.transition.unet": MLPUnet(channels=64)})
+
+    Multiple overrides compose left-to-right. The original ``obj`` is
+    never mutated; ``override`` returns a fresh dataclass.
+
+    Examples::
+
+        B = override(A, "training.steps=200",
+                        "model.transition.schedule.sigma_min=0.001")
+
+        for mode in ["harmonic", "bimodal", "robot-basis-pursuit"]:
+            exp = override(A, f"data.mode={mode}")
+            run(exp, run_dir=f"runs/{mode}")
     """
+    import yaml
+
+    flat: dict[str, Any] = {}
+    for item in overrides:
+        if isinstance(item, str):
+            if "=" not in item:
+                raise ValueError(
+                    f"CLI override missing '=': {item!r}. "
+                    f"Use 'path.to.field=value'."
+                )
+            key, _, val = item.partition("=")
+            flat[key.strip()] = yaml.safe_load(val)
+        elif isinstance(item, dict):
+            flat.update(item)
+        else:
+            raise TypeError(
+                f"override() expects strings or dicts, got {type(item).__name__}: "
+                f"{item!r}"
+            )
+
+    return _apply_flat(obj, flat)
+
+
+def _apply_flat(obj: Any, flat: dict[str, Any]) -> Any:
+    """Expand a flat ``{dotted.path: value}`` dict and apply recursively."""
     nested: dict[str, Any] = {}
-    for path, value in overrides.items():
-        if "__" not in path:
-            nested[path] = value
-            continue
-        head, rest = path.split("__", 1)
-        nested.setdefault(head, {})[rest] = value
+    for key, value in flat.items():
+        parts = key.split(".")
+        cur = nested
+        for p in parts[:-1]:
+            cur = cur.setdefault(p, {})
+        cur[parts[-1]] = value
+    return _apply_nested(obj, nested)
+
+
+def _apply_nested(obj: Any, d: dict[str, Any]) -> Any:
     updates: dict[str, Any] = {}
-    for k, v in nested.items():
+    for k, v in d.items():
         if isinstance(v, dict):
             cur = getattr(obj, k)
-            updates[k] = tweak(cur, **v)
-        else:
-            updates[k] = v
+            if dataclasses.is_dataclass(cur):
+                updates[k] = _apply_nested(cur, v)
+                continue
+        updates[k] = v
     return dataclasses.replace(obj, **updates)
 
 
@@ -237,4 +279,6 @@ def run(
     return experiment.train(device=device, run_dir=run_dir)
 
 
-__all__ = ["make_experiment", "run", "to_yaml", "save_yaml", "from_yaml", "tweak"]
+__all__ = [
+    "make_experiment", "run", "to_yaml", "save_yaml", "from_yaml", "override",
+]
