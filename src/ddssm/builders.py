@@ -55,14 +55,32 @@ from .viz.runner import PlotSpec, VizSpec
 
 
 # ---------------------------------------------------------------------------
-# Mixer + residual block dataclasses (runtime config objects, no Conf wrapper
-# needed — they're already dataclasses; expose them under shorter names).
+# Mixer + residual block builders.
+#
+# The runtime objects (``TimeMixerConfig`` etc.) are plain dataclasses, but
+# we wrap them in hydra-zen ``builds(...)`` so callers/experiments can
+# override any sub-field from a single overrides string, e.g.
+# ``encoder.context.residual_block.feature.nheads=8``.
+# Instantiating one of these configs returns an instance of the underlying
+# dataclass — that's what ``ContextProducer``/``CSDIUnet`` expect.
 # ---------------------------------------------------------------------------
 
-TimeMixer = TimeMixerConfig
-FeatureMixer = FeatureMixerConfig
-ResidualBlock = ResidualBlockConfig
-DiffResidualBlock = DiffResidualBlockConfig
+TimeMixer = builds(TimeMixerConfig, populate_full_signature=True)
+FeatureMixer = builds(FeatureMixerConfig, populate_full_signature=True)
+
+ResidualBlock = builds(
+    ResidualBlockConfig,
+    populate_full_signature=True,
+    time=TimeMixer(),
+    feature=FeatureMixer(n_layers=2),
+)
+
+DiffResidualBlock = builds(
+    DiffResidualBlockConfig,
+    populate_full_signature=True,
+    time=TimeMixer(),
+    feature=FeatureMixer(),
+)
 
 # ---------------------------------------------------------------------------
 # Schedules (plain dataclasses already; re-export under short names).
@@ -83,6 +101,7 @@ Context = builds(
     ContextProducer,
     channels=8,
     num_layers=2,
+    residual_block=ResidualBlock(),
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -91,6 +110,7 @@ MLPContext = builds(
     MLPContextProducer,
     channels=8,
     num_layers=2,
+    residual_block=ResidualBlock(),
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -100,6 +120,7 @@ Unet = builds(
     channels=64,
     n_layers=4,
     embedding_dim=128,
+    residual_block=DiffResidualBlock(),
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -109,6 +130,7 @@ MLPUnet = builds(
     channels=64,
     n_layers=2,
     embedding_dim=128,
+    residual_block=DiffResidualBlock(),
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -265,7 +287,7 @@ ExperimentC = builds(Experiment, populate_full_signature=True)
 
 
 __all__ = [
-    # Mixers / residual blocks (re-exported runtime dataclasses)
+    # Mixer / residual-block builders (instantiate to runtime dataclasses)
     "TimeMixer", "FeatureMixer", "ResidualBlock", "DiffResidualBlock",
     # Schedules
     "Schedule", "ScheduleV2",
