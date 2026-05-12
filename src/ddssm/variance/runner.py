@@ -60,7 +60,9 @@ class ProbeSpec:
         ProbeMetricSpec("loss_var"),
         ProbeMetricSpec("grad_var"),
         ProbeMetricSpec("ratio_esm_dsm"),
-        ProbeMetricSpec("var_per_tau"),
+        ProbeMetricSpec("loss_var_per_tau"),
+        ProbeMetricSpec("grad_var_per_tau"),
+        ProbeMetricSpec("ratio_per_tau"),
     ])
     # Same rationale as ``cells`` above.
     plots: list = field(default_factory=lambda: [
@@ -93,6 +95,8 @@ def variance(
 ) -> dict[str, Any]:
     os.makedirs(run_dir, exist_ok=True)
     ckpt = checkpoint_path or spec.checkpoint_path
+    log.info("Variance probe → %s (checkpoint=%s)", run_dir, ckpt)
+    log.info("Stage 1/3: running probe loop")
     rows, summary, transitions = run_probe(
         experiment,
         spec,
@@ -101,6 +105,7 @@ def variance(
     )
     raw_path = os.path.join(run_dir, spec.raw_filename)
     _write_rows(rows, raw_path)
+    log.info("Wrote raw CSV → %s (%d rows)", raw_path, len(rows))
 
     loader = _select_loader(experiment, spec.split)
 
@@ -115,10 +120,12 @@ def variance(
         summary=summary,
     )
 
+    log.info("Stage 2/3: computing %d metric(s)", len(spec.metrics))
     metric_out: dict[str, Any] = {}
     for metric in spec.metrics:
         if metric.name not in PROBE_METRIC_REGISTRY:
             raise KeyError(f"Unknown probe metric {metric.name!r}")
+        log.info("  metric %s", metric.name)
         kwargs = dict(metric.kwargs or {})
         metric_out.update(PROBE_METRIC_REGISTRY[metric.name](ctx, **kwargs))
 
@@ -128,9 +135,12 @@ def variance(
         "raw_csv": os.path.basename(raw_path),
         "checkpoint_path": ckpt,
     }
-    with open(os.path.join(run_dir, spec.summary_filename), "w") as f:
+    summary_path = os.path.join(run_dir, spec.summary_filename)
+    with open(summary_path, "w") as f:
         json.dump(summary_out, f, indent=2, default=float)
+    log.info("Wrote summary JSON → %s", summary_path)
 
+    log.info("Stage 3/3: generating %d plot(s)", len(spec.plots))
     plot_ctx = ProbePlotContext(rows=rows, summary=summary, metrics=metric_out)
     for plot in spec.plots:
         if plot.name not in PROBE_PLOT_REGISTRY:
@@ -138,5 +148,6 @@ def variance(
         out_name = plot.save_filename or f"{plot.name}.png"
         out_path = os.path.join(run_dir, out_name)
         PROBE_PLOT_REGISTRY[plot.name](plot_ctx, out_path, **dict(plot.kwargs or {}))
-        log.info("Saved variance plot %s", out_path)
+        log.info("  saved %s", out_path)
+    log.info("Variance probe complete.")
     return summary_out

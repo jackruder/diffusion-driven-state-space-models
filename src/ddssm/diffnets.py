@@ -10,7 +10,6 @@ import torch.nn as nn
 # from mamba_ssm import Mamba2
 import torch.nn.functional as F
 
-from hydra_zen import builds
 
 from .net_utils import (
     Conv1d_with_init,
@@ -515,23 +514,6 @@ class CSDIUnet(nn.Module):
         return x
 
 
-# ---------------------------------------------------------------------------
-# Hydra-zen partial config for CSDIUnet.
-# Shape kwargs (output_len, diffusion_steps, latent_dim, latent_history_len,
-# side_dim) are filled in by the enclosing module at construction time.
-# Architectural defaults match the old CSDIUnetConfig dataclass.
-# ---------------------------------------------------------------------------
-
-CSDIUnetConf = builds(
-    CSDIUnet,
-    channels=64,
-    n_layers=4,
-    embedding_dim=128,
-    populate_full_signature=True,
-    zen_partial=True,
-)
-
-
 @final
 class MLPCSDIUnet(nn.Module):
     """Simple MLP denoiser used for architectural ablations/testing."""
@@ -583,21 +565,6 @@ class MLPCSDIUnet(nn.Module):
         inp = torch.cat([x_flat, side_flat, step], dim=1)
         out = self.mlp(inp)
         return out.reshape(B, self.latent_dim, self.output_len)
-
-
-# ---------------------------------------------------------------------------
-# Hydra-zen partial config for MLPCSDIUnet.
-# Shape kwargs are supplied by enclosing transition modules.
-# ---------------------------------------------------------------------------
-
-MLPCSDIUnetConf = builds(
-    MLPCSDIUnet,
-    channels=64,
-    n_layers=2,
-    embedding_dim=128,
-    populate_full_signature=True,
-    zen_partial=True,
-)
 
 
 @final
@@ -825,23 +792,6 @@ class ContextProducer(nn.Module):
         return x
 
 
-# ---------------------------------------------------------------------------
-# Hydra-zen partial config for ContextProducer.
-# Shape kwargs (combined_dim, mask_tot_dim, emb_time_dim, combined_len,
-# static_emb_dim, skip_mask) are filled in by the enclosing module at
-# construction time. Architectural defaults match the old
-# ContextProducerConfig dataclass.
-# ---------------------------------------------------------------------------
-
-ContextProducerConf = builds(
-    ContextProducer,
-    channels=8,
-    num_layers=2,
-    populate_full_signature=True,
-    zen_partial=True,
-)
-
-
 @final
 class MLPContextProducer(nn.Module):
     """Simple MLP context producer used for architectural ablations/testing."""
@@ -935,17 +885,3 @@ class MLPContextProducer(nn.Module):
             dim=1,
         )
         return self.mlp(inp)
-
-
-# ---------------------------------------------------------------------------
-# Hydra-zen partial config for MLPContextProducer.
-# Shape kwargs are supplied by enclosing encoder/decoder/transition modules.
-# ---------------------------------------------------------------------------
-
-MLPContextProducerConf = builds(
-    MLPContextProducer,
-    channels=8,
-    num_layers=2,
-    populate_full_signature=True,
-    zen_partial=True,
-)

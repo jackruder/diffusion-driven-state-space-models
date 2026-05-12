@@ -146,14 +146,6 @@ class Experiment:
     The trainer is constructed lazily inside :meth:`run` because it
     needs the device and the per-trial run directory — both of which
     are owned by :mod:`ddssm.app`.
-
-    The shape fields (``data_dim``, ``latent_dim`` etc.) are the single
-    source of truth for downstream interpolation: ``DDSSMConf`` and the
-    transition Confs read ``${experiment.data_dim}`` etc., so changing
-    a value here propagates to the model + transition without
-    duplication. The :class:`Experiment` instance carries them as
-    plain fields so they remain inspectable at runtime (logging,
-    debugging, checkpoints).
     """
 
     data: DDSSMDataModule
@@ -166,22 +158,11 @@ class Experiment:
     variance: Any = None  # ddssm.variance.ProbeSpec | None -- typed lazily
     seed: int | None = 0
     wandb_config: dict | None = None
-
-    # Shape / wiring fields consumed by Hydra interpolation. These are
-    # not used directly by ``run`` — they exist so ``DDSSMConf`` and the
-    # transition Confs can interpolate from a single source of truth.
-    data_dim: int = 1
-    latent_dim: int = 4
-    j: int = 1
-    emb_time_dim: int = 16
-    covariate_dim: int = 0
-    use_observation_mask: bool = False
-    checkpoint_dir: str = "./checkpoints"
-    transition: Any = None
-    encoder: Any = None
-    decoder: Any = None
-    z_init: Any = None
-    hyperparams: Any = None
+    # Convenience: same Hparams instance the trainer reads via
+    # ``self.model.config.hyperparams``. Exposed here so callers can
+    # ``exp.hparams.lambda_warmup_steps=...`` or ``tweak(exp,
+    # hparams__lr=1e-3)`` without descending into ``model.config``.
+    hparams: Any = None
 
     def train(self, *, device: torch.device, run_dir: str) -> float | DDSSMTrainer:
         """Run training only. Eval and visualization are separate stages."""
@@ -190,6 +171,19 @@ class Experiment:
         os.makedirs(run_dir, exist_ok=True)
         csv_log_path = os.path.join(run_dir, "metrics.csv")
         tensorboard_dir = os.path.join(run_dir, "tb_logs")
+
+        # The trainer reads ``model.config.hyperparams.*``. When the caller
+        # passed an :class:`Experiment`-level ``hparams`` (e.g. via
+        # ``tweak(exp, hparams__lr=1e-3)``), make that the authoritative
+        # value seen by the trainer.
+        if self.hparams is not None:
+            self.model.config.hyperparams = self.hparams
+
+        # Anchor the checkpoint directory inside ``run_dir`` so a run's
+        # outputs are self-contained — Hydra defaults to ``chdir=False``,
+        # so the model's class-default ``./checkpoints`` would otherwise
+        # land next to the invocation CWD rather than the run.
+        self.model.config.checkpoint_dir = os.path.join(run_dir, "checkpoints")
 
         log.info("Model: %d parameters", sum(p.numel() for p in self.model.parameters()))
         wandb_kwargs = self._wandb_kwargs(run_dir)

@@ -8,7 +8,8 @@ from ddssm.train import DDSSMTrainer
 from ddssm.encoder import GaussianEncoder, GaussianInitPrior
 from ddssm.decoder import GaussianDecoder
 from ddssm.transitions.transitions import GaussianTransition
-from ddssm.conf import DDSSMTrainerConf
+from hydra_zen import builds
+DDSSMTrainerConf = builds(DDSSMTrainer, populate_full_signature=True)
 from ddssm.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
 from ddssm.gaussians import GaussianHead
 from ddssm.futsum import GRUFutureSummary

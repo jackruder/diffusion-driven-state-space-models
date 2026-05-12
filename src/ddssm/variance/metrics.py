@@ -83,14 +83,79 @@ def metric_ratio_esm_dsm(ctx: ProbeContext) -> dict[str, Any]:
     return {"ratio_esm_dsm": out}
 
 
-@register_probe_metric("var_per_tau")
-def metric_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+def _loss_var_per_tau(ctx: ProbeContext) -> dict[str, dict[str, float]]:
+    """Per-(cell, k) variance of the per-batch loss mean across seeds/batches.
+
+    Returns NaN where fewer than two samples are available (otherwise
+    ``np.var`` silently reports 0, which looks like a confidently flat
+    estimator instead of an undersampled one).
+    """
     rows = [r for r in ctx.rows if r["kind"] == "forced_k"]
     bucket: dict[str, dict[int, list[float]]] = {}
     for r in rows:
         key = f"{r['objective']}:{r['k_sampling_mode']}"
         bucket.setdefault(key, {}).setdefault(int(r["k_idx"]), []).append(float(r["L_p"]))
-    out: dict[str, Any] = {}
+    out: dict[str, dict[str, float]] = {}
     for cell, kmap in bucket.items():
-        out[cell] = {str(k): float(np.var(vals)) for k, vals in sorted(kmap.items())}
-    return {"var_per_tau": out}
+        out[cell] = {
+            str(k): float(np.var(vals)) if len(vals) >= 2 else float("nan")
+            for k, vals in sorted(kmap.items())
+        }
+    return out
+
+
+@register_probe_metric("loss_var_per_tau")
+def metric_loss_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    return {"loss_var_per_tau": _loss_var_per_tau(ctx)}
+
+
+# Back-compat alias — old configs referenced ``var_per_tau``. Drops in
+# the same value under the legacy key.
+@register_probe_metric("var_per_tau")
+def metric_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    return {"var_per_tau": _loss_var_per_tau(ctx)}
+
+
+@register_probe_metric("grad_var_per_tau")
+def metric_grad_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    """Per-(cell, k) gradient variance, populated by the force_per_k loop."""
+    raw = ctx.summary.get("per_k_grad_var", {})
+    out: dict[str, dict[str, float]] = {}
+    for cell, kmap in raw.items():
+        out[cell] = {str(k): float(v) for k, v in sorted(kmap.items())}
+    return {"grad_var_per_tau": out}
+
+
+@register_probe_metric("ratio_per_tau")
+def metric_ratio_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    """Per-k ESM/DSM ratio for both loss and gradient variances.
+
+    This is the "vs τ" version of ``ratio_esm_dsm`` — instead of one
+    scalar per (kind, mode) it returns ``{kind: {mode: {k: ratio}}}``.
+    """
+    loss_pt = _loss_var_per_tau(ctx)
+    grad_raw = ctx.summary.get("per_k_grad_var", {})
+    grad_pt = {
+        cell: {str(k): float(v) for k, v in kmap.items()}
+        for cell, kmap in grad_raw.items()
+    }
+    out: dict[str, dict[str, dict[str, float]]] = {"loss": {}, "grad": {}}
+    for mode in ("uniform", "lsgm_is"):
+        e_key = f"esm:{mode}"
+        d_key = f"dsm:{mode}"
+        for kind, src in (("loss", loss_pt), ("grad", grad_pt)):
+            if e_key not in src or d_key not in src:
+                continue
+            ek = src[e_key]
+            dk = src[d_key]
+            ratios: dict[str, float] = {}
+            for k_str, dv in dk.items():
+                ev = ek.get(k_str, float("nan"))
+                if not np.isfinite(dv) or dv == 0 or not np.isfinite(ev):
+                    ratios[k_str] = float("nan")
+                else:
+                    ratios[k_str] = float(ev / dv)
+            out[kind][mode] = dict(sorted(
+                ratios.items(), key=lambda kv: int(kv[0])
+            ))
+    return {"ratio_per_tau": out}

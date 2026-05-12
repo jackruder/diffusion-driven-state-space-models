@@ -1,76 +1,120 @@
 #+TITLE: Verifications — DDSSM (New Framework)
 #+AUTHOR: Jack Ruder
 #+PROPERTY: header-args:sh :results output :exports both
+#+PROPERTY: header-args:python :tangle no :results none
 
 * Overview
 
-This notebook documents component tests and synthetic-data comparisons for
-DDSSM using the Hydra-based three-stage CLI. Each experiment is a named preset
-in ~ddssm.conf~; train, evaluate, and visualize are independent stages that can
-be run in any order provided a checkpoint exists.
+DDSSM experiments are organised as a package-by-domain Python tree
+under ~experiments/~, with three subpackages: ~synthetic/~,
+~variance_probe/~, ~kdd/~. Every named encoder, decoder, transition,
+schedule, hparams, training/eval/viz spec, dataset, model, and
+experiment registers itself with the matching hydra-zen ~store(group=...)~
+handle in [[file:conf/registry.py][conf/registry.py]] when its module is imported.
 
-** Three-stage pattern
-
-#+BEGIN_SRC sh
-# 1. Train
-python -m ddssm.app experiment=PRESET
-
-# 2. Evaluate (requires a checkpoint from stage 1)
-python -m ddssm.evaluate experiment=PRESET \
-    +checkpoint=outputs/<run_dir>/checkpoints/ckpt_latest.pth \
-    +csv_path=outputs/<run_dir>/metrics.csv
-
-# 3. Visualize (produces PNGs under the same run_dir)
-python -m ddssm.visualize experiment=PRESET \
-    +checkpoint=outputs/<run_dir>/checkpoints/ckpt_latest.pth \
-    +csv_path=outputs/<run_dir>/metrics.csv
-#+END_SRC
-
-Hydra writes all outputs (CSV log, checkpoints, PNGs, ~metrics.json~) under
-~outputs/<date>/<time>/~ by default.  Pass ~hydra.run.dir=runs/my_run~ to
-override.
-
-** W&B logging
+Importing the ~experiments~ package (triggered automatically by
+~ddssm._experiment_registry.register_experiments~) populates every
+store; one ~store.add_to_hydra_store()~ call publishes the union to
+Hydra. The CLI then resolves each group by name:
 
 #+BEGIN_SRC sh
-# Enable W&B (opt-in)
-python -m ddssm.app experiment=PRESET wandb=enabled experiment.wandb_config.project=ddssm
+python -m ddssm.app experiment=harmonic_diffusion
+python -m ddssm.app experiment=harmonic_gauss model=small_diff
+python -m ddssm.app experiment=harmonic_gauss data=bimodal
 #+END_SRC
 
-W&B is disabled by default (~conf/wandb/disabled.yaml~). Use ~wandb=enabled~ to
-activate; group / run names are auto-derived from Hydra so multirun trials
-cluster correctly in the W&B UI.
+** Layout
 
-** Experiment presets quick-reference
+#+BEGIN_SRC text
+conf/
+└── registry.py                              # all stores (group="model", ...)
 
-Three base presets cover all synthetic verification experiments.  Switch
-the transition and training budget via CLI overrides (see each section below).
+experiments/
+├── _make.py                                 # experiment(), override(), run(), to_yaml()
+├── synthetic/                               # 1D + 2D synthetic family
+│   ├── {encoders,decoders,z_inits,unets,schedules,transitions}.py
+│   ├── {hparams,training,evals,vizs,datasets}.py
+│   ├── models.py                            # composed DDSSM Confs
+│   └── experiments.py                       # composed ExperimentC Confs
+├── variance_probe/                          # DiffusionV2 + Probe spec
+└── kdd/                                     # KDD Cup 2018 PM2.5
+#+END_SRC
 
-| Base preset  | Mode               | D | latent\_dim | j | Default transition | Default steps |
-|--------------+--------------------+---+-------------+---+--------------------+---------------|
-| harmonic     | harmonic           | 1 |           4 | 1 | gaussian           |          1000 |
-| bimodal      | bimodal            | 1 |           4 | 1 | gaussian           |          1000 |
-| robot\_2d    | robot-basis-purs.  | 2 |           6 | 2 | gaussian           |          2000 |
-| kdd\_gauss   | KDD Cup 2018       | 6 |           8 | 1 | gaussian (baked)   |          5000 |
-| kdd\_diffusion | KDD Cup 2018     | 6 |           8 | 1 | diffusion (baked)  |          8000 |
+Each leaf module imports the matching store from ~conf.registry~ and
+calls ~<store>(thing, name=...)~ for every Conf it defines, so
+registration is visible in source next to the definition.
 
-Component-test smoke tests:
+** Deriving an ad-hoc variant — ~override()~
 
-| Preset               | Mode  | D | Transition | Steps |
-|----------------------+-------+---+------------+-------|
-| synthetic\_gauss     | lgssm | 1 | gaussian   |   500 |
-| synthetic\_diffusion | lgssm | 1 | diffusion  |  1000 |
+For one-off variants in a notebook / org block / sweep, import a
+registered experiment and tweak fields with ~override()~
+(Hydra-CLI-style strings for scalars, dicts for Python objects):
 
-*Diffusion override* (applies to ~harmonic~, ~bimodal~, ~robot_2d~):
+#+BEGIN_SRC python
+from experiments.synthetic.experiments import harmonic_diffusion as A
+from experiments._make import override, run
+from ddssm.builders import MLPUnet
+
+# one knob
+B = override(A, "model.transition.schedule.sigma_min=0.001")
+
+# sweep
+for sigma in [1e-4, 1e-3, 1e-2, 1e-1]:
+    exp = override(A, f"model.transition.schedule.sigma_min={sigma}")
+    run(exp, run_dir=f"runs/sigma_{sigma}")
+
+# swap a builder (Python object — dict form)
+C = override(A, {"model.transition.unet": MLPUnet(channels=64, n_layers=3)})
+#+END_SRC
+
+The Hydra CLI does the same job for the registered groups — you can
+mix-and-match named handles without restarting Python:
 
 #+BEGIN_SRC sh
-transition=diffusion \
-    'experiment.training.steps=N' \
-    'experiment.training.checkpoint_every=500' \
-    'experiment.hyperparams.lambda_warmup_steps=W'
+# swap the model group on a named experiment
+python -m ddssm.app experiment=harmonic_diffusion model=small_gauss
+
+# swap the dataset
+python -m ddssm.app experiment=harmonic_diffusion data=bimodal
+
+# scalar override
+python -m ddssm.app experiment=harmonic_diffusion training.steps=500
 #+END_SRC
 
-where ~N~ and ~W~ are family-specific (documented per-section below).
+** Promoting a variant to a named preset
+
+When a derived variant becomes worth keeping, add a block to the
+appropriate subpackage (e.g. ~experiments/synthetic/experiments.py~):
+
+#+BEGIN_SRC python
+my_variant = experiment(
+    data=Harmonic, model=SmallDiff,
+    hparams=Base1D,
+    training=Training(steps=500),
+    eval=EvalForecast1D, viz=VizForecast1D,
+)
+experiment_store(my_variant, name="harmonic_diffusion_short")
+#+END_SRC
+
+The Hydra CLI / pytest pick it up automatically on the next
+~register_experiments()~ call because of the visible
+~experiment_store(...)~ line.
+
+** Three-stage CLI workflow
+
+Train / evaluate / visualise are independent stages — run any once
+you have a checkpoint:
+
+#+BEGIN_SRC sh
+python -m ddssm.app       experiment=harmonic_diffusion
+python -m ddssm.evaluate  experiment=harmonic_diffusion \
+    +checkpoint=outputs/<run_dir>/checkpoints/ckpt_latest.pth
+python -m ddssm.visualize experiment=harmonic_diffusion \
+    +checkpoint=outputs/<run_dir>/checkpoints/ckpt_latest.pth
+#+END_SRC
+
+W&B is opt-in (disabled by default); enable per-run with
+~wandb=enabled experiment.wandb_config.project=ddssm~.
 
 * Component Tests
 
@@ -749,6 +793,11 @@ python -m ddssm.visualize experiment=kdd_diffusion \
     +csv_path=runs/kdd/diff/metrics.csv \
     hydra.run.dir=runs/kdd/diff
 #+END_SRC
+
+* Variance Probes
+
+ESM vs DSM gradient-variance probes have their own runbook —
+see [[file:esm_vs_dsm.org][esm_vs_dsm.org]] for the train + probe + visualise commands.
 
 * Results
 

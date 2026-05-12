@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import random
+import time
 from collections import defaultdict
 from typing import Any
 
 import numpy as np
 import torch
+
+log = logging.getLogger(__name__)
 
 
 def seed_everything(seed: int) -> None:
@@ -100,11 +104,28 @@ def run_probe(
 
     rows: list[dict[str, Any]] = []
     cell_grads: dict[tuple[str, str], list[np.ndarray]] = defaultdict(list)
+    # per-(cell, k) grad vectors collected during the force_per_k loop —
+    # variance is taken across (seed, batch) per (cell, k).
+    per_k_cell_grads: dict[tuple[str, str, int], list[np.ndarray]] = defaultdict(list)
 
-    for seed in spec.seeds:
+    seeds = list(spec.seeds)
+    n_seeds = len(seeds)
+    n_batches = int(spec.n_batches)
+    R = int(spec.R)
+    n_cells = len(spec.cells)
+    log.info(
+        "Probe run: %d seeds × %d batches × %d replicas × %d cells "
+        "(force_per_k=%s, K_bins=%d, split=%r)",
+        n_seeds, n_batches, R, n_cells,
+        spec.force_per_k, int(getattr(model.transition, "num_steps", 0)), spec.split,
+    )
+    log_every = max(1, R // 8)   # ~8 heartbeats per replica loop
+    t_run_start = time.perf_counter()
+
+    for seed_i, seed in enumerate(seeds, start=1):
         seed_everything(int(seed))
         batch_iter = iter(loader)
-        for batch_idx in range(int(spec.n_batches)):
+        for batch_idx in range(n_batches):
             batch = next(batch_iter)
             if transform is not None:
                 batch = transform(batch, device)
@@ -112,8 +133,21 @@ def run_probe(
             bs = probe_batch.zs.shape[0] * probe_batch.zs.shape[1]
             d = probe_batch.zs.shape[2]
             sk = int(model.transition.S_k)
+            log.info(
+                "  seed %d/%d batch %d/%d: %d replicas × %d cells "
+                "(bs=%d, d=%d, S_k=%d)",
+                seed_i, n_seeds, batch_idx + 1, n_batches, R, n_cells, bs, d, sk,
+            )
+            t_batch_start = time.perf_counter()
 
-            for replica in range(int(spec.R)):
+            for replica in range(R):
+                if replica % log_every == 0 and replica > 0:
+                    elapsed = time.perf_counter() - t_batch_start
+                    eta = elapsed * (R - replica) / replica
+                    log.info(
+                        "    replica %d/%d  elapsed %.1fs  eta %.1fs",
+                        replica, R, elapsed, eta,
+                    )
                 shared_eps = torch.randn(bs, d, sk, device=device)
                 shared_k_idx: dict[str, torch.Tensor] = {}
                 for mode, trans in transitions.items():
@@ -160,11 +194,21 @@ def run_probe(
 
             if spec.force_per_k:
                 k_max = int(getattr(model.transition, "num_steps", 0))
+                log.info(
+                    "    force_per_k: %d steps × %d cells", k_max, n_cells,
+                )
+                t_pk_start = time.perf_counter()
                 for k in range(k_max):
+                    if k > 0 and k % max(1, k_max // 4) == 0:
+                        log.info(
+                            "      force_per_k step %d/%d  elapsed %.1fs",
+                            k, k_max, time.perf_counter() - t_pk_start,
+                        )
                     forced_idx = torch.full((bs, sk), k, device=device, dtype=torch.long)
                     forced_eps = torch.randn(bs, d, sk, device=device)
                     for cell in spec.cells:
                         trans = transitions[cell.k_sampling_mode]
+                        trans.zero_grad(set_to_none=True)
                         out = trans.transition_kl(
                             **probe_batch.as_kwargs(),
                             mc_override={
@@ -173,6 +217,12 @@ def run_probe(
                                 "objective": cell.objective,
                             },
                             return_per_sample=True,
+                        )
+                        out["L_p"].backward()
+                        g = _grad_vector(trans.diffmodel)
+                        g_norm = float(g.norm().item())
+                        per_k_cell_grads[(cell.objective, cell.k_sampling_mode, int(k))].append(
+                            g.cpu().numpy()
                         )
                         per_sample = out["L_p_per_sample"].detach().cpu().numpy()
                         rows.append({
@@ -186,8 +236,13 @@ def run_probe(
                             "sample_idx": -1,
                             "L_p": float(np.mean(per_sample)),
                             "L_p_scalar": float(out["L_p"].item()),
-                            "grad_norm": math.nan,
+                            "grad_norm": g_norm,
                         })
+
+    log.info(
+        "Probe loop done in %.1fs — %d rows across %d cells",
+        time.perf_counter() - t_run_start, len(rows), len(cell_grads),
+    )
 
     summary_cells: dict[str, dict[str, float]] = {}
     for (objective, mode), grad_list in cell_grads.items():
@@ -198,5 +253,23 @@ def run_probe(
             "grad_variance": float(np.var(grad_arr, axis=0).mean()),
         }
 
-    summary = {"cells": summary_cells}
+    # Per-(cell, k) gradient variance from the force_per_k loop. Variance
+    # is taken across the (seed, batch) samples per (cell, k); with only
+    # n_seeds × n_batches samples the estimate is noisy — bump
+    # ``seeds`` for a tighter read.
+    per_k_grad_var: dict[str, dict[int, float]] = {}
+    for (objective, mode, k), grad_list in per_k_cell_grads.items():
+        cell_key = f"{objective}:{mode}"
+        if len(grad_list) < 2:
+            # Variance is undefined with a single sample; record NaN so
+            # plots / metrics surface the underspecification instead of
+            # silently showing 0.
+            per_k_grad_var.setdefault(cell_key, {})[k] = float("nan")
+            continue
+        grad_arr = np.stack(grad_list, axis=0)
+        per_k_grad_var.setdefault(cell_key, {})[k] = float(
+            np.var(grad_arr, axis=0).mean()
+        )
+
+    summary = {"cells": summary_cells, "per_k_grad_var": per_k_grad_var}
     return rows, summary, transitions

@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from hydra_zen import builds
 
 from .net_utils import softplus_inv
 
@@ -145,16 +144,3 @@ class GaussianHead(nn.Module):
         logvar = logvar.clamp(self.clamp_logvar_min, self.clamp_logvar_max)
 
         return mu, logvar
-
-
-# ---------------------------------------------------------------------------
-# Hydra-zen partial config: parents fill in ``in_features`` / ``out_features``
-# at construction time. Instantiating this config returns a partial callable
-# that the parent module invokes with the shape kwargs.
-# ---------------------------------------------------------------------------
-
-GaussianHeadConf = builds(
-    GaussianHead,
-    populate_full_signature=True,
-    zen_partial=True,
-)

@@ -7,17 +7,12 @@ from typing import Any, Dict, List, final
 import torch
 import torch.nn as nn
 
-from hydra_zen import builds
-from omegaconf import MISSING
-
-from .decoder import BaseDecoder, GaussianDecoder, GaussianDecoderConf
+from .decoder import BaseDecoder, GaussianDecoder
 from .encoder import (
     BaseEncoder,
     BaseInitPrior,
     GaussianEncoder,
-    GaussianEncoderConf,
     GaussianInitPrior,
-    GaussianInitPriorConf,
 )
 from .net_utils import (
     time_embedding,
@@ -842,24 +837,3 @@ class DDSSMHyperParamsConf:
     rewo: REWOConf = field(default_factory=REWOConf)
 
 
-DDSSMConf = builds(
-    DDSSM_base,
-    populate_full_signature=True,
-    # Shape kwargs interpolate from the active experiment subtree; see
-    # ``ddssm.conf.experiment_for_*`` builders for the source of truth.
-    j="${experiment.j}",
-    data_dim="${experiment.data_dim}",
-    latent_dim="${experiment.latent_dim}",
-    emb_time_dim="${experiment.emb_time_dim}",
-    covariate_dim="${experiment.covariate_dim}",
-    use_observation_mask="${experiment.use_observation_mask}",
-    checkpoint_dir="${experiment.checkpoint_dir}",
-    # Module slots are selected per-experiment via their own config groups
-    # (``encoder``, ``decoder``, ``z_init``, ``transition``).  The active
-    # experiment subtree forwards whichever option was selected.
-    transition="${experiment.transition}",
-    encoder="${experiment.encoder}",
-    decoder="${experiment.decoder}",
-    z_init="${experiment.z_init}",
-    hyperparams="${experiment.hyperparams}",
-)

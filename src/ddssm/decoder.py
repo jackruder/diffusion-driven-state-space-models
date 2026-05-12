@@ -8,10 +8,8 @@ from typing import Callable, Tuple
 import torch
 import torch.nn as nn
 
-from hydra_zen import builds
-
-from .diffnets import ContextProducer, ContextProducerConf
-from .gaussians import GaussianHead, GaussianHeadConf
+from .diffnets import ContextProducer
+from .gaussians import GaussianHead
 from .net_utils import hist_abs_time_tokens
 from .torch_compile import maybe_compile
 
@@ -359,15 +357,3 @@ class GaussianDecoder(BaseDecoder):
         obs_count_t = m_t.sum(dim=1).clamp_min(1.0)  # (B,)
 
         return logp_t, mu_x, logvar_x, obs_count_t
-
-
-# ---------------------------------------------------------------------------
-# Hydra-zen config for GaussianDecoder
-# ---------------------------------------------------------------------------
-
-GaussianDecoderConf = builds(
-    GaussianDecoder,
-    context=ContextProducerConf(),
-    gaussian_head=GaussianHeadConf(),
-    populate_full_signature=True,
-)

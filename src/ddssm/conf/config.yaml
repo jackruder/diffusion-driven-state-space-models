@@ -1,20 +1,14 @@
 # Top-level Hydra config for DDSSM.
 #
-# All experiment-specific wiring (data module, model, transition,
-# hyperparameters, training scalars, objective) lives inside
-# ``cfg.experiment``. The default selects the small Synthetic + Gaussian
-# preset for smoke tests; pick another preset with ``experiment=NAME``
-# (see ``ddssm.conf`` for the registered names).
+# Experiments are notebook-first: each file under ``experiments/`` in
+# the repo root composes an ``Experiment`` via
+# :func:`experiments._make.experiment`. The default selects
+# ``experiments/harmonic_gauss.py``; switch with ``experiment=NAME``
+# where ``NAME`` is the module name (no ``.py``). To tweak a knob,
+# either edit the experiment file or override on the CLI with dotted
+# paths, e.g. ``experiment.training.steps=200``.
 
 defaults:
-  - experiment: synthetic_gauss
-  - transition: gaussian
-  - encoder: gaussian
-  - decoder: gaussian
-  - z_init: gaussian
-  - context: csdi
-  - unet: csdi
-  - time_mixer: conv
-  - feature_mixer: transformer
+  - experiment: harmonic_gauss
   - wandb: disabled
   - _self_
