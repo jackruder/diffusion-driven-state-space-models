@@ -124,3 +124,38 @@ def metric_grad_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
     for cell, kmap in raw.items():
         out[cell] = {str(k): float(v) for k, v in sorted(kmap.items())}
     return {"grad_var_per_tau": out}
+
+
+@register_probe_metric("ratio_per_tau")
+def metric_ratio_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    """Per-k ESM/DSM ratio for both loss and gradient variances.
+
+    This is the "vs τ" version of ``ratio_esm_dsm`` — instead of one
+    scalar per (kind, mode) it returns ``{kind: {mode: {k: ratio}}}``.
+    """
+    loss_pt = _loss_var_per_tau(ctx)
+    grad_raw = ctx.summary.get("per_k_grad_var", {})
+    grad_pt = {
+        cell: {str(k): float(v) for k, v in kmap.items()}
+        for cell, kmap in grad_raw.items()
+    }
+    out: dict[str, dict[str, dict[str, float]]] = {"loss": {}, "grad": {}}
+    for mode in ("uniform", "lsgm_is"):
+        e_key = f"esm:{mode}"
+        d_key = f"dsm:{mode}"
+        for kind, src in (("loss", loss_pt), ("grad", grad_pt)):
+            if e_key not in src or d_key not in src:
+                continue
+            ek = src[e_key]
+            dk = src[d_key]
+            ratios: dict[str, float] = {}
+            for k_str, dv in dk.items():
+                ev = ek.get(k_str, float("nan"))
+                if not np.isfinite(dv) or dv == 0 or not np.isfinite(ev):
+                    ratios[k_str] = float("nan")
+                else:
+                    ratios[k_str] = float(ev / dv)
+            out[kind][mode] = dict(sorted(
+                ratios.items(), key=lambda kv: int(kv[0])
+            ))
+    return {"ratio_per_tau": out}

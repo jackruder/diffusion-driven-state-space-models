@@ -62,6 +62,7 @@ class ProbeSpec:
         ProbeMetricSpec("ratio_esm_dsm"),
         ProbeMetricSpec("loss_var_per_tau"),
         ProbeMetricSpec("grad_var_per_tau"),
+        ProbeMetricSpec("ratio_per_tau"),
     ])
     # Same rationale as ``cells`` above.
     plots: list = field(default_factory=lambda: [
