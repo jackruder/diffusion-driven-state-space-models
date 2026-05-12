@@ -50,28 +50,28 @@ ob-async; safe to fire all four in parallel.
 ** lgssm
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=variance_probe_lgssm \
+uv run python -m ddssm.app experiment=variance_probe_lgssm \
     hydra.run.dir=runs/variance_probe/lgssm
 #+END_SRC
 
 ** bimodal_clean
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=variance_probe_bimodal_clean \
+uv run python -m ddssm.app experiment=variance_probe_bimodal_clean \
     hydra.run.dir=runs/variance_probe/bimodal_clean
 #+END_SRC
 
 ** bimodal_noisy
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=variance_probe_bimodal_noisy \
+uv run python -m ddssm.app experiment=variance_probe_bimodal_noisy \
     hydra.run.dir=runs/variance_probe/bimodal_noisy
 #+END_SRC
 
 ** nonlinear_bimodal_lift
 
 #+BEGIN_SRC sh
-python -m ddssm.app experiment=variance_probe_nonlinear_bimodal_lift \
+uv run python -m ddssm.app experiment=variance_probe_nonlinear_bimodal_lift \
     hydra.run.dir=runs/variance_probe/nonlinear_bimodal_lift
 #+END_SRC
 
@@ -89,7 +89,7 @@ experiment.
 ** lgssm
 
 #+BEGIN_SRC sh
-python -m ddssm.variance experiment=variance_probe_lgssm \
+uv run python -m ddssm.variance experiment=variance_probe_lgssm \
     +per_step=true \
     hydra.run.dir=runs/variance_probe/lgssm
 #+END_SRC
@@ -97,7 +97,7 @@ python -m ddssm.variance experiment=variance_probe_lgssm \
 ** bimodal_clean
 
 #+BEGIN_SRC sh
-python -m ddssm.variance experiment=variance_probe_bimodal_clean \
+uv run python -m ddssm.variance experiment=variance_probe_bimodal_clean \
     +per_step=true \
     hydra.run.dir=runs/variance_probe/bimodal_clean
 #+END_SRC
@@ -105,7 +105,7 @@ python -m ddssm.variance experiment=variance_probe_bimodal_clean \
 ** bimodal_noisy
 
 #+BEGIN_SRC sh
-python -m ddssm.variance experiment=variance_probe_bimodal_noisy \
+uv run python -m ddssm.variance experiment=variance_probe_bimodal_noisy \
     +per_step=true \
     hydra.run.dir=runs/variance_probe/bimodal_noisy
 #+END_SRC
@@ -113,7 +113,7 @@ python -m ddssm.variance experiment=variance_probe_bimodal_noisy \
 ** nonlinear_bimodal_lift
 
 #+BEGIN_SRC sh
-python -m ddssm.variance experiment=variance_probe_nonlinear_bimodal_lift \
+uv run python -m ddssm.variance experiment=variance_probe_nonlinear_bimodal_lift \
     +per_step=true \
     hydra.run.dir=runs/variance_probe/nonlinear_bimodal_lift
 #+END_SRC
