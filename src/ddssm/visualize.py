@@ -1,4 +1,4 @@
-r"""Hydra entry point for the visualization stage.
+"""Hydra entry point for the visualization stage.
 
 Loads a trained checkpoint into the experiment's model, walks the
 plots declared on ``cfg.experiment.viz``, and saves PNGs to the Hydra
@@ -7,18 +7,13 @@ run dir.
 Usage::
 
     # Default plots for the experiment, rendered on the test split
-    python -m ddssm.visualize experiment=kdd_gauss \\
-        +checkpoint=outputs/.../ckpt_latest.pth
+    python -m ddssm.visualize experiment=kdd_gauss +checkpoint=outputs/.../ckpt_latest.pth
 
     # Pass a CSV path so the metrics_csv plot has data to draw
-    python -m ddssm.visualize experiment=synthetic_gauss \\
-        +checkpoint=path/to/ckpt.pth \\
-        +csv_path=outputs/.../metrics.csv
+    python -m ddssm.visualize experiment=synthetic_gauss +checkpoint=path/to/ckpt.pth
 
     # Override the plot list at the CLI
-    python -m ddssm.visualize experiment=kdd_gauss \\
-        +checkpoint=path/to/ckpt.pth \\
-        'experiment.viz.plots=[{name: forecast_1d, save_filename: f.png}]'
+    python -m ddssm.visualize experiment=kdd_gauss +checkpoint=path/to/ckpt.pth
 """
 
 from __future__ import annotations

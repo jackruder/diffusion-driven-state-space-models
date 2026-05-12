@@ -1,39 +1,9 @@
-r"""Synthetic verification experiment base presets.
+"""Synthetic verification experiment base presets.
 
 Three family bases cover the full set of synthetic verification
-experiments documented in ``verifications.org``.  Each base uses the
-Gaussian transition by default (``transition=gaussian``); switch to the
-diffusion transition and adjust the training budget with CLI overrides:
-
-.. code-block:: sh
-
-    # harmonic + diffusion
-    python -m ddssm.app experiment=harmonic \\
-        transition=diffusion \\
-        'experiment.training.steps=2000' \\
-        'experiment.training.checkpoint_every=500' \\
-        'experiment.hyperparams.lambda_warmup_steps=400'
-
-    # harmonic with 4× observation noise
-    python -m ddssm.app experiment=harmonic \\
-        'experiment.data.mode=harmonic-noisy'
-
-    # harmonic with second-order AR latent (j=2)
-    python -m ddssm.app experiment=harmonic \\
-        'experiment.j=2'
-
-    # bimodal + diffusion
-    python -m ddssm.app experiment=bimodal \\
-        transition=diffusion \\
-        'experiment.training.steps=2000' \\
-        'experiment.training.checkpoint_every=500' \\
-        'experiment.hyperparams.lambda_warmup_steps=400'
-
-    # robot_2d + diffusion
-    python -m ddssm.app experiment=robot_2d \\
-        transition=diffusion \\
-        'experiment.training.steps=4000' \\
-        'experiment.hyperparams.lambda_warmup_steps=800'
+experiments documented in ``verifications.org``.  Each base can be run from
+Python source blocks with ``ddssm.workflow`` or selected by name from the
+Hydra CLI.
 
 Registered experiment names
 ----------------------------

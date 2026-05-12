@@ -1,4 +1,4 @@
-r"""Hydra entry point for the evaluation stage.
+"""Hydra entry point for the evaluation stage.
 
 Loads a trained checkpoint into the experiment's model, walks the
 metrics declared on ``cfg.experiment.eval``, and writes a single
@@ -7,19 +7,14 @@ metrics declared on ``cfg.experiment.eval``, and writes a single
 Usage::
 
     # Evaluate the most recent KDD run
-    python -m ddssm.evaluate experiment=kdd_gauss \\
-        +checkpoint=outputs/.../ckpt_latest.pth
+    python -m ddssm.evaluate experiment=kdd_gauss +checkpoint=outputs/.../ckpt_latest.pth
 
     # Override which metrics to compute and on which split
-    python -m ddssm.evaluate experiment=kdd_gauss \\
-        +checkpoint=path/to/ckpt.pth \\
-        experiment.eval.metrics='[mae, crps_sum, recon_mse]' \\
-        experiment.eval.split=test
+    python -m ddssm.evaluate experiment=kdd_gauss +checkpoint=path/to/ckpt.pth
+    python -m ddssm.evaluate experiment=kdd_gauss experiment.eval.split=test
 
     # CSV-only metric (no checkpoint needed)
-    python -m ddssm.evaluate experiment=synthetic_gauss \\
-        +csv_path=outputs/.../metrics.csv \\
-        experiment.eval.metrics='[loss_tail]'
+    python -m ddssm.evaluate experiment=synthetic_gauss +csv_path=outputs/.../metrics.csv
 """
 
 from __future__ import annotations
