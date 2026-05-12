@@ -56,7 +56,7 @@ from ..transitions.diffusion_v2 import (
     DiffusionV2ScheduleConfig,
 )
 
-type ConfigFragment = object
+type HydraZenConfig = object
 
 # ---------------------------------------------------------------------------
 # Top-level transition Confs for the ``transition`` config group.
@@ -328,13 +328,13 @@ DDSSMTrainerPartial = builds(
 
 def build_experiment_conf(
     *,
-    data_conf: ConfigFragment,
-    hyperparams_conf: ConfigFragment,
-    training_conf: ConfigFragment,
-    objective_conf: ConfigFragment | None = None,
-    eval_conf: ConfigFragment | None = None,
-    viz_conf: ConfigFragment | None = None,
-    variance_conf: ConfigFragment | None = None,
+    data_conf: HydraZenConfig,
+    hyperparams_conf: HydraZenConfig,
+    training_conf: HydraZenConfig,
+    objective_conf: HydraZenConfig | None = None,
+    eval_conf: HydraZenConfig | None = None,
+    viz_conf: HydraZenConfig | None = None,
+    variance_conf: HydraZenConfig | None = None,
     data_dim: int,
     latent_dim: int,
     j: int = 1,
@@ -343,10 +343,10 @@ def build_experiment_conf(
     use_observation_mask: bool = False,
     checkpoint_dir: str = "./checkpoints",
     seed: int = 0,
-    transition_conf: ConfigFragment | None = None,
-    encoder_conf: ConfigFragment | None = None,
-    decoder_conf: ConfigFragment | None = None,
-    z_init_conf: ConfigFragment | None = None,
+    transition_conf: HydraZenConfig | None = None,
+    encoder_conf: HydraZenConfig | None = None,
+    decoder_conf: HydraZenConfig | None = None,
+    z_init_conf: HydraZenConfig | None = None,
 ) -> type[object]:
     """Compose an instantiable :class:`Experiment` config from Python parts.
 

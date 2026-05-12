@@ -332,7 +332,7 @@ jsd_updates = {
     }
 }
 
-for run in [r for r in synthetic_runs if "jsd" in r.tags]:
+for run in (r for r in synthetic_runs if "jsd" in r.tags):
     evaluate_config(
         run.config,
         run_dir=run.run_dir,

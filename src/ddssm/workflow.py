@@ -1,14 +1,10 @@
 """Run DDSSM experiments from Python-authored Hydra-Zen configs."""
 
-# ruff: noqa: ANN401
-# Workflow entry points intentionally accept Hydra-Zen config classes,
-# structured config instances, and DictConfig roots.
-
 from __future__ import annotations
 
 import os
 import json
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 import logging
 from pathlib import Path
 from dataclasses import field, dataclass
@@ -30,19 +26,22 @@ from .conf import (
 
 log = logging.getLogger(__name__)
 
+type ConfigInput = object
+type StageResult = object
+
 
 @dataclass(frozen=True)
 class ConfigGroups:
     """Default config-group choices for Python source-block experiment runs."""
 
-    transition: Any = TransitionGaussianConf
-    encoder: Any = EncoderGaussianConf
-    decoder: Any = DecoderGaussianConf
-    z_init: Any = InitPriorGaussianConf
-    context: Any = ContextProducerCSDIConf
-    unet: Any = CSDIUnetGroupConf
-    time_mixer: Any = TimeMixerConvConf
-    feature_mixer: Any = FeatureMixerTransformerConf
+    transition: ConfigInput = TransitionGaussianConf
+    encoder: ConfigInput = EncoderGaussianConf
+    decoder: ConfigInput = DecoderGaussianConf
+    z_init: ConfigInput = InitPriorGaussianConf
+    context: ConfigInput = ContextProducerCSDIConf
+    unet: ConfigInput = CSDIUnetGroupConf
+    time_mixer: ConfigInput = TimeMixerConvConf
+    feature_mixer: ConfigInput = FeatureMixerTransformerConf
 
 
 DEFAULT_CONFIG_GROUPS = ConfigGroups()
@@ -57,10 +56,10 @@ class RunMetadata:
 
 
 def compose_experiment_config(
-    experiment_config: Any,
+    experiment_config: ConfigInput,
     *,
     groups: ConfigGroups | None = None,
-    updates: Mapping[str, Any] | None = None,
+    updates: Mapping[str, ConfigInput] | None = None,
 ) -> DictConfig:
     """Build a root config from a Python-defined experiment config object.
 
@@ -86,14 +85,14 @@ def compose_experiment_config(
 
 
 def train_config(
-    config: Any,
+    config: ConfigInput,
     *,
     run_dir: str | os.PathLike[str],
     device: torch.device | str | None = None,
     groups: ConfigGroups | None = None,
-    updates: Mapping[str, Any] | None = None,
+    updates: Mapping[str, ConfigInput] | None = None,
     metadata: RunMetadata | None = None,
-) -> float | Any:
+) -> float | StageResult:
     """Train an experiment from a Python config or a composed root config."""
     cfg = _as_root_config(config, groups=groups, updates=updates)
     run_path = Path(run_dir)
@@ -113,14 +112,14 @@ def train_config(
 
 
 def evaluate_config(
-    config: Any,
+    config: ConfigInput,
     *,
     run_dir: str | os.PathLike[str],
     checkpoint_path: str | None = None,
     csv_path: str | None = None,
     device: torch.device | str | None = None,
     groups: ConfigGroups | None = None,
-    updates: Mapping[str, Any] | None = None,
+    updates: Mapping[str, ConfigInput] | None = None,
     metadata: RunMetadata | None = None,
 ) -> dict:
     """Evaluate an experiment from a Python config or a composed root config."""
@@ -147,14 +146,14 @@ def evaluate_config(
 
 
 def visualize_config(
-    config: Any,
+    config: ConfigInput,
     *,
     run_dir: str | os.PathLike[str],
     checkpoint_path: str | None = None,
     csv_path: str | None = None,
     device: torch.device | str | None = None,
     groups: ConfigGroups | None = None,
-    updates: Mapping[str, Any] | None = None,
+    updates: Mapping[str, ConfigInput] | None = None,
     metadata: RunMetadata | None = None,
 ) -> list[str]:
     """Visualize an experiment from a Python config or a composed root config."""
@@ -181,15 +180,15 @@ def visualize_config(
 
 
 def variance_config(
-    config: Any,
+    config: ConfigInput,
     *,
     run_dir: str | os.PathLike[str],
     checkpoint_path: str | None = None,
     device: torch.device | str | None = None,
     groups: ConfigGroups | None = None,
-    updates: Mapping[str, Any] | None = None,
+    updates: Mapping[str, ConfigInput] | None = None,
     metadata: RunMetadata | None = None,
-) -> dict[str, Any]:
+) -> dict[str, StageResult]:
     """Run a variance probe from a Python config or a composed root config."""
     cfg = _as_root_config(config, groups=groups, updates=updates)
     run_path = Path(run_dir)
@@ -226,7 +225,7 @@ def write_experiment_log(
     cfg: DictConfig,
     run_dir: Path,
     resolved_config_path: Path,
-    result: Any,
+    result: StageResult,
     metadata: RunMetadata | None = None,
 ) -> Path:
     """Persist a lightweight per-stage experiment log."""
@@ -247,10 +246,10 @@ def write_experiment_log(
 
 
 def _as_root_config(
-    config: Any,
+    config: ConfigInput,
     *,
     groups: ConfigGroups | None,
-    updates: Mapping[str, Any] | None,
+    updates: Mapping[str, ConfigInput] | None,
 ) -> DictConfig:
     if isinstance(config, DictConfig) and "experiment" in config:
         cfg = OmegaConf.create(config)
@@ -264,11 +263,11 @@ def _resolve_device(device: torch.device | str | None) -> torch.device:
     return device if isinstance(device, torch.device) else torch.device(device)
 
 
-def _key_metrics(result: Any) -> dict[str, Any]:
+def _key_metrics(result: StageResult) -> dict[str, StageResult]:
     if isinstance(result, float):
         return {"objective": result}
     if isinstance(result, Mapping):
-        return dict(result)
+        return {str(key): value for key, value in result.items()}
     if isinstance(result, list):
         return {"outputs": result, "count": len(result)}
     return {}
