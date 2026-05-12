@@ -886,6 +886,64 @@ for name in variance_probe_lgssm \
 done
 #+END_SRC
 
+** Per-step sweep + GIF animations
+
+A single trained checkpoint often shows the variance gap "compressed"
+(the score net has already learned, and the per-cell variances
+collapse close together). To see the *evolution* of the variance
+landscape across training, pass ``+per_step=true``:
+
+#+BEGIN_SRC sh
+python -m ddssm.variance experiment=variance_probe_lgssm \
+    +per_step=true \
+    hydra.run.dir=runs/variance_probe/lgssm
+#+END_SRC
+
+This will:
+
+1. Auto-train (with ``Probe300`` defaults: 300 steps,
+   ``checkpoint_every=25`` → 12 step checkpoints) if no
+   ``ckpt_step*.pth`` files exist yet.
+2. Run the probe against *each* ``ckpt_step{N}.pth``, writing
+   per-step outputs to ``<run_dir>/probe/step_{N:06d}/``.
+3. Stitch one animated GIF per plot type into ``<run_dir>/``:
+   ``var_grad_vs_tau.gif``, ``var_loss_vs_tau.gif``,
+   ``ratio_vs_tau.gif``, ``summary_table.gif``. Each frame is the
+   PNG from a checkpoint, annotated with a "step N" badge in the
+   top-right.
+
+Per-step run-dir tree:
+
+#+BEGIN_SRC text
+runs/variance_probe/lgssm/
+├── checkpoints/
+│   ├── ckpt_step25.pth
+│   ├── ckpt_step50.pth
+│   ├── …
+│   ├── ckpt_step300.pth
+│   └── ckpt_latest.pth
+├── probe/
+│   ├── step_000025/
+│   │   ├── variance_raw.csv
+│   │   ├── variance_summary.json
+│   │   ├── var_grad_vs_tau.png
+│   │   ├── var_loss_vs_tau.png
+│   │   ├── ratio_vs_tau.png
+│   │   └── summary_table.png
+│   ├── step_000050/…
+│   └── step_000300/…
+├── var_grad_vs_tau.gif
+├── var_loss_vs_tau.gif
+├── ratio_vs_tau.gif
+├── summary_table.gif
+├── metrics.csv
+└── tb_logs/
+#+END_SRC
+
+Tune frame coverage by overriding ``experiment.training.steps`` or
+``experiment.training.checkpoint_every`` — the probe loop picks up
+whatever step-checkpoints land in ``<run_dir>/checkpoints/``.
+
 ** Customising the probe
 
 ~experiment.variance~ is a regular ~ProbeSpec~; every leaf is
