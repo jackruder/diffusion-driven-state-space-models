@@ -2,17 +2,17 @@
 
 Usage::
 
-    # Smoke run with the default Synthetic + Gaussian experiment.
+    # Default experiment (harmonic + Gaussian transition).
     python -m ddssm.app
 
-    # Pick a different registered experiment.
-    python -m ddssm.app experiment=synthetic_diffusion
+    # Pick a different experiment.
+    python -m ddssm.app experiment=harmonic_diffusion
     python -m ddssm.app experiment=kdd_gauss
 
-    # Override anything inside the experiment subtree.
-    python -m ddssm.app experiment=synthetic_gauss \\
+    # Override any field at any depth via dot-notation.
+    python -m ddssm.app experiment=harmonic_gauss \\
         experiment.training.steps=200 \\
-        experiment.hyperparams.batch_size=64
+        experiment.model.transition.hidden_dim=128
 
     # Optuna sweep using a pre-defined search space.
     python -m ddssm.app --multirun \\
@@ -20,9 +20,8 @@ Usage::
         +sweep=synthetic_lr \\
         hydra.sweeper.n_trials=20
 
-The instantiated :class:`Experiment` object owns the run; this module
-just resolves the run directory, picks the device, persists the
-resolved config for reproducibility, and forwards the result.
+Experiments are discovered from ``experiments/*.py`` in the repo root;
+see :mod:`ddssm._experiment_registry`.
 """
 
 from __future__ import annotations
@@ -35,9 +34,9 @@ from hydra.core.hydra_config import HydraConfig
 from hydra_zen import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-# Importing conf populates Hydra's ConfigStore via ``store.add_to_hydra_store``.
-# Must precede @hydra.main so config groups resolve.
-from . import conf  # noqa: F401
+from ._experiment_registry import register_experiments
+
+register_experiments()
 
 log = logging.getLogger(__name__)
 
