@@ -61,7 +61,6 @@ def make_small_model():
         t_chunk=4, clip_grad_norm=None, lambda_schedule="none", lambda_start=0.001,
         lambda_end=1.0, lambda_warmup_steps=1, enc_lr=1e-3, dec_lr=1e-3,
         zinit_lr=1e-3, trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
-        rewo=SimpleNamespace(D0=0.1, nu=1e-3, alpha=0.99, tau1=1.0, tau2=1.0),
     )
     return DDSSM_base(
         encoder=enc, decoder=dec, z_init=zinit, transition=trans,
