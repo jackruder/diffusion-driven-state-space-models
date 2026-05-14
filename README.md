@@ -47,9 +47,41 @@ Requires Python 3.13 and PyTorch ≥ 2.9.
 
 ## Running experiments
 
-`python -m ddssm.app` is the single Hydra-native entry point. All experiment
-configuration is composed from the hydra-zen `ConfigStore` registered in
-`src/ddssm/conf/`; there is no separate Pydantic config layer.
+Two equivalent entry points:
+
+- `python -m ddssm.app experiment=<name>` — the Hydra-native entry; composes
+  the named experiment from the hydra-zen `ConfigStore` and runs it.
+- `python -m experiments <subcommand>` — a thin wrapper around the same
+  registry. Useful for listing, running ad-hoc, or emitting Slurm scripts:
+
+  ```bash
+  python -m experiments list                 # all registered experiments
+  python -m experiments run    <name> [hydra overrides...]
+  python -m experiments sbatch <name> [resource flags...] [hydra overrides...]
+  ```
+
+  `sbatch` writes a one-job Slurm submit script (`#SBATCH --partition`,
+  `--time`, `--gres=gpu:N`, …) that launches `python -m ddssm.app
+  experiment=<name>`. Resources come from the experiment's `SBatch` field if
+  set, falling back to `experiments/_sbatch.py:DEFAULT_SBATCH`. CLI flags
+  (`--partition=...`, `--time=...`, `--mem=...`, `--gpus=...`, etc.) take the
+  final say; they must come **before** `<name>`. Hydra-style overrides after
+  `<name>` are baked into the generated script.
+
+### Per-family config layout
+
+Each family under `experiments/<family>/` is exactly five Python files:
+
+| File | Contents |
+|------|----------|
+| `model.py` | Family-shared arch primitives (mixers, residual blocks, context, head, futsum, U-Net flavours, schedule) and one **shape-namespace class** per shape (`Small1D`, `Robot2D`, `KDD`, …). Each shape class declares its `data_dim/latent_dim/j/...` constants at the top, then builds encoder/decoder/z_init/transition/model below — tweak a constant once and every subconfig inherits the change. Submodules are registered at the bottom of the file. |
+| `data.py` | `SyntheticDataModule` / `KDDDataModule` configs. |
+| `hparams.py` | `Hparams` + training-scalar (`Training`) presets. |
+| `evals.py` | `Eval` + `Viz` specs (variance-probe substitutes `Objective` + `Probe`). |
+| `experiments.py` | Named `experiment(...)` compositions + Optuna sweep presets at the bottom. |
+
+The Hydra-zen `ConfigStore` is populated at import time as the family
+subpackages are loaded.
 
 ### Hydra experiment presets
 
@@ -217,10 +249,26 @@ logger silently no-ops and training continues with TensorBoard + CSV.
 
 ## SLURM
 
-A ready-to-use submitit launcher config lives at
-``src/ddssm/conf/hydra/launcher/submitit_slurm.yaml``. Combine it with any experiment
-preset and (optionally) a sweep preset to launch a multirun on a Slurm
-cluster:
+Two paths, depending on what you need:
+
+**Single job — emit an `sbatch` script and submit it yourself.** Recommended
+for one-off training runs. Resources can live alongside the experiment
+config (set `sbatch=SBatch(...)` on `experiment(...)`) and are overridable
+on the CLI:
+
+```bash
+# emit the script (writes to stdout if --out is omitted)
+python -m experiments sbatch --partition=gpu --time=12:00:00 --mem=64G \
+    --out=runs/kdd_diffusion.sbatch kdd_diffusion
+
+# submit it
+sbatch runs/kdd_diffusion.sbatch
+# or pass extra Hydra overrides at submit time:
+sbatch runs/kdd_diffusion.sbatch experiment.training.steps=12000
+```
+
+**Sweep — Hydra `--multirun` over the submitit launcher.** Recommended for
+Optuna search:
 
 ```bash
 python -m ddssm.app --multirun \
@@ -232,8 +280,10 @@ python -m ddssm.app --multirun \
     hydra.sweeper.storage=sqlite:///$PWD/ddssm_synth_diff.db
 ```
 
-Resource overrides (``partition``, ``gpus_per_node``, ``timeout_min``, …) are
-plain CLI flags, e.g. ``hydra.launcher.timeout_min=240``.
+The launcher config lives at
+`src/ddssm/conf/hydra/launcher/submitit_slurm.yaml`. Resource overrides
+(`partition`, `gpus_per_node`, `timeout_min`, …) are plain CLI flags, e.g.
+`hydra.launcher.timeout_min=240`.
 
 ## Development
 

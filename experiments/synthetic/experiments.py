@@ -1,37 +1,38 @@
-"""Named experiments for the synthetic-data family.
+"""Named experiments + Optuna sweep presets for the synthetic family.
 
 Each ``<name>`` below composes a registered model + dataset + hparams
 + training/eval/viz from this subpackage and registers the result to
-``experiment_store`` under that name. Reachable as
-``python -m ddssm.app experiment=<name>`` or via
-``from experiments.synthetic.experiments import <name>``.
+``experiment_store``. Reachable as
+``python -m ddssm.app experiment=<name>`` or
+``python -m experiments run <name>``.
+
+Sweeps live at the bottom of this file (one section) so a search
+preset sits next to the experiments it pairs with.
 """
 
 from __future__ import annotations
 
 import dataclasses
 
-from conf.registry import experiment_store
+from hydra_zen import make_config
+
+from conf.registry import experiment_store, sweep_store
 
 from experiments._make import experiment
-from experiments.synthetic.datasets import (
+from experiments.synthetic.data import (
     Bimodal, Harmonic, LGSSM, Robot2D,
 )
 from experiments.synthetic.evals import (
-    BimodalEnergy, Forecast1D as EvalForecast1D, LGSSM as EvalLGSSM,
-    Robot2D as EvalRobot2D,
+    BimodalEnergy_Eval, BimodalForecast1D_Viz,
+    Forecast1D_Eval, Forecast1D_Viz,
+    LGSSM_Eval, LGSSM_Viz,
+    Robot2D_Eval, Robot2D_Viz,
 )
-from experiments.synthetic.hparams import Base1D, Bimodal as HparamsBimodal
-from experiments.synthetic.models import (
-    Robot2DDiff, Robot2DGauss, SmallDiff, SmallGauss,
-)
-from experiments.synthetic.training import (
+from experiments.synthetic.hparams import (
+    Base1D, Bimodal as HparamsBimodal,
     Diff1k, Diff2k, Gauss1k, RobotDiff, RobotGauss, Smoke500,
 )
-from experiments.synthetic.vizs import (
-    BimodalForecast1D, Forecast1D as VizForecast1D, LGSSM as VizLGSSM,
-    Robot2DForecast,
-)
+from experiments.synthetic.model import Robot2D as Robot2DShape, Small1D
 
 
 # ---------------------------------------------------------------------------
@@ -39,18 +40,18 @@ from experiments.synthetic.vizs import (
 # ---------------------------------------------------------------------------
 
 synthetic_gauss = experiment(
-    data=LGSSM, model=SmallGauss,
+    data=LGSSM, model=Small1D.gauss_model,
     hparams=Base1D,
     training=Smoke500,
-    eval=EvalLGSSM, viz=VizLGSSM,
+    eval=LGSSM_Eval, viz=LGSSM_Viz,
 )
 experiment_store(synthetic_gauss, name="synthetic_gauss")
 
 synthetic_diffusion = experiment(
-    data=LGSSM, model=SmallDiff,
+    data=LGSSM, model=Small1D.diff_model,
     hparams=dataclasses.replace(Base1D, lambda_warmup_steps=300),
     training=Diff1k,
-    eval=EvalLGSSM, viz=VizLGSSM,
+    eval=LGSSM_Eval, viz=LGSSM_Viz,
 )
 experiment_store(synthetic_diffusion, name="synthetic_diffusion")
 
@@ -60,18 +61,18 @@ experiment_store(synthetic_diffusion, name="synthetic_diffusion")
 # ---------------------------------------------------------------------------
 
 harmonic_gauss = experiment(
-    data=Harmonic, model=SmallGauss,
+    data=Harmonic, model=Small1D.gauss_model,
     hparams=Base1D,
     training=Gauss1k,
-    eval=EvalForecast1D, viz=VizForecast1D,
+    eval=Forecast1D_Eval, viz=Forecast1D_Viz,
 )
 experiment_store(harmonic_gauss, name="harmonic_gauss")
 
 harmonic_diffusion = experiment(
-    data=Harmonic, model=SmallDiff,
+    data=Harmonic, model=Small1D.diff_model,
     hparams=dataclasses.replace(Base1D, lambda_warmup_steps=400),
     training=Diff2k,
-    eval=EvalForecast1D, viz=VizForecast1D,
+    eval=Forecast1D_Eval, viz=Forecast1D_Viz,
 )
 experiment_store(harmonic_diffusion, name="harmonic_diffusion")
 
@@ -81,18 +82,18 @@ experiment_store(harmonic_diffusion, name="harmonic_diffusion")
 # ---------------------------------------------------------------------------
 
 bimodal_gauss = experiment(
-    data=Bimodal, model=SmallGauss,
+    data=Bimodal, model=Small1D.gauss_model,
     hparams=HparamsBimodal,
     training=Gauss1k,
-    eval=BimodalEnergy, viz=BimodalForecast1D,
+    eval=BimodalEnergy_Eval, viz=BimodalForecast1D_Viz,
 )
 experiment_store(bimodal_gauss, name="bimodal_gauss")
 
 bimodal_diffusion = experiment(
-    data=Bimodal, model=SmallDiff,
+    data=Bimodal, model=Small1D.diff_model,
     hparams=dataclasses.replace(HparamsBimodal, lambda_warmup_steps=400),
     training=Diff2k,
-    eval=BimodalEnergy, viz=BimodalForecast1D,
+    eval=BimodalEnergy_Eval, viz=BimodalForecast1D_Viz,
 )
 experiment_store(bimodal_diffusion, name="bimodal_diffusion")
 
@@ -102,17 +103,54 @@ experiment_store(bimodal_diffusion, name="bimodal_diffusion")
 # ---------------------------------------------------------------------------
 
 robot_2d_gauss = experiment(
-    data=Robot2D, model=Robot2DGauss,
+    data=Robot2D, model=Robot2DShape.gauss_model,
     hparams=dataclasses.replace(Base1D, lambda_warmup_steps=400),
     training=RobotGauss,
-    eval=EvalRobot2D, viz=Robot2DForecast,
+    eval=Robot2D_Eval, viz=Robot2D_Viz,
 )
 experiment_store(robot_2d_gauss, name="robot_2d_gauss")
 
 robot_2d_diffusion = experiment(
-    data=Robot2D, model=Robot2DDiff,
+    data=Robot2D, model=Robot2DShape.diff_model,
     hparams=dataclasses.replace(Base1D, lambda_warmup_steps=800),
     training=RobotDiff,
-    eval=EvalRobot2D, viz=Robot2DForecast,
+    eval=Robot2D_Eval, viz=Robot2D_Viz,
 )
 experiment_store(robot_2d_diffusion, name="robot_2d_diffusion")
+
+
+# ---------------------------------------------------------------------------
+# Optuna sweep presets.
+#
+# Registered under ``group="sweep"`` and activated via
+# ``+sweep=<name>``. ``package="_global_"`` on ``sweep_store`` merges
+# the preset at root, matching the legacy ``# @package _global_`` YAML
+# semantic.
+#
+# Example::
+#
+#     python -m ddssm.app --multirun \
+#         experiment=synthetic_gauss \
+#         +sweep=synthetic_lr \
+#         hydra.sweeper.n_trials=20
+# ---------------------------------------------------------------------------
+
+SyntheticLR = make_config(
+    hydra_defaults=["_self_", {"override /hydra/sweeper": "ddssm_optuna"}],
+    hydra=dict(
+        sweeper=dict(
+            direction="minimize",
+            params={
+                "experiment.hyperparams.enc_lr": "interval(1e-5, 1e-3)",
+                "experiment.hyperparams.dec_lr": "interval(1e-5, 1e-3)",
+                "experiment.hyperparams.trans_lr": "interval(1e-5, 1e-3)",
+                "experiment.hyperparams.zinit_lr": "interval(1e-5, 1e-3)",
+                "experiment.hyperparams.lambda_warmup_steps":
+                    "range(50, 400, step=50)",
+                "experiment.hyperparams.lambda_end": "interval(0.5, 2.0)",
+                "experiment.hyperparams.batch_size": "choice(16, 32, 64)",
+            },
+        ),
+    ),
+)
+sweep_store(SyntheticLR, name="synthetic_lr")
