@@ -10,6 +10,8 @@ encoder + decoder + z_init + transition in one shot.
 from __future__ import annotations
 
 from ddssm.builders import (
+    Combiner,
+    ConcatLinearFusionB,
     Context,
     DDSSM,
     Decoder,
@@ -17,10 +19,12 @@ from ddssm.builders import (
     DiffTransition,
     Encoder,
     FeatureMixer,
+    GaussianDistHeadB,
     GaussTransition,
     GRUFutSum,
     Head,
     Hparams,
+    IdentityAggregatorB,
     ResidualBlock,
     Schedule,
     TimeMixer,
@@ -69,6 +73,16 @@ KDDUnet = Unet(
 )
 KDDSchedule = Schedule()
 
+# Encoder distribution head + combiner. KDD has j=1, so the history
+# aggregator is the identity (no z-history mixing needed); fusion is the
+# default concat-linear of h_fut and z_{t-1}. Override with
+# ``DKSFusionB()`` for a DKS-style combiner.
+KDDDistHead = GaussianDistHeadB(clamp_logvar_min=-10.0)
+KDDIdentityCombiner = Combiner(
+    aggregator=IdentityAggregatorB(),
+    fusion=ConcatLinearFusionB(),
+)
+
 
 # ---------------------------------------------------------------------------
 # Shape: KDD (D=6, latent_dim=8, j=1, covariate_dim=3, emb_time_dim=32).
@@ -92,8 +106,8 @@ class KDD:
         hidden_dim=hidden_dim,
         fut_mask_emb_dim=mask_emb_dim,
         pad_mask_emb_dim=mask_emb_dim,
-        context=KDDContext,
-        gaussian_head=KDDClampedHead,
+        combiner=KDDIdentityCombiner,
+        dist_head=KDDDistHead,
         fut_summary=KDDFutSum,
     )
 

@@ -13,6 +13,10 @@ from typing import Callable, Dict, Tuple, Optional
 import torch
 import torch.nn as nn
 
+from .aggregators import ContextProducerAggregator
+from .combiners import BaseEncoderCombiner, CompoundCombiner
+from .dist_heads import BaseDistHead, GaussianDistHead
+from .fusions import ConcatLinearFusion
 from .futsum import FutureSummary, GRUFutureSummary
 from .diffnets import ContextProducer
 from .gaussians import (
@@ -146,16 +150,17 @@ class GaussLatentInit(nn.Module):
 
 
 class GaussianEncoder(BaseEncoder):
-    """Encoder producing q_ϕ(z_t | z_{t-j:t-1}, h_t) Gaussian parameters.
+    """Encoder producing q_ϕ(z_t | z_{t-j:t-1}, h_t).
 
-    This forms an input to a residual block stack,
-    by building a tensor with [h_t | z_{t-j:t-1} ].
-    That way, causality in mamba allows the h_t future summary to attend to
-    latent history z_{t-j:t-1}, to produce the parameters for z_t.
+    The encoder owns the future-summary RNN and the per-step time/mask
+    construction logic; the actual mixing of ``h_fut`` with the latent
+    history happens inside the configurable ``combiner`` slot, and the
+    distribution parameterization lives in the ``dist_head`` slot. With
+    ``combiner=LegacyJointCombiner`` and ``dist_head=GaussianDistHead``
+    this matches the pre-refactor encoder bit-for-bit.
 
-    As h_t and z_{t-j:t-1} have different shapes, we first project them to
-    the same hidden dimension C, then concatenate along the channel dim.
-
+    The name retains "Gaussian" for now even though the dist head is
+    pluggable, to avoid mass-renaming downstream call sites.
     """
 
     def __init__(
@@ -170,15 +175,21 @@ class GaussianEncoder(BaseEncoder):
         pad_mask_emb_dim: int = 8,
         covariate_dim: int = 0,
         static_covariate_dim: int = 0,
-        context: Callable[..., ContextProducer] | None = None,
-        gaussian_head: Callable[..., GaussianHead] | None = None,
+        combiner: Callable[..., BaseEncoderCombiner] | None = None,
+        dist_head: Callable[..., BaseDistHead] | None = None,
         fut_summary: Callable[..., FutureSummary] | None = None,
     ) -> None:
         super().__init__()
-        if context is None:
-            context = partial(ContextProducer, channels=8, num_layers=2)
-        if gaussian_head is None:
-            gaussian_head = partial(GaussianHead, clamp_logvar_min=-10.0)
+        if combiner is None:
+            combiner = partial(
+                CompoundCombiner,
+                aggregator=partial(
+                    ContextProducerAggregator, channels=8, num_layers=2
+                ),
+                fusion=partial(ConcatLinearFusion),
+            )
+        if dist_head is None:
+            dist_head = partial(GaussianDistHead, clamp_logvar_min=-10.0)
         if fut_summary is None:
             fut_summary = partial(GRUFutureSummary, summary_dim=64, num_layers=2)
 
@@ -190,7 +201,6 @@ class GaussianEncoder(BaseEncoder):
         self.emb_time_dim = emb_time_dim
         self.fut_mask_emb_dim = fut_mask_emb_dim
         self.pad_mask_emb_dim = pad_mask_emb_dim
-        self.mask_emb_dim = fut_mask_emb_dim + pad_mask_emb_dim
         self.use_mask = use_mask
         self.eps = 1e-8
 
@@ -198,20 +208,10 @@ class GaussianEncoder(BaseEncoder):
         self.total_static_dim = static_covariate_dim
 
         if self.total_static_dim > 0:
-            # Project D (data) -> hidden_dim (ContextProducer spatial dim)
+            # Project D (data) -> hidden_dim (combiner spatial dim)
             self.static_proj_context = nn.Linear(data_dim, self.hidden_dim)
         else:
             self.static_proj_context = None
-
-        # -- context summarizer --
-        combined_dim = self.hidden_dim
-        self.context_producer = context(
-            combined_dim=combined_dim,
-            mask_tot_dim=self.mask_emb_dim,
-            emb_time_dim=self.emb_time_dim + self.covariate_dim,
-            combined_len=self.j + 1,
-            static_emb_dim=self.total_static_dim,
-        )
 
         # -- future summary module --
         self.fut_sum_module = fut_summary(
@@ -222,31 +222,29 @@ class GaussianEncoder(BaseEncoder):
         )
         self.summary_dim = self.fut_sum_module.summary_dim
 
-        # -- projection layers --
-        # project future summary h_t: C_summary -> H
-        self.h_fut_proj = nn.Linear(self.summary_dim, self.hidden_dim)
+        # -- combiner: (h_fut, z_hist, time, masks) -> features --
+        self.combiner = combiner(
+            latent_dim=latent_dim,
+            j=j,
+            summary_dim=self.summary_dim,
+            hidden_dim=hidden_dim,
+            emb_time_dim=emb_time_dim + self.covariate_dim,
+            pad_mask_emb_dim=pad_mask_emb_dim,
+            fut_mask_emb_dim=fut_mask_emb_dim,
+            static_emb_dim=self.total_static_dim,
+        )
 
-        # project latent history z_{t-j:t-1}: d -> H
-        self.z_hist_proj = nn.Linear(self.latent_dim, self.hidden_dim)
-
-        # Embedding for the [0,1,1,...,1] mask over (h_t + history) positions
-        # We map a scalar mask per position to a small vector,
-        self.fut_mask_embed = nn.Linear(1, self.fut_mask_emb_dim)
-        self.pad_mask_embed = nn.Linear(1, self.pad_mask_emb_dim)
-
-        # heads: take flattened context (c * (h + e_t)) -> latent_dim
-        head_in_dim = self.context_producer.channels * self.hidden_dim
-        self.gaussian_head = gaussian_head(
-            in_features=head_in_dim,
-            out_features=self.latent_dim,
+        # -- dist head: features -> (z, logq, step_params) --
+        self.dist_head = dist_head(
+            in_features=self.combiner.out_features,
+            latent_dim=self.latent_dim,
         )
 
         self.fut_sum_module = maybe_compile(self.fut_sum_module, dynamic=True)
-        self.context_producer = maybe_compile(self.context_producer, dynamic=True)
 
     @property
     def is_gaussian_family(self) -> bool:
-        return True
+        return bool(self.dist_head.is_gaussian_family)
 
     # ---- main calls ----
     def _forward_with_stats(
@@ -257,50 +255,39 @@ class GaussianEncoder(BaseEncoder):
         h_fut: torch.Tensor,  # (B, C_summary) # fut summary at t
         time_embed: torch.Tensor,  # (B, T, E_t) time embeddings
         time_idx: torch.Tensor,  # (B,) current time index t
-        # (B,D,T-t) # optional conditioning mask
-        cond_mask: Optional[torch.Tensor] = None,
+        cond_mask: Optional[torch.Tensor] = None,  # (B,D,T-t) optional conditioning mask
         covariates: Optional[torch.Tensor] = None,
         static_context: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """One-step inference: returns (z_t, logq_t, mu_t, logvar_t).
+    ) -> Tuple[torch.Tensor, torch.Tensor, dict]:
+        """One-step inference: returns (z_t, logq_t, step_params).
 
         Args:
-            z_prev: (B, d, j) latent history z_{t-j:t-1}
-            z_padding: (B, d, j) padding latents for when k < j
+            z_prev: (B, d, k) latent history z_{t-k:t-1} with ``k <= j``
+            z_padding: (B, d, j) padding latents for when ``k < j``
             h_fut: (B, C_summary) future summary at time t
             time_embed: (B, T, E_t) time embeddings
-            pad_mask_embed: (B, T, E_pad) latent impute mask embeddings
             time_idx: (B,) current time index t
             cond_mask: (B, D, T-t) optional conditioning mask for observed data
+            covariates: optional (B, V, T) time-varying covariates
+            static_context: optional (B, E_s, H) projected static context
 
         Returns:
-            z_t   : (B, d) sample from q_ϕ(z_t | ·)
-            logq_t: (B,)   log q_ϕ(z_t | ·)
-            mu_t  : (B, d) mean of q_ϕ(z_t | ·)
-            logvar_t: (B, d) log-variance of q_ϕ(z_t | ·)
-
+            z_t         : (B, d) sample from q_ϕ(z_t | ·)
+            logq_t      : (B,)   log q_ϕ(z_t | ·)
+            step_params : dict — per-step distribution parameters from the head
         """
-        # define L = T-t as the future length
         device = z_prev.device
 
-        # z_prev: (B, d, j)
+        # z_prev: (B, d, k)
         B, d, k = z_prev.shape
         assert d == self.latent_dim, f"z_prev latent dim {d} != {self.latent_dim}"
 
+        # Left-pad history to length j and build the per-step pad mask.
         if k < self.j:
             assert z_padding is not None, "z_padding required when history length < j"
             num_pad = self.j - k
-            # z_padding is (B, d, j). We want the last num_pad elements.
-            # If z_padding = [z_{-j-1}, ..., z_{0}]
-            # and z_prev = [z_1, ..., z_{k}]
-            # we would like  [z_{k - j + 1}, ..., z_k] of total length j
-
-            # grab [z_{k - j + 1}, ..., z_{0}] from z_padding (last num_pad)
             pad_z = z_padding[:, :, -num_pad:]  # (B, d, num_pad)
             z_prev_full = torch.cat([pad_z, z_prev], dim=-1)  # (B, d, j)
-
-            # mask: 0 for pad, 1 for existing history
-            # We ignore input pad_mask if we are padding, assuming z_prev is all real
             pad_mask_hist = torch.cat(
                 [
                     torch.zeros(B, num_pad, device=device, dtype=z_prev.dtype),
@@ -312,103 +299,44 @@ class GaussianEncoder(BaseEncoder):
             z_prev_full = z_prev
             pad_mask_hist = torch.ones(B, self.j, device=device, dtype=z_prev.dtype)
 
-        assert z_prev_full.shape == (B, d, self.j), (
-            f"z_prev_full shape {z_prev_full.shape} != (B={B}, d={d}, j={self.j})"
-        )
-        # h_fut: (B, C_summary)
+        assert z_prev_full.shape == (B, d, self.j)
         assert h_fut.shape == (B, self.summary_dim), (
             f"h_fut shape {h_fut.shape} != (B={B}, summary_dim={self.summary_dim})"
         )
+        assert time_embed.shape[0] == B and time_embed.shape[2] == self.emb_time_dim
+        assert time_idx.shape == (B,) and time_idx.dtype == torch.long
 
-        # time_embed: (B, T, E_t)
-        assert time_embed.shape[0] == B, (
-            f"time_embed batch {time_embed.shape[0]} != B={B}"
-        )
-        assert time_embed.shape[2] == self.emb_time_dim, (
-            f"time_embed emb dim {time_embed.shape[2]} != {self.emb_time_dim}"
-        )
-
-        # time_idx: (B,)
-        assert time_idx.shape == (B,), f"time_idx shape {time_idx.shape} != (B={B},)"
-        assert time_idx.dtype == torch.long, "time_idx must be torch.long"
-
-        # get time embeddings for history slots
+        # History time embeddings: [t-j, ..., t-1] (length j).
         hist_time_emb = hist_abs_time_tokens(
             time_embed=time_embed,
             t_idx=time_idx,
             j=self.j,
-            prepend_fut=True,
-        )  # (B, j+1, E_t)
-
+            prepend_fut=False,
+            plus_one=False,
+        )  # (B, j, E_t)
         if covariates is not None:
             covs = covariates.permute(0, 2, 1)  # (B, T, V)
             hist_covs = hist_abs_time_tokens(
                 time_embed=covs,
                 t_idx=time_idx,
                 j=self.j,
-                prepend_fut=True,
-            )  # (B, j+1, V)
+                prepend_fut=False,
+                plus_one=False,
+            )  # (B, j, V)
             hist_time_emb = torch.cat([hist_time_emb, hist_covs], dim=-1)
 
-        # ---- build combined context vector [h_t | z_hist_summary] ----
-        # project future summary
-        h_proj = self.h_fut_proj(h_fut)  # (B, H)
-        h_proj = h_proj.unsqueeze(-1)  # (B, H, 1)
-
-        # project latent history per step
-        z_hist = z_prev_full.permute(0, 2, 1)  # (B, j, d)
-        z_proj = self.z_hist_proj(z_hist)  # (B, j, H)
-        z_proj = z_proj.permute(0, 2, 1)  # (B, H, j)
-
-        # concatenate to get [h_t | z_{t-j: t-1}]
-        combined = torch.cat([h_proj, z_proj], dim=-1)  # (B, H, j+1)
-
-        # add in timestamps
-        hist_time_emb = hist_time_emb.permute(0, 2, 1)  # (B, E_t (or E_t+V), j+1)
-
-        # ---- add [0,1,1,...,1] mask over (h_t + history) positions ----
-        Bc, Fe, L_hist = combined.shape  # Fe = H, L_hist = j+1
-        device = combined.device
-
-        # base mask: 0 for h_t (index 0), 1 for history slots (1..j)
-        base_mask = torch.zeros(Bc, 1, L_hist, device=device, dtype=combined.dtype)
-        base_mask[:, :, 1:] = 1.0  # (B,1,j+1)
-
-        # embed mask per position: (B,1,L) -> (B,E_fut,L)
-        fut_mask_embed = self.fut_mask_embed(base_mask.permute(0, 2, 1))  # (B,L,E_m)
-        fut_mask_embed = fut_mask_embed.permute(0, 2, 1)  # (B,E_m,L)
-
-        # full mask embedding
-        # pad_mask_hist is (B, j). We prepend 1 for h_t (future summary is always valid/present)
-        pad_mask_full = torch.cat(
-            [torch.ones(B, 1, device=device, dtype=pad_mask_hist.dtype), pad_mask_hist],
-            dim=1,
-        )  # (B, j+1)
-
-        pad_mask_embed = self.pad_mask_embed(
-            pad_mask_full.unsqueeze(-1)
-        )  # (B, j+1, E_pad)
-        pad_mask_embed = pad_mask_embed.permute(0, 2, 1)  # (B,E_pad,L)
-        mask_embed = torch.cat(
-            [fut_mask_embed, pad_mask_embed], dim=1
-        )  # (B, E_m + E_pad, L)
-
-        x = self.context_producer.forward(
-            combined=combined,
-            mask_embedded=mask_embed,
+        # Combiner: (h_fut, z_hist) -> features
+        features = self.combiner(
+            h_fut=h_fut,
+            z_hist=z_prev_full,
             hist_time_emb=hist_time_emb,
-            static_embedded=static_context,
-        )  # (B, C*tot_dim)
+            pad_mask_hist=pad_mask_hist,
+            static_context=static_context,
+        )
 
-        mu_t, logvar_t = self.gaussian_head(x)  # (B, d), (B, d)
-
-        # sample and log-prob
-        sigma_t = (0.5 * logvar_t).exp()
-        eps = torch.randn_like(mu_t)
-        z_t = mu_t + sigma_t * eps  # (B, d)
-        logq_t = gaussian_log_prob(z_t, mu_t, logvar_t)  # (B,)
-
-        return z_t, logq_t, mu_t, logvar_t
+        # Distribution head: features -> (z, logq, step_params)
+        z_t, logq_t, step_params = self.dist_head(features)
+        return z_t, logq_t, step_params
 
     def sample_paths(
         self,
@@ -418,7 +346,7 @@ class GaussianEncoder(BaseEncoder):
         cond_mask: Optional[torch.Tensor] = None,
         covariates: Optional[torch.Tensor] = None,
         static_embed: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, GaussianStats]:
+    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
         device = observed_data.device
         B, D, T = observed_data.shape
         assert time_embed.shape == (B, T, self.emb_time_dim)
@@ -442,7 +370,6 @@ class GaussianEncoder(BaseEncoder):
         # expand these to S paths
         BS = B * S
         h_expanded = h.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, T, -1)
-        # (BS, T, C_summary)
         time_embed_expanded = (
             time_embed.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, T, -1)
         )
@@ -463,18 +390,14 @@ class GaussianEncoder(BaseEncoder):
         else:
             covariates_expanded = None
 
-        # Prepare expanded context for ContextProducer
+        # Prepare expanded static context for the combiner
         static_context_expanded = None
         if self.static_proj_context is not None:
             assert static_embed is not None, (
                 "static_embed required when static_proj_context is defined"
             )
-
-            # (B, D, E_static) -> (B, E_static, D)
-            se_perms = static_embed.permute(0, 2, 1)
-            # -> (B, E_static, hidden_dim)
-            static_context = self.static_proj_context(se_perms)
-            # Expand to (BS, E_static, hidden_dim)
+            se_perms = static_embed.permute(0, 2, 1)  # (B, E_static, D)
+            static_context = self.static_proj_context(se_perms)  # (B, E_static, hidden_dim)
             E_s = static_context.size(1)
             static_context_expanded = (
                 static_context
@@ -483,38 +406,31 @@ class GaussianEncoder(BaseEncoder):
                 .reshape(BS, E_s, self.hidden_dim)
             )
 
-        # initialize empty latent history paths
+        # initialize empty latent history paths + zero padding
         z_prev_paths = torch.zeros(
             BS, self.latent_dim, 0, device=device, dtype=observed_data.dtype
-        )  # (BS, d, 0)
-
-        # generate 0 padding
+        )
         z_padding = torch.zeros(
             BS, self.latent_dim, self.j, device=device, dtype=observed_data.dtype
-        )  # (BS, d, j)
+        )
 
         zs_list = []
         logqs_list = []
-        mus_list = []
-        logvars_list = []
+        step_params_list: list[dict] = []
 
-        # autoregressive over time
         for t in range(T):
             t_idx = torch.full((BS,), t, dtype=torch.long, device=device)
 
-            # Current history: (BS, d, k)
             z_prev = z_prev_paths
             k = z_prev.shape[-1]
-
             if k > self.j:
-                z_prev_input = z_prev[:, :, -self.j :]
+                z_prev_input = z_prev[:, :, -self.j:]
             else:
                 z_prev_input = z_prev  # (BS, d, k) k <= j
 
             h_t = h_expanded[:, t, :]  # (BS, C_summary)
 
-            # Single forward pass for all B*S paths
-            z_t_sample, logq_t, mu_t, logvar_t = self._forward_with_stats(
+            z_t_sample, logq_t, step_params = self._forward_with_stats(
                 z_prev=z_prev_input,
                 z_padding=z_padding,
                 h_fut=h_t,
@@ -525,50 +441,32 @@ class GaussianEncoder(BaseEncoder):
                 static_context=static_context_expanded,
             )
 
-            # Update history
             z_prev_paths = torch.cat([z_prev_paths, z_t_sample.unsqueeze(-1)], dim=-1)
-            # Keep only last j steps to save memory/compute
             if z_prev_paths.shape[-1] > self.j:
-                z_prev_paths = z_prev_paths[..., -self.j :]
+                z_prev_paths = z_prev_paths[..., -self.j:]
 
             zs_list.append(z_t_sample)
             logqs_list.append(logq_t)
-            mus_list.append(mu_t)
-            logvars_list.append(logvar_t)
+            step_params_list.append(step_params)
 
         zs_bs = torch.stack(zs_list, dim=-1)  # (BS, d, T)
         logqs_bs = torch.stack(logqs_list, dim=-1)  # (BS, T)
-        mus_bs = torch.stack(mus_list, dim=-1)  # (BS, d, T)
-        logvars_bs = torch.stack(logvars_list, dim=-1)  # (BS, d, T)
 
         zs = zs_bs.view(B, S, self.latent_dim, T)
         logqs = logqs_bs.view(B, S, T)
-        mus = mus_bs.view(B, S, self.latent_dim, T)
-        logvars = logvars_bs.view(B, S, self.latent_dim, T)
 
-        stats: GaussianStats = {"mus": mus, "logvars": logvars}
+        # Head stacks per-step params along the new last (T) axis; reshape BS -> (B, S).
+        stats_bs = self.dist_head.stack_stats(step_params_list)
+        stats: dict = {
+            k: v.view(B, S, *v.shape[1:]) for k, v in stats_bs.items()
+        }
         return zs, logqs, stats
 
-    def entropy_transition(self, stats: GaussianStats, j: int) -> torch.Tensor:
-        assert "logvars" in stats
-        logvars = stats["logvars"]  # (B, S, d, T)
-        B, S, d, T = logvars.shape
-        if j >= T:
-            return torch.zeros((), device=logvars.device, dtype=logvars.dtype)
-        lv = logvars[:, :, :, j:]  # (B, S, d, T-j)
-        H_per_bs = gaussian_entropy(lv)  # (B, S)
-        return H_per_bs.mean()  # Mean over B, S
+    def entropy_transition(self, stats: dict, j: int) -> torch.Tensor:
+        return self.dist_head.entropy_transition(stats, j)
 
-    def entropy_init(self, stats: GaussianStats, steps: int) -> torch.Tensor:
-        assert "logvars" in stats
-        logvars = stats["logvars"]  # (B, S, d, T)
-        B, S, d, T = logvars.shape
-        steps = min(steps, T)
-        if steps == 0:
-            return torch.zeros((), device=logvars.device, dtype=logvars.dtype)
-        lv = logvars[:, :, :, :steps]  # (B, S, d, steps)
-        H_per_bs = gaussian_entropy(lv)  # (B, S)
-        return H_per_bs.mean()  # Mean over B, S
+    def entropy_init(self, stats: dict, steps: int) -> torch.Tensor:
+        return self.dist_head.entropy_init(stats, steps)
 
 
 # ---- Initial Prior Interface ---- ####
