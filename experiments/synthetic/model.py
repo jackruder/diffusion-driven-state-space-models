@@ -22,17 +22,22 @@ and the typed builders below pick it up.
 from __future__ import annotations
 
 from ddssm.builders import (
+    Combiner,
+    ConcatLinearFusionB,
     Context,
+    ContextAggregatorB,
     DDSSM,
     Decoder,
     DiffResidualBlock,
     DiffTransition,
     Encoder,
     FeatureMixer,
+    GaussianDistHeadB,
     GaussTransition,
     GRUFutSum,
     Head,
     Hparams,
+    IdentityAggregatorB,
     MLPUnet,
     ResidualBlock,
     Schedule,
@@ -78,6 +83,30 @@ SmallHead = Head(clamp_logvar_min=-10.0)
 # Unclamped head (decoder / Gaussian transition): a logvar prior in the
 # decoder + the KL term keep this well-behaved.
 PlainHead = Head()
+
+# Encoder distribution head (Gaussian, clamped logvar) — used by every
+# shape in this family.
+SmallDistHead = GaussianDistHeadB(clamp_logvar_min=-10.0)
+
+# Encoder combiner for ``j=1`` shapes: identity history aggregator
+# (no history to mix when j=1) + concat-linear fusion of h_fut and
+# z_{t-1}. Override the fusion to ``DKSFusionB()`` for a DKS-style
+# combiner, or swap the aggregator for ``GRUAggregatorB`` /
+# ``MLPAggregatorB`` / ``AttentionAggregatorB`` when ``j>1``.
+SmallIdentityCombiner = Combiner(
+    aggregator=IdentityAggregatorB(),
+    fusion=ConcatLinearFusionB(),
+)
+
+# Encoder combiner for ``j>1`` shapes: ContextProducer aggregator over
+# the j-step history (matching the residual-block stack the encoder
+# used before the aggregator/fusion split) + concat-linear fusion.
+SmallContextCombiner = Combiner(
+    aggregator=ContextAggregatorB(
+        channels=8, num_layers=2, residual_block=SmallResBlock,
+    ),
+    fusion=ConcatLinearFusionB(),
+)
 
 # Tiny GRU summary — single layer, 16-dim hidden state. The future
 # summary is the dominant per-step cost (sequential over T); overkill
@@ -125,8 +154,8 @@ class Small1D:
         hidden_dim=hidden_dim,
         fut_mask_emb_dim=mask_emb_dim,
         pad_mask_emb_dim=mask_emb_dim,
-        context=SmallContext,
-        gaussian_head=SmallHead,
+        combiner=SmallIdentityCombiner,
+        dist_head=SmallDistHead,
         fut_summary=TinyGRU,
     )
 
@@ -205,8 +234,8 @@ class Robot2D:
         hidden_dim=hidden_dim,
         fut_mask_emb_dim=mask_emb_dim,
         pad_mask_emb_dim=mask_emb_dim,
-        context=SmallContext,
-        gaussian_head=SmallHead,
+        combiner=SmallContextCombiner,
+        dist_head=SmallDistHead,
         fut_summary=TinyGRU,
     )
 
@@ -285,8 +314,8 @@ class ProbeMedium:
         hidden_dim=hidden_dim,
         fut_mask_emb_dim=mask_emb_dim,
         pad_mask_emb_dim=mask_emb_dim,
-        context=SmallContext,
-        gaussian_head=SmallHead,
+        combiner=SmallIdentityCombiner,
+        dist_head=SmallDistHead,
         fut_summary=TinyGRU,
     )
 
