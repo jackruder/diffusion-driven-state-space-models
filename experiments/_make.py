@@ -10,11 +10,11 @@ call :func:`experiment` (it ties them together and keeps
     from ddssm.builders import Eval, Hparams, Plot, Training, Viz
     from conf.registry import experiment_store
     from experiments._make import experiment, run
-    from experiments.synthetic.models import SmallGauss
-    from experiments.synthetic.datasets import Harmonic
+    from experiments.synthetic.model import Small1D
+    from experiments.synthetic.data import Harmonic
 
     exp = experiment(
-        data=Harmonic, model=SmallGauss,
+        data=Harmonic, model=Small1D.gauss_model,
         hparams=Hparams(S=1, lambda_warmup_steps=200, batch_size=32,
                         enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4),
         training=Training(steps=1000, log_every=25, checkpoint_every=200),
@@ -58,6 +58,7 @@ def experiment(
     objective: Any | None = None,
     variance: Any | None = None,
     wandb_config: Any | None = None,
+    sbatch: Any | None = None,
     seed: int | None = 0,
 ) -> Any:
     """Bind a model + dataset + training into an :class:`ExperimentC` config.
@@ -66,6 +67,11 @@ def experiment(
     Hparams instances inside the resulting tree are identical — the
     trainer reads the experiment-level field and the DDSSM internals
     read ``model.hyperparams``.
+
+    ``sbatch`` is purely metadata at training time; it is read by
+    ``python -m experiments sbatch <name>`` when emitting a Slurm
+    submit script. Leave ``None`` to inherit the project default in
+    :mod:`experiments._sbatch`.
     """
     model = dataclasses.replace(model, hyperparams=hparams)
     return ExperimentC(
@@ -80,6 +86,7 @@ def experiment(
         seed=seed,
         wandb_config=wandb_config,
         hparams=hparams,
+        sbatch=sbatch,
     )
 
 

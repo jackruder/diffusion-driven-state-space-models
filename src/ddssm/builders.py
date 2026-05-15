@@ -40,7 +40,13 @@ from .diffnets import (
 from .dssd import DDSSM_base, DDSSMHyperParamsConf  # dataclasses
 from .encoder import GaussianEncoder, GaussianInitPrior
 from .eval.runner import EvalSpec
-from .experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
+from .experiment import (
+    Experiment,
+    ObjectiveSpec,
+    SBatch as _SBatchDC,
+    TrainableModules,
+    TrainingScalars,
+)
 from .futsum import GRUFutureSummary, TransformerFutureSummary
 from .gaussians import GaussianHead
 from .train import DDSSMTrainer
@@ -251,6 +257,7 @@ Training = builds(
     trainable=None,
 )
 Objective = builds(ObjectiveSpec, populate_full_signature=True)
+SBatch = builds(_SBatchDC, populate_full_signature=True)
 
 DDSSM = builds(
     DDSSM_base,
@@ -300,7 +307,7 @@ __all__ = [
     "Synthetic", "KDD", "Null",
     # Model + training
     "DDSSM", "Hparams",
-    "Trainable", "Training", "Objective",
+    "Trainable", "Training", "Objective", "SBatch",
     "TrainerPartial",
     # Eval / viz / variance
     "Eval", "Plot", "Viz",

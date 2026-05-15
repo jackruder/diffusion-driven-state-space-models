@@ -128,6 +128,28 @@ class ObjectiveSpec:
         return float(sum(values[-tail_n:]) / tail_n)
 
 
+@dataclass
+class SBatch:
+    """Slurm resource request attached to an experiment.
+
+    Read by ``experiments._sbatch.render_sbatch`` when emitting a
+    submit script via ``python -m experiments sbatch <name>``. Ignored
+    at training time. Most experiments leave this ``None`` on the
+    :class:`Experiment` and inherit the project-default ``SBatch``
+    from ``experiments._sbatch``; override here for runs that need
+    e.g. ``time="12:00:00"`` or a different partition.
+    """
+
+    partition: str = "gpu"
+    time: str = "04:00:00"
+    gpus: int = 1
+    cpus: int = 4
+    mem: str = "32G"
+    nodes: int = 1
+    job_name: str | None = None
+    extra_flags: tuple[str, ...] = ()
+
+
 def _seed_everything(seed: int | None) -> None:
     if seed is None:
         return
@@ -163,6 +185,9 @@ class Experiment:
     # ``exp.hparams.lambda_warmup_steps=...`` or ``tweak(exp,
     # hparams__lr=1e-3)`` without descending into ``model.config``.
     hparams: Any = None
+    # Slurm resource request, consumed by ``python -m experiments
+    # sbatch``. Purely metadata at training time.
+    sbatch: SBatch | None = None
 
     def train(self, *, device: torch.device, run_dir: str) -> float | DDSSMTrainer:
         """Run training only. Eval and visualization are separate stages."""
@@ -341,4 +366,5 @@ __all__ = [
     "TrainingScalars",
     "TrainableModules",
     "ObjectiveSpec",
+    "SBatch",
 ]
