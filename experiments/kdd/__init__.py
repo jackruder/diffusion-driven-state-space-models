@@ -1,19 +1,19 @@
 """KDD Cup 2018 PM2.5 experiments family.
 
-Importing this subpackage registers the KDD-specific encoder /
-decoder / z_init / transition / hparams / training / eval / viz /
-dataset / model / experiment configs to their respective stores.
+Five files per family (see :mod:`experiments.synthetic` for the convention):
+
+* :mod:`.model`        — arch primitives + ``KDD`` shape-namespace + composed DDSSM.
+* :mod:`.data`         — :class:`KDDDataModule` config.
+* :mod:`.hparams`      — :class:`Hparams` + training-scalar presets.
+* :mod:`.evals`        — :class:`Eval` + :class:`Viz` specs.
+* :mod:`.experiments`  — named compositions + ``kdd_phase1`` Optuna sweep.
 """
 
-from . import encoders, decoders, z_inits
-from . import hparams, training, evals, vizs, datasets
-from . import transitions
-from . import models
+from . import model
+from . import data
+from . import hparams
+from . import evals
 from . import experiments
-from . import sweeps
 
-__all__ = [
-    "encoders", "decoders", "z_inits",
-    "hparams", "training", "evals", "vizs", "datasets",
-    "transitions", "models", "experiments", "sweeps",
-]
+
+__all__ = ["model", "data", "hparams", "evals", "experiments"]

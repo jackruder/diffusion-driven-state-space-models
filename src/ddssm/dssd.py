@@ -1,6 +1,6 @@
 """Core DDSSM model: ELBO forward pass, encoder/decoder/transition dispatch, and forecast rollout."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Dict, List, final
 
@@ -791,22 +791,12 @@ def _default_hyperparams():
         trans_lr=5e-4,
         logvar_min=-7.0,
         logvar_max=7.0,
-        rewo=SimpleNamespace(D0=0.1, nu=1e-3, alpha=0.99, tau1=1.0, tau2=1.0),
     )
 
 
 # ---------------------------------------------------------------------------
 # Hyperparameters and top-level DDSSMConf, co-located with DDSSM_base.
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class REWOConf:
-    D0: float = 0.1
-    nu: float = 1e-3
-    alpha: float = 0.99
-    tau1: float = 1.0
-    tau2: float = 1.0
 
 
 @dataclass
@@ -821,7 +811,7 @@ class DDSSMHyperParamsConf:
     t_chunk: int = 16
     clip_grad_norm: float | None = None
 
-    lambda_schedule: str = "none"  # "none" | "linear" | "cosine" | "rewo"
+    lambda_schedule: str = "none"  # "none" | "linear" | "cosine"
     lambda_start: float = 0.001
     lambda_end: float = 1.0
     lambda_warmup_steps: int = 10
@@ -833,7 +823,5 @@ class DDSSMHyperParamsConf:
 
     logvar_min: float = -7.0
     logvar_max: float = 7.0
-
-    rewo: REWOConf = field(default_factory=REWOConf)
 
 

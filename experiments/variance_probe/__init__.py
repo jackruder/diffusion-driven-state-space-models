@@ -1,20 +1,24 @@
 """Variance-probe experiments family.
 
 DiffusionV2 transition + Probe spec over short (300-step) runs on a
-handful of synthetic datasets. Importing this subpackage registers
-every named config; the dependency graph requires
-:mod:`experiments.synthetic` to be imported first (this subpackage's
-models reuse synthetic encoders/decoders/z_inits) — the top-level
-:mod:`experiments` ``__init__`` handles the ordering.
+handful of synthetic datasets. Reuses the synthetic family's encoder /
+decoder / z_init shapes — :mod:`experiments.synthetic` must import
+first (the top-level :mod:`experiments` ``__init__`` enforces the order).
+
+Five files per family (see :mod:`experiments.synthetic` for the convention):
+
+* :mod:`.model`        — DiffusionV2 transition + DDSSM composition.
+* :mod:`.data`         — :class:`SyntheticDataModule` configs at smaller ``N_per_split``.
+* :mod:`.hparams`      — :class:`Hparams` + training-scalar presets.
+* :mod:`.evals`        — :class:`Objective` + :class:`Probe` specs.
+* :mod:`.experiments`  — named compositions + ``variance_probe`` sweep preset.
 """
 
-from . import schedules, hparams, training, datasets
-from . import transitions
-from . import models
+from . import model
+from . import data
+from . import hparams
+from . import evals
 from . import experiments
-from . import sweeps
 
-__all__ = [
-    "schedules", "hparams", "training", "datasets",
-    "transitions", "models", "experiments", "sweeps",
-]
+
+__all__ = ["model", "data", "hparams", "evals", "experiments"]

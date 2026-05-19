@@ -219,3 +219,4 @@ __marimo__/
 # Hydra outputs
 outputs/
 multirun/
+runs/

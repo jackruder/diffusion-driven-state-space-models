@@ -1,28 +1,26 @@
 """Synthetic-data experiments family.
 
-Importing this subpackage triggers registration of every named
-encoder / decoder / z_init / unet / schedule / transition /
-dataset / hparams / training / eval / viz / model / experiment
-to the corresponding store in :mod:`conf.registry`.
+Importing this subpackage triggers registration of every encoder /
+decoder / z_init / unet / schedule / transition / dataset / hparams /
+training / eval / viz / model / experiment / sweep to the corresponding
+store in :mod:`conf.registry`.
 
-Dependency order matters — leaf pieces register first, then
-composed configs. The imports below reflect that order.
+Five files per family:
+
+* :mod:`.model`        — arch primitives + shape-namespace classes +
+                          encoder/decoder/z_init/transition/unet/
+                          schedule/model registrations.
+* :mod:`.data`         — :class:`SyntheticDataModule` configs.
+* :mod:`.hparams`      — :class:`Hparams` + training-scalar presets.
+* :mod:`.evals`        — :class:`Eval` + :class:`Viz` specs.
+* :mod:`.experiments`  — named :class:`ExperimentC` compositions + Optuna sweeps.
 """
 
-# Leaf component groups.
-from . import encoders, decoders, z_inits, unets, schedules
-from . import hparams, training, evals, vizs, datasets
-
-# Composed groups (depend on leaves).
-from . import transitions
-from . import models
+from . import model
+from . import data
+from . import hparams
+from . import evals
 from . import experiments
 
-# Optuna sweep presets.
-from . import sweeps
 
-__all__ = [
-    "encoders", "decoders", "z_inits", "unets", "schedules",
-    "hparams", "training", "evals", "vizs", "datasets",
-    "transitions", "models", "experiments", "sweeps",
-]
+__all__ = ["model", "data", "hparams", "evals", "experiments"]

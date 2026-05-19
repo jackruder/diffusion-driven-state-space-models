@@ -2,6 +2,10 @@
 from functools import partial
 import torch
 import pytest
+from ddssm.aggregators import ContextProducerAggregator
+from ddssm.combiners import CompoundCombiner
+from ddssm.dist_heads import GaussianDistHead
+from ddssm.fusions import ConcatLinearFusion
 from ddssm.net_utils import get_side_info, time_embedding
 from ddssm.encoder import GaussianEncoder, GaussianInitPrior
 from ddssm.decoder import GaussianDecoder
@@ -48,12 +52,26 @@ _CTX = partial(
 _GH = GaussianHead  # zen_partial-style: parents call _GH(in_features=..., out_features=...)
 _FS = partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1)
 
+# Encoder-only slots: aggregator + fusion + dist head.
+_AGG = partial(
+    ContextProducerAggregator,
+    channels=CHANNELS,
+    num_layers=1,
+    residual_block=ResidualBlockConfig(
+        feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+    ),
+)
+_FUSION = partial(ConcatLinearFusion)
+_DIST_HEAD = partial(GaussianDistHead)
+
 
 def make_encoder():
     return GaussianEncoder(
         data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
         use_mask=True, hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH, fut_summary=_FS,
+        combiner=partial(CompoundCombiner, aggregator=_AGG, fusion=_FUSION),
+        dist_head=_DIST_HEAD,
+        fut_summary=_FS,
     )
 
 
@@ -87,7 +105,6 @@ def make_hyperparams():
         t_chunk=4, clip_grad_norm=None, lambda_schedule="none", lambda_start=0.001,
         lambda_end=1.0, lambda_warmup_steps=1, enc_lr=1e-3, dec_lr=1e-3,
         zinit_lr=1e-3, trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
-        rewo=SimpleNamespace(D0=0.1, nu=1e-3, alpha=0.99, tau1=1.0, tau2=1.0),
     )
 
 
@@ -369,3 +386,77 @@ def test_ddssm_forward(model):
     assert "loss/rate/trans/total" not in metrics
     assert "loss/rate/trans/diff" not in metrics
     assert "loss/rate/trans/entropy" not in metrics
+
+
+# ---------------------------------------------------------------------------
+# Encoder with each aggregator backbone — end-to-end ELBO smoke test
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("agg_name", ["identity", "gru", "mlp", "attention", "context"])
+def test_ddssm_forward_with_each_aggregator(agg_name):
+    """Every aggregator backbone produces a finite ELBO end-to-end."""
+    from ddssm.aggregators import (
+        AttentionAggregator,
+        ContextProducerAggregator,
+        GRUAggregator,
+        IdentityAggregator,
+        MLPAggregator,
+    )
+    from ddssm.combiners import CompoundCombiner
+    from ddssm.fusions import ConcatLinearFusion
+    from ddssm.dist_heads import GaussianDistHead
+
+    # Identity requires j=1; others run with the test default j=2.
+    j = 1 if agg_name == "identity" else J
+    rb = ResidualBlockConfig(feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1))
+    agg_map = {
+        "identity": partial(IdentityAggregator),
+        "gru": partial(GRUAggregator, num_gru_layers=1),
+        "mlp": partial(MLPAggregator, num_layers=2),
+        "attention": partial(AttentionAggregator, nheads=NHEADS, num_attn_layers=1),
+        "context": partial(
+            ContextProducerAggregator, channels=CHANNELS, num_layers=1, residual_block=rb,
+        ),
+    }
+    combiner = partial(
+        CompoundCombiner,
+        aggregator=agg_map[agg_name],
+        fusion=partial(ConcatLinearFusion),
+    )
+
+    enc = GaussianEncoder(
+        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=j, emb_time_dim=EMB_TIME,
+        use_mask=True, hidden_dim=CHANNELS,
+        combiner=combiner,
+        dist_head=partial(GaussianDistHead),
+        fut_summary=_FS,
+    )
+    # Decoder / z_init / transition keep their original ContextProducer.
+    dec = GaussianDecoder(
+        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=j, emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS, context=_CTX, gaussian_head=_GH,
+    )
+    zin = GaussianInitPrior(
+        latent_dim=LATENT_DIM, j=j, emb_time_dim=EMB_TIME, hidden_dim=CHANNELS,
+        context=_CTX, aux_context=_CTX, gaussian_head=_GH, aux_posterior_head=_GH,
+    )
+    trans = GaussianTransition(
+        latent_dim=LATENT_DIM, j=j, emb_time_dim=EMB_TIME, hidden_dim=CHANNELS,
+        context=_CTX, gaussian_head=_GH,
+    )
+
+    model = DDSSM_base(
+        encoder=enc, decoder=dec, z_init=zin, transition=trans,
+        j=j, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
+        hyperparams=make_hyperparams(),
+    )
+
+    B, T = 2, 5
+    x = torch.randn(B, DATA_DIM, T)
+    mask = torch.ones(B, DATA_DIM, T)
+    timepoints = torch.arange(T).unsqueeze(0).expand(B, -1)
+    loss, _dist, _rate, _metrics, _stats = model(
+        observed_data=x, observation_mask=mask, timepoints=timepoints,
+    )
+    assert loss.ndim == 0
+    assert torch.isfinite(loss).item()

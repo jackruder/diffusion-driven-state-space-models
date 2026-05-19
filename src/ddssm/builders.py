@@ -25,6 +25,14 @@ from hydra_zen import builds
 from omegaconf import MISSING
 
 # Runtime classes — actual constructors targeted by ``builds()``.
+from .aggregators import (
+    AttentionAggregator,
+    ContextProducerAggregator,
+    GRUAggregator,
+    IdentityAggregator,
+    MLPAggregator,
+)
+from .combiners import CompoundCombiner
 from .data.datamodule import KDDDataModule, NullDataModule, SyntheticDataModule
 from .decoder import GaussianDecoder
 from .diffnets import (
@@ -37,10 +45,18 @@ from .diffnets import (
     ResidualBlockConfig,
     TimeMixerConfig,
 )
-from .dssd import DDSSM_base, DDSSMHyperParamsConf, REWOConf  # dataclasses
+from .dist_heads import GaussianDistHead, MixtureGaussianDistHead
+from .dssd import DDSSM_base, DDSSMHyperParamsConf  # dataclasses
 from .encoder import GaussianEncoder, GaussianInitPrior
 from .eval.runner import EvalSpec
-from .experiment import Experiment, ObjectiveSpec, TrainableModules, TrainingScalars
+from .experiment import (
+    Experiment,
+    ObjectiveSpec,
+    SBatch as _SBatchDC,
+    TrainableModules,
+    TrainingScalars,
+)
+from .fusions import ConcatLinearFusion, DKSFusion, GatedFusion
 from .futsum import GRUFutureSummary, TransformerFutureSummary
 from .gaussians import GaussianHead
 from .train import DDSSMTrainer
@@ -55,14 +71,32 @@ from .viz.runner import PlotSpec, VizSpec
 
 
 # ---------------------------------------------------------------------------
-# Mixer + residual block dataclasses (runtime config objects, no Conf wrapper
-# needed — they're already dataclasses; expose them under shorter names).
+# Mixer + residual block builders.
+#
+# The runtime objects (``TimeMixerConfig`` etc.) are plain dataclasses, but
+# we wrap them in hydra-zen ``builds(...)`` so callers/experiments can
+# override any sub-field from a single overrides string, e.g.
+# ``encoder.context.residual_block.feature.nheads=8``.
+# Instantiating one of these configs returns an instance of the underlying
+# dataclass — that's what ``ContextProducer``/``CSDIUnet`` expect.
 # ---------------------------------------------------------------------------
 
-TimeMixer = TimeMixerConfig
-FeatureMixer = FeatureMixerConfig
-ResidualBlock = ResidualBlockConfig
-DiffResidualBlock = DiffResidualBlockConfig
+TimeMixer = builds(TimeMixerConfig, populate_full_signature=True)
+FeatureMixer = builds(FeatureMixerConfig, populate_full_signature=True)
+
+ResidualBlock = builds(
+    ResidualBlockConfig,
+    populate_full_signature=True,
+    time=TimeMixer(),
+    feature=FeatureMixer(n_layers=2),
+)
+
+DiffResidualBlock = builds(
+    DiffResidualBlockConfig,
+    populate_full_signature=True,
+    time=TimeMixer(),
+    feature=FeatureMixer(),
+)
 
 # ---------------------------------------------------------------------------
 # Schedules (plain dataclasses already; re-export under short names).
@@ -83,6 +117,7 @@ Context = builds(
     ContextProducer,
     channels=8,
     num_layers=2,
+    residual_block=ResidualBlock(),
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -91,6 +126,102 @@ MLPContext = builds(
     MLPContextProducer,
     channels=8,
     num_layers=2,
+    residual_block=ResidualBlock(),
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# Encoder aggregators / fusions / distribution heads.
+#
+# An encoder is built from three slots:
+#   combiner = CompoundCombiner(aggregator=..., fusion=...)
+#   dist_head = GaussianDistHead | MoGDistHead (stub)
+# Each builder is ``zen_partial=True`` so the encoder (or another module)
+# supplies shape kwargs at construction time.
+# ---------------------------------------------------------------------------
+
+IdentityAggregatorB = builds(
+    IdentityAggregator,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+GRUAggregatorB = builds(
+    GRUAggregator,
+    num_gru_layers=1,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+MLPAggregatorB = builds(
+    MLPAggregator,
+    num_layers=2,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+AttentionAggregatorB = builds(
+    AttentionAggregator,
+    nheads=4,
+    num_attn_layers=1,
+    ff_mult=4,
+    dropout=0.0,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+ContextAggregatorB = builds(
+    ContextProducerAggregator,
+    channels=8,
+    num_layers=2,
+    residual_block=ResidualBlock(),
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+ConcatLinearFusionB = builds(
+    ConcatLinearFusion,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+DKSFusionB = builds(
+    DKSFusion,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+GatedFusionB = builds(
+    GatedFusion,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+
+def Combiner(*, aggregator, fusion=None):
+    """Compose an aggregator + fusion into a ``CompoundCombiner`` partial."""
+    if fusion is None:
+        fusion = ConcatLinearFusionB()
+    return builds(
+        CompoundCombiner,
+        aggregator=aggregator,
+        fusion=fusion,
+        populate_full_signature=True,
+        zen_partial=True,
+    )
+
+
+GaussianDistHeadB = builds(
+    GaussianDistHead,
+    populate_full_signature=True,
+    zen_partial=True,
+)
+
+MoGDistHeadB = builds(
+    MixtureGaussianDistHead,
+    K=4,
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -100,6 +231,7 @@ Unet = builds(
     channels=64,
     n_layers=4,
     embedding_dim=128,
+    residual_block=DiffResidualBlock(),
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -109,6 +241,7 @@ MLPUnet = builds(
     channels=64,
     n_layers=2,
     embedding_dim=128,
+    residual_block=DiffResidualBlock(),
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -157,8 +290,8 @@ Encoder = builds(
     GaussianEncoder,
     populate_full_signature=True,
     **_SHAPE_ENC,
-    context=Context(),
-    gaussian_head=Head(clamp_logvar_min=-10.0),
+    combiner=Combiner(aggregator=ContextAggregatorB(), fusion=ConcatLinearFusionB()),
+    dist_head=GaussianDistHeadB(clamp_logvar_min=-10.0),
     fut_summary=GRUFutSum(),
 )
 
@@ -221,7 +354,6 @@ Null = builds(NullDataModule, populate_full_signature=True)
 # ---------------------------------------------------------------------------
 
 Hparams = builds(DDSSMHyperParamsConf, populate_full_signature=True)
-Rewo = builds(REWOConf, populate_full_signature=True)
 
 Trainable = builds(TrainableModules, populate_full_signature=True)
 Training = builds(
@@ -230,6 +362,7 @@ Training = builds(
     trainable=None,
 )
 Objective = builds(ObjectiveSpec, populate_full_signature=True)
+SBatch = builds(_SBatchDC, populate_full_signature=True)
 
 DDSSM = builds(
     DDSSM_base,
@@ -265,21 +398,27 @@ ExperimentC = builds(Experiment, populate_full_signature=True)
 
 
 __all__ = [
-    # Mixers / residual blocks (re-exported runtime dataclasses)
+    # Mixer / residual-block builders (instantiate to runtime dataclasses)
     "TimeMixer", "FeatureMixer", "ResidualBlock", "DiffResidualBlock",
     # Schedules
     "Schedule", "ScheduleV2",
     # Architectural builders
     "Head", "Context", "MLPContext", "Unet", "MLPUnet",
     "GRUFutSum", "TransformerFutSum",
+    # Encoder building blocks: aggregator + fusion + dist-head
+    "IdentityAggregatorB", "GRUAggregatorB", "MLPAggregatorB",
+    "AttentionAggregatorB", "ContextAggregatorB",
+    "ConcatLinearFusionB", "DKSFusionB", "GatedFusionB",
+    "Combiner",
+    "GaussianDistHeadB", "MoGDistHeadB",
     # Module-slot builders
     "Encoder", "Decoder", "ZInit",
     "GaussTransition", "DiffTransition", "DiffV2Transition",
     # Data modules
     "Synthetic", "KDD", "Null",
     # Model + training
-    "DDSSM", "Hparams", "Rewo",
-    "Trainable", "Training", "Objective",
+    "DDSSM", "Hparams",
+    "Trainable", "Training", "Objective", "SBatch",
     "TrainerPartial",
     # Eval / viz / variance
     "Eval", "Plot", "Viz",
