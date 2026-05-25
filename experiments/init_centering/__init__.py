@@ -18,10 +18,23 @@ factory introduced in Phase B (cell parametrisation):
   ``StageTrainableConf.baseline`` mirrors ``baseline_mode``.
 
 Phase C adds the pilot Optuna sweep (``init_centering_pilot``
-experiment + ``init_pilot`` sweep preset).  The full 18-cell grid +
-named cell presets land in Phase D.
+experiment + ``init_pilot`` sweep preset).  Phase D registers the full
+18-cell grid (one named preset per cell, see :mod:`.cells` for the
+enumerator) plus two explicit control presets
+(``init_canonical_ctrl_sigma0`` and ``init_canonical_ctrl_npretrain0``)
+that pin the two sweep knobs at zero — values Optuna's log-uniform
+prior cannot sample.  See :mod:`.launch_phase_d` for the SLURM sbatch
+helper that emits one job per cell.
 """
 
-from . import data, evals, experiments, hparams, model, sweeps
+from . import cells, data, evals, experiments, hparams, model, sweeps
 
-__all__ = ["data", "evals", "experiments", "hparams", "model", "sweeps"]
+__all__ = [
+    "cells",
+    "data",
+    "evals",
+    "experiments",
+    "hparams",
+    "model",
+    "sweeps",
+]

@@ -57,8 +57,13 @@ def _clear_global_hydra():
 
 
 def test_experiments_registered() -> None:
-    """All 16 named presets are reachable through the experiment store."""
-    assert len(EXPERIMENTS) == 16, EXPERIMENTS
+    """All 36 named presets are reachable through the experiment store.
+
+    Phase D adds 18 cell presets (one per ablation-grid cell) plus 2
+    explicit control presets on top of the 16-preset Phase-C surface
+    (14 legacy + ``init_centering_smoke`` + ``init_centering_pilot``).
+    """
+    assert len(EXPERIMENTS) == 36, EXPERIMENTS
 
 
 @pytest.mark.parametrize("name", EXPERIMENTS)

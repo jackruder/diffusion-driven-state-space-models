@@ -1,9 +1,14 @@
-"""Named init-centering experiments: smoke + pilot."""
+"""Named init-centering experiments: smoke + pilot + Phase-D 18-cell grid."""
 
 from __future__ import annotations
 
 from conf.registry import experiment_store
 from experiments._make import experiment
+from experiments.init_centering.cells import (
+    CANONICAL_CELL,
+    cell_name,
+    iter_cells,
+)
 from experiments.init_centering.data import Harmonic
 from experiments.init_centering.evals import PilotEval, PilotObjective
 from experiments.init_centering.hparams import SmokeHparams, StagesB, Training800
@@ -52,3 +57,84 @@ init_centering_pilot = experiment(
     objective=PilotObjective,
 )
 experiment_store(init_centering_pilot, name="init_centering_pilot")
+
+
+# ---------------------------------------------------------------------------
+# Phase D — the full 18-cell ablation grid.
+#
+# One named preset per cell, all sharing the canonical-cell training
+# scaffold but with the three cell axes (``baseline_form``,
+# ``baseline_mode``, ``tracking_mode``) varied across the grid.  Each
+# cell wires the Phase-A eval pipeline + the JSON-source
+# ``stage2_elbo_surrogate`` objective so it can plug straight into the
+# pilot Optuna sweep (``+sweep=init_pilot``).
+#
+# Run a single cell:
+#   python -m ddssm.app experiment=init_mlp_pinned_per_t
+#
+# Sweep a single cell (20 trials):
+#   python -m ddssm.app --multirun \
+#       experiment=init_mlp_pinned_per_t +sweep=init_pilot \
+#       hydra.sweeper.n_trials=20 \
+#       hydra.sweeper.study_name=phase_d_mlp_pinned_per_t
+#
+# Submit all 18 cells via SLURM:
+#   python -m experiments.init_centering.launch_phase_d --write-dir runs/sbatch/phase_d
+# ---------------------------------------------------------------------------
+
+for _form, _mode, _tracking in iter_cells():
+    _cell_exp = experiment(
+        data=Harmonic,
+        model=SmokeModel(
+            baseline_form=_form,
+            baseline_mode=_mode,
+            tracking_mode=_tracking,
+            stages=StagesB,
+        ),
+        hparams=SmokeHparams,
+        training=Training800,
+        eval=PilotEval,
+        objective=PilotObjective,
+    )
+    experiment_store(_cell_exp, name=cell_name(_form, _mode, _tracking))
+
+
+# ---------------------------------------------------------------------------
+# Phase D control cells — the two settings Optuna's log-uniform cannot
+# sample.  Both pin the canonical cell and zero out exactly one sweep
+# knob, so the headline plot in Phase E can show "what happens at the
+# boundary the sweep never reaches".
+# ---------------------------------------------------------------------------
+
+_CANONICAL_FORM, _CANONICAL_MODE, _CANONICAL_TRACKING = CANONICAL_CELL
+
+init_canonical_ctrl_sigma0 = experiment(
+    data=Harmonic,
+    model=SmokeModel(
+        baseline_form=_CANONICAL_FORM,
+        baseline_mode=_CANONICAL_MODE,
+        tracking_mode=_CANONICAL_TRACKING,
+        stages=StagesB(sigma_pert=0.0),
+    ),
+    hparams=SmokeHparams,
+    training=Training800,
+    eval=PilotEval,
+    objective=PilotObjective,
+)
+experiment_store(init_canonical_ctrl_sigma0, name="init_canonical_ctrl_sigma0")
+
+
+init_canonical_ctrl_npretrain0 = experiment(
+    data=Harmonic,
+    model=SmokeModel(
+        baseline_form=_CANONICAL_FORM,
+        baseline_mode=_CANONICAL_MODE,
+        tracking_mode=_CANONICAL_TRACKING,
+        stages=StagesB(n_pretrain=0),
+    ),
+    hparams=SmokeHparams,
+    training=Training800,
+    eval=PilotEval,
+    objective=PilotObjective,
+)
+experiment_store(init_canonical_ctrl_npretrain0, name="init_canonical_ctrl_npretrain0")

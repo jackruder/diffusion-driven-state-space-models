@@ -27,22 +27,14 @@ from ddssm.centering.baselines import (
     LinearBaseline,
     IdentityBaseline,
 )
+from experiments.init_centering.cells import iter_cells
 from experiments.init_centering.model import _build_init_centering_model
 from experiments.init_centering.hparams import _build_init_centering_stages
 
-# 18-cell grid (post auto-degenerate clamp): 6 zero/identity-pinned + 12 linear/MLP × {pinned, learnable}
-_BASELINE_FORMS = ("zero", "identity", "linear", "mlp")
-_TRACKING_MODES = ("fixed", "global_ema", "per_t")
-
 
 def _cells():
-    cells = []
-    for form in _BASELINE_FORMS:
-        modes = ("pinned",) if form in ("zero", "identity") else ("pinned", "learnable")
-        for mode in modes:
-            for tm in _TRACKING_MODES:
-                cells.append((form, mode, tm))
-    return cells
+    """All 18 cells of the post-auto-clamp ablation grid."""
+    return list(iter_cells())
 
 
 def _minimal_hparams() -> SimpleNamespace:
