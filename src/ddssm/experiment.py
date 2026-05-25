@@ -11,12 +11,13 @@ handles wiring; this class handles orchestration.
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import math
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import numpy as np
 import torch
@@ -85,17 +86,47 @@ class TrainingScalars:
 class ObjectiveSpec:
     """How the experiment turns a finished run into an Optuna objective.
 
-    Reads the trainer's CSV log and returns the mean of the final
-    ``tail_frac`` of values in ``metric``. ``+inf`` is returned when the
-    log is missing or the column is absent so failed trials surface
+    Two sources:
+
+    * ``source="csv"`` (default, legacy): reads the trainer's
+      ``metrics.csv`` and returns the mean of the final ``tail_frac``
+      of values in ``metric``.  ``split`` filters rows by the ``split``
+      column.
+
+    * ``source="json"``: reads the eval pipeline's ``metrics.json`` and
+      returns the scalar at key ``metric``.  Used by Phase-C/D Optuna
+      pilots whose objective is a post-training eval metric (e.g.
+      :func:`ddssm.eval.metrics.eval_stage2_elbo_surrogate`).  ``split``
+      and ``tail_frac`` are ignored in this mode.
+
+    ``+inf`` is returned when the source file is missing, the column /
+    key is absent, or the value is non-finite — so failed trials surface
     cleanly under Optuna's ``minimize`` direction.
     """
 
     metric: str = "loss/total"
     split: str = "train"
     tail_frac: float = 0.1
+    source: Literal["csv", "json"] = "csv"
 
-    def read(self, csv_path: str) -> float:
+    def read(self, run_dir_or_csv: str) -> float:
+        """Read the objective value from ``run_dir`` (or, legacy: a CSV path).
+
+        Backward-compatibility: if ``run_dir_or_csv`` points at an
+        existing file (not a directory) the CSV source is read directly
+        from that path — preserving the pre-Phase-C call signature used
+        by ``Experiment.train`` and the variance-probe family.
+        """
+        if self.source == "json":
+            return self._read_json(run_dir_or_csv)
+        return self._read_csv(run_dir_or_csv)
+
+    def _read_csv(self, path: str) -> float:
+        # If caller passed a run_dir, append the conventional filename.
+        if path and os.path.isdir(path):
+            csv_path = os.path.join(path, "metrics.csv")
+        else:
+            csv_path = path
         if not csv_path or not os.path.isfile(csv_path):
             return float("inf")
         try:
@@ -126,6 +157,29 @@ class ObjectiveSpec:
             return float("inf")
         tail_n = max(1, int(len(values) * float(self.tail_frac)))
         return float(sum(values[-tail_n:]) / tail_n)
+
+    def _read_json(self, run_dir: str) -> float:
+        if not run_dir:
+            return float("inf")
+        json_path = (
+            run_dir if os.path.isfile(run_dir)
+            else os.path.join(run_dir, "metrics.json")
+        )
+        if not os.path.isfile(json_path):
+            return float("inf")
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return float("inf")
+        value = data.get(self.metric)
+        if value is None:
+            return float("inf")
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return float("inf")
+        return v if math.isfinite(v) else float("inf")
 
 
 @dataclass
@@ -264,6 +318,31 @@ class Experiment:
 
         if self.objective is None:
             return trainer
+
+        # Phase C: when the objective comes from the eval pipeline,
+        # save a final checkpoint and chain :meth:`evaluate` so the
+        # metric is written to ``metrics.json`` before we read it.
+        if getattr(self.objective, "source", "csv") == "json":
+            if self.eval is None:
+                log.warning(
+                    "Objective source='json' but self.eval is None; "
+                    "returning +inf so the trial is skipped cleanly."
+                )
+                return float("inf")
+            final_ckpt = os.path.join(
+                self.model.config.checkpoint_dir, "ckpt_final.pth",
+            )
+            trainer.save_checkpoint(final_ckpt)
+            log.info("Saved final checkpoint to %s", final_ckpt)
+            self.evaluate(
+                device=device, run_dir=run_dir,
+                checkpoint_path=final_ckpt, csv_path=csv_log_path,
+            )
+            value = self.objective.read(run_dir)
+            log.info(
+                "Objective[json/%s] = %.6g", self.objective.metric, value,
+            )
+            return value
 
         value = self.objective.read(csv_log_path)
         log.info(

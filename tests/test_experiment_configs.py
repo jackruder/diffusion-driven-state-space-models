@@ -57,8 +57,8 @@ def _clear_global_hydra():
 
 
 def test_experiments_registered() -> None:
-    """All 15 named presets are reachable through the experiment store."""
-    assert len(EXPERIMENTS) == 15, EXPERIMENTS
+    """All 16 named presets are reachable through the experiment store."""
+    assert len(EXPERIMENTS) == 16, EXPERIMENTS
 
 
 @pytest.mark.parametrize("name", EXPERIMENTS)

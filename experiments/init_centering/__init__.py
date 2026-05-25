@@ -17,10 +17,11 @@ factory introduced in Phase B (cell parametrisation):
   :class:`CenteringHandoffConf` between them; stage-2's
   ``StageTrainableConf.baseline`` mirrors ``baseline_mode``.
 
-The 18-cell ablation grid and Optuna sweep ride on top of this
-factory (Phases C/D); register named cell presets there.
+Phase C adds the pilot Optuna sweep (``init_centering_pilot``
+experiment + ``init_pilot`` sweep preset).  The full 18-cell grid +
+named cell presets land in Phase D.
 """
 
-from . import data, model, hparams, experiments
+from . import data, evals, experiments, hparams, model, sweeps
 
-__all__ = ["data", "experiments", "hparams", "model"]
+__all__ = ["data", "evals", "experiments", "hparams", "model", "sweeps"]
