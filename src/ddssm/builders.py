@@ -39,6 +39,7 @@ from .centering.baselines import (
     MLPBaseline,
     ZeroBaseline,
 )
+from .centering.handoff import CenteringHandoffConf
 from .centering.sigma_data import SigmaDataBuffer
 from .combiners import CompoundCombiner
 from .data.datamodule import KDDDataModule, NullDataModule, SyntheticDataModule
@@ -403,6 +404,8 @@ DiffV3Transition = builds(
     schedule=ScheduleV3(),
 )
 
+CenteringHandoff = builds(CenteringHandoffConf, populate_full_signature=True)
+
 
 # ---------------------------------------------------------------------------
 # Data modules.
@@ -483,7 +486,7 @@ __all__ = [
     # Model-v2 baseline-centering builders
     "ZeroBaselineB", "IdentityBaselineB", "LinearBaselineB", "MLPBaselineB",
     "AuxPosteriorB", "SigmaDataBufferB",
-    "BaselineGaussTransition", "DiffV3Transition",
+    "BaselineGaussTransition", "DiffV3Transition", "CenteringHandoff",
     # Data modules
     "Synthetic", "KDD", "Null",
     # Model + training

@@ -23,16 +23,19 @@ from .baselines import (
     MLPBaseline,
     ZeroBaseline,
 )
+from .handoff import CenteringHandoffConf, perform_centering_handoff
 from .regularizers import r_mu_p_loss, r_sigma_p_loss
 from .sigma_data import SigmaDataBuffer
 
 __all__ = [
     "BaseBaseline",
+    "CenteringHandoffConf",
     "IdentityBaseline",
     "LinearBaseline",
     "MLPBaseline",
     "SigmaDataBuffer",
     "ZeroBaseline",
+    "perform_centering_handoff",
     "r_mu_p_loss",
     "r_sigma_p_loss",
 ]
