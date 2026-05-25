@@ -447,6 +447,14 @@ def parse_batch(batch: dict, device: torch.device):
                 batch["static_covariates"], device=device, dtype=torch.long
             )
 
+        # Optional ground-truth latents (synthetic data with
+        # ``expose_gt_latents=True``; used by the model-v2 evaluation
+        # metrics ``gt_latent_jsd`` and ``crps_sum_latent``).
+        if batch.get("gt_latent", None) is not None:
+            out["gt_latent"] = torch.as_tensor(
+                batch["gt_latent"], device=device, dtype=torch.float32
+            )
+
         return out
 
     # GluonTS path

@@ -96,3 +96,64 @@ def test_trainer_conf_builds_instantiates(small_model, tmp_path):
         )
     )
     assert isinstance(trainer, DDSSMTrainer)
+
+
+class _SyntheticBatchDataset(Dataset):
+    """One-batch fixture for the CSV logging test."""
+
+    def __init__(self, B: int = 1, T: int = 4):
+        self.B = B
+        self.T = T
+
+    def __len__(self):
+        return self.B
+
+    def __getitem__(self, idx):
+        return {
+            "observed_data": torch.randn(DATA_DIM, self.T),
+            "observation_mask": torch.ones(DATA_DIM, self.T),
+            "timepoints": torch.arange(self.T, dtype=torch.float32),
+        }
+
+
+def test_trainer_logs_time_elapsed_s_to_csv(small_model, tmp_path):
+    """``_log_train_step`` writes ``time/elapsed_s`` as a CSV column.
+
+    This is the Phase-A trainer-side extension that feeds the
+    ``wallclock_to_target`` headline metric.
+    """
+    import csv as _csv
+
+    csv_path = tmp_path / "metrics.csv"
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        csv_log_path=str(csv_path),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+    trainer.fit(
+        train_loader=loader,
+        val_loader=None,
+        total_steps=2,
+        validate_every=0,
+        log_every=1,
+        checkpoint_every=None,
+        amp=False,
+    )
+    assert csv_path.exists()
+    with open(csv_path, newline="") as f:
+        reader = _csv.DictReader(f)
+        rows = list(reader)
+        fieldnames = reader.fieldnames or []
+    assert "time/elapsed_s" in fieldnames, (
+        f"missing time/elapsed_s column; got {fieldnames}"
+    )
+    # Each row's elapsed_s should be finite and non-negative.
+    elapsed_values = [float(r["time/elapsed_s"]) for r in rows if r.get("time/elapsed_s")]
+    assert elapsed_values, "no time/elapsed_s rows logged"
+    for v in elapsed_values:
+        assert v >= 0.0
+    # And monotonically non-decreasing across steps (real-time progression).
+    assert all(b >= a - 1e-6 for a, b in zip(elapsed_values, elapsed_values[1:]))

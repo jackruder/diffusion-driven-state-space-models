@@ -452,10 +452,18 @@ class DDSSMTrainer:
         accum_weight: int,
         device: torch.device,
     ):
+        import time as _time
         self.global_step += 1
         log_values = {
             "loss/total": torch.tensor(
                 accum_loss / self.grad_accum_steps, device=device
+            ),
+            # Wall-clock elapsed since the metric store was created
+            # (typically equals trainer-start time).  Surfaces ``time/elapsed_s``
+            # as a CSV column so the eval ``wallclock_to_target`` metric can
+            # find the time at which a metric first crossed a threshold.
+            "time/elapsed_s": torch.tensor(
+                _time.time() - self.metrics._t0, device=device
             ),
             **accum_metrics,
         }

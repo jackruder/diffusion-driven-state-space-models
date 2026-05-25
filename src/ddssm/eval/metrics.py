@@ -420,3 +420,503 @@ def eval_loss_tail(ctx: EvalContext, *, column: str = "loss/total", tail_frac: f
         return {column.replace("/", "_") + "_tail": float("nan")}
     n = max(1, int(len(values) * float(tail_frac)))
     return {column.replace("/", "_") + "_tail": float(sum(values[-n:]) / n)}
+
+
+# ---------------------------------------------------------------------------
+# Model-v2 headline metrics (init-experiment.org § Headline metrics).
+#
+# Five metrics that the init-centering ablation grid uses to score each
+# cell.  PF-ODE NLL (the doc's headline metric #1) is gated and deferred;
+# the others are below.
+# ---------------------------------------------------------------------------
+
+
+@register_metric("wallclock_to_target")
+def eval_wallclock_to_target(
+    ctx: EvalContext,
+    *,
+    target_column: str = "loss/total",
+    target_value: float = 0.0,
+    direction: str = "<=",
+    time_column: str = "time/elapsed_s",
+    step_column: str = "step",
+) -> Dict[str, Any]:
+    """Wall-clock (and step) at which a metric first crossed a threshold.
+
+    Walks ``ctx.csv_path`` in order; returns the ``(step, elapsed_s)``
+    of the first row where ``target_column`` crosses ``target_value``
+    in the given ``direction`` ("<=" or ">="), or ``null`` for both
+    fields if no row crosses.
+
+    Per ``init-experiment.org`` § Headline metrics, metric 5
+    ("wall-clock time to a target metric").
+    """
+    if direction not in ("<=", ">="):
+        raise ValueError(f"direction must be '<=' or '>='; got {direction!r}")
+    null_result = {
+        "wallclock_to_target_step": None,
+        "wallclock_to_target_seconds": None,
+        "wallclock_to_target_column": target_column,
+        "wallclock_to_target_value": float(target_value),
+        "wallclock_to_target_direction": direction,
+    }
+    if not ctx.csv_path:
+        return null_result
+    import csv as _csv
+    try:
+        with open(ctx.csv_path, "r", newline="") as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                raw = row.get(target_column, "")
+                if raw in ("", None):
+                    continue
+                try:
+                    v = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(v):
+                    continue
+                crossed = v <= target_value if direction == "<=" else v >= target_value
+                if not crossed:
+                    continue
+                step_raw = row.get(step_column, "")
+                time_raw = row.get(time_column, "")
+                try:
+                    step_int = int(float(step_raw)) if step_raw not in ("", None) else None
+                except (TypeError, ValueError):
+                    step_int = None
+                try:
+                    elapsed = float(time_raw) if time_raw not in ("", None) else None
+                except (TypeError, ValueError):
+                    elapsed = None
+                return {
+                    "wallclock_to_target_step": step_int,
+                    "wallclock_to_target_seconds": elapsed,
+                    "wallclock_to_target_column": target_column,
+                    "wallclock_to_target_value": float(target_value),
+                    "wallclock_to_target_direction": direction,
+                }
+    except OSError:
+        return null_result
+    return null_result
+
+
+@register_metric("stage2_elbo_surrogate")
+def eval_stage2_elbo_surrogate(
+    ctx: EvalContext,
+    *,
+    max_batches: int | None = None,
+) -> Dict[str, Any]:
+    """Stage-2 ELBO surrogate on a held-out split.
+
+    Walks ``ctx.loader``, calls ``model.forward(train=False, ...)`` on
+    each batch (the existing core code path computes every piece of
+    ``L_total`` per ``model-v2.org`` § Assembled losses for stage 2),
+    accumulates the rate + distortion sub-components, and returns the
+    seven scalar pieces of the surrogate plus the total.
+
+    Per ``init-experiment.org`` § Headline metrics, metric 2.  Until
+    PF-ODE NLL (metric 1) lands, this is the comparison objective for
+    the ablation grid.
+    """
+    if ctx.model is None or ctx.loader is None:
+        return {"stage2_elbo_surrogate": float("nan")}
+
+    sums = {
+        "stage2_elbo_surrogate": 0.0,
+        "recon": 0.0,
+        "init_loss": 0.0,
+        "init_kl_aux": 0.0,
+        "init_entropy": 0.0,
+        "trans_kl": 0.0,
+        "r_sigma_p": 0.0,
+        "r_mu_p": 0.0,
+    }
+    n_batches = 0
+    transform = ctx.batch_transform
+    model = ctx.model
+    device = ctx.device
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(ctx.loader):
+            if max_batches is not None and batch_idx >= int(max_batches):
+                break
+            if transform is not None:
+                batch = transform(batch, device)
+            else:
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+            loss, _, _, metrics, _ = model(
+                batch["observed_data"],
+                batch["observation_mask"],
+                batch["timepoints"],
+                covariates=batch.get("covariates", None),
+                static_covariates=batch.get("static_covariates", None),
+                train=False,
+                compute_recon=True,
+                compute_trans=True,
+                report_scaled=False,
+            )
+            sums["stage2_elbo_surrogate"] += float(loss.item())
+            sums["recon"] += float(metrics.get("loss/distortion/rec", 0.0).item() if hasattr(metrics.get("loss/distortion/rec", 0.0), "item") else metrics.get("loss/distortion/rec", 0.0))
+            sums["init_loss"] += float(metrics.get("loss/rate/init/loss_init", 0.0).item() if hasattr(metrics.get("loss/rate/init/loss_init", 0.0), "item") else metrics.get("loss/rate/init/loss_init", 0.0))
+            sums["init_kl_aux"] += float(metrics.get("loss/rate/init/kl_aux", 0.0).item() if hasattr(metrics.get("loss/rate/init/kl_aux", 0.0), "item") else metrics.get("loss/rate/init/kl_aux", 0.0))
+            sums["init_entropy"] += float(metrics.get("loss/rate/init/entropy", 0.0).item() if hasattr(metrics.get("loss/rate/init/entropy", 0.0), "item") else metrics.get("loss/rate/init/entropy", 0.0))
+            sums["trans_kl"] += float(metrics.get("loss/rate/trans/kl", 0.0).item() if hasattr(metrics.get("loss/rate/trans/kl", 0.0), "item") else metrics.get("loss/rate/trans/kl", 0.0))
+            sums["r_sigma_p"] += float(metrics.get("loss/rate/trans/r_sigma_p", 0.0).item() if hasattr(metrics.get("loss/rate/trans/r_sigma_p", 0.0), "item") else metrics.get("loss/rate/trans/r_sigma_p", 0.0))
+            sums["r_mu_p"] += float(metrics.get("loss/rate/trans/r_mu_p", 0.0).item() if hasattr(metrics.get("loss/rate/trans/r_mu_p", 0.0), "item") else metrics.get("loss/rate/trans/r_mu_p", 0.0))
+            n_batches += 1
+
+    if n_batches == 0:
+        return {"stage2_elbo_surrogate": float("nan")}
+    out = {f"stage2_elbo_surrogate_{k}": v / n_batches for k, v in sums.items()}
+    # The total surrogate (loss/total under V3) is also the headline value.
+    out["stage2_elbo_surrogate"] = out.pop("stage2_elbo_surrogate_stage2_elbo_surrogate")
+    out["stage2_elbo_surrogate_n_batches"] = int(n_batches)
+    return out
+
+
+@register_metric("sigma_data_drift")
+def eval_sigma_data_drift(
+    ctx: EvalContext,
+    *,
+    max_batches: int = 4,
+) -> Dict[str, Any]:
+    """σ_data²(t) snapshot + the two-component decomposition.
+
+    Per ``model-v2.org`` § Data-variance tracking:
+
+      ``σ_data²(t) = (1/D) ( E[‖σ_t‖²] + tr Var[μ̂_t] )``
+
+    where ``μ̂_t = μ_t − μ_p(z_{t-1})`` is the centered residual mean.
+    The first component captures the *average posterior variance* and
+    the second the *spread of residual means*.  This metric returns
+    both components per t plus the buffer's per-t values, summing
+    over a few held-out batches for the empirical components.
+
+    Per ``init-experiment.org`` § Headline metrics, metric 6 ("σ_data
+    drift trajectory + two-component decomposition").  This is the
+    snapshot variant — the trajectory plot in Phase E reads from
+    ``diag/sigma_data2/t=N`` columns in ``metrics.csv``.
+    """
+    if (
+        ctx.model is None
+        or ctx.loader is None
+        or getattr(ctx.model, "sigma_data", None) is None
+    ):
+        return {"sigma_data_drift_available": False}
+    model = ctx.model
+    device = ctx.device
+    transform = ctx.batch_transform
+
+    sigma_data2 = model.sigma_data.sigma_data2.detach().cpu().tolist()
+
+    # Empirical components from a few held-out batches.
+    j = int(model.j)
+    d = int(model.latent_dim)
+    comp1_per_t: dict[int, list[float]] = {}  # t -> list of E[||σ_t||^2]
+    comp2_per_t: dict[int, list[float]] = {}  # t -> list of tr Var[μ̂_t]
+
+    from ..net_utils import time_embedding
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(ctx.loader):
+            if batch_idx >= int(max_batches):
+                break
+            if transform is not None:
+                batch = transform(batch, device)
+            else:
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+            obs = batch["observed_data"]
+            mask = batch["observation_mask"]
+            tp = batch["timepoints"]
+            te = time_embedding(tp, model.emb_time_dim, device=device)
+            zs, _, stats = model._encode_latents(
+                observed_data=obs,
+                time_embed=te,
+                observation_mask=mask,
+            )
+            B, S, _, T = zs.shape
+            if T <= j:
+                continue
+            mus = stats["mus"]
+            logvars = stats["logvars"]
+            sigma2 = logvars.exp()  # (B, S, d, T)
+
+            # For each transition target t in 1..T-1 (0-based code idx
+            # t = j..T-1), compute:
+            #   component 1 = mean over (b, s) of sum_d sigma_t^2
+            #   component 2 = var over (b, s) of (mu_t - mu_p(z_hist))
+            #                 summed over d (trace).
+            baseline = getattr(model, "baseline", None)
+            for t in range(j, T):
+                z_hist = zs[:, :, :, t - j : t]  # (B, S, d, j)
+                z_hist_flat = z_hist.reshape(B * S, d, j)
+                mu_t = mus[:, :, :, t].reshape(B * S, d)
+                lv_t = sigma2[:, :, :, t].reshape(B * S, d)
+
+                if baseline is not None:
+                    mu_p = baseline.mean(z_hist_flat)
+                    mu_hat = mu_t - mu_p
+                else:
+                    mu_hat = mu_t
+
+                # Component 1: average ||sigma_t||^2.
+                c1 = lv_t.sum(dim=-1).mean().item() / d
+                # Component 2: tr Var across the BS axis of mu_hat,
+                # summed over d, then divided by d (matches the
+                # 1/D normalisation in the doc).
+                c2 = float(mu_hat.var(dim=0, unbiased=False).sum().item() / d)
+
+                t_ext = t + 1  # 1-based
+                comp1_per_t.setdefault(t_ext, []).append(c1)
+                comp2_per_t.setdefault(t_ext, []).append(c2)
+
+    # Reduce.
+    sorted_ts = sorted(comp1_per_t.keys())
+    comp1_list = [float(np.mean(comp1_per_t[t])) for t in sorted_ts]
+    comp2_list = [float(np.mean(comp2_per_t[t])) for t in sorted_ts]
+    decomp_sum = [a + b for a, b in zip(comp1_list, comp2_list)]
+    return {
+        "sigma_data_drift_available": True,
+        "sigma_data2_buffer": sigma_data2,
+        "sigma_data2_t_indices": sorted_ts,
+        "sigma_data2_component1_per_t": comp1_list,
+        "sigma_data2_component2_per_t": comp2_list,
+        "sigma_data2_decomposition_sum_per_t": decomp_sum,
+    }
+
+
+@register_metric("crps_sum_latent")
+def eval_crps_sum_latent(
+    ctx: EvalContext,
+    *,
+    max_batches: int | None = None,
+) -> Dict[str, Any]:
+    """CRPS-sum on latent samples vs. ground-truth latents.
+
+    Mirrors the obs-space ``crps_sum`` metric but operates on the
+    latent path: the encoder + transition produce ``(B, S, d, T)``
+    samples of z (via ``model.forecast``'s latent rollout), and the
+    ground-truth latents come from the data module's
+    ``expose_gt_latents`` surface.
+
+    Returns ``{crps_sum_latent_mean, crps_sum_latent_per_t}`` when
+    GT latents are available; ``{crps_sum_latent_available: False}``
+    otherwise.  Per ``init-experiment.org`` § Headline metrics,
+    metric 4 ("CRPS-sum across forecast horizons, in both latent
+    and observation spaces").
+    """
+    if ctx.model is None or ctx.loader is None or ctx.T_split is None:
+        return {"crps_sum_latent_available": False}
+    from ..eval_metrics import crps_sum_latent_metrics
+
+    model = ctx.model
+    device = ctx.device
+    transform = ctx.batch_transform
+    L1 = int(ctx.T_split)
+    means: list[float] = []
+    per_t_accum: list[torch.Tensor] = []
+    n_batches = 0
+
+    from ..net_utils import time_embedding
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(ctx.loader):
+            if max_batches is not None and batch_idx >= int(max_batches):
+                break
+            if transform is not None:
+                batch = transform(batch, device)
+            else:
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+            gt_latent = batch.get("gt_latent", None)
+            if gt_latent is None:
+                return {"crps_sum_latent_available": False}
+
+            T = batch["observed_data"].shape[-1]
+            x_hist = batch["observed_data"][..., :L1]
+            x_mask = batch["observation_mask"][..., :L1]
+            past_time = batch["timepoints"][:, :L1]
+            future_time = batch["timepoints"][:, L1:]
+
+            # Encode the past, then roll out latents into the future
+            # via the transition (this is what ``model.forecast`` does
+            # internally; we re-implement it lightly to expose latent
+            # samples rather than decoder samples).
+            te_past = time_embedding(past_time, model.emb_time_dim, device=device)
+            zs_past, _, stats = model.encoder.sample_paths(
+                observed_data=x_hist,
+                time_embed=te_past,
+                S=int(ctx.num_samples),
+                cond_mask=x_mask if getattr(model.encoder, "use_mask", False) else None,
+            )
+            B, S, d, _ = zs_past.shape
+            j = int(model.j)
+
+            # Pad if past < j.
+            if j <= L1:
+                z_hist = zs_past[..., -j:]
+            else:
+                pad = torch.zeros(B, S, d, j - L1, device=device, dtype=zs_past.dtype)
+                z_hist = torch.cat([pad, zs_past], dim=-1)
+            z_hist_flat = z_hist.reshape(B * S, d, j)
+
+            # Roll out future latents.  Use a no-context sample for the
+            # transition (covariates/time-embeddings are stub-zero —
+            # acceptable for the simple synthetic modes the GT-latent
+            # surface covers).
+            L2 = future_time.size(1)
+            future_zs = torch.zeros(B, S, d, L2, device=device, dtype=zs_past.dtype)
+            for t_step in range(L2):
+                ctx_dict = {
+                    "hist_time_emb": torch.zeros(
+                        B * S, j, model.emb_time_dim, device=device,
+                    ),
+                    "target_time_emb": torch.zeros(
+                        B * S, 1, model.emb_time_dim, device=device,
+                    ),
+                }
+                z_next = model.transition.sample(z_hist_flat, S=1, ctx=ctx_dict)
+                z_next = z_next.squeeze(1)  # (BS, d)
+                future_zs[:, :, :, t_step] = z_next.view(B, S, d)
+                if j > 1:
+                    z_hist_flat = torch.cat(
+                        [z_hist_flat[:, :, 1:], z_next.unsqueeze(-1)], dim=-1,
+                    )
+                else:
+                    z_hist_flat = z_next.unsqueeze(-1)
+
+            # Ground-truth latents over the same future range.
+            z_gt = gt_latent[..., L1:T]  # (B, d, L2)
+            crps_mean, crps_per_t = crps_sum_latent_metrics(
+                z_samples=future_zs, z_gt=z_gt,
+            )
+            means.append(float(crps_mean.item()))
+            per_t_accum.append(crps_per_t.cpu())
+            n_batches += 1
+
+    if n_batches == 0:
+        return {"crps_sum_latent_available": False}
+    per_t = torch.stack(per_t_accum, dim=0).mean(dim=0).tolist()
+    return {
+        "crps_sum_latent_available": True,
+        "crps_sum_latent_mean": float(np.mean(means)),
+        "crps_sum_latent_per_t": per_t,
+    }
+
+
+@register_metric("gt_latent_jsd")
+def eval_gt_latent_jsd(
+    ctx: EvalContext,
+    *,
+    max_batches: int = 2,
+    n_bins: int = 60,
+    edges_min: float = -3.0,
+    edges_max: float = 3.0,
+) -> Dict[str, Any]:
+    """JSD between model-transition samples and the GT transition kernel.
+
+    For each ``t ∈ [1, T-1]``, draws ``S`` samples from the model's
+    learned ``p_ψ(z_t | z_{t-1})`` (with GT ``z_{t-1}`` as the
+    conditioning), plus ``S`` samples from the analytic ground-truth
+    transition kernel via :mod:`ddssm.eval.synthetic_kernels`.  Bins
+    both into shared histograms and computes Jensen-Shannon divergence
+    per t.
+
+    Per ``init-experiment.org`` § Headline metrics, metric 3
+    ("Transition JSD on ground-truth latents").  This metric is the
+    *only* one that isolates the transition model from the encoder —
+    both sample sets are conditioned on the same GT z_{t-1}.
+
+    Skips with ``{gt_latent_jsd_available: False}`` when GT latents
+    aren't exposed by the loader or when the synthetic mode lacks a
+    registered closed-form kernel.
+    """
+    if ctx.model is None or ctx.loader is None:
+        return {"gt_latent_jsd_available": False}
+    from .synthetic_kernels import KERNEL_REGISTRY
+
+    # Look up the data module's mode from the loader's dataset.
+    mode = _infer_synthetic_mode(ctx.loader)
+    if mode is None or mode not in KERNEL_REGISTRY:
+        return {"gt_latent_jsd_available": False, "gt_latent_jsd_reason": f"no kernel for mode={mode!r}"}
+
+    kernel = KERNEL_REGISTRY[mode]
+    model = ctx.model
+    device = ctx.device
+    transform = ctx.batch_transform
+    j = int(model.j)
+    S = int(ctx.num_samples)
+
+    edges = np.linspace(edges_min, edges_max, n_bins + 1)
+    per_t_jsd: dict[int, list[float]] = {}
+    n_batches = 0
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(ctx.loader):
+            if batch_idx >= int(max_batches):
+                break
+            if transform is not None:
+                batch = transform(batch, device)
+            else:
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+            gt_latent = batch.get("gt_latent", None)
+            if gt_latent is None:
+                return {"gt_latent_jsd_available": False, "gt_latent_jsd_reason": "no gt_latent"}
+            B, d, T = gt_latent.shape
+            for t in range(j, T):
+                # GT conditioning history (B, d, j).
+                z_hist_gt = gt_latent[:, :, t - j : t]
+                # Tile across S samples.
+                z_hist_flat = z_hist_gt.unsqueeze(1).expand(B, S, d, j).reshape(B * S, d, j)
+
+                ctx_dict = {
+                    "hist_time_emb": torch.zeros(B * S, j, model.emb_time_dim, device=device),
+                    "target_time_emb": torch.zeros(B * S, 1, model.emb_time_dim, device=device),
+                }
+                z_next_model = model.transition.sample(z_hist_flat, S=1, ctx=ctx_dict)
+                z_next_model = z_next_model.squeeze(1).view(B, S, d).cpu().numpy()
+                z_next_gt = kernel(z_hist_gt.cpu().numpy(), S, batch_idx=batch_idx, t=t)  # (B, S, d)
+
+                # Per-dim JSD, averaged.
+                jsds_d = []
+                for di in range(d):
+                    for b in range(B):
+                        p = _hist_mass(z_next_model[b, :, di], edges)
+                        q = _hist_mass(z_next_gt[b, :, di], edges)
+                        jsds_d.append(_jsd_discrete(p, q))
+                per_t_jsd.setdefault(t + 1, []).append(float(np.mean(jsds_d)))
+            n_batches += 1
+
+    if not per_t_jsd:
+        return {"gt_latent_jsd_available": False}
+    sorted_ts = sorted(per_t_jsd.keys())
+    per_t_list = [float(np.mean(per_t_jsd[t])) for t in sorted_ts]
+    return {
+        "gt_latent_jsd_available": True,
+        "gt_latent_jsd_mean": float(np.mean(per_t_list)),
+        "gt_latent_jsd_per_t": per_t_list,
+        "gt_latent_jsd_t_indices": sorted_ts,
+        "gt_latent_jsd_n_batches": int(n_batches),
+    }
+
+
+def _infer_synthetic_mode(loader) -> str | None:
+    """Best-effort lookup of the synthetic dataset's ``mode`` attribute."""
+    try:
+        ds = loader.dataset
+        if hasattr(ds, "mode"):
+            return str(ds.mode)
+    except AttributeError:
+        return None
+    return None
