@@ -171,11 +171,14 @@ class StageOrchestrator:
             # 3. Per-module trainable flags.
             self.trainer._set_trainable(stage.trainable)
 
-            # 4. Run the stage's training loop.
+            # 4. Run the stage's training loop.  ``trainer.fit``'s
+            # ``total_steps`` is the *cumulative* max step, not per-stage,
+            # so we add the global step counter to the stage's budget.
+            target = int(self.trainer.global_step) + int(stage.steps)
             self.trainer.fit(
                 train_loader=train_loader,
                 val_loader=val_loader,
-                total_steps=stage.steps,
+                total_steps=target,
                 validate_every=stage.val_every,
                 log_every=stage.log_every,
                 checkpoint_every=stage.checkpoint_every,

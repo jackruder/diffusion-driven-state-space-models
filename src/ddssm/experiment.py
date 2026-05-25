@@ -230,19 +230,37 @@ class Experiment:
             return trainer
 
         val_loader = self.data.val_loader() if self.training.validate_every > 0 else None
-        log.info(
-            "Starting fit (steps=%d, log_every=%d, validate_every=%d, amp=%s)",
-            self.training.steps,
-            self.training.log_every,
-            self.training.validate_every,
-            self.training.amp,
-        )
-        trainer.fit(
-            train_loader=train_loader,
-            val_loader=val_loader,
-            batch_transform=self.data.batch_transform,
-            **self.training.fit_kwargs(),
-        )
+
+        stages_cfg = getattr(self.model.config, "stages", None)
+        if stages_cfg is not None and getattr(stages_cfg, "run", None):
+            # Multi-stage path: drive StageOrchestrator instead of a single fit.
+            from .stages import StageOrchestrator
+
+            log.info(
+                "Starting multi-stage run via StageOrchestrator (stages=%s)",
+                stages_cfg.run,
+            )
+            orchestrator = StageOrchestrator(trainer, self.model.config)
+            orchestrator.run(
+                train_loader=train_loader,
+                val_loader=val_loader,
+                amp=self.training.amp,
+                batch_transform=self.data.batch_transform,
+            )
+        else:
+            log.info(
+                "Starting fit (steps=%d, log_every=%d, validate_every=%d, amp=%s)",
+                self.training.steps,
+                self.training.log_every,
+                self.training.validate_every,
+                self.training.amp,
+            )
+            trainer.fit(
+                train_loader=train_loader,
+                val_loader=val_loader,
+                batch_transform=self.data.batch_transform,
+                **self.training.fit_kwargs(),
+            )
 
         if self.objective is None:
             return trainer

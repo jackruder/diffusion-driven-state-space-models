@@ -30,6 +30,7 @@ class _DummyTrainer:
     def __init__(self) -> None:
         self.model = SimpleNamespace(stage_selector="stage_0")
         self.calls: list[tuple] = []
+        self.global_step: int = 0
 
     def _rebuild_optimizer(self, lrs) -> None:
         self.calls.append(("rebuild", lrs))
