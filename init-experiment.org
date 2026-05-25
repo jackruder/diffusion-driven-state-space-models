@@ -6,7 +6,42 @@ baseline-centering and pretraining scheme defined in =model-v2.org=. The
 math, notation, and protocol live in =model-v2.org=; this file specifies
 *what we measure*, *what we sweep*, and *how we report*. It does not
 restate equations — see the pointer table in § Pointers to =model-v2.org=
-below for line references.
+below.
+
+* Implementation precursors
+
+The following items must be implemented before the init experiments
+can run. They are /not/ ablation knobs; they are baked-in design
+choices established in =model-v2.org= that the codebase needs to
+support.
+These are stated with \(j=1\), but should be implemented for any \(j\).
+
+- *VHP for \(p(z_1)\)* (=model-v2.org= § Reframing VHP to use diffusion).
+  Requires:
+  (i) auxiliary latent \(z_0 \in \mathbb{R}^D\) with prior
+  \(p(z_0) = \mathcal{N}(0, I)\);
+  (ii) variational posterior \(q_Φ(z_0 \mid z_1)\) — a small
+  diagonal-Gaussian MLP head;
+  (iii) reuse of the shared transition heads at \(t = 1\)
+  (\(p_ψ(z_1 \mid z_0)\) is the Gaussian transition in stage 1 and the
+  reverse-SDE density driven by the same \(s_ψ\) in stage 2);
+  (iv) extension of the \(σ_{\mathrm{data}}^2[t]\) buffer to
+  \(t \in \{1, \ldots, T\}\) so the stage-2 ESM surrogate at \(t = 1\)
+  gets EDM preconditioning.
+
+- *Zero-initialise the final layer of \(F_ψ\)*
+  (=model-v2.org= § EDM Preconditioning). At handoff, the EDM
+  denoiser-network \(F_ψ\) is created with its last layer zero-initialised
+  so that \(D_ψ \approx c_{\mathrm{skip}}\, \tilde{z}_t^{(τ)}\) at stage-2
+  start. Standard "zero-init residual" pattern; not an ablation knob.
+
+- *Padding mask in the diffusion side-info tensor*
+  (=model-v2.org= § Reframing VHP to use diffusion, /Padding mask in
+  the diffusion side-info tensor/). The score net's side-info tensor
+  carries a binary mask indicating whether the previous-latent
+  conditioning slot holds a real latent (\(z_{t-1}\) for \(t \geq 2\)) or
+  the padded auxiliary (\(z_0\) at \(t = 1\) under the VHP). This lets a
+  single \(s_ψ\) handle both cases without duplicating the network.
 
 * Goal
 
@@ -29,21 +64,26 @@ the full metric set below for post-hoc analysis.
 * Pointers to =model-v2.org=
 
 The reader should default to =model-v2.org= for any definition not
-restated here. Approximate line numbers in the current revision:
+restated here. Sections are referenced by heading text (stable across
+revisions); line numbers are deliberately omitted because they drift.
 
-| Topic                                | =model-v2.org= reference                                                      |
-|--------------------------------------+-------------------------------------------------------------------------------|
-| Two-stage training motivation        | § Motivation (line 590 ff.)                                                   |
-| Baseline-form variants (4 choices)   | § Baseline-form variants (line 651 ff.)                                       |
-| Baseline-mode variants (Pinned/Learnable) | § Generative baseline → Baseline-mode variants (lines 693, 708 ff.)       |
-| Structural degeneracy                | § Structural degeneracy (line 735 ff.)                                        |
-| Tracking-mode variants (3 choices)   | § Tracking-mode variants (line 903 ff.)                                       |
-| Stage-1 → stage-2 handoff protocol   | § Stage-1 → stage-2 handoff (line 760 ff.)                                    |
-| Centered residual \(\hat{z}_t\)      | § Motivation (line 599), § Centered coordinates and encoder marginal (line 817 ff.) |
-| Data-variance \(σ_{\mathrm{data}}^2(t)\) | § Data-variance tracking (line 841 ff.)                                   |
-| Loss and regression target           | § Regression target and final loss (line 971 ff.)                             |
-| Practical-considerations / logging   | § Practical considerations (line 1014 ff.)                                    |
-| Ablation grid summary                | § Ablation grid summary (line 1044 ff.)                                       |
+| Topic                                                   | =model-v2.org= reference                                                       |
+|---------------------------------------------------------+--------------------------------------------------------------------------------|
+| Two-stage training motivation                           | § Motivation (under § Baseline Centering)                                      |
+| Mean-only centering                                     | § Mean-only centering                                                          |
+| State-conditional anisotropic prior variance, \(\mathcal{R}_{σ_p}\) | § State-conditional prior variance                                  |
+| Baseline-form variants (Zero / Identity / Linear / MLP) | § Baseline-form variants                                                       |
+| Baseline-mode variants (Pinned / Learnable + anchor); structural-degeneracy argument | § Baseline-mode variants                                |
+| Tracking-mode variants (Fixed / Global EMA / Per-\(t\) EMA) | § Tracking-mode variants                                                   |
+| Stage-1 → stage-2 handoff protocol                      | § Stage-1 → stage-2 handoff                                                    |
+| Centered residual \(\hat{z}_t\)                         | § Centered coordinates and encoder marginal                                    |
+| Data-variance \(σ_{\mathrm{data}}^2(t)\) and EMA buffer | § Data-variance tracking                                                       |
+| EDM preconditioning; zero-init \(F_ψ\)                  | § EDM Preconditioning                                                          |
+| VHP for \(p(z_1)\); \(q_Φ\); padding mask               | § Reframing VHP to use diffusion                                               |
+| Per-step transition surrogate \(\mathcal{L}_t\)         | § Regression target and final loss                                             |
+| Assembled stage-1 / stage-2 losses                      | § Assembled losses for stage 1 and stage 2                                     |
+| Practical-considerations / logging / forecasting fallback | § Practical considerations                                                   |
+| Ablation grid summary (18 cells)                        | § Ablation grid summary                                                        |
 
 * Headline metrics (top 6, for tables and plots)
 
@@ -57,8 +97,7 @@ Each is logged once per trial (or per-step for time-series metrics).
 
 2. *Stage-2 ELBO surrogate* — cross-entropy term via Monte Carlo plus
    analytic entropy of \(q_φ\). Definition: see =model-v2.org= § ELBO
-   contribution (line 458 ff.) and § Regression target and final loss
-   (line 971 ff.).
+   contribution and § Regression target and final loss.
 
 3. *Transition JSD on ground-truth latents* (simulated data only; cf.
    =todos.org= line 79: "jsd for the relevant exps"). The only metric
@@ -80,10 +119,10 @@ Each is logged once per trial (or per-step for time-series metrics).
    alongside its two components (average posterior variance
    \(\mathbb{E}[\|\boldsymbol{σ}_t\|^2]\) and spread of residual means
    \(\mathrm{tr}(\mathrm{Var}[\hat{μ}_t])\)). Definition and
-   decomposition: =model-v2.org= § Data-variance tracking (line 841 ff.).
-   The headline diagnostic for the baseline-mode × tracking-mode
+   decomposition: =model-v2.org= § Data-variance tracking. The
+   headline diagnostic for the baseline-mode × tracking-mode
    interaction predicted by =model-v2.org= § Interaction with
-   tracking-mode variants (line 748 ff.).
+   tracking-mode variants.
 
 * Secondary metrics (logged, not headlined)
 
@@ -107,8 +146,18 @@ axis in the main tables/figures.
 - \(μ_p\) drift \(\|μ_p - μ_p^{(0)}\|\) on a fixed validation set of
   \(z_{t-1}\) samples (Learnable mode only).
 - Structural-degeneracy-direction projection of the \(μ_p\) change
-  (Learnable mode only). Defined in =model-v2.org= § Structural
-  degeneracy (line 735 ff.).
+  (Learnable mode only). Defined in =model-v2.org= § Baseline-mode
+  variants (structural-degeneracy argument).
+- Stage-2 ESM surrogate evaluated at \(t = 1\) (the initial-state term
+  \(\mathcal{L}_1^{(\mathrm{init})}\) under the VHP), tracked
+  alongside the per-\(t\) ESM losses at \(t \geq 2\). Looking for
+  parity in scale — large deviations indicate the VHP initial-state
+  conditional is not training comparably to the interior transitions.
+- \(\mathrm{KL}\bigl[q_Φ(z_0 \mid z_1) \,\|\, \mathcal{N}(0, I)\bigr]\)
+  averaged over the batch, per training step. Should rise off zero
+  early in stage 1 and stabilise; collapse back to zero indicates
+  \(q_Φ\) is ignoring \(z_1\) (VHP degenerated to the homoskedastic
+  prior).
 
 ** Compute and efficiency
 
@@ -116,8 +165,8 @@ axis in the main tables/figures.
 - Gradient steps to convergence.
 - Diffusion-sampling NFEs vs. quality (post-training).
 - Peak GPU memory.
-- Parameter count per submodule (encoder, decoder, baseline, diffusion
-  net separately).
+- Parameter count per submodule (encoder, decoder, baseline,
+  auxiliary posterior \(q_Φ\), diffusion net separately).
 - Throughput (samples/sec) at sampling time, parameterized by NFEs.
 
 ** Sampling quality (post-training)
@@ -135,16 +184,33 @@ axis in the main tables/figures.
   (post-handoff progress).
 - Residual-centering check \(\|\mathbb{E}[\hat{z}_t]\|\) for the
   parameter-free baseline forms (zero, identity).
+- *\(\log \boldsymbol{σ}_p^2\) collapse-vs-inflation diagnostic.* At
+  the end of stage 1, log the per-\((t, d)\) batch mean of
+  \(\log \boldsymbol{σ}_p^2(z_{t-1})_d\) across an evaluation
+  trajectory sample. Flag any \((t, d)\) whose mean deviates more
+  than a few standard deviations from zero — the global anchor
+  \(\mathcal{R}_{σ_p}\) can be satisfied by some dims collapsing
+  while others inflate (balancing in aggregate), and this diagnostic
+  surfaces that pathology. If triggered, the remediation is to
+  tighten \(λ_{σ_p}\) or fall back to a per-\((t, d)\) anchor (see
+  =model-v2.org= § State-conditional prior variance).
+- *\(q_Φ\) posterior summary.* Mean and variance of the sampled
+  \(z_0 \sim q_Φ(z_0 \mid z_1)\) across a validation batch. Sanity
+  check that the auxiliary posterior is informative (its variance is
+  meaningfully less than \(\mathcal{N}(0, I)\) and its mean varies
+  with \(z_1\)).
 
 * Hyperparameters introduced by this experiment
 
 Two new continuous knobs are exposed by the handoff protocol and were
 not present in the prior methodology. They are tuned per cell by Optuna.
 All /other/ hyperparams in the training pipeline (learning rates per
-parameter group, EMA decay \(γ\), anchor strength \(λ_{μ_p}\), encoder
-posterior-σ floor, etc.) are tuned by the implementation; this section
-specifies *only* the ranges for the two new knobs because they are
-specific to this experiment.
+parameter group, EMA decay \(γ\), \(μ_p\)-anchor strength \(λ_{μ_p}\),
+\(\boldsymbol{σ}_p\)-log-variance regularizer strength \(λ_{σ_p}\)
+(starting suggestion \(10^{-2}\) per =model-v2.org= § State-conditional
+prior variance), encoder posterior-σ floor, etc.) are tuned by the
+implementation; this section specifies *only* the ranges for the two
+new knobs because they are specific to this experiment.
 
 | New knob                  | Suggested Optuna range                                          | Notes                                                                                                                                                                                                |
 |---------------------------+-----------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -164,18 +230,26 @@ them as knobs.
   variance-head-only or last-layer-only variants.
 - *Optimizer rebuild scope*: full reset, always. No partial-reset or
   carry-over variants.
-- *EMA initialization at handoff*: inherit from stage 1 — if the cell
-  uses /Fixed/ tracking (\(σ_{\mathrm{data}} \equiv 1\) throughout
-  stage 1), start stage 2 from \(1\); otherwise inherit the stage-1
-  close-of-training EMA value (see =model-v2.org= step 5 of § Stage-1 →
-  stage-2 handoff).
+- *\(σ_{\mathrm{data}}^2[t]\) buffer continuity at handoff*: the
+  buffer is unified across stage 1 and stage 2 — it accumulates
+  passively throughout stage 1, carries over to stage 2 without
+  re-initialisation, and only the EMA /schedule/ (step counter, bias
+  correction, decay annealing) resets at the handoff. Under /Fixed/
+  tracking the buffer is then frozen at its handoff value; under
+  /Global EMA/ and /Per-\(t\) EMA/ the updates resume from that value
+  with the reset schedule (see =model-v2.org= § Stage-1 → stage-2
+  handoff steps 1 and 5).
+- *Zero-initialise \(F_ψ\)'s final layer* at the start of stage 2
+  (see =model-v2.org= § EDM Preconditioning).
+- *Padding mask in the diffusion side-info tensor* (see Implementation
+  precursors and =model-v2.org= § Reframing VHP to use diffusion).
 
 * Composition with the ablation grid
 
-- *Categorical cells.* The \(4 \times 2 \times 3 = 24\)-entry grid from
-  =model-v2.org= § Ablation grid summary, with parameter-free baseline
-  forms (zero, identity) admitting only the Pinned baseline-mode. Net
-  unique cells:
+- *Categorical cells.* The 18-cell grid of =model-v2.org= § Ablation
+  grid summary, derived from the three knobs (Baseline form ×
+  Baseline mode × Tracking mode) with the parameter-free baseline
+  forms (Zero, Identity) admitting only the Pinned baseline-mode:
 
   | Baseline forms      | × | Baseline modes        | × | Tracking modes | = | Cells |
   |---------------------+---+-----------------------+---+----------------+---+-------|
@@ -204,8 +278,8 @@ them as knobs.
 * Pairwise-comparison stories
 
 These are the questions the cell-vs-cell comparisons are designed to
-answer. They mirror =model-v2.org= § Pairwise comparisons (line 679 ff.)
-and § Tracking-mode variants (line 903 ff.):
+answer. They mirror =model-v2.org= § Pairwise comparisons (under
+§ Baseline-form variants) and § Tracking-mode variants:
 
 - *Baseline form*: does residual decomposition help? Does learning the
   baseline beyond identity help? Does nonlinear capacity in the baseline
@@ -224,7 +298,7 @@ and § Tracking-mode variants (line 903 ff.):
   is needed to escape stage-1 geometry without destroying the stage-1
   alignment with \(μ_p^{(0)}\)?
 - *Interaction* (=model-v2.org= § Interaction with tracking-mode
-  variants, line 748 ff.): under Learnable \(μ_p\), does the gap
+  variants): under Learnable \(μ_p\), does the gap
   between tracking-mode variants (2) and (3) shrink? Headline metric
   (6) is the direct test.
 

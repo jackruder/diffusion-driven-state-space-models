@@ -210,7 +210,7 @@ reference.
    the per-dimension diagonal output by \(q_φ\). No diffusion-time
    dependence.
 2. /Per-sample marginal variance at diffusion time \(τ\)/
-   \(Σ_t^{(τ)} := \boldsymbol{σ}_t^2 + \tilde{σ}_τ^2\)
+   \(\boldsymbol{Σ}_t^{(τ)} := \boldsymbol{σ}_t^2 + \tilde{σ}_τ^2\)
    (per-dim vector; the scalar \(\tilde{σ}_τ^2\) broadcasts over the
    \(D\) dimensions; in native coordinates the additive term is
    \(σ_τ^2\) instead): the variance of \(z_t^{(τ)}\) given the
@@ -583,6 +583,11 @@ with constants determined by
 c_{\mathrm{out}}(\tilde{σ}_τ) = \frac{\tilde{σ}_τ\, σ_{\mathrm{data}}}{\sqrt{\tilde{σ}_τ^2 + σ_{\mathrm{data}}^2}}, \quad
 c_{\mathrm{in}}(\tilde{σ}_τ) = \frac{1}{\sqrt{\tilde{σ}_τ^2 + σ_{\mathrm{data}}^2}}, \quad
 c_{\mathrm{noise}}(\tilde{σ}_τ) = \tfrac{1}{4}\ln \tilde{σ}_τ.\]
+Following prior work /TODO: cite/, we zero-initialize the final layer
+of \(F_ψ\) so that \(D_ψ \approx c_{\mathrm{skip}}\, \tilde{z}_t^{(τ)}\)
+at the start of training and the network learns score-matching
+residuals from a sensible baseline.
+
 
 **** Regression target and final loss.
 Define the regression target
@@ -674,8 +679,10 @@ In numerous settings (cite) it is useful to learn perturbations of a statistical
 We aim to both simplify the training objective of the diffusion model and provide a smart initialization scheme
 by letting our diffusion model learn the residual from some deterministic function of the previous state history, i.e \(δ_t = z_t - m(z_{t_{\mathrm{hist}}})\) for deterministic \(m\). The functional form of \(m\) is itself a design choice: GenCast and CSDI take \(m(z_{t-1}, z_{t-2}) = z_{t-1}\) (identity / random walk); a linear-Gaussian SSM takes \(m(z_{t-1}) = A z_{t-1} + b\); a DKF takes \(m\) to be a learned MLP mean head. We evaluate four parametric families for \(m\) — see [[Baseline-form variants]] below — and present the development with \(μ_p\) standing in for the chosen form (each downstream formula is form-agnostic).
 
-We propose to pretrain the full deep state-space model with a unit-variance
-Gaussian transition prior \(p(z_t | z_{t-1}) = \mathcal{N}(μ_p(z_{t-1}), I)\),
+We propose to pretrain the full deep state-space model with the Gaussian transition prior \(p(z_t | z_{t-1}) = \mathcal{N}\bigl(μ_p(z_{t-1}),\, \mathrm{diag}(\boldsymbol{σ}_p^2(z_{t-1}))\bigr)\)
+(with \(\boldsymbol{σ}_p(z_{t-1}) \in \mathbb{R}^D\).
+We utilize a regularizer to anchor the log-variance
+near zero, see [[State-conditional prior variance]] below),
 and then /center the diffusion target/:
 \[
 \hat{z}_t^{(τ)} := \tilde{z}_t^{(τ)} - μ_p(z_{t-1}),
@@ -691,50 +698,126 @@ directly; the baseline enters the assembled generative model only through
 this coordinate shift.
 
 
-Two design choices follow from this separation:
+Two design choices follow from this separation, developed in
+[[Mean-only centering]] and [[State-conditional prior variance]]
+below.
 
-1. /Mean-only centering./ We center by \(μ_p(z_{t-1})\) but do /not/
-   apply a full whitening
-   \((\tilde{z}_t - μ_p)/σ_{\mathrm{data}}(t)\).
-   The right scale here is \(σ_{\mathrm{data}}(t)\), not the
-   per-sample encoder std \(\boldsymbol{σ}_t\): we want the
-   coordinate system to be normalized over /all/ data, not per
-   batch. But \(σ_{\mathrm{data}}(t)\) is defined as a marginal
-   over the joint \((p_{\mathrm{data}}, q_φ)\), so it is not
-   directly observable — only estimable from samples. Whitening
-   the coordinate system by an estimate means the coordinate
-   system itself becomes a moving approximation during training,
-   and tracking error propagates directly into the diffusion
-   objective.
+*** Mean-only centering
+We center by \(μ_p(z_{t-1})\) but do /not/ apply a full whitening
+\((\tilde{z}_t - μ_p)/σ_{\mathrm{data}}(t)\). The right scale here is
+\(σ_{\mathrm{data}}(t)\), not the per-sample encoder std
+\(\boldsymbol{σ}_t\): we want the coordinate system to be normalized
+over /all/ data, not per batch. But \(σ_{\mathrm{data}}(t)\) is
+defined as a marginal over the joint \((p_{\mathrm{data}}, q_φ)\), so
+it is not directly observable — only estimable from samples.
+Whitening the coordinate system by an estimate means the coordinate
+system itself becomes a moving approximation during training, and
+tracking error propagates directly into the diffusion objective.
 
-   EDM preconditioning divides by the data variance to keep neural-network inputs unit to variance to. Applying EDM uses \(σ_{\mathrm{data}}(t)\) to reparameterize the loss, instead of the coordinate system. As a result, error in
-   the tracked \(σ_{\mathrm{data}}(t)\) results in sub-optimal preconditioning, still however yielding a valid loss in the fixed coordinate system. /TODO: valid is vauge/
-   On the contrary, error in the coordinate system results in the diffusion model being trained on an incorrect objective.
+EDM preconditioning divides by the data variance to keep
+neural-network inputs unit-variance. Applying EDM uses
+\(σ_{\mathrm{data}}(t)\) to reparameterize the loss, /not/ to
+reparameterize the coordinate system. As a result, error in the
+tracked \(σ_{\mathrm{data}}(t)\) yields sub-optimal preconditioning
+(the EDM constants \(c_{\mathrm{in}}, c_{\mathrm{out}},
+c_{\mathrm{skip}}\) are slightly mis-scaled, so the score net's
+inputs and gradient magnitudes are off from their EDM-calibrated
+ranges) — but it does /not/ change the minimiser: the unique
+\(ψ^{*}\) with \(s_{ψ^{*}} = s_q\) is still the global optimum. The
+gradient /geometry/ degrades; the gradient /target/ does not. On the
+contrary, error in the coordinate system results in the diffusion
+model being trained on an incorrect objective entirely (the
+minimiser shifts).
 
-   We note that the EDM preconditioning constants still have an effective divison by \(σ_{\mathrm{data}}(t)\), we aim to handle this in the next point.
+The EDM preconditioning constants still have an effective division
+by \(σ_{\mathrm{data}}(t)\); we handle this in
+[[State-conditional prior variance]] below.
 
-2. /Unit-variance residual by pretraining; \(σ_{\mathrm{data}}\) as a
-   configurable scalar./
-   
-   To encourage the latent space to initialize with reasonable scaling, we pretrain with the unit-variance prior
-   \(\mathcal{N}(μ_p(z_{t-1}), I)\). This pushes the encoder posterior variance
-   toward \(I\) and the encoder mean toward \(μ_p\) via the KL loss, so the
-   centered residual \(\hat{z}_t^{(0)} = \tilde{z}_t - μ_p(z_{t-1})\) has
-   approximately unit per-dimension marginal variance at each \(t\) at the
-   close of pretraining: \(σ_{\mathrm{data}}(t) \approx 1\). Whether this
-   continues to hold during stage-2 joint training is an empirical question:
-   the encoder's regularization is  due to diffusion rather
-   than the pretraining prior, so the residual variance is free to drift.
-   We therefore write the EDM constants symbolically in
-   \(σ_{\mathrm{data}}(t)\) (instead of just assuming a value of \(1\)) and evaluate three configurations for setting it
-   (see [[Tracking-mode variants]] below): /(i)/ hold
-   \(σ_{\mathrm{data}}(t) \equiv 1\) (the residual variance is treated as a
-   modeling assumption and the loss-conditioning mismatch acts as an implicit
-   regularizer); /(ii)/ track a single global EMA scalar; /(iii)/ track a
-   per-\(t\) EMA. All three share one estimator and one code path.
+*** State-conditional prior variance
+\(σ_{\mathrm{data}}\) as a configurable scalar; per-dim
+\(\boldsymbol{σ}_p(z_{t-1}) \in \mathbb{R}^D\) head.
 
-   Optionally, we could relax \(\mathcal{N}(μ_p(z_{t-1}), I)\),
-   to allow heteroskedasticity via diagonal covariance, instead learning \(\mathcal{N}(μ_p(z_{t-1}), \boldsymbol{σ}_{p}(z_{t-1}))\), where we enforce \(\|\boldsymbol{σ}_p(z_{t-1})\| = 1\) via normalization. Simultaneously, this would allow the variance to change over \(t\) and allow a more flexible inital latent representation via weaker regularization.
+We pretrain using the prior
+\(\mathcal{N}\bigl(μ_p(z_{t-1}),\, \mathrm{diag}(\boldsymbol{σ}_p^2(z_{t-1}))\bigr)\).
+This choice is symmetric with the encoder posterior
+\(q_φ(z_t | z_{t-1}, x_{t:T}) = \mathcal{N}(μ_t,\, \mathrm{diag}(\boldsymbol{σ}_t^2))\).
+The motivation for retaining anisotropy for the prior is that
+different latent dimensions may carry different amounts of
+state-dependent uncertainty: some directions are tightly determined
+by \(z_{t-1}\), others are intrinsically more uncertain.
+
+*Why state-conditional, not homoskedastic.*
+State-conditional matches the DKF default and the symmetry of
+\(μ_p\): if we are paying the architectural cost for a
+state-conditional mean head, the parallel choice for the variance is
+also state-conditional. Note that this allows variances to vary in
+time: \(z_{t-1}\) is derived from an encoder that saw \(x_{t-1:T}\),
+so it carries sequence-position information that
+\(\boldsymbol{σ}_p(z_{t-1})\) can read. This is desirable, as for
+example, at late \(t\) there is less future information to dictate
+\(z_t\) and thus fundamentally higher uncertainty.
+
+*Parameterization and stage-2 use.* \(μ_p\) and \(\boldsymbol{σ}_p\)
+share the same backbone network with two output heads (one for the
+mean, one for the log-variance), following standard Gaussian-head
+practice in DKF-style models. \(\boldsymbol{σ}_p\) appears only in
+the stage-1 KL; after handoff it is discarded and plays no role in
+stage 2 (the centering shift uses \(μ_p\) only, and the stage-2
+transition KL is replaced by the ESM/EDM surrogate). There is
+therefore no "Pinned vs.\ Learnable" knob for \(\boldsymbol{σ}_p\)
+analogous to the one for \(μ_p\).
+
+*Normalization (soft global anchor on log-variance).* The stage-1
+ELBO has its own pressure on \(\boldsymbol{σ}_p\) — the KL pulls
+\(\boldsymbol{σ}_p\) and the encoder \(\boldsymbol{σ}_t\) toward
+agreement, so \(\boldsymbol{σ}_p^2\) settles at the natural data
+scale rather than running off to zero or infinity. But the absolute
+scale is under-constrained by the ELBO, and we want a /rough/
+unit-variance close to keep \(σ_{\mathrm{data}}(t) \approx 1\)
+calibration plausible and retain numerical stability. We add a
+global regularizer to the stage-1 loss:
+\[
+\mathcal{R}_{σ_p}
+\;=\; \tfrac{λ_{σ_p}}{2}\,
+  \Biggl(\frac{1}{T_{\mathrm{eff}}\, D\, N}\,
+    \sum_{t=2}^T \sum_{d=1}^D \sum_{i=1}^N
+    \log \boldsymbol{σ}_p^2(z_{t-1}^{(i)})_d\Biggr)^{\!2},
+\]
+where \(T_{\mathrm{eff}} = T - 1\) is the number of transition
+timesteps and \(N\) is the batch size. Gradient flows through the
+inner sum and through individual head outputs. \(λ_{σ_p}\) is a
+hyperparameter to be tuned alongside the others; \(10^{-2}\) is our
+starting suggestion, but the right value should be determined
+empirically (small enough not to fight the ELBO, large enough to
+keep \(\boldsymbol{σ}_p\) from drifting unboundedly).
+
+/Why global rather than per-\(t\) or per-\((t,d)\)./ The per-t scale
+structure (boundary effects, dynamics) and per-dim anisotropy are
+exactly the structure we want to admit; pinning per-\(t\) or
+per-\((t,d)\) means would suppress them. The σ_data EMA tracking
+(see [[Tracking-mode variants]]) absorbs whatever per-\(t\) scale
+actually emerges, keeping EDM preconditioning calibrated even when
+the global anchor permits drift.
+
+/Checking if \(λ\) is set correctly./ Log per-\((t, d)\) means of
+\(\log \boldsymbol{σ}_p^2\) at the close of stage 1; flag any dim
+whose mean is more than a few standard deviations from zero. If this
+happens, strengthen \(λ_{σ_p}\).
+
+Whether \(σ_{\mathrm{data}}(t) \approx 1\) continues to hold during
+stage-2 joint training is an empirical question: the encoder's
+stage-2 regularization is due to diffusion rather than the
+pretraining prior, so the residual variance is free to drift. We
+therefore write the EDM constants symbolically in
+\(σ_{\mathrm{data}}(t)\) and evaluate three configurations for
+setting it (see [[Tracking-mode variants]] below): /(i)/ freeze
+\(σ_{\mathrm{data}}^2[t]\) at its handoff value (the buffer
+accumulated during stage 1; any stage-2 drift acts through
+mis-scaled gradients as an implicit regularizer); /(ii)/ track a
+single global EMA scalar; /(iii)/ track a per-\(t\) EMA. All three
+share one estimator and one code path; in the non-/Fixed/ variants
+the EMA schedule resets at handoff but the buffer value persists
+(see [[Stage-1 → stage-2 handoff]]).
 
 *** Baseline-form variants
 The centering function \(μ_p(z_{t-1})\) (also written \(m\) in the Motivation)
@@ -771,12 +854,12 @@ applies. Variants 3 and 4 admit both modes.
   nonlinear baseline vs.\ unanchored diffusion.
 
 Pretraining details for each variant differ but all follow the same
-template: jointly fit encoder, decoder, and baseline parameters (if any) to
-maximize the stage-1 ELBO under the transition prior
-\(\mathcal{N}(μ_p(z_{t-1}), I)\). For variants 1 and 2 there are no baseline
-parameters to fit; for variants 3 and 4 the baseline is fit alongside the
-encoder and decoder.
-
+template: jointly fit encoder, decoder, and the baseline
+mean parameters (if any) to maximize the stage-1 ELBO under the
+transition prior
+\(\mathcal{N}\bigl(μ_p(z_{t-1}),\, \mathrm{diag}(\boldsymbol{σ}_p^2(z_{t-1}))\bigr)\),
+augmented with the global log-variance regularizer
+\(\mathcal{R}_{σ_p}\) of [[State-conditional prior variance]]. 
 *** Generative baseline
 Let \(μ_p^{(0)}(z_{t-1})\) denote the baseline function at the close of
 stage 1 (form chosen per /Baseline-form variants/ above); this seeds the
@@ -807,11 +890,15 @@ along which it can drift while leaving the data likelihood unchanged. Variant
 free drift.
 
 1. /Pinned (\(μ_p \equiv μ_p^{(0)}\))./ No stage-2 update. The shift is a
-   literal, parameter-invariant coordinate change and contributes no gradient
-   to anything. No prior is needed because no learning happens. Breaks the
-   structural degeneracy below by anchoring \(μ_p\) at the stage-1 point.
-   Distinct from the one-time [[stage-1 → stage-2 handoff]] described below,
-   which applies whenever we use pretraining.
+   literal, parameter-invariant coordinate change: \(μ_p\)'s
+   /parameters/ receive no gradient (since they are frozen), though
+   \(μ_p\) still enters the diffusion loss through the centering shift
+   and so affects \(\hat{z}_t\), \(F^{*}\), and the encoder's inputs.
+   No prior on \(μ_p\) is needed because no learning of \(μ_p\)
+   happens. Breaks the structural degeneracy below by anchoring
+   \(μ_p\) at the stage-1 point. Distinct from the one-time
+   [[stage-1 → stage-2 handoff]] described below, which applies
+   whenever we use pretraining.
 
 2. /Learnable with Gaussian anchor./ Allow \(μ_p\) to update during stage 2
    with an added regularizer
@@ -832,8 +919,14 @@ free drift.
 Allowing learnable \(μ_p\) will possibly reduce the spread of residual
 means, i.e the term \(\mathrm{tr}(\mathrm{Var}[\hat{μ}_t])\) used to compute \(σ_{\mathrm{data}}^2(t)\) will be reduced since
 \(μ_p\) is now free to track \(\mathbb{E}[μ_t]\).
-The choices of how to track \(σ_{\mathrm{data}}^2(t)\) and whether or not to allow learnable \(μ_{p}\) therefore interact,
-so we run the full \(2 \times 3\) grid as an ablation study.
+The choices of how to track \(σ_{\mathrm{data}}^2(t)\) and whether or
+not to allow learnable \(μ_{p}\) therefore interact, so we run the
+full \(2 \times 3\) Baseline-mode × Tracking-mode grid as an ablation
+study /for baseline forms that admit both Baseline modes/ (Linear and
+MLP). Variants Zero and Identity are parameter-free, so Baseline mode
+is degenerate (Pinned only) and they contribute a \(1 \times 3\)
+sub-grid each — see [[Ablation grid summary]] for the full cell
+count.
 A possible prediction: under
 learnable \(μ_p\), the gap between tracking-mode variants (2) and (3) should
 shrink, because the residual-mean drift that variant (3) is designed to
@@ -850,8 +943,16 @@ The steps below execute in order at the boundary between the two stages.
    or when the stage-1 ELBO improvement over a sliding window drops below a
    threshold. Log the residual diagnostics already required by
    /Practical considerations/ — \(\mathbb{E}[\|\boldsymbol{σ}_t\|^2]\), \(\mathrm{tr}(\mathrm{Var}[\hat{μ}_t])\), and
-   \(σ_{\mathrm{data}}^2(t)\) — to verify the near-unit-variance close
-   that the centering scheme assumes.
+   \(σ_{\mathrm{data}}^2(t)\) — to verify the
+   \(σ_{\mathrm{data}}(t) \approx 1\) close that the centering scheme
+   assumes (the global log-variance regularizer on \(\boldsymbol{σ}_p\) tries to enfore this; the diagnostic checks this empirically, see   [[State-conditional prior variance]]).
+
+   The /\(σ_{\mathrm{data}}^2[t]\) EMA buffer/ described in
+   [[Data-variance tracking]] is the same buffer used across both
+   stages: it accumulates throughout stage 1 (running passively, with
+   no role in the stage-1 loss) and continues into stage 2. At the
+   handoff (step 5) the EMA /schedule/ resets but the buffer /value/
+   persists.
 
 2. /Snapshot \(μ_p^{(0)}\)./ Deep-copy baseline parameters. 
    
@@ -869,19 +970,24 @@ The steps below execute in order at the boundary between the two stages.
    \qquad ε \sim \mathcal{N}(0, I).
    \]
    The intention here is to allow the encoder to escape a sharp local minimum
-   due to the srict regularization in stage-1. 
+   due to the srict regularization in stage-1.
    A small perturbation lets stage 2 reorganize the encoder without first
    having to escape stage-1 geometry. The magnitude is tuned
    \(σ_{\mathrm{pert}}\) alongside other hyperparameters.
 
-5. /Initialize \(σ_{\mathrm{data}}^2[t]\) by inheriting from stage 1./
-   In all cells we initialize \(σ_{\mathrm{data}}^2[t] \leftarrow σ_p^2[t]\):
-   stage 1 produces \(σ_p^2[t]\) (which equals \(1\) for the
-   identity/homoskedastic prior, recovering the \(σ_{\mathrm{data}} \equiv 1\)
-   start), so the two descriptions are equivalent. If the cell uses
-   /Fixed/ tracking the buffer remains at this initial value;
-   /Learnable with Gaussian anchor/ regularizer.
-   otherwise the EMA proceeds from it.
+5. /Reset \(σ_{\mathrm{data}}^2[t]\) EMA schedule (buffer value persists)./
+   The \(σ_{\mathrm{data}}^2[t]\) buffer has been accumulating throughout
+   stage 1 (see step 1) and carries over to stage 2 /without
+   re-initialization/. Its value at handoff is the empirical measured
+   residual scale at the close of pretraining — the global log-variance
+   regularizer on \(\boldsymbol{σ}_p\) pulls this toward 1, but how close it actually
+   lands is what step 1's diagnostic verifies. What /does/ reset at
+   handoff is the EMA /schedule/: step counter, bias correction (if
+   any), and decay annealing (if any) are reset so the stage-2 updates
+   begin as if EMA accumulation is fresh. Under /Fixed/ tracking the
+   buffer is then frozen at this handoff value for all of stage 2;
+   under /Global EMA/ and /Per-\(t\) EMA/ the EMA update proceeds from
+   it with the reset schedule.
 
 6. /Optional stage-2 LR warmup?/ Brief linear warmup over the first
    \(N_{\mathrm{warmup}}\) steps. Motivated by step 4: large updates
@@ -910,11 +1016,12 @@ where \(μ_t, \boldsymbol{σ}_t\) are the encoder posterior mean and std, and
 \hat{μ}_t := μ_t(c) - μ_p(z_{t-1})
 \]
 is the observation-conditional residual mean. The pretraining prior
-\(\mathcal{N}(μ_p, I)\) drives \(\hat{μ}_t \approx 0\) and
-\(\boldsymbol{σ}_t \approx \mathbf{1}\) at the close of stage 1, so at
-\(τ = 0\) the diffusion model sees approximately zero-mean unit-variance
-inputs. \(\hat{μ}_t\) is the structure \(F_ψ\) is trained to model above
-and beyond the prior mean.
+\(\mathcal{N}(μ_p,\, \mathrm{diag}(\boldsymbol{σ}_p^2(z_{t-1})))\) drives
+\(\hat{μ}_t \approx 0\) per-state and
+\(\boldsymbol{σ}_t \approx \boldsymbol{σ}_p(z_{t-1})\) ideally with the
+global log-variance regularizer anchoring the scale to 1.
+Thus at \(τ = 0\) the diffusion model sees approximately zero-mean inputs
+whose variance is near 1 on average (over timesteps/dimensions). 
 
 *** Data-variance tracking
 EDM preconditioning needs the variance of the clean
@@ -935,12 +1042,27 @@ that the encoder posterior is Gaussian with diagonal covariance,
 = \frac{1}{D}\Bigl(\,\underbrace{𝔼\!\bigl[\|\boldsymbol{σ}_t\|^2\bigr]}_{\text{average posterior variance}}
 \;+\;\underbrace{\mathrm{tr}\!\bigl(\mathrm{Var}\!\bigl[\hat{μ}_t\bigr]\bigr)}_{\text{spread of residual means}}\Bigr).
 \]
-The decomposition surfaces one of the goals of pretraining: stage-1 regularization drives
-\(\boldsymbol{σ}_t \to \mathbf{1}\) (so the first term \(\to 1\)) and
-\(\hat{μ}_t \to 0\) (so the second term \(\to 0\)), hence
-\(σ_{\mathrm{data}}(t) \to 1\) at the close of stage 1. During stage 2 either
-term can shift. [[Tracking-mode variants]] below picks between three ways to
-populate \(σ_{\mathrm{data}}(t)\) during stage 2.
+The decomposition surfaces what stage-1 pretraining actually does to
+each term:
+- The KL pushes \(\boldsymbol{σ}_t \to \boldsymbol{σ}_p(z_{t-1})\) per dim per state,
+  so the first term tracks \(\mathbb{E}\bigl[\|\boldsymbol{σ}_p(z_{t-1})\|^2\bigr]\).
+- The KL also pushes \(μ_t \to μ_p\), so \(\hat{μ}_t \to 0\) and the
+  second term \(\to 0\).
+
+The log-variance regularizer \(\mathcal{R}_{σ_p}\) anchors
+\(\mathbb{E}[\log \boldsymbol{σ}_p^2]\) near zero /globally/ — averaged over
+\((t, d, \text{state})\). It does /not/ pin per-\(t\) or per-dim
+means: those are free to vary (and ideally do, to express boundary
+effects and per-dim anisotropy). 
+
+Because per-\(t\) drift is permitted by design, we do not assume
+\(σ_{\mathrm{data}}(t) = 1\) downstream; instead, the
+\(σ_{\mathrm{data}}^2[t]\) EMA buffer (running continuously from
+stage 1; see /Stage-1 → stage-2 handoff/ step 1) captures whatever
+per-\(t\) scale actually emerges and feeds it to the EDM
+preconditioning. [[Tracking-mode variants]] below decides whether
+that buffer continues updating in stage 2 or is frozen at its handoff
+value.
 
 **** Estimator
 A minibatch yields \(N\) trajectory samples and hence \(N\) draws of
@@ -957,7 +1079,10 @@ updated as
 σ_{\mathrm{data}}^2[t] \;\leftarrow\; γ\, σ_{\mathrm{data}}^2[t] \;+\; (1 - γ)\, \bar{σ}_{\mathrm{data}}^2(t),
 \qquad γ \in [0.99,\, 0.9999],
 \]
-initialized at the start of stage 2 from \(σ_p^2[t]\) per the /Stage-1 → stage-2 handoff/ protocol (step 5).
+The buffer accumulates continuously from the start of stage 1 through
+stage 2; at the stage-1 → stage-2 handoff the EMA /schedule/ resets but
+the buffer /value/ persists (see /Stage-1 → stage-2 handoff/ steps 1
+and 5).
 The EMA is detached from the autograd graph: the value used to form the EDM
 constants is \(\mathrm{stop\_grad}(σ_{\mathrm{data}}^2[t])\), so no gradient
 flows to \(φ\) depending on \(σ_{\mathrm{data}}^2[t]\).
@@ -968,14 +1093,18 @@ estimator \(\bar{σ}_{\mathrm{data}}^2(t)\) above and one code path, differing
 only in (a) whether the EMA update is applied and (b) whether updates are
 pooled across \(t\).
 
-1. /Fixed (\(σ_{\mathrm{data}} \equiv 1\))./ Hold
-   \(σ_{\mathrm{data}}^2[t] \equiv 1\) and skip the EMA update. The
-   loss-conditioning is calibrated to the /assumed/ residual variance, not
-   the /actual/ one — so any drift of the encoder away from
-   \(\boldsymbol{σ}_t \approx \mathbf{1}\) is implicitly penalized via
-   mis-scaled gradients. This relies on stage-1 pretraining to put the encoder
-   near unit-variance residuals and requires that the encoder does not drift in order to retain
-   optimal preconditioning.
+1. /Fixed (frozen at handoff value)./ Hold \(σ_{\mathrm{data}}^2[t]\) at
+   the per-\(t\) value the EMA buffer reached at handoff (the
+   accumulated stage-1 EMA; see handoff steps 1 and 5) and skip the
+   stage-2 EMA update. The loss-conditioning is calibrated to the
+   residual variance /as measured at the close of stage 1/, not the
+   actual variance during stage 2 — so any drift of the encoder
+   during stage 2 is implicitly penalized via mis-scaled gradients.
+   This relies on stage-1 pretraining (with the global log-variance
+   regularizer on \(\boldsymbol{σ}_p\); see [[State-conditional prior variance]])
+   to put the encoder near a stable residual scale and requires that
+   the encoder does not drift from that scale in stage 2 in order to
+   retain optimal preconditioning.
 
 2. /Global EMA./ Tie all per-\(t\) buffers to a single scalar
    \(σ_{\mathrm{data}}^2\), updated by
@@ -1006,8 +1135,8 @@ A pure shift coordinate shift leaves the score invariant — \(\hat{s}(\hat{z}) 
 — so the closed-form encoder score in centered coordinates is
 \[
 \hat{s}_q^{(τ)}(\hat{z}_t^{(τ)} | c)
-= -\frac{\hat{z}_t^{(τ)} - \hat{μ}_t(c)}{Σ_t^{(τ)}},
-\qquad Σ_t^{(τ)} := \boldsymbol{σ}_t^2 + \tilde{σ}_τ^2.
+= -\frac{\hat{z}_t^{(τ)} - \hat{μ}_t(c)}{\boldsymbol{Σ}_t^{(τ)}},
+\qquad \boldsymbol{Σ}_t^{(τ)} := \boldsymbol{σ}_t^2 + \tilde{σ}_τ^2.
 \]
 The generative score is parameterized by the network directly:
 \(\hat{s}_ψ(\hat{z}_t^{(τ)}, τ, z_{t-1})\). We apply the EDM denoiser
@@ -1026,7 +1155,7 @@ the previous section. The three variance objects from /Notation: three
 variance objects/ each have a separate role here:
 \(\boldsymbol{σ}_t^2\) (object 1) enters the analytic score
 \(\hat{s}_q^{(τ)}\) via the per-sample variance
-\(Σ_t^{(τ)} = \boldsymbol{σ}_t^2 + \tilde{σ}_τ^2\)
+\(\boldsymbol{Σ}_t^{(τ)} = \boldsymbol{σ}_t^2 + \tilde{σ}_τ^2\)
 (object 2); \(σ_{\mathrm{data}}^2(t)\) (object 3) enters only the EDM
 preconditioning constants.
 
@@ -1072,6 +1201,229 @@ parameters \(φ\) receive gradient through the sampling distribution
 \(σ_{\mathrm{data}}^2(t)\) is held constant w.r.t. \(φ\) — no gradient flows
 back through the EMA.
 
+*** Reframing VHP to use diffusion
+We modify our use of the /Variational Hierarchical
+Prior/ post-ProbML, to utilize diffusion. We assume that there is no separate
+network parameterizing \(p(z_1)\) using weights \(η\), we instead
+utilize \(p_{ψ}(z_{t } | z_{t-1})\) directly and adapt it to handle \(t \leq 1\).
+**** Construction (\(j = 1\))
+Introduce an auxiliary latent \(z_0 \in \mathbb{R}^D\) with prior
+\(p(z_0) = \mathcal{N}(0, I)\). The initial-state prior is the marginal
+\[
+p(z_1) \;=\; \int p_ψ(z_1 \mid z_0)\, p(z_0)\, dz_0,
+\]
+where \(p_ψ(z_1 \mid z_0)\) is set to /match the transition prior of
+the current stage/, applied with \(z_0\) in the previous-latent
+conditioning slot:
+
+- /Stage 1./
+  \(p_ψ(z_1 \mid z_0) = \mathcal{N}\bigl(μ_p(z_0),\, \mathrm{diag}(\boldsymbol{σ}_p^2(z_0))\bigr)\).
+  The shared transition heads \(μ_p, \boldsymbol{σ}_p\) are evaluated
+  at \(z_0\); no new prior-side parameters.
+
+- /Stage 2./ \(p_ψ(z_1 \mid z_0)\) is the reverse-SDE density driven
+  by the /same/ score network \(s_ψ(\,\cdot\,, τ, z_0)\). The
+  conditioning input is \(z_0\) rather than \(z_{t-1}\), but the
+  network and its noise schedule \((β(τ), α_τ, σ_τ)\) are identical
+  to those used for \(t \geq 2\). We retain a single \(s_ψ\) for all
+  \(t \in \{1, \ldots, T\}\); no separate initial-state network.
+
+The construction generalises to higher Markov order \(j > 1\) by
+introducing \(j\) auxiliary variables \(z_{-j+1:0}\) (see ProbML draft).
+We include an early-sequence mask to serve as a signal to the score network that it is operating
+on auxiliary variables (similar to the encoder); see
+[[Padding mask in the diffusion side-info tensor]] below for the
+side-info-tensor convention.
+
+\(q_Φ(z_0 \mid z_1)\) is a small diagonal-Gaussian MLP head with
+parameters \(Φ\) that approximates the posterior over the auxiliary
+\(z_0\) given the initial latent. It is trained jointly with the
+encoder \(q_φ\) for all optimisation-related concerns.
+
+**** ELBO contribution from the initial state
+The negative-ELBO term contributed by \(z_1\) decomposes as
+\[
+\mathcal{L}_{\mathrm{init}}
+\;=\; \mathcal{L}_{\mathrm{init}}^{\mathrm{entropy}}
+\;+\; \mathcal{L}_{\mathrm{VHP}},
+\]
+with the /encoder-side negative entropy/
+\[
+\mathcal{L}_{\mathrm{init}}^{\mathrm{entropy}}
+\;=\; \mathbb{E}_{q_φ(z_1 | x_{1:T})}\!\left[\log q_φ(z_1 \mid x_{1:T})\right]
+\]
+(analytic given the diagonal-Gaussian encoder head), and the
+VHP-side term taking different forms per stage:
+
+- /Stage 1 (Gaussian \(p_ψ\))./
+\[
+\mathcal{L}_{\mathrm{VHP}}^{(\mathrm{stage\text{-}1})}
+\;=\; \mathbb{E}_{q_φ(z_1 | x)}\!\left[
+   \mathbb{E}_{q_Φ(z_0 | z_1)}\!\bigl[-\log p_ψ(z_1 \mid z_0)\bigr]
+   \;+\; \mathrm{KL}\!\bigl[q_Φ(z_0 \mid z_1)\,\|\,\mathcal{N}(0, I)\bigr]
+   \right].
+\]
+The inner \(-\log p_ψ(z_1 \mid z_0)\) is the analytic Gaussian
+log-density given the shared heads.
+
+- /Stage 2 (SDE \(p_ψ\))./
+\[
+\mathcal{L}_{\mathrm{VHP}}^{(\mathrm{stage\text{-}2})}
+\;=\; \mathbb{E}_{q_φ(z_1 | x)}\!\left[
+   \mathbb{E}_{q_Φ(z_0 | z_1)}\!\bigl[\mathcal{L}_1^{(\mathrm{init})}\bigr]
+   \;+\; \mathrm{KL}\!\bigl[q_Φ(z_0 \mid z_1)\,\|\,\mathcal{N}(0, I)\bigr]
+   \right],
+\]
+where \(\mathcal{L}_1^{(\mathrm{init})}\) is the /cross-entropy/ term
+\(\mathbb{E}_{q_φ(z_1 \mid x)}\!\left[-\log p_ψ(z_1 \mid z_0)\right]\),
+which our theorem (see [[Score matching variational lower bound (our proof)]])
+expresses as
+\[
+\mathcal{L}_1^{(\mathrm{init})}
+\;=\; H\!\bigl(q_φ(z_1 \mid x)\bigr)
+   \;+\; \mathbb{E}_{τ \sim U[0,1]}\, \mathbb{E}_{q_φ^{(τ)}(z_1^{(τ)} | z_0, x)}
+        \!\left[\tfrac{1}{2}\, g^2(τ)\, \|s_q^{(τ)} - s_ψ(z_1^{(τ)}, τ, z_0)\|^2\right].
+\]
+Note that \(\mathcal{L}_1^{(\mathrm{init})}\) is the cross-entropy, /not/
+the KL-divergence that \(\mathcal{L}_t\) of
+[[Regression target and final loss]] represents — they differ by the
+encoder entropy \(H(q_φ)\), which appears explicitly here.
+
+The \(\mathrm{KL}\bigl[q_Φ \,\|\, \mathcal{N}(0, I)\bigr]\) term is
+analytic in both stages (diagonal Gaussian against \(\mathcal{N}(0,I)\)).
+
+**** Entropy cancellation in stage 2
+In stage 2 the encoder entropy in \(\mathcal{L}_1^{(\mathrm{init})}\)
+cancels against \(\mathcal{L}_{\mathrm{init}}^{\mathrm{entropy}}\):
+\begin{align*}
+\mathcal{L}_{\mathrm{init}}
+&= \mathcal{L}_{\mathrm{init}}^{\mathrm{entropy}} + \mathcal{L}_{\mathrm{VHP}}^{(\mathrm{stage\text{-}2})} \\
+&= -H\!\bigl(q_φ(z_1|x)\bigr)
+ + \mathbb{E}_{q_φ}\mathbb{E}_{q_Φ}\!\bigl[H\!\bigl(q_φ(z_1|x)\bigr) + \mathrm{ESM}_{t=1}\bigr]
+ + \mathbb{E}_{q_φ}\mathrm{KL}\!\bigl[q_Φ \,\|\, \mathcal{N}(0,I)\bigr] \\
+&= \mathbb{E}_{q_φ}\mathbb{E}_{q_Φ}[\mathrm{ESM}_{t=1}]
+ + \mathbb{E}_{q_φ}\mathrm{KL}\!\bigl[q_Φ \,\|\, \mathcal{N}(0,I)\bigr],
+\end{align*}
+because \(H(q_φ(z_1|x))\) does not depend on \(z_0\) and pulls out of
+the inner expectation. The implementation is therefore tractable
+without ever evaluating the entropy or \(-\log p_ψ\) directly: compute
+the ESM surrogate (with \(z_0\) in the conditioning slot) and the
+analytic auxiliary KL.
+
+**** σ_data buffer extension
+The \(σ_{\mathrm{data}}^2[t]\) EMA buffer (see
+[[Data-variance tracking]]) is extended to \(t \in \{1, \ldots, T\}\)
+— one additional accumulator at \(t = 1\) tracking the encoder's
+residual scale at the initial state. The estimator and EMA update are
+identical to those at \(t \geq 2\); the buffer at \(t = 1\) is used by
+the stage-2 surrogate \(\mathcal{L}_1^{(\mathrm{init})}\) and runs
+passively in stage 1 (no role in the stage-1 loss).
+
+**** Padding mask in the diffusion side-info tensor
+The score net \(s_ψ\) additionally receives in the side-info tensor a start-of-sequence mask.
+When the conditioning slot is
+the auxiliary \(z_0\) rather than a real previous latent (i.e.\ at
+\(t = 1\) under the VHP), we add a /binary padding mask/ to this
+side-info tensor to flag the case. This lets a single \(s_ψ\)
+distinguish "real previous latent" from "padded auxiliary" without
+duplicating the network, and is important whenever the time argument
+expects a real previous timestep.
+
+*** Assembled losses for stage 1 and stage 2
+We now collect the per-step terms into the full training objective of
+each stage. Both stages share the encoder \(q_φ\), decoder
+\(p_θ(x_t | z_t)\), and trajectory factorisation; they differ only in
+the transition density of the generative model.
+
+**** Stage 1 — Gaussian transition prior
+The stage-1 generative model uses the closed-form prior introduced
+in [[State-conditional prior variance]] for the \(t \geq 2\)
+transitions:
+\[
+p_ψ^{(\mathrm{stage\text{-}1})}(z_t \mid z_{t-1})
+\;=\;
+\mathcal{N}\!\bigl(μ_p(z_{t-1}),\, \mathrm{diag}(\boldsymbol{σ}_p^2(z_{t-1}))\bigr),
+\qquad t = 2,\ldots,T,
+\]
+and the VHP construction of [[Reframing VHP to use diffusion]] for
+the initial state \(z_1\). All KL terms (and the VHP terms) are
+analytic in stage 1. The negative ELBO is
+\begin{align*}
+\mathcal{L}^{(\mathrm{stage\text{-}1})}
+&= -\,𝔼_{q_φ(z_{1:T} | x_{1:T})}\!\left[\sum_{t=1}^T \log p_θ(x_t \mid z_t)\right] \\
+&\quad + \underbrace{\mathcal{L}_{\mathrm{init}}^{\mathrm{entropy}}
+   + \mathcal{L}_{\mathrm{VHP}}^{(\mathrm{stage\text{-}1})}}_{\mathcal{L}_{\mathrm{init}}^{(\mathrm{stage\text{-}1})}\,;\,\text{see [[Reframing VHP to use diffusion]]}} \\
+&\quad + \sum_{t=2}^T 𝔼_{q_φ(z_{t-1} | x_{1:T})}\!
+   \mathrm{KL}\!\left[q_φ(z_t \mid z_{t-1}, x_{t:T}) \,\|\, p_ψ^{(\mathrm{stage\text{-}1})}(z_t \mid z_{t-1})\right].
+\end{align*}
+The total stage-1 training objective is the negative ELBO plus the
+log-variance anchor on \(\boldsymbol{σ}_p\):
+\[
+\boxed{\;
+\mathcal{L}^{(\mathrm{stage\text{-}1})}_{\mathrm{total}}(φ, θ, μ_p, \boldsymbol{σ}_p, Φ)
+\;=\; \mathcal{L}^{(\mathrm{stage\text{-}1})} \;+\; \mathcal{R}_{σ_p},
+\;}
+\]
+with \(\mathcal{R}_{σ_p}\) as defined in [[State-conditional prior variance]].
+The auxiliary-posterior parameters \(Φ\) (for \(q_Φ\)) train jointly
+with the encoder, decoder, and shared transition heads.
+
+**** Stage 2 — SDE transition prior
+The stage-2 generative model replaces the Gaussian transition with the
+reverse-SDE density parameterised by the score network \(s_ψ\) (see
+[[SDE as a generative model]]) for the \(t \geq 2\) transitions:
+\[
+p_ψ^{(\mathrm{stage\text{-}2})}(z_t \mid z_{t-1})
+\;=\;
+\text{density of } z_t^{(0)} \text{ under the reverse SDE driven by } s_ψ(\,\cdot\,, τ, z_{t-1}),
+\qquad t = 2,\ldots,T,
+\]
+with the same network reused at \(t = 1\) via the VHP construction
+(see [[Reframing VHP to use diffusion]]): \(p_ψ^{(\mathrm{stage\text{-}2})}(z_1 \mid z_0)\)
+is driven by \(s_ψ(\,\cdot\,, τ, z_0)\) with the auxiliary \(z_0\) in
+the previous-latent conditioning slot. The transition KL at \(t \geq 2\)
+is no longer analytic; it is replaced by the ESM/EDM surrogate
+\(\mathcal{L}_t\) from [[Regression target and final loss]]. The
+initial-state contribution is the VHP decomposition. The negative
+ELBO is
+\begin{align*}
+\mathcal{L}^{(\mathrm{stage\text{-}2})}
+&= -\,𝔼_{q_φ(z_{1:T} | x_{1:T})}\!\left[\sum_{t=1}^T \log p_θ(x_t \mid z_t)\right] \\
+&\quad + \underbrace{\mathcal{L}_{\mathrm{init}}^{\mathrm{entropy}}
+   + \mathcal{L}_{\mathrm{VHP}}^{(\mathrm{stage\text{-}2})}}_{\mathcal{L}_{\mathrm{init}}^{(\mathrm{stage\text{-}2})}\,;\,\text{see [[Reframing VHP to use diffusion]]}} \\
+&\quad + \sum_{t=2}^T 𝔼_{q_φ(z_{t-1} | x_{1:T})}\!\bigl[\mathcal{L}_t\bigr].
+\end{align*}
+The encoder-entropy term inside \(\mathcal{L}_{\mathrm{init}}^{(\mathrm{stage\text{-}2})}\)
+cancels against \(\mathcal{L}_{\mathrm{init}}^{\mathrm{entropy}}\) (see
+the entropy-cancellation observation in
+[[Reframing VHP to use diffusion]]), leaving only the initial-state
+ESM surrogate and the analytic \(q_Φ\) KL.
+
+Under the /Learnable + Gaussian anchor/ baseline-mode (see
+[[Baseline-mode variants]]) we add the anchor regularizer on \(μ_p\);
+under /Pinned/ no such term is needed. The total stage-2 training
+objective is
+\[
+\boxed{\;
+\mathcal{L}^{(\mathrm{stage\text{-}2})}_{\mathrm{total}}(φ, θ, ψ, μ_p, Φ)
+\;=\; \mathcal{L}^{(\mathrm{stage\text{-}2})}
+\;+\; \mathbb{1}[\text{Learnable } μ_p]\,\cdot\,\mathcal{R}_{μ_p}.
+\;}
+\]
+\(Φ\) (for \(q_Φ\)) continues training in stage 2 under the
+SDE-driven \(\mathcal{L}_{\mathrm{VHP}}^{(\mathrm{stage\text{-}2})}\).
+
+**** Summary of which terms enter each stage
+
+| Term                                          | Stage 1                  | Stage 2                                  |
+|-----------------------------------------------+--------------------------+------------------------------------------|
+| Reconstruction \(\log p_θ\)                   | yes                      | yes                                      |
+| \(\mathcal{L}_{\mathrm{init}}^{\mathrm{entropy}}\) | yes                  | yes (cancels with VHP entropy term)      |
+| \(\mathcal{L}_{\mathrm{VHP}}\)                 | Gaussian \(p_ψ\)         | SDE \(p_ψ\), same \(s_ψ\) with \(z_0\)   |
+| \(q_Φ\) (auxiliary posterior)                  | trained                  | continues training                       |
+| Transition (\(t \geq 2\))                      | analytic KL              | replaced by \(\mathcal{L}_t\)            |
+| \(\mathcal{R}_{σ_p}\)                          | yes                      | no (\(\boldsymbol{σ}_p\) discarded)      |
+| \(\mathcal{R}_{μ_p}\)                          | no                       | only under /Learnable/ mode              |
 
 *** Practical considerations
 The diagnostic bullet below applies to all three tracking-mode variants; the
@@ -1084,21 +1436,52 @@ remaining bullets apply only when an EMA is in use (Variants 2 and 3).
   prior mean; variance drift is absorbed by the EMA in Variants 2 and 3 so
   preconditioning self-corrects, but is /not/ absorbed under Variant 1, where
   large drift signals a real conditioning problem. 
-- *Initialization and warmup.* Initialize \(σ_{\mathrm{data}}^2[t] = σ_p^2[t]\) (initialize from the baseline transition variance) at the
-  start of stage 2.
-- *Sampling.* At sampling time, the same EMA buffer is used for the EDM
-  constants (with \(σ_{\mathrm{data}}^2[t]\) frozen at its last-train value).
-  If sampling at \(t\) outside the training horizon, fall back to the nearest
-  trained \(t\) (or to \(σ_{\mathrm{data}} = 1\)).
+- *Sampling.* At sampling time, the same \(σ_{\mathrm{data}}^2[t]\)
+  buffer is used for the EDM constants (frozen at its last training
+  value).
+
+- *Forecasting beyond the training horizon.* When unrolling the
+  sequence to generate \(F\) steps into the future
+  (\(t = T+1, \ldots, T+F\)), we need a \(σ_{\mathrm{data}}^2(t)\)
+  value for each forecast step even though no training data exists
+  there. Use constant extrapolation: for \(t > T\), set
+  \(σ_{\mathrm{data}}^2[t] \leftarrow σ_{\mathrm{data}}^2[T]\). This
+  is the principled choice because the score network
+  \(F_ψ(\,\cdot\,, c_{\mathrm{noise}}, z_{t-1})\) does not take \(t\)
+  as an input — at forecast step \(T+k\) it sees only \(z_{T+k-1}\)
+  and the diffusion noise level, exactly as it did at training step
+  \(T\). Re-using \(σ_{\mathrm{data}}^2[T]\) keeps the EDM constants
+  (\(c_{\mathrm{in}}, c_{\mathrm{out}}, c_{\mathrm{skip}}\)) in the
+  same regime the network was calibrated against at the closest
+  trained timestep; any other value (\(σ_{\mathrm{data}} = 1\), or
+  values extrapolated from a tail trend) would mis-scale the
+  preconditioning relative to the network's learned ranges. Under
+  /Global EMA/ tracking this question is moot — the single scalar
+  applies at all \(t\).
 
 *** Ablation grid summary
-The Baseline Centering design space has three orthogonal knobs:
+The Baseline Centering design space has three knobs:
 
 | Knob          | Options                                                            | Section                  |
 |---------------+--------------------------------------------------------------------+--------------------------|
 | Baseline form | zero, identity, linear, MLP                                        | /Baseline-form variants/ |
 | Baseline mode | pinned; learnable + Gaussian anchor                                | /Baseline-mode variants/ |
-| Tracking mode | fixed \(σ_{\mathrm{data}} \equiv 1\); global EMA; per-\(t\) EMA      | /Tracking-mode variants/ |
+| Tracking mode | fixed at stage-1 EMA; global EMA; per-\(t\) EMA                     | /Tracking-mode variants/ |
+
+The three knobs are not fully orthogonal: the Baseline-mode knob is
+degenerate for the parameter-free Baseline forms (Zero and Identity),
+where only /Pinned/ applies. The valid cell count is
+\[
+\underbrace{2 \times 1 \times 3}_{\text{Zero, Identity}}
+\;+\;
+\underbrace{2 \times 2 \times 3}_{\text{Linear, MLP}}
+\;=\; 6 + 12 \;=\; 18 \text{ cells},
+\]
+not the nominal \(4 \times 2 \times 3 = 24\) the table-product would
+suggest. The four-by-three sub-grid (Linear, MLP) × (Pinned,
+Learnable+Anchor) × (Fixed, Global EMA, Per-\(t\) EMA) is where
+[[Interaction with tracking-mode variants]] runs its
+Baseline-mode × Tracking-mode interaction analysis.
 
 
 * Misc quotes from the LSGM paper to remember
