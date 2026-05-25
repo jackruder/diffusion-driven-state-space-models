@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
-from .conftest import EMB_TIME, J, LATENT_DIM, make_dummy_ctx
+from .conftest import EMB_TIME, LATENT_DIM, J, make_dummy_ctx
 
 
 def test_forward_shapes(transition, fixed_batch):

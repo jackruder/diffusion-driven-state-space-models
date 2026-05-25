@@ -8,10 +8,10 @@ import math
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 import torch
+import pytest
 
-from ddssm.eval import EvalContext, EvalSpec, METRIC_REGISTRY, evaluate
+from ddssm.eval import METRIC_REGISTRY, EvalSpec, EvalContext, evaluate
 from ddssm.eval.metrics import eval_loss_tail, eval_energy_score
 
 
@@ -100,6 +100,7 @@ def test_evalspec_per_metric_kwargs_forwarded(tmp_path):
     class _StubData:
         batch_transform = staticmethod(lambda b, d: b)
         metadata = type("_M", (), {"forecast_split": None})()
+
         def train_loader(self): return None
         def val_loader(self): return None
         def test_loader(self): return None

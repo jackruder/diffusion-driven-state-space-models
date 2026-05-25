@@ -24,11 +24,9 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-import pytest
 import torch
-
+import pytest
 from hydra_zen import instantiate
-
 
 pytestmark = pytest.mark.slow
 
@@ -102,8 +100,15 @@ def test_init_centering_smoke_end_to_end(tmp_path: Path) -> None:
 
     # The handoff populates ``baseline_anchor``.
     assert exp.model.baseline_anchor is not None
-    # The handoff also resets the σ_data EMA schedule under "fixed" mode.
-    assert exp.model.sigma_data.frozen is True
+    # The handoff resets the σ_data EMA schedule.  Under the canonical
+    # cell's per-t tracking mode the buffer keeps updating after the
+    # handoff (``frozen`` stays False); only the per-t step counter
+    # resets to zero.  Under "fixed" tracking the buffer freezes.
+    if exp.model.sigma_data.tracking_mode == "fixed":
+        assert exp.model.sigma_data.frozen is True
+    else:
+        assert exp.model.sigma_data.frozen is False
+        assert int(exp.model.sigma_data.ema_step.max()) == 5  # 5 stage-2 steps
 
 
 def test_init_centering_smoke_shares_baseline_instance() -> None:

@@ -4,9 +4,11 @@ from functools import partial
 
 import torch
 
-from ddssm.diffnets import CSDIUnet, DiffResidualBlockConfig, FeatureMixerConfig
-from ddssm.transitions.diffusion_v2 import DiffusionV2ScheduleConfig
-from ddssm.transitions.diffusion_v2 import DiffusionV2Transition
+from ddssm.diffnets import CSDIUnet, FeatureMixerConfig, DiffResidualBlockConfig
+from ddssm.transitions.diffusion_v2 import (
+    DiffusionV2Transition,
+    DiffusionV2ScheduleConfig,
+)
 
 
 def make_transition(schedule: DiffusionV2ScheduleConfig) -> DiffusionV2Transition:

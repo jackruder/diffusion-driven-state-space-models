@@ -1,17 +1,36 @@
-"""Hparams + training scalars + multi-stage config for the smoke preset."""
+"""Hparams + training scalars + multi-stage config for the init-centering preset.
+
+Phase B promotes the cell axes (``baseline_mode``, ``tracking_mode``)
+and the two sweep knobs (``sigma_pert``, ``n_pretrain``) to
+first-class fields on the hparams dataclass and exposes a parametric
+:class:`StagesConf` factory so the Optuna sweep (Phase C) can sample
+them via CLI override.
+
+Default values reproduce the canonical cell from
+``init-experiment.org:275`` — MLP / Pinned / per-t EMA — with the
+trainable-mask interlock baked in:
+
+* Stage 1 trains ``baseline=True``.
+* Stage 2 under Pinned: ``baseline=False`` (consistent with the
+  imperative freeze in :func:`perform_centering_handoff`).
+* Stage 2 under Learnable: ``baseline=True`` so the R_μp anchor
+  regulariser is the only thing constraining μ_p's drift.
+"""
 
 from __future__ import annotations
 
+from typing import Literal
+
 from hydra_zen import builds
 
-from ddssm.builders import CenteringHandoff, Hparams, Training
 from ddssm.stages import (
-    StageLrsConf,
-    StageSpecConf,
     StagesConf,
+    StageLrsConf,
+    EarlyStopSpec,
+    StageSpecConf,
     StageTrainableConf,
 )
-
+from ddssm.builders import Hparams, Training, CenteringHandoff
 
 LR = 5e-4
 LAMBDA_WARMUP = 50  # short: smoke runs are ~800 total steps
@@ -39,49 +58,79 @@ SmokeHparams = Hparams(
 Training800 = Training(steps=800, log_every=25, checkpoint_every=200, amp=False)
 
 
-# Two-stage config: stage 1 trains encoder/decoder/baseline (and aux_posterior
-# through encoder=True) with the Gaussian transition; stage 2 swaps to V3 with
-# the centering handoff.
+def _build_init_centering_stages(
+    *,
+    baseline_mode: Literal["pinned", "learnable"] = "pinned",
+    n_pretrain: int = 200,
+    n_stage2: int = 600,
+    sigma_pert: float = 1e-2,
+    enc_lr: float = LR,
+    dec_lr: float = LR,
+    zinit_lr: float = LR,
+    trans_lr: float = LR,
+    log_every: int = 25,
+    checkpoint_every: int = 200,
+    early_stop_enabled: bool = False,
+    early_stop_window: int = 50,
+    early_stop_min_improvement: float = 1e-4,
+    early_stop_warmup_steps: int = 100,
+) -> StagesConf:
+    """Build the two-stage orchestration spec for an init-centering cell.
+
+    The stage-2 baseline trainable mask is wired in lockstep with
+    ``baseline_mode`` so the declarative mask and the
+    :func:`perform_centering_handoff` imperative freeze agree.
+    """
+    lrs = StageLrsConf(
+        enc_lr=enc_lr, dec_lr=dec_lr, zinit_lr=zinit_lr, trans_lr=trans_lr,
+    )
+    stage1_trainable = StageTrainableConf(
+        encoder=True, decoder=True, z_init=False, transition=True, baseline=True,
+    )
+    stage2_baseline_trainable = baseline_mode == "learnable"
+    stage2_trainable = StageTrainableConf(
+        encoder=True, decoder=True, z_init=False, transition=True,
+        baseline=stage2_baseline_trainable,
+    )
+    es = EarlyStopSpec(
+        enabled=early_stop_enabled,
+        window=early_stop_window,
+        min_improvement=early_stop_min_improvement,
+        warmup_steps=early_stop_warmup_steps,
+    )
+    return StagesConf(
+        stage_1=StageSpecConf(
+            steps=int(n_pretrain),
+            trainable=stage1_trainable,
+            lrs=lrs,
+            log_every=log_every,
+            val_every=0,
+            checkpoint_every=checkpoint_every,
+            early_stop=es if early_stop_enabled else None,
+        ),
+        stage_2=StageSpecConf(
+            steps=int(n_stage2),
+            trainable=stage2_trainable,
+            lrs=lrs,
+            log_every=log_every,
+            val_every=0,
+            checkpoint_every=checkpoint_every,
+            centering_handoff=CenteringHandoff(sigma_pert=float(sigma_pert)),
+        ),
+        run=["stage_1", "stage_2"],
+    )
+
+
+# hydra-zen wrapper so the preset / Optuna sweep can override fields by name.
 StagesB = builds(
-    StagesConf,
+    _build_init_centering_stages,
     populate_full_signature=True,
-    stage_1=builds(
-        StageSpecConf,
-        populate_full_signature=True,
-        steps=200,
-        trainable=builds(
-            StageTrainableConf,
-            populate_full_signature=True,
-            encoder=True,
-            decoder=True,
-            z_init=False,  # legacy path off
-            transition=True,  # stage1_transition's μ_p/σ_p heads train
-        ),
-        lrs=builds(StageLrsConf, populate_full_signature=True, enc_lr=LR),
-        log_every=25,
-        val_every=0,
-        checkpoint_every=200,
-    ),
-    stage_2=builds(
-        StageSpecConf,
-        populate_full_signature=True,
-        steps=600,
-        trainable=builds(
-            StageTrainableConf,
-            populate_full_signature=True,
-            encoder=True,
-            decoder=True,
-            z_init=False,
-            transition=True,  # stage-2 transition (V3) trains
-        ),
-        lrs=builds(StageLrsConf, populate_full_signature=True, enc_lr=LR),
-        log_every=25,
-        val_every=0,
-        checkpoint_every=200,
-        centering_handoff=CenteringHandoff(sigma_pert=1e-2),
-    ),
-    run=["stage_1", "stage_2"],
 )
 
 
-__all__ = ["SmokeHparams", "StagesB", "Training800"]
+__all__ = [
+    "SmokeHparams",
+    "StagesB",
+    "Training800",
+    "_build_init_centering_stages",
+]

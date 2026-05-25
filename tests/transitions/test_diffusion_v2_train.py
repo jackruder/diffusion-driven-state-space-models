@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 
 def test_gradient_flows_to_score_net(transition, fixed_batch):
@@ -37,8 +37,9 @@ def test_overfit_single_batch(fixed_batch):
     closed-form Gaussian entropy ``L_q`` is constant across optimizer steps
     so monitoring ``L_p = kl + L_q`` masks the kl reduction.
     """
-    from .conftest import make_transition
     from ddssm.transitions.diffusion_v2 import DiffusionV2ScheduleConfig
+
+    from .conftest import make_transition
 
     cfg = DiffusionV2ScheduleConfig(
         S_k=16, k_chunk=16, num_steps=20, k_sampling_mode="uniform",

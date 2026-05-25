@@ -4,20 +4,19 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
 import torch
+import pytest
 
+from ddssm.gaussians import gaussian_kl_divergence
 from ddssm.aux_posterior import AuxPosterior
 from ddssm.centering.baselines import (
-    BaseBaseline,
-    IdentityBaseline,
     MLPBaseline,
+    BaseBaseline,
     ZeroBaseline,
+    IdentityBaseline,
 )
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.gaussians import gaussian_kl_divergence
 from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
-
 
 # ---------------------------------------------------------------------------
 # Shapes / helpers

@@ -13,11 +13,10 @@ drives the baseline somewhere non-trivial.
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
-from .conftest import make_smooth_sine_data, make_vhp_model, run_stage
-
+from .conftest import run_stage, make_vhp_model, make_smooth_sine_data
 
 pytestmark = pytest.mark.slow
 

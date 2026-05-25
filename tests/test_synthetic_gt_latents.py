@@ -7,11 +7,10 @@ data module and exposes the underlying clean latent ``z`` to consumers
 
 from __future__ import annotations
 
-import pytest
 import torch
 
-from ddssm.data.datamodule import SyntheticDataModule
 from ddssm.data.synthetic import SyntheticDataset
+from ddssm.data.datamodule import SyntheticDataModule
 
 
 def test_legacy_no_gt_latent_field_by_default() -> None:

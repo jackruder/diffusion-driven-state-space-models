@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 from ddssm.centering.baselines import (
-    BaseBaseline,
-    IdentityBaseline,
-    LinearBaseline,
     MLPBaseline,
+    BaseBaseline,
     ZeroBaseline,
+    LinearBaseline,
+    IdentityBaseline,
 )
-
 
 B = 4
 D = 3

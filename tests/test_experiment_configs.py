@@ -16,13 +16,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
-from hydra.core.global_hydra import GlobalHydra
-from hydra_zen import instantiate, store
 import pytest
+from hydra_zen import store, instantiate
+from hydra.core.global_hydra import GlobalHydra
 
-from ddssm._experiment_registry import register_experiments
-from ddssm.data.datamodule import DDSSMDataModule
 from ddssm.experiment import Experiment, ObjectiveSpec, TrainingScalars
+from ddssm.data.datamodule import DDSSMDataModule
+from ddssm._experiment_registry import register_experiments
 
 CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
 
@@ -37,7 +37,7 @@ def _registered_names(group: str) -> list[str]:
 
 def _exp(name: str):
     """Look up the registered experiment Conf node by name."""
-    return store["experiment"][("experiment", name)]
+    return store["experiment"]["experiment", name]
 
 
 # Populated once at collection time so ``parametrize`` sees the same list
@@ -77,11 +77,14 @@ def test_experiment_cli_compose(name: str) -> None:
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config", overrides=[f"experiment={name}"])
     assert cfg.experiment.training.steps > 0
-    # Legacy presets target DDSSM_base directly; the model-v2 smoke
-    # preset uses a factory wrapper that constructs DDSSM_base with
-    # shared baseline/aux instances.
+    # Legacy presets target DDSSM_base directly; the model-v2 init-
+    # centering preset uses a factory wrapper that constructs
+    # DDSSM_base with shared baseline/aux instances.
     target = cfg.experiment.model._target_
-    assert target.endswith("DDSSM_base") or target.endswith("_build_smoke_model"), target
+    assert (
+        target.endswith("DDSSM_base")
+        or target.endswith("_build_init_centering_model")
+    ), target
     assert cfg.experiment.data._target_
 
 

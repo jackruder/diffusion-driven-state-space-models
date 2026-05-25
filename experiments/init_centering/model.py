@@ -1,4 +1,4 @@
-"""Composed DDSSM model for the smoke preset.
+"""Composed DDSSM model for the init-centering preset family.
 
 Builds the model via a factory function so that ``baseline`` and
 ``aux_posterior`` are constructed *once* and passed by reference to
@@ -7,102 +7,186 @@ both the stage-1 :class:`BaselineGaussianTransition` and the stage-2
 across the handoff (per ``model-v2.org`` § Generative baseline /
 § Stage-1 → stage-2 handoff step 2).
 
-The Small1D encoder/decoder shape from
-``experiments.synthetic.model`` is reused unchanged (data_dim=1,
-latent_dim=4, j=1, emb_time_dim=16).
+The factory is parametric over the three ablation-grid axes from
+``init-experiment.org`` § Composition with the ablation grid:
+
+* ``baseline_form`` ∈ {zero, identity, linear, mlp}
+* ``baseline_mode`` ∈ {pinned, learnable}  (auto-clamped to pinned
+  for the parameter-free zero/identity forms)
+* ``tracking_mode`` ∈ {fixed, global_ema, per_t}
+
+Default values reproduce the canonical cell from
+``init-experiment.org:275`` — MLP / Pinned / per-t EMA.
 """
 
 from __future__ import annotations
 
+from typing import Any, Literal
+import warnings
 from functools import partial
-from typing import Any
 
 from hydra_zen import builds, instantiate
 from omegaconf import MISSING
 
+from ddssm.dssd import DDSSM_base
 from conf.registry import model_store
-
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.baselines import MLPBaseline
-from ddssm.centering.sigma_data import SigmaDataBuffer
 from ddssm.diffnets import (
     CSDIUnet,
-    DiffResidualBlockConfig,
     FeatureMixerConfig,
+    DiffResidualBlockConfig,
 )
-from ddssm.dssd import DDSSM_base
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
-from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3ScheduleConfig,
-    DiffusionV3Transition,
+from ddssm.aux_posterior import AuxPosterior
+from ddssm.centering.baselines import (
+    MLPBaseline,
+    BaseBaseline,
+    ZeroBaseline,
+    LinearBaseline,
+    IdentityBaseline,
 )
-
+from ddssm.centering.sigma_data import SigmaDataBuffer
 from experiments.synthetic.model import Small1D
+from ddssm.transitions.diffusion_v3 import (
+    DiffusionV3Transition,
+    DiffusionV3ScheduleConfig,
+)
+from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
+
+# Forms that have no learnable μ_p parameters and therefore degenerate
+# to ``baseline_mode="pinned"`` regardless of user input.
+_PARAM_FREE_FORMS: frozenset[str] = frozenset({"zero", "identity"})
 
 
-# ---------------------------------------------------------------------------
-# Shape
-# ---------------------------------------------------------------------------
-
-DATA_DIM = 1
-LATENT_DIM = 4
-J = 1
-EMB_TIME = 16
-T_MAX = 32  # matches Harmonic data's T
-
-CHANNELS = 32
-NHEADS = 4
-
-
-def _build_smoke_model(
+def _build_baseline(
     *,
+    baseline_form: str,
+    latent_dim: int,
+    j: int,
+    hidden_dim: int,
+    n_layers: int,
+) -> BaseBaseline:
+    """Construct the baseline (μ_p) head for the requested form."""
+    if baseline_form == "zero":
+        return ZeroBaseline(
+            latent_dim=latent_dim, j=j,
+            hidden_dim=hidden_dim, n_layers=n_layers,
+        )
+    if baseline_form == "identity":
+        return IdentityBaseline(
+            latent_dim=latent_dim, j=j,
+            hidden_dim=hidden_dim, n_layers=n_layers,
+        )
+    if baseline_form == "linear":
+        return LinearBaseline(latent_dim=latent_dim, j=j)
+    if baseline_form == "mlp":
+        return MLPBaseline(
+            latent_dim=latent_dim, j=j,
+            hidden_dim=hidden_dim, n_layers=n_layers,
+        )
+    raise ValueError(
+        f"baseline_form must be one of (zero, identity, linear, mlp); "
+        f"got {baseline_form!r}"
+    )
+
+
+def _build_init_centering_model(
+    *,
+    # --- Cell axes (the three grid dimensions) ---
+    baseline_form: Literal["zero", "identity", "linear", "mlp"] = "mlp",
+    baseline_mode: Literal["pinned", "learnable"] = "pinned",
+    tracking_mode: Literal["fixed", "global_ema", "per_t"] = "per_t",
+    # --- Shape ---
+    j: int = 1,
+    T_max: int = 32,
+    data_dim: int = 1,
+    latent_dim: int = 4,
+    emb_time_dim: int = 16,
+    channels: int = 32,
+    nheads: int = 4,
+    baseline_hidden_dim: int = 32,
+    baseline_n_layers: int = 2,
+    # --- Centering / regulariser scalars ---
+    anchor_lambda: float | None = None,  # None ⇒ 0.0 (pinned) / 1e-2 (learnable)
+    # --- Stage-2 diffusion schedule ---
+    diffusion_S_k: int = 1,
+    diffusion_k_chunk: int = 1,
+    diffusion_num_steps: int = 50,
+    diffusion_layers: int = 2,
+    # --- Plumb-through ---
     hyperparams: Any,
     stages: Any,
 ) -> DDSSM_base:
-    """Construct the smoke-preset model with shared baseline + aux instances.
+    """Construct an init-centering DDSSM model parametric over the 18-cell grid.
 
     The factory pattern is required so the *same* Python objects are
     passed to both transitions (so μ_p's parameters are shared and the
     handoff snapshot captures the right state).
+
+    Auto-degeneracy: if ``baseline_form`` is one of the parameter-free
+    forms (``zero`` / ``identity``) and ``baseline_mode`` is
+    ``"learnable"``, the mode is clamped to ``"pinned"`` and a warning
+    is emitted.  This avoids crashing under Optuna overrides that
+    happen to sample the degenerate region.
     """
+    if baseline_form in _PARAM_FREE_FORMS and baseline_mode == "learnable":
+        warnings.warn(
+            f"baseline_form={baseline_form!r} has no learnable μ_p "
+            f"parameters; clamping baseline_mode from 'learnable' to "
+            f"'pinned' (auto-degenerate per init-experiment.org § "
+            f"Composition with the ablation grid).",
+            stacklevel=2,
+        )
+        baseline_mode = "pinned"
+
+    if anchor_lambda is None:
+        # 0.0 under pinned (the R_μp term is moot when μ_p is frozen).
+        # 1e-2 under learnable matches model-v2.org § Baseline-mode
+        # variants / Learnable's recommended soft-anchor strength.
+        anchor_lambda = 0.0 if baseline_mode == "pinned" else 1e-2
+
     # ---- shared ingredients ----
-    baseline = MLPBaseline(
-        latent_dim=LATENT_DIM, j=J, hidden_dim=32, n_layers=2,
+    baseline = _build_baseline(
+        baseline_form=baseline_form,
+        latent_dim=latent_dim, j=j,
+        hidden_dim=baseline_hidden_dim, n_layers=baseline_n_layers,
     )
     aux_posterior = AuxPosterior(
-        latent_dim=LATENT_DIM, j=J, hidden_dim=32, n_layers=2,
+        latent_dim=latent_dim, j=j,
+        hidden_dim=baseline_hidden_dim, n_layers=baseline_n_layers,
     )
     sigma_data = SigmaDataBuffer(
-        T_max=T_MAX, tracking_mode="fixed", init_value=1.0,
+        T_max=T_max, tracking_mode=tracking_mode, init_value=1.0,
     )
 
     # ---- stage-1 transition (Gaussian closed-form) ----
     stage1_transition = BaselineGaussianTransition(
         baseline=baseline,
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
+        latent_dim=latent_dim,
+        j=j,
+        emb_time_dim=emb_time_dim,
     )
 
     # ---- stage-2 transition (centered ESM/EDM) ----
     unet = partial(
         CSDIUnet,
-        channels=CHANNELS,
-        n_layers=2,
-        embedding_dim=CHANNELS,
+        channels=channels,
+        n_layers=diffusion_layers,
+        embedding_dim=channels,
         residual_block=DiffResidualBlockConfig(
-            feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
+            feature=FeatureMixerConfig(nheads=nheads, n_layers=1)
         ),
     )
     schedule = DiffusionV3ScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=50, k_sampling_mode="uniform",
+        S_k=diffusion_S_k,
+        k_chunk=diffusion_k_chunk,
+        num_steps=diffusion_num_steps,
+        k_sampling_mode="uniform",
     )
     stage2_transition = DiffusionV3Transition(
         baseline=baseline,
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
-        T_max=T_MAX,
+        latent_dim=latent_dim,
+        j=j,
+        emb_time_dim=emb_time_dim,
+        T_max=T_max,
         unet=unet,
         schedule=schedule,
     )
@@ -115,10 +199,10 @@ def _build_smoke_model(
         encoder=encoder,
         decoder=decoder,
         transition=stage2_transition,
-        j=J,
-        data_dim=DATA_DIM,
-        latent_dim=LATENT_DIM,
-        emb_time_dim=EMB_TIME,
+        j=j,
+        data_dim=data_dim,
+        latent_dim=latent_dim,
+        emb_time_dim=emb_time_dim,
         hyperparams=hyperparams,
         stages=stages,
         use_observation_mask=False,
@@ -126,16 +210,16 @@ def _build_smoke_model(
         aux_posterior=aux_posterior,
         baseline=baseline,
         baseline_anchor=None,        # populated by the handoff
-        baseline_mode="pinned",
-        anchor_lambda=0.0,
+        baseline_mode=baseline_mode,
+        anchor_lambda=float(anchor_lambda),
         sigma_data=sigma_data,
         stage1_transition=stage1_transition,
     )
 
 
-# hydra-zen wrapper so the smoke preset can plug into experiment(model=...).
+# hydra-zen wrapper so the preset can plug into experiment(model=...).
 SmokeModel = builds(
-    _build_smoke_model,
+    _build_init_centering_model,
     populate_full_signature=True,
     hyperparams=MISSING,
     stages=MISSING,
@@ -144,4 +228,4 @@ SmokeModel = builds(
 
 model_store(SmokeModel, name="init_centering_smoke")
 
-__all__ = ["SmokeModel"]
+__all__ = ["SmokeModel", "_build_init_centering_model"]

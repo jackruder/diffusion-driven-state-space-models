@@ -17,14 +17,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 import torch
+import pytest
 
 from ddssm.centering.handoff import CenteringHandoffConf, perform_centering_handoff
-from ddssm.centering.baselines import MLPBaseline
 
-from .conftest import make_smooth_sine_data, make_vhp_model, run_stage
-
+from .conftest import run_stage, make_vhp_model, make_smooth_sine_data
 
 pytestmark = pytest.mark.slow
 

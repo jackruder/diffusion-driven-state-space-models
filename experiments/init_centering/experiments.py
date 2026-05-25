@@ -5,9 +5,8 @@ from __future__ import annotations
 from conf.registry import experiment_store
 from experiments._make import experiment
 from experiments.init_centering.data import Harmonic
-from experiments.init_centering.hparams import SmokeHparams, StagesB, Training800
 from experiments.init_centering.model import SmokeModel
-
+from experiments.init_centering.hparams import StagesB, Training800, SmokeHparams
 
 # The smoke preset wires every Phase 1–5 piece end-to-end:
 #   - shared MLPBaseline between BaselineGaussianTransition (stage 1) and

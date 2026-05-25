@@ -19,17 +19,16 @@ import csv
 import math
 from pathlib import Path
 
-import pytest
 import torch
+import pytest
 
-from ddssm.eval import EvalContext, METRIC_REGISTRY
+from ddssm.eval import METRIC_REGISTRY, EvalContext
 from ddssm.eval.metrics import (
     eval_sigma_data_drift,
-    eval_stage2_elbo_surrogate,
     eval_wallclock_to_target,
+    eval_stage2_elbo_surrogate,
 )
 from ddssm.eval.synthetic_kernels import KERNEL_REGISTRY
-
 
 # ---------------------------------------------------------------------------
 # wallclock_to_target — CSV-derived, no model needed
@@ -200,6 +199,7 @@ def test_sigma_data_drift_snapshot_with_init_centering_smoke(tmp_path) -> None:
         snapshot time.
     """
     from hydra_zen import instantiate
+
     from ddssm._experiment_registry import register_experiments
 
     register_experiments()
@@ -259,6 +259,7 @@ def test_sigma_data_drift_snapshot_with_init_centering_smoke(tmp_path) -> None:
 def test_stage2_elbo_surrogate_with_init_centering_smoke(tmp_path) -> None:
     """End-to-end: the metric runs on a trained smoke checkpoint."""
     from hydra_zen import instantiate
+
     from ddssm._experiment_registry import register_experiments
 
     register_experiments()
@@ -330,8 +331,8 @@ def _build_lgssm_eval_fixture():
 
 def test_crps_sum_latent_returns_unavailable_without_gt_latents() -> None:
     """When the loader has no gt_latent, the metric returns ``available: False``."""
-    from ddssm.data.datamodule import SyntheticDataModule
     from ddssm.eval.metrics import eval_crps_sum_latent
+    from ddssm.data.datamodule import SyntheticDataModule
 
     dm = SyntheticDataModule(mode="lgssm", T=4, D=1, N_per_split=2, batch_size=1)
     ctx = EvalContext(
@@ -347,8 +348,8 @@ def test_crps_sum_latent_returns_unavailable_without_gt_latents() -> None:
 
 def test_gt_latent_jsd_returns_unavailable_without_kernel() -> None:
     """A mode without a registered kernel → ``available: False``."""
-    from ddssm.data.datamodule import SyntheticDataModule
     from ddssm.eval.metrics import eval_gt_latent_jsd
+    from ddssm.data.datamodule import SyntheticDataModule
 
     dm = SyntheticDataModule(
         mode="harmonic",  # no kernel registered

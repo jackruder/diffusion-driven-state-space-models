@@ -6,18 +6,17 @@ and that the ``j=1`` constraint on :class:`IdentityAggregator` is enforced.
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
+from ddssm.diffnets import FeatureMixerConfig, ResidualBlockConfig
 from ddssm.aggregators import (
+    GRUAggregator,
+    MLPAggregator,
+    IdentityAggregator,
     AttentionAggregator,
     ContextProducerAggregator,
-    GRUAggregator,
-    IdentityAggregator,
-    MLPAggregator,
 )
-from ddssm.diffnets import FeatureMixerConfig, ResidualBlockConfig
-
 
 B = 3
 D = 4

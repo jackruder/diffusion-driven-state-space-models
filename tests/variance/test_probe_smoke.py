@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import torch
 from hydra import compose, initialize_config_dir
+import torch
 from hydra_zen import instantiate
 
+from ddssm.variance.runner import ProbeCell, ProbeSpec, ProbePlotSpec, variance
 from ddssm._experiment_registry import register_experiments
-from ddssm.variance.runner import ProbeCell, ProbePlotSpec, ProbeSpec, variance
 
 register_experiments()
 

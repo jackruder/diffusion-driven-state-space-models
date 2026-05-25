@@ -4,22 +4,21 @@ from __future__ import annotations
 
 from functools import partial
 
-import pytest
 import torch
+import pytest
 
+from ddssm.diffnets import (
+    CSDIUnet,
+    FeatureMixerConfig,
+    DiffResidualBlockConfig,
+)
 from ddssm.aux_posterior import AuxPosterior
 from ddssm.centering.baselines import MLPBaseline, ZeroBaseline
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.diffnets import (
-    CSDIUnet,
-    DiffResidualBlockConfig,
-    FeatureMixerConfig,
-)
 from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3ScheduleConfig,
     DiffusionV3Transition,
+    DiffusionV3ScheduleConfig,
 )
-
 
 B = 2
 S = 2
@@ -200,8 +199,8 @@ def test_transition_kl_v2_reduction_with_zero_baseline_unit_sigma_data() -> None
     equals V2's per-step loss.
     """
     from ddssm.transitions.diffusion_v2 import (
-        DiffusionV2ScheduleConfig,
         DiffusionV2Transition,
+        DiffusionV2ScheduleConfig,
     )
 
     j = J

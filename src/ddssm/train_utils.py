@@ -13,6 +13,7 @@ def param_groups_for_adamw(
     trans_lr: float,
     zinit_lr: float,
     weight_decay: float = 0.01,
+    baseline_lr: float | None = None,
 ):
     """Build per-component AdamW parameter groups with selective weight decay.
 
@@ -32,6 +33,16 @@ def param_groups_for_adamw(
         List of parameter-group dicts ready to pass to ``torch.optim.AdamW``.
     """
     groups = []
+    # Some submodules (notably ``baseline``) are reachable from multiple
+    # top-level attributes (e.g. ``model.baseline`` and
+    # ``model.transition.baseline``) because the model-v2 architecture
+    # shares the μ_p instance across both transitions and exposes it at
+    # the top level for the declarative trainable mask.  Without
+    # deduplication AdamW raises "some parameters appear in more than
+    # one parameter group".  The first add_module call that walks a
+    # given Parameter wins (the LR/wd group it ends up in is
+    # deterministic via the call order below).
+    _claimed_ids: set[int] = set()
 
     def add_module(module, lr: float, tag: str):
         if module is None or lr is None:
@@ -61,6 +72,9 @@ def param_groups_for_adamw(
         for n, p in module.named_parameters(recurse=True):
             if not p.requires_grad:
                 continue
+            if id(p) in _claimed_ids:
+                continue
+            _claimed_ids.add(id(p))
 
             n_lower = n.lower()
             is_bias = n_lower.endswith("bias")
@@ -97,6 +111,13 @@ def param_groups_for_adamw(
 
     # Capture top-level static embeddings (using encoder's LR)
     add_module(getattr(model, "static_embeddings", None), enc_lr, "static_embeddings")
+
+    # model-v2 slots: aux_posterior shares the encoder LR (it's part of the
+    # variational-inference family); baseline gets its own LR, defaulting to
+    # trans_lr if not provided.
+    add_module(getattr(model, "aux_posterior", None), enc_lr, "aux_posterior")
+    bl_lr = trans_lr if baseline_lr is None else baseline_lr
+    add_module(getattr(model, "baseline", None), bl_lr, "baseline")
 
     return groups
 

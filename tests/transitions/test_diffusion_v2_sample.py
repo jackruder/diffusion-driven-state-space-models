@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from typing import List
-
-import pytest
 import torch
+import pytest
 import torch.nn as nn
 
-from .conftest import EMB_TIME, J, LATENT_DIM, make_dummy_ctx
+from .conftest import EMB_TIME, LATENT_DIM, J, make_dummy_ctx
 
 
 def test_sample_shape_and_finiteness(transition):
@@ -65,7 +63,8 @@ def test_pf_ode_step_count(transition):
 
 class _OracleGaussian(nn.Module):
     """Oracle that returns ``F`` such that the recovered VE-coords score is the
-    analytic score of a target Gaussian ``N(mu_tgt, sigma_tgt**2 I)``."""
+    analytic score of a target Gaussian ``N(mu_tgt, sigma_tgt**2 I)``.
+    """
 
     def __init__(self, transition, mu_tgt: torch.Tensor, sigma_tgt: float):
         super().__init__()
@@ -100,8 +99,9 @@ class _OracleGaussian(nn.Module):
 @pytest.mark.slow
 def test_sample_recovers_known_unimodal_gaussian():
     """Oracle-score sampler recovers a known target Gaussian within MC tolerance."""
-    from .conftest import make_transition
     from ddssm.transitions.diffusion_v2 import DiffusionV2ScheduleConfig
+
+    from .conftest import make_transition
 
     torch.manual_seed(0)
     cfg = DiffusionV2ScheduleConfig(

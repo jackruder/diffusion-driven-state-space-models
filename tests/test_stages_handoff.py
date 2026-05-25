@@ -11,17 +11,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-import torch
-
-from ddssm.centering.handoff import CenteringHandoffConf
 from ddssm.stages import (
-    StageLrsConf,
-    StageOrchestrator,
-    StageSpecConf,
     StagesConf,
+    StageLrsConf,
+    StageSpecConf,
+    StageOrchestrator,
     StageTrainableConf,
 )
+from ddssm.centering.handoff import CenteringHandoffConf
 
 
 class _DummyTrainer:
