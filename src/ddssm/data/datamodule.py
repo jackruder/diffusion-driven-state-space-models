@@ -127,6 +127,7 @@ class SyntheticDataModule:
         drop_last: bool = False,
         shuffle_train: bool = True,
         use_observation_mask: bool = False,
+        expose_gt_latents: bool = False,
     ):
         self.mode = mode
         self.T = T
@@ -139,6 +140,7 @@ class SyntheticDataModule:
         self.drop_last = drop_last
         self.shuffle_train = shuffle_train
         self._use_observation_mask = use_observation_mask
+        self.expose_gt_latents = bool(expose_gt_latents)
 
     def _build(self, split: str) -> SyntheticDataset:
         return SyntheticDataset(
@@ -148,6 +150,7 @@ class SyntheticDataModule:
             T=self.T,
             D=self.D,
             dataset_seed=self.dataset_seed,
+            expose_gt_latents=self.expose_gt_latents,
         )
 
     def _loader(self, split: str, shuffle: bool) -> DataLoader:

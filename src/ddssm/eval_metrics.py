@@ -127,3 +127,25 @@ def crps_sum_metrics(
     indicator = (y_sum.unsqueeze(-1) < qs).float()
     crps = 2 * ((levels - indicator) * (y_sum.unsqueeze(-1) - qs)).mean(dim=-1)
     return crps.mean(), crps.mean(dim=0)
+
+
+def crps_sum_latent_metrics(
+    z_samples: torch.Tensor, z_gt: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """CRPS-sum on latent samples vs. ground-truth latents.
+
+    Structurally identical to :func:`crps_sum_metrics`; the only
+    difference is that ``z_samples`` and ``z_gt`` are latent-space
+    tensors of shapes ``(B, S, d, L2)`` and ``(B, d, L2)``, summed
+    across the latent dimension ``d``.
+
+    Used by ``ddssm.eval.metrics.crps_sum_latent`` for the model-v2
+    init-experiment headline metric on the latent path.
+    """
+    levels = torch.arange(0.05, 1.0, 0.05, device=z_samples.device)
+    z_sum = z_samples.sum(dim=2)  # (B, S, L2)
+    y_sum = z_gt.sum(dim=1)  # (B, L2)
+    qs = torch.quantile(z_sum, levels, dim=1).permute(1, 2, 0)  # (B, L2, Q)
+    indicator = (y_sum.unsqueeze(-1) < qs).float()
+    crps = 2 * ((levels - indicator) * (y_sum.unsqueeze(-1) - qs)).mean(dim=-1)
+    return crps.mean(), crps.mean(dim=0)

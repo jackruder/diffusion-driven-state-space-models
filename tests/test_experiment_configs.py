@@ -57,8 +57,8 @@ def _clear_global_hydra():
 
 
 def test_experiments_registered() -> None:
-    """All 14 named presets are reachable through the experiment store."""
-    assert len(EXPERIMENTS) == 14, EXPERIMENTS
+    """All 15 named presets are reachable through the experiment store."""
+    assert len(EXPERIMENTS) == 15, EXPERIMENTS
 
 
 @pytest.mark.parametrize("name", EXPERIMENTS)
@@ -77,7 +77,11 @@ def test_experiment_cli_compose(name: str) -> None:
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config", overrides=[f"experiment={name}"])
     assert cfg.experiment.training.steps > 0
-    assert cfg.experiment.model._target_.endswith("DDSSM_base")
+    # Legacy presets target DDSSM_base directly; the model-v2 smoke
+    # preset uses a factory wrapper that constructs DDSSM_base with
+    # shared baseline/aux instances.
+    target = cfg.experiment.model._target_
+    assert target.endswith("DDSSM_base") or target.endswith("_build_smoke_model"), target
     assert cfg.experiment.data._target_
 
 

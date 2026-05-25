@@ -15,6 +15,7 @@ class SyntheticDataset(Dataset):
         D: int = 1,
         seed: int = 42,
         dataset_seed: int = 1234,  # new: controls the data split, not the model seed
+        expose_gt_latents: bool = False,
     ):
         """
         Args:
@@ -25,24 +26,43 @@ class SyntheticDataset(Dataset):
             D: Data dimension
             seed: (legacy, ignored for splitting)
             dataset_seed: Seed for data generation and split
+            expose_gt_latents: When True, ``__getitem__`` returns an
+                additional ``gt_latent`` field containing the
+                ground-truth latent ``z`` underlying each sequence.
+                Available for modes that have a closed-form latent
+                process (currently only ``lgssm``); other modes do not
+                expose this field even with the flag on.
         """
         self.mode = mode
         self.split = split
         self.N_per_split = N_per_split
         self.T = T
         self.D = D
+        self.expose_gt_latents = bool(expose_gt_latents)
+        # Populated by _generate_data when the mode supports it.
+        self._all_gt_latents: torch.Tensor | None = None
+        self.gt_latents: torch.Tensor | None = None
 
         self.N_total = 3 * N_per_split
         all_data = self._generate_data(dataset_seed)
 
         if split == "train":
             self.data = all_data[:N_per_split]
+            if self._all_gt_latents is not None:
+                self.gt_latents = self._all_gt_latents[:N_per_split]
         elif split == "val":
             self.data = all_data[N_per_split : 2 * N_per_split]
+            if self._all_gt_latents is not None:
+                self.gt_latents = self._all_gt_latents[N_per_split : 2 * N_per_split]
         elif split == "test":
             self.data = all_data[2 * N_per_split : 3 * N_per_split]
+            if self._all_gt_latents is not None:
+                self.gt_latents = self._all_gt_latents[2 * N_per_split : 3 * N_per_split]
         else:
             raise ValueError(f"Unknown split: {split}")
+
+        # Free the full tensor; the per-split slice is what we keep.
+        self._all_gt_latents = None
 
         self.N = len(self.data)
 
@@ -65,6 +85,13 @@ class SyntheticDataset(Dataset):
                     self.N_total, self.D
                 )
             data = z + 0.1 * torch.randn(self.N_total, self.D, self.T)
+            # Retain the underlying clean latent for the GT-latent
+            # surface (used by ``gt_latent_jsd`` and
+            # ``crps_sum_latent`` metrics) only when explicitly
+            # requested — otherwise drop the reference so it can be
+            # garbage-collected.
+            if self.expose_gt_latents:
+                self._all_gt_latents = z
 
         elif self.mode == "nonlinear":
             # z_t = sin(z_{t-1}) + N(0, 0.1)
@@ -319,11 +346,16 @@ class SyntheticDataset(Dataset):
 
         T = full_seq.shape[1]
 
-        return {
+        item = {
             "observed_data": full_seq,
             "observation_mask": torch.ones_like(full_seq),
             "timepoints": torch.arange(T, dtype=torch.float32),
         }
+        # Optional GT-latent surface (e.g. for ``gt_latent_jsd`` +
+        # ``crps_sum_latent`` evaluators on the LGSSM mode).
+        if self.expose_gt_latents and self.gt_latents is not None:
+            item["gt_latent"] = self.gt_latents[idx]
+        return item
 
 
 def generate_lgssm_latents(N: int, T: int, D: int, seed: int = 42):

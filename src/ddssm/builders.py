@@ -32,6 +32,15 @@ from .aggregators import (
     IdentityAggregator,
     MLPAggregator,
 )
+from .aux_posterior import AuxPosterior
+from .centering.baselines import (
+    IdentityBaseline,
+    LinearBaseline,
+    MLPBaseline,
+    ZeroBaseline,
+)
+from .centering.handoff import CenteringHandoffConf
+from .centering.sigma_data import SigmaDataBuffer
 from .combiners import CompoundCombiner
 from .data.datamodule import KDDDataModule, NullDataModule, SyntheticDataModule
 from .decoder import GaussianDecoder
@@ -60,10 +69,15 @@ from .fusions import ConcatLinearFusion, DKSFusion, GatedFusion
 from .futsum import GRUFutureSummary, TransformerFutureSummary
 from .gaussians import GaussianHead
 from .train import DDSSMTrainer
+from .transitions.baseline_gaussian import BaselineGaussianTransition
 from .transitions.diffusion import DiffusionScheduleConfig, DiffusionTransition
 from .transitions.diffusion_v2 import (
     DiffusionV2ScheduleConfig,
     DiffusionV2Transition,
+)
+from .transitions.diffusion_v3 import (
+    DiffusionV3ScheduleConfig,
+    DiffusionV3Transition,
 )
 from .transitions.transitions import GaussianTransition
 from .variance.runner import ProbeCell, ProbeMetricSpec, ProbePlotSpec, ProbeSpec
@@ -104,6 +118,7 @@ DiffResidualBlock = builds(
 
 Schedule = DiffusionScheduleConfig
 ScheduleV2 = DiffusionV2ScheduleConfig
+ScheduleV3 = DiffusionV3ScheduleConfig
 
 # ---------------------------------------------------------------------------
 # Head, context, U-Net, future-summary builders.
@@ -339,6 +354,60 @@ DiffV2Transition = builds(
 
 
 # ---------------------------------------------------------------------------
+# Model-v2 baseline-centering builders.
+# ---------------------------------------------------------------------------
+
+ZeroBaselineB = builds(
+    ZeroBaseline,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+IdentityBaselineB = builds(
+    IdentityBaseline,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+LinearBaselineB = builds(
+    LinearBaseline,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+MLPBaselineB = builds(
+    MLPBaseline,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+AuxPosteriorB = builds(
+    AuxPosterior,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+SigmaDataBufferB = builds(
+    SigmaDataBuffer,
+    populate_full_signature=True,
+    T_max=MISSING,
+)
+BaselineGaussTransition = builds(
+    BaselineGaussianTransition,
+    populate_full_signature=True,
+    baseline=MISSING,
+    latent_dim=MISSING, j=MISSING,
+)
+
+DiffV3Transition = builds(
+    DiffusionV3Transition,
+    populate_full_signature=True,
+    baseline=MISSING,
+    latent_dim=MISSING, j=MISSING,
+    emb_time_dim=MISSING, T_max=MISSING,
+    unet=Unet(),
+    schedule=ScheduleV3(),
+)
+
+CenteringHandoff = builds(CenteringHandoffConf, populate_full_signature=True)
+
+
+# ---------------------------------------------------------------------------
 # Data modules.
 # ---------------------------------------------------------------------------
 
@@ -401,7 +470,7 @@ __all__ = [
     # Mixer / residual-block builders (instantiate to runtime dataclasses)
     "TimeMixer", "FeatureMixer", "ResidualBlock", "DiffResidualBlock",
     # Schedules
-    "Schedule", "ScheduleV2",
+    "Schedule", "ScheduleV2", "ScheduleV3",
     # Architectural builders
     "Head", "Context", "MLPContext", "Unet", "MLPUnet",
     "GRUFutSum", "TransformerFutSum",
@@ -414,6 +483,10 @@ __all__ = [
     # Module-slot builders
     "Encoder", "Decoder", "ZInit",
     "GaussTransition", "DiffTransition", "DiffV2Transition",
+    # Model-v2 baseline-centering builders
+    "ZeroBaselineB", "IdentityBaselineB", "LinearBaselineB", "MLPBaselineB",
+    "AuxPosteriorB", "SigmaDataBufferB",
+    "BaselineGaussTransition", "DiffV3Transition", "CenteringHandoff",
     # Data modules
     "Synthetic", "KDD", "Null",
     # Model + training
