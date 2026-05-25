@@ -26,6 +26,7 @@ def get_side_info(
     embed_layer: nn.Embedding,  # nn.Embedding(D, E_f)
     cond_mask: torch.Tensor | None = None,  # (B, D, T) optional
     device: str = "cpu",
+    padding_mask: torch.Tensor | None = None,  # (B, T) optional
 ):
     """Build covariate information tensors.
 
@@ -34,6 +35,14 @@ def get_side_info(
         - given time embeddings per timestep (of dimension E_t)
         - learned feature embeddings per data dimension (of dimension E_f)
         - optional conditioning mask (1 channel)
+        - optional padding mask (1 channel)
+
+    ``padding_mask`` is per-slot (shape ``(B, T)``) and flags slot identity
+    (e.g.\\ "padded auxiliary z_0" vs.\\ "real previous latent" in the
+    model-v2 VHP-via-diffusion construction).  It is broadcast across the
+    data dimension when appended as a side-info channel.  Per
+    ``init-experiment.org`` § Implementation precursors and
+    ``model-v2.org`` § Padding mask in the diffusion side-info tensor.
 
     TODO : support additional covariates,
       - static feature covariates (per D)
@@ -46,11 +55,13 @@ def get_side_info(
         embed_layer: nn.Embedding(D, E_f) feature embedding layer
         cond_mask: optional (B, D, T) conditioning mask, for missing data
         device: str, device to put tensors on
+        padding_mask: optional (B, T) per-slot binary mask flagging
+            padded auxiliary slots.  Broadcast across the D axis.
 
 
     Returns:
         side_info: (B, C_side, D, T), where
-            C_side = E_t + E_f (+1 if cond_mask provided)
+            C_side = E_t + E_f (+1 if cond_mask) (+1 if padding_mask)
     """
     B, T, E_t = time_embed.shape
     D = data_dim
@@ -69,6 +80,17 @@ def get_side_info(
     if cond_mask is not None:
         cond_mask = cond_mask.to(device).unsqueeze(1)  # (B, 1, D, T)
         side = torch.cat([side, cond_mask], dim=1)
+
+    if padding_mask is not None:
+        if padding_mask.dim() != 2 or padding_mask.shape != (B, T):
+            raise ValueError(
+                "padding_mask must have shape (B, T) matching time_embed; "
+                f"got {tuple(padding_mask.shape)} vs (B={B}, T={T})"
+            )
+        # (B, T) -> (B, 1, 1, T) -> (B, 1, D, T)
+        pm = padding_mask.to(device).to(side.dtype)
+        pm = pm.unsqueeze(1).unsqueeze(2).expand(B, 1, D, T)
+        side = torch.cat([side, pm], dim=1)
 
     return side  # (B, C_side, D, T)
 

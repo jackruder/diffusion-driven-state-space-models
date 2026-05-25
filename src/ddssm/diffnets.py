@@ -415,6 +415,7 @@ class CSDIUnet(nn.Module):
         embedding_dim: int = 128,
         projection_dim: int | None = None,
         residual_block: DiffResidualBlockConfig | None = None,
+        zero_init_output: bool = True,
     ) -> None:
         super().__init__()
         if residual_block is None:
@@ -460,7 +461,14 @@ class CSDIUnet(nn.Module):
         ])
         self.output_projection1 = Conv1d_with_init(self.channels, self.channels, 1)
         self.output_projection2 = Conv1d_with_init(self.channels, 1, 1)
-        _ = nn.init.zeros_(self.output_projection2.weight)
+        # Conv1d_with_init already zero-initialises bias; the standard
+        # EDM convention also zeros the final-layer weights so D_ψ ≈
+        # c_skip · z̃_t at the start of training.  Toggle via flag for
+        # ablations / explicit control under model-v2 V3.
+        if zero_init_output:
+            nn.init.zeros_(self.output_projection2.weight)
+            if self.output_projection2.bias is not None:
+                nn.init.zeros_(self.output_projection2.bias)
 
     def forward(
         self, x: torch.Tensor, side_info: torch.Tensor, diffusion_step: torch.Tensor
@@ -530,6 +538,7 @@ class MLPCSDIUnet(nn.Module):
         embedding_dim: int = 128,
         projection_dim: int | None = None,
         residual_block: DiffResidualBlockConfig | None = None,
+        zero_init_output: bool = False,
     ) -> None:
         super().__init__()
         # Kept for constructor compatibility with ``CSDIUnet``.
@@ -549,7 +558,12 @@ class MLPCSDIUnet(nn.Module):
         layers: list[nn.Module] = [nn.Linear(in_dim, hidden), nn.SiLU()]
         for _ in range(depth - 1):
             layers.extend([nn.Linear(hidden, hidden), nn.SiLU()])
-        layers.append(nn.Linear(hidden, out_dim))
+        final = nn.Linear(hidden, out_dim)
+        if zero_init_output:
+            nn.init.zeros_(final.weight)
+            if final.bias is not None:
+                nn.init.zeros_(final.bias)
+        layers.append(final)
         self.mlp = nn.Sequential(*layers)
 
     def forward(
