@@ -68,6 +68,17 @@ def perform_centering_handoff(
         )
     model.baseline_anchor = model.baseline.snapshot()
 
+    # ---- 1b. Freeze μ_p under "pinned" baseline mode. ----
+    # Per ``model-v2.org`` § Baseline-mode variants / Pinned:
+    # "μ_p's /parameters/ receive no gradient (since they are frozen),
+    # though μ_p still enters the diffusion loss through the centering
+    # shift and so affects ẑ_t, F*, and the encoder's inputs."
+    # Set ``requires_grad = False`` *before* the optimizer rebuild so the
+    # frozen baseline params are excluded from the new parameter groups.
+    if getattr(model, "baseline_mode", "pinned") == "pinned":
+        for p in model.baseline.parameters():
+            p.requires_grad = False
+
     # ---- 2. Rebuild optimizer ----
     trainer._rebuild_optimizer(new_lrs)
 
