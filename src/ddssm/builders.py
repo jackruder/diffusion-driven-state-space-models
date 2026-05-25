@@ -74,6 +74,10 @@ from .transitions.diffusion_v2 import (
     DiffusionV2ScheduleConfig,
     DiffusionV2Transition,
 )
+from .transitions.diffusion_v3 import (
+    DiffusionV3ScheduleConfig,
+    DiffusionV3Transition,
+)
 from .transitions.transitions import GaussianTransition
 from .variance.runner import ProbeCell, ProbeMetricSpec, ProbePlotSpec, ProbeSpec
 from .viz.runner import PlotSpec, VizSpec
@@ -113,6 +117,7 @@ DiffResidualBlock = builds(
 
 Schedule = DiffusionScheduleConfig
 ScheduleV2 = DiffusionV2ScheduleConfig
+ScheduleV3 = DiffusionV3ScheduleConfig
 
 # ---------------------------------------------------------------------------
 # Head, context, U-Net, future-summary builders.
@@ -388,6 +393,16 @@ BaselineGaussTransition = builds(
     latent_dim=MISSING, j=MISSING,
 )
 
+DiffV3Transition = builds(
+    DiffusionV3Transition,
+    populate_full_signature=True,
+    baseline=MISSING,
+    latent_dim=MISSING, j=MISSING,
+    emb_time_dim=MISSING, T_max=MISSING,
+    unet=Unet(),
+    schedule=ScheduleV3(),
+)
+
 
 # ---------------------------------------------------------------------------
 # Data modules.
@@ -452,7 +467,7 @@ __all__ = [
     # Mixer / residual-block builders (instantiate to runtime dataclasses)
     "TimeMixer", "FeatureMixer", "ResidualBlock", "DiffResidualBlock",
     # Schedules
-    "Schedule", "ScheduleV2",
+    "Schedule", "ScheduleV2", "ScheduleV3",
     # Architectural builders
     "Head", "Context", "MLPContext", "Unet", "MLPUnet",
     "GRUFutSum", "TransformerFutSum",
@@ -467,7 +482,8 @@ __all__ = [
     "GaussTransition", "DiffTransition", "DiffV2Transition",
     # Model-v2 baseline-centering builders
     "ZeroBaselineB", "IdentityBaselineB", "LinearBaselineB", "MLPBaselineB",
-    "AuxPosteriorB", "SigmaDataBufferB", "BaselineGaussTransition",
+    "AuxPosteriorB", "SigmaDataBufferB",
+    "BaselineGaussTransition", "DiffV3Transition",
     # Data modules
     "Synthetic", "KDD", "Null",
     # Model + training
