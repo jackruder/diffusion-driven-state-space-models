@@ -1,0 +1,271 @@
+#+TITLE: Agent Handoff — init-centering experiment (Phases A → E shipped)
+#+OPTIONS: toc:2 num:t
+#+STARTUP: overview
+
+This file briefs an incoming Claude session on the init-centering
+ablation project so you can pick up without re-deriving the context.
+Read it top-to-bottom before doing any work — the gotchas section in
+particular will save you wasted tool calls.
+
+* TL;DR
+
+A 5-phase research stack landed on branch
+=claude/update-documents-redo-plan-JzSxw= (PR #27) implementing the
+18-cell ablation grid for init-centering on DDSSM:
+
+| Phase | Commit  | Role                                                                |
+|-------+---------+---------------------------------------------------------------------|
+| A     | b7fc9a7 | Headline-metric primitives (=stage2_elbo_surrogate=, etc.)          |
+| B     | d7f14c4 | Parametric factory over the 3 cell axes                            |
+| C     | efdb1b6 | Pilot Optuna sweep on canonical cell + JSON-source objective       |
+| D     | 0132870 | 18 cell presets + 2 controls + sbatch launcher + V2-reduction test  |
+| E     | 2d6579a | Reporting layer (serialize → JSONL → plot, decoupled from eval)    |
+
+Test status as of E: 446 fast tests pass (was 375 pre-D), 2 skipped.
+
+The user's primary org docs:
+- design — =init-experiment.org=
+- impl plan — =init-experiment-implementation.org=
+- operator's manual — =init-experiment-running.org=
+
+* User profile + working style
+
+- Researcher (PhD-style); comfortable reading source.
+- Prefers planning *before* implementation — uses plan mode, then
+  =ExitPlanMode=, then implement.  Treat plan-mode review as a real
+  approval gate, not a formality.
+- Iterates phase-by-phase.  Each phase is one commit + one push to
+  the existing PR.  Don't open new PRs unless asked.
+- Asks targeted clarifying questions about design tradeoffs.  Always
+  use =AskUserQuestion= when you'd otherwise have to guess; the user
+  prefers to be consulted over Claude making executive decisions on
+  naming, test depth, etc.
+- Values numerical correctness anchors.  When you add abstraction,
+  add a test that reduces to a known baseline (e.g. the simplest
+  cell reduces to =DiffusionV2= — see =tests/test_init_centering_v2_reduction.py=).
+- Values *serialize-then-plot* hygiene: any reporting code must
+  write metrics to disk first so plot iteration is decoupled from
+  computation.  See =experiments/init_centering/report.py= for the
+  canonical pattern.
+
+* Hard rules
+
+These are non-negotiable.  Violating any of them is grounds for the
+user to lose trust:
+
+1. *Never* commit the string =claude-opus-4-7[1m]= (or any other
+   model identifier) to a repository.  Chat replies only.
+2. *Never* push to =main= / =master=.  Develop on
+   =claude/update-documents-redo-plan-JzSxw=.
+3. *Never* use =--no-verify=, =--no-gpg-sign=, or any other hook
+   skip unless the user explicitly asks.
+4. *Never* open a new PR.  PR #27 already exists and is being
+   iterated on commit-by-commit.  =git push -u origin <branch>= is
+   the publish step.
+5. Commit messages must end with the session URL
+   =https://claude.ai/code/session_01KQ4ArViPSJ9wJZH58fVr1Q=
+   inside a HEREDOC block.
+
+* Environment quirks
+
+** Test invocation
+
+Always =python -m pytest …= — never bare =pytest=.  The project root
+isn't on =sys.path= by default, so =from conf.registry import store=
+breaks under plain =pytest=.
+
+#+begin_src bash
+.venv/bin/python -m pytest tests/ -m "not slow"
+#+end_src
+
+** Hydra =compose= in tests
+
+=cfg.hydra= is not accessible by default.  Pass
+=return_hydra_config=True= to =compose(…)=:
+
+#+begin_src python
+with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
+    cfg = compose(
+        config_name="config",
+        overrides=["experiment=init_centering_pilot", "+sweep=init_pilot"],
+        return_hydra_config=True,
+    )
+#+end_src
+
+The pattern lives at
+=tests/test_init_centering_pilot.py:test_pilot_sweep_composes_via_cli=.
+
+** Tool environments
+
+The session runs on a managed remote container; the harness clones
+the repo fresh each time.  =gh= CLI is *not* available — use the
+=mcp__github__*= MCP tools (scoped to
+=jackruder/diffusion-driven-state-space-models= only).
+
+* Project topology (where things live)
+
+** Source
+
+| Path                                                      | What's there                              |
+|-----------------------------------------------------------+-------------------------------------------|
+| =src/ddssm/=                                              | Library code — model, trainer, eval, viz  |
+| =src/ddssm/dssd.py:DDSSM_base=                            | The main model                            |
+| =src/ddssm/transitions/diffusion_v3.py=                   | Stage-2 centered-ESM transition           |
+| =src/ddssm/transitions/diffusion_v2.py=                   | Reference baseline (V2 reduction target)  |
+| =src/ddssm/centering/baselines.py=                        | μ_p heads (Zero/Identity/Linear/MLP)      |
+| =src/ddssm/centering/sigma_data.py:SigmaDataBuffer=       | Per-t σ_data tracking                     |
+| =src/ddssm/eval/metrics.py=                               | The 5 Phase-A headline metrics            |
+| =src/ddssm/eval/runner.py=                                | Writes =metrics.json= per run             |
+| =src/ddssm/experiment.py:Experiment=                      | Composition root                          |
+| =src/ddssm/experiment.py:ObjectiveSpec=                   | CSV/JSON-source objective reader          |
+
+** init-centering family
+
+| Path                                            | Role                                                 |
+|-------------------------------------------------+------------------------------------------------------|
+| =experiments/init_centering/cells.py=           | Enumerator =iter_cells= + =cell_name= + canonical    |
+| =experiments/init_centering/model.py=           | =_build_init_centering_model= factory                |
+| =experiments/init_centering/hparams.py=         | =_build_init_centering_stages= factory + SmokeHparams |
+| =experiments/init_centering/data.py=            | =Harmonic= data preset                               |
+| =experiments/init_centering/evals.py=           | =PilotEval= + =PilotObjective=                       |
+| =experiments/init_centering/sweeps.py=          | =InitPilot= (Optuna search space)                    |
+| =experiments/init_centering/experiments.py=     | All 18 cell presets + 2 controls + smoke + pilot     |
+| =experiments/init_centering/launch_phase_d.py=  | sbatch generator for Phase-D submission              |
+| =experiments/init_centering/smoke_phase_d.py=   | Local end-to-end smoke (every cell, 5+5 steps)       |
+| =experiments/init_centering/report.py=          | Aggregate → JSONL/CSV → plot (Phase E)               |
+
+** Tests
+
+| Path                                            | Coverage                                              |
+|-------------------------------------------------+-------------------------------------------------------|
+| =tests/test_init_centering_factory.py=          | Phase-B parametric factory across all 18 cells        |
+| =tests/test_init_centering_pilot.py=            | Phase-C wiring; slow E2E pilot                        |
+| =tests/test_init_centering_cells.py=            | Phase-D cell enumeration + registration               |
+| =tests/test_init_centering_v2_reduction.py=     | The simplest cell reduces to DiffusionV2 numerically  |
+| =tests/test_init_centering_report.py=           | Phase-E aggregation + serialization + plot pipeline   |
+| =tests/test_experiment_configs.py=              | Catalogue (36-experiment count assertion)             |
+| =tests/test_objective_source.py=                | =ObjectiveSpec= CSV vs JSON dispatch                  |
+| =tests/test_transitions/test_diffusion_v3.py=   | Transition-level V3 vs V2 numerical equivalence       |
+
+* Open work / what's next
+
+** Phase F — PF-ODE NLL as gating objective (deferred)
+
+The doc =init-experiment.org= mentions PF-ODE NLL replacing
+=stage2_elbo_surrogate= as the Optuna objective.  Not started.  Would
+require:
+
+1. A new metric =pf_ode_nll= in =src/ddssm/eval/metrics.py= (S-sample
+   solve of the V3 PF-ODE + log-density evaluation).
+2. New =Objective(metric="pf_ode_nll", source="json")= preset.
+3. A new pilot preset on the canonical cell + a new sweep selecting
+   that objective.
+
+** Phase F follow-ups (also deferred)
+
+- Cross-cell joint TPE search over (cell × hparams) — current Phase
+  D runs *18 independent* studies, one per cell.  A joint search is
+  intriguing but pollutes per-cell rankings.
+- Bayesian model comparison across cells (Phase E reports point
+  estimates only).
+- SLURM-launched parallel sweeps via =hydra/launcher=submitit_slurm=
+  on the smoke launcher itself (currently sequential).
+
+** Pre-existing technical debt
+
+- =experiments/init_centering/data.py= only ships =Harmonic= — the
+  =gt_latent_jsd= metric returns =available=False= on this data
+  (no GT latents).  An LGSSM-backed alternative would unblock that
+  metric for the headline plot.
+- The launcher generates one sbatch per cell but does NOT submit
+  them.  Submit step is manually =for f in …; do sbatch "$f"; done=.
+  If the user asks for autosubmit, add a =--submit= flag that
+  shells out to =sbatch= per file.
+
+* Conventions for your future commits
+
+** Commit message format
+
+Use HEREDOCs, end with the session URL.  Title-line ≤ 60 chars; body
+explains *why*, not *what*.  Example:
+
+#+begin_src bash
+git commit -m "$(cat <<'EOF'
+Phase F: PF-ODE NLL objective
+
+<one-paragraph rationale>
+
+<bullet list of files touched + key tests>
+
+https://claude.ai/code/session_01KQ4ArViPSJ9wJZH58fVr1Q
+EOF
+)"
+#+end_src
+
+** Don't bloat the launcher
+
+=launch_phase_d.py= is intentionally focused on sbatch generation.
+For new run modes (local smoke, prod sweep, etc.) create a sibling
+module (=smoke_phase_d.py= is the precedent).  Resist the urge to
+flag-overload one file.
+
+** Reuse =all_phase_d_cells()=
+
+Every script that iterates the grid (=smoke_phase_d=, =launch_phase_d=,
+the report's defaults) consumes
+=experiments.init_centering.launch_phase_d.all_phase_d_cells=.  If
+you change the cell set (e.g. add new controls), update that one
+function — everything else picks it up.
+
+** Test the V2-reduction anchor
+
+Whenever you touch =DiffusionV3Transition= or =_build_init_centering_model=,
+re-run:
+
+#+begin_src bash
+.venv/bin/python -m pytest tests/test_init_centering_v2_reduction.py -v
+.venv/bin/python -m pytest tests/test_transitions/test_diffusion_v3.py -v
+#+end_src
+
+The reduction lockdown is the user's headline correctness invariant.
+Breaking it silently is the worst-case regression.
+
+* Quick start for the new agent
+
+1. Read =CLAUDE.md= (project conventions).
+2. Read =init-experiment-running.org= (operator's manual — most
+   useful as a navigation aid).
+3. Read this file.
+4. Run =.venv/bin/python -m pytest tests/ -m "not slow"= and confirm
+   446 passes.
+5. Ask the user what they want next.  Common asks:
+   - Phase F (PF-ODE NLL).
+   - LGSSM data preset so =gt_latent_jsd= reports a real number.
+   - A specific cell's behavior is wrong — investigate, write a
+     test that reproduces it, fix, push.
+   - Re-run the full sweep with a tweaked search space.
+
+* Glossary
+
+- *Cell* — one point of the 18-cell ablation grid, identified by
+  =(baseline_form, baseline_mode, tracking_mode)=.  Named e.g.
+  =init_mlp_pinned_per_t=.
+- *Canonical cell* — =(mlp, pinned, per_t)=, the Phase-C pilot
+  baseline.
+- *Simplest cell* — =(zero, pinned, fixed)=, mathematically
+  equivalent to =DiffusionV2= and locked down by the V2-reduction
+  test.
+- *Control cell* — Either =init_canonical_ctrl_sigma0= (canonical
+  with =sigma_pert=0=) or =init_canonical_ctrl_npretrain0=
+  (canonical with =n_pretrain=0=).  Not in the 18-cell grid; not
+  Optuna-swept.
+- *Handoff* — Stage-1 → stage-2 transition during multi-stage
+  training.  Pinned mode freezes μ_p at handoff; Learnable mode
+  allows continued updates via the anchor regulariser.
+- *σ_data tracking* — =SigmaDataBuffer= records the per-t target
+  variance.  Three modes: =fixed= (snapshot at stage-2 start),
+  =global_ema= (single EMA pooled across t), =per_t= (independent
+  per-timestep EMA).
+- *Sweep knobs* — =n_pretrain= + =sigma_pert= + 3 lrs.  Sampled by
+  Optuna per trial.  Log-uniform priors; cannot reach zero (hence
+  the 2 control cells).
