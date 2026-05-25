@@ -1,0 +1,397 @@
+#+TITLE: Initialization / Centering Experiment — Implementation Plan
+#+OPTIONS: toc:2 num:t
+
+This document describes the *implementation plan* for the experimental
+design in =init-experiment.org=, building on the model-v2 core machinery
+tagged ~model-v2-core-complete~.  The math and what-we-measure live
+in =init-experiment.org=; this file specifies *how we build it* and
+*in what order*.
+
+The plan is phased so each phase produces a self-contained,
+testable artefact and leaves the suite green.  Phase A unblocks every
+downstream phase by landing the headline-metric primitives; Phases B–D
+parametrise + sweep + scale up; Phase E produces the report.
+
+* Status as of ~model-v2-core-complete~
+
+The following are *already in place* (six PRs / phases on
+~claude/update-documents-redo-plan-JzSxw~):
+
+- ~BaseBaseline~ + 4 forms (Zero, Identity, Linear, MLP) with
+  ~mean~ / ~mean_and_logvar~ / ~snapshot~ APIs.
+- ~AuxPosterior~ (q_Φ(z_{-j+1:0} | z_{1:j})).
+- ~SigmaDataBuffer~ with three tracking modes (fixed, global_ema, per_t).
+- ~BaselineGaussianTransition~ (stage 1) + ~DiffusionV3Transition~ (stage 2).
+- ~r_sigma_p_loss~ + ~r_mu_p_loss~ free functions.
+- ~perform_centering_handoff~ — snapshot μ_p → freeze under Pinned →
+  rebuild optimizer → perturb encoder → reset σ_data EMA schedule.
+- ~StageOrchestrator~ wired into ~Experiment.train~ (stages-aware
+  dispatch).
+- One smoke preset ~init_centering_smoke~.
+- ~tests/test_integration/~ — math-validating integration tests for
+  σ_data convergence, centered residual decay, tracking-mode
+  distinctions, Pinned/Learnable mutation, parametric baseline
+  learning.
+
+300 tests pass (281 fast + 19 integration).
+
+* Phase A — Headline metric primitives
+
+** Goal
+
+Implement the five tractable headline metrics from
+=init-experiment.org= § Headline metrics so every downstream phase has
+a uniform measurement surface.  PF-ODE NLL (metric (1)) is gated and
+deferred to Phase F.
+
+** Files
+
+- ~src/ddssm/eval/metrics.py~ — register new metrics in the existing
+  ~METRIC_REGISTRY~:
+
+  - ~stage2_elbo_surrogate~ — MC cross-entropy + analytic q_φ entropy
+    on a held-out split.  Most of the values are already computed in
+    ~DDSSM_base.forward~; this metric assembles them into a single
+    scalar plus a JSON snapshot.  Definition: =model-v2.org= § ELBO
+    contribution + § Regression target and final loss.
+
+  - ~sigma_data_drift~ — time-series of ~σ_data²[t]~ plus the
+    two-component decomposition (~E‖σ_t‖²~, ~tr Var[μ̂_t]~).  Pulls
+    the per-step values from ~metrics.csv~ (already logged at every
+    step) and produces a per-t trajectory JSON.  Plot helper goes in
+    Phase E.
+
+  - ~gt_latent_jsd~ — JSD between samples from ~p_ψ(z_t | z_{t-1})~
+    and samples from the known ground-truth transition kernel.  Only
+    defined on simulated data; requires the synthetic data module to
+    expose its ground-truth transition (see "Data-module extension"
+    below).
+
+  - ~crps_sum_latent~ — latent-space variant of the existing
+    ~crps_sum~ obs-space metric.  Walks the encoded latent paths plus
+    the transition's forecast samples and computes CRPS-sum across
+    latent dims.
+
+  - ~wallclock_to_target~ — post-hoc CSV summary.  Given
+    ~(metric, threshold)~, returns the wall-clock and step at which
+    the metric first crossed the threshold (or ~null~ if never).
+
+- ~src/ddssm/data/synthetic.py~ — extension so the data module can
+  optionally emit ~ground_truth_z~ alongside ~observed_data~, gated
+  on a kwarg ~expose_gt_latents=False~ (default off; only the
+  ~gt_latent_jsd~ metric needs it).  The synthetic modes that have a
+  closed-form latent process (~lgssm~, ~harmonic~) already simulate
+  a latent path internally; we just need to surface it.
+
+- ~src/ddssm/eval/runner.py~ — wire the new metric names through the
+  ~EvalSpec.metrics~ list; no structural change.
+
+** Tests
+
+- ~tests/test_eval/test_stage2_elbo_surrogate.py~ — unit test that
+  the metric returns finite values on a trained checkpoint and that
+  the JSON shape matches the spec.
+
+- ~tests/test_eval/test_sigma_data_drift.py~ — drives a 10-step
+  smoke run and asserts the per-t trajectory length matches T_max
+  and the two components sum to the buffer value.
+
+- ~tests/test_eval/test_gt_latent_jsd.py~ — on a known synthetic mode
+  (~lgssm~), the JSD between p_ψ samples after training and the
+  ground-truth-kernel samples should be finite and decrease with
+  training.
+
+- ~tests/test_eval/test_crps_sum_latent.py~ — shape sanity.
+
+- ~tests/test_eval/test_wallclock_to_target.py~ — hand-crafted CSV
+  rows verifying the threshold-crossing logic.
+
+** Definition of done
+
+Each metric is callable via ~python -m ddssm.evaluate experiment=…
+checkpoint=…~ on the existing smoke preset and writes its result
+into ~metrics.json~.  Full suite still green.
+
+* Phase B — Cell parametrisation
+
+** Goal
+
+Generalise the single ~init_centering_smoke~ preset into a
+parametric family covering the full 3-axis cell grid plus the two
+sweep knobs.
+
+** Files
+
+- ~experiments/init_centering/model.py~ — refactor the factory
+  function ~_build_smoke_model~ into ~_build_init_centering_model~
+  taking ~(baseline_form, baseline_mode, tracking_mode, j, T_max,
+  shape)~ kwargs and emitting the right ~DDSSM_base~.  Auto-degenerate
+  ~baseline_mode~ to ~"pinned"~ for ~"zero"~ / ~"identity"~ forms.
+
+- ~src/ddssm/stages.py~ — add ~baseline: bool = True~ to
+  ~StageTrainableConf~.  Update ~DDSSMTrainer._set_trainable~ to
+  flip ~model.baseline.parameters()~ based on this flag (in
+  addition to the existing handoff-side freeze under Pinned mode —
+  the two are belt-and-suspenders; the orchestrator-level mask gives
+  per-stage control while the handoff-side freeze enforces the doc's
+  Pinned semantics regardless of trainable configuration).
+
+- ~src/ddssm/dssd.py~ + ~src/ddssm/experiment.py~ — add an
+  ~elbo_plateau_early_stop~ field to ~TrainingScalars~ (and to the
+  stage spec).  The trainer checks the rolling-window improvement of
+  ~loss/total~ and terminates the stage early if it falls below the
+  threshold.  Per =init-experiment.org= § Hyperparameters: "Pair
+  with a stage-1 ELBO-plateau early-stop so trials don't waste
+  compute".  Implemented at the trainer level so it works for any
+  stage; the Optuna sweep uses it on stage 1.
+
+- ~experiments/init_centering/hparams.py~ — add ~lambda_sigma_p~,
+  ~anchor_lambda~, ~tracking_mode~, ~sigma_pert~, ~n_pretrain~ as
+  first-class fields on the smoke-preset hparams/training/stages so
+  the Optuna sweep can sample them via override.
+
+** Tests
+
+- ~tests/test_integration/test_cell_parametrisation.py~ — for each
+  of the 4 baseline forms × 3 tracking modes × {Pinned, Learnable},
+  the parametric factory builds a working model that survives a
+  short forward + backward.  Auto-degenerate cells (Zero/Identity ×
+  Learnable) raise a clear error.
+
+- ~tests/test_trainer.py~ — extend with one test for
+  ~elbo_plateau_early_stop~: train for N steps with a converged
+  loss curve, assert termination before N.
+
+** Definition of done
+
+A single CLI override —
+~experiment=init_centering_smoke
+experiment.model.baseline_form=linear
+experiment.model.baseline_mode=learnable
+experiment.model.tracking_mode=per_t~ — instantiates the right
+cell without changes to the preset registry.  Full suite green.
+
+* Phase C — Pilot Optuna sweep
+
+** Goal
+
+Validate the entire metric + sweep pipeline by running ~20 Optuna
+trials on the canonical cell.
+
+** Files
+
+- ~experiments/init_centering/sweeps.py~ — new file registering the
+  pilot search space to ~sweep_store~:
+
+  #+begin_src python
+  init_pilot = make_config(
+      hydra_defaults=["_self_", {"override /hydra/sweeper": "ddssm_optuna"}],
+      hydra=dict(
+          sweeper=dict(
+              direction="minimize",
+              params={
+                  "experiment.training.n_pretrain":
+                      "tag(log, range(50, 2000))",
+                  "experiment.training.sigma_pert":
+                      "tag(log, interval(1e-4, 1e-1))",
+                  "experiment.hyperparams.enc_lr":
+                      "tag(log, interval(1e-5, 1e-3))",
+                  # ... other LRs ...
+              },
+          ),
+      ),
+  )
+  sweep_store(init_pilot, name="init_pilot")
+  #+end_src
+
+  Plus the ~include 0~ control for ~N_pretrain~ and ~σ_pert~ — Optuna's
+  numerical-type ranges don't natively cover this, so we use a
+  discrete categorical or a small custom callback.
+
+- ~experiments/init_centering/experiments.py~ — register a parametric
+  preset ~init_centering_pilot~ that wires the canonical cell
+  (MLP / Pinned / per-t EMA) and includes:
+  - ~objective=Objective(metric="stage2_elbo_surrogate", split="val", tail_frac=0.1)~
+  - ~eval~ + ~viz~ specs that compute the 5 headline metrics
+    post-training.
+
+- ~src/ddssm/conf/sweep/init_pilot.yaml~ — Hydra-CLI handle to
+  the registered sweep (matches the existing sweep-preset pattern in
+  ~src/ddssm/conf/sweep/~).
+
+** Tests
+
+- ~tests/test_experiment_configs.py~ — add ~init_centering_pilot~ to
+  the cell parametrisation tests; verify the sweep preset composes.
+
+** Definition of done
+
+#+begin_src bash
+python -m ddssm.app --multirun \
+    experiment=init_centering_pilot +sweep=init_pilot \
+    hydra.sweeper.n_trials=20 \
+    hydra.sweeper.study_name=pilot_smoke \
+    hydra.sweeper.storage=sqlite:///pilot.db
+#+end_src
+
+runs to completion (20 trials, each ~5 min on synthetic data), the
+Optuna study is queryable, and the metric pipeline produces
+~metrics.json~ per trial with all 5 headline metrics.
+
+* Phase D — Full 18-cell grid
+
+** Goal
+
+Run the full ablation study from =init-experiment.org= § Composition
+with the ablation grid: 18 cells, one Optuna study per cell.
+
+** Files
+
+- ~experiments/init_centering/experiments.py~ — register 18 named
+  parametric presets (~init_zero_pinned_fixed~,
+  ~init_zero_pinned_global_ema~, …, ~init_mlp_learnable_per_t~).
+  Per the doc: ~Zero~ and ~Identity~ admit only ~Pinned~ (6 cells);
+  ~Linear~ and ~MLP~ admit both modes (12 cells).
+
+- ~experiments/init_centering/sweeps.py~ — register an
+  ~init_cell~ sweep preset shared by all 18 cells (the search space
+  doesn't depend on the cell; only the experiment kwargs do).
+
+- ~experiments/init_centering/_sbatch.py~ — wrapper that emits the
+  18 sbatch submit scripts via the existing ~experiments._sbatch~
+  machinery.  Each cell becomes one sbatch job running an Optuna
+  study over the shared search space.
+
+** Choice: 18 independent studies vs. one study with cell as categorical
+
+I recommend *18 independent studies* (the "one study per cell"
+plan in =init-experiment.org=).  Reasons:
+
+- The cells are *the experimental factor of interest* (per the doc:
+  "These are not Optuna search dimensions"), not a hyperparameter to
+  optimise.
+- Independent studies parallelise trivially on the cluster.
+- Per-cell sampler/pruner state is isolated — pruning on one cell
+  doesn't leak across cells.
+- The headline table is computed *per cell*, which is simpler when
+  each cell has its own study.
+
+If we later want a single global study (e.g., for compute-budgeted
+sharing of trials across cells), Optuna's multi-study aggregation
+covers the reporting; we don't need to bake it into the sweep.
+
+** Tests
+
+- ~tests/test_experiment_configs.py~ — assert all 18 presets register
+  and compose.
+
+- A slow-marked end-to-end test running 2 trials of the canonical
+  cell to smoke-check the full pipeline.
+
+** Definition of done
+
+All 18 sbatch jobs launchable via ~python -m experiments sbatch
+init_<cell>~.  Per-cell Optuna DB populated.  Full suite green.
+
+* Phase E — Reporting
+
+** Goal
+
+Produce the 6-metric headline table + the two headline plots from
+=init-experiment.org= § Reporting.
+
+** Files
+
+- ~scripts/init_centering/summarize.py~ — reads per-cell Optuna DBs
+  + per-trial ~metrics.json~ files, produces:
+  - A pandas DataFrame indexed by cell with the 6 headline metric
+    columns (PF-ODE NLL nullable until Phase F).
+  - A median/IQR summary across trials per cell.
+  - LaTeX / markdown table output.
+
+- ~scripts/init_centering/sigma_data_drift_plot.py~ — per-cell
+  time-series plot of ~σ_data²(t)~ + the two components, overlaid
+  across the cells in a small grid.  Headline metric (6).
+
+- ~scripts/init_centering/wallclock_plot.py~ — perf-vs-wallclock
+  curves for metric (2) (or metric (1) once PF-ODE NLL lands).
+  Headline metric (5).
+
+- ~scripts/init_centering/pairwise_comparisons.py~ — generates the
+  pairwise-comparison panels from =init-experiment.org=
+  § Pairwise-comparison stories: baseline-form ablation,
+  baseline-mode ablation, tracking-mode ablation, and the
+  baseline-mode × tracking-mode interaction predicted by
+  =model-v2.org= § Interaction with tracking-mode variants.
+
+** Tests
+
+These are reporting scripts; the main test surface is "do they run
+on a tiny synthetic dataset of trial results without crashing".
+
+- ~tests/test_init_centering_reporting.py~ — golden tiny example
+  with 2 cells × 3 trials of fake metrics, assert the table /
+  plots are produced and have the right shapes.
+
+** Definition of done
+
+A single command — ~python -m scripts.init_centering.summarize
+--cells-root runs/init_centering~ — produces the full report
+(table + 3 plots) suitable for the paper.
+
+* Phase F — PF-ODE NLL (deferred)
+
+Per =init-experiment.org= § Open items: "Headline metric (1) is gated
+on PF-ODE NLL implementation. Until that lands, metric (2) is the
+comparison objective."
+
+When this phase fires, register ~pf_ode_nll~ to ~METRIC_REGISTRY~
+and update the per-cell objective to switch from metric (2) to
+metric (1).  Out of scope for the first full grid run.
+
+* Cross-phase open questions
+
+These are the choices the user flagged as needing decision before
+the plan is locked in:
+
+1. *Phase A metric set.*  Confirm the 5 metrics
+   (~stage2_elbo_surrogate~, ~sigma_data_drift~, ~gt_latent_jsd~,
+   ~crps_sum_latent~, ~wallclock_to_target~) are the right starting
+   set, or should any be deferred / replaced.
+
+2. *Pinned freeze location.*  The handoff currently sets
+   ~requires_grad=False~ on the baseline under Pinned.  Phase B adds
+   a ~StageTrainableConf.baseline~ flag.  I propose keeping both
+   (the handoff-side freeze enforces the spec's "frozen" semantic
+   regardless of stage configuration; the trainable flag gives
+   experimenters per-stage control on top).  Alternative: migrate
+   entirely to the trainable flag and drop the handoff-side freeze.
+
+3. *Pilot cell.*  =init-experiment.org= suggests "MLP baseline /
+   Pinned / per-t EMA".  Confirm or replace.
+
+4. *Studies layout.*  Phase D proposes 18 independent Optuna
+   studies.  Alternative: one giant study with the cell as a
+   categorical search dimension.  My recommendation is in Phase D
+   above.
+
+5. *Compute budget.*  Per-cell trial count.  =init-experiment.org=
+   says "Trial count budgeted by the implementation"; I propose
+   ~20 in the pilot, ~50 per cell in the full grid as a starting
+   point.
+
+* Sequencing summary
+
+#+begin_src
+Phase A  →  metric primitives in place; smoke preset can be evaluated
+                with all 5 metrics
+Phase B  →  parametric cell family + early-stop + trainable.baseline
+                (depends on A: cells need the metric pipeline for objectives)
+Phase C  →  pilot sweep on canonical cell (depends on A + B)
+Phase D  →  full 18-cell grid (depends on B + C)
+Phase E  →  reporting (depends on D — needs trial outputs)
+Phase F  →  PF-ODE NLL (independent; can run in parallel)
+#+end_src
+
+Each phase ends with a tag — ~init-exp-phase-a~, ~init-exp-phase-b~,
+… — so partial progress is recoverable.
