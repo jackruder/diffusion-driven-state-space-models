@@ -32,6 +32,14 @@ from .aggregators import (
     IdentityAggregator,
     MLPAggregator,
 )
+from .aux_posterior import AuxPosterior
+from .centering.baselines import (
+    IdentityBaseline,
+    LinearBaseline,
+    MLPBaseline,
+    ZeroBaseline,
+)
+from .centering.sigma_data import SigmaDataBuffer
 from .combiners import CompoundCombiner
 from .data.datamodule import KDDDataModule, NullDataModule, SyntheticDataModule
 from .decoder import GaussianDecoder
@@ -60,6 +68,7 @@ from .fusions import ConcatLinearFusion, DKSFusion, GatedFusion
 from .futsum import GRUFutureSummary, TransformerFutureSummary
 from .gaussians import GaussianHead
 from .train import DDSSMTrainer
+from .transitions.baseline_gaussian import BaselineGaussianTransition
 from .transitions.diffusion import DiffusionScheduleConfig, DiffusionTransition
 from .transitions.diffusion_v2 import (
     DiffusionV2ScheduleConfig,
@@ -339,6 +348,48 @@ DiffV2Transition = builds(
 
 
 # ---------------------------------------------------------------------------
+# Model-v2 baseline-centering builders.
+# ---------------------------------------------------------------------------
+
+ZeroBaselineB = builds(
+    ZeroBaseline,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+IdentityBaselineB = builds(
+    IdentityBaseline,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+LinearBaselineB = builds(
+    LinearBaseline,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+MLPBaselineB = builds(
+    MLPBaseline,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+AuxPosteriorB = builds(
+    AuxPosterior,
+    populate_full_signature=True,
+    latent_dim=MISSING, j=MISSING,
+)
+SigmaDataBufferB = builds(
+    SigmaDataBuffer,
+    populate_full_signature=True,
+    T_max=MISSING,
+)
+BaselineGaussTransition = builds(
+    BaselineGaussianTransition,
+    populate_full_signature=True,
+    baseline=MISSING,
+    latent_dim=MISSING, j=MISSING,
+)
+
+
+# ---------------------------------------------------------------------------
 # Data modules.
 # ---------------------------------------------------------------------------
 
@@ -414,6 +465,9 @@ __all__ = [
     # Module-slot builders
     "Encoder", "Decoder", "ZInit",
     "GaussTransition", "DiffTransition", "DiffV2Transition",
+    # Model-v2 baseline-centering builders
+    "ZeroBaselineB", "IdentityBaselineB", "LinearBaselineB", "MLPBaselineB",
+    "AuxPosteriorB", "SigmaDataBufferB", "BaselineGaussTransition",
     # Data modules
     "Synthetic", "KDD", "Null",
     # Model + training
