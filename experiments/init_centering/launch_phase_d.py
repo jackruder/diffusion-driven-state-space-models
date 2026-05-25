@@ -68,16 +68,30 @@ def all_phase_d_cells() -> list[str]:
 
 
 def _overrides_for_cell(
-    name: str, *, study_prefix: str, n_trials: int, storage_dir: str,
+    name: str,
+    *,
+    study_prefix: str,
+    n_trials: int,
+    storage_dir: str,
+    sweeps_root: str,
 ) -> tuple[list[str], bool]:
     """Build the Hydra overrides + multirun flag for a cell or control.
 
     Controls run as single jobs (no Optuna sweep); cells run as
     multirun + ``+sweep=init_pilot``.  Each gets a cell-scoped
     ``study_name`` and SQLite path so the sweeps don't share state.
+
+    The cell's sweep dir is pinned at
+    ``{sweeps_root}/{study_prefix}_{cell}/`` so Phase-E aggregation
+    (see :mod:`.report`) can deterministically discover trial
+    metrics.json paths.  Control runs reuse the same dir for the
+    single-job output.
     """
+    sweep_dir = os.path.join(sweeps_root, f"{study_prefix}_{name}")
     if name in CONTROL_CELLS:
-        return [], False  # single-trial control run, no multirun
+        # Single-job (non-multirun) control: ``hydra.run.dir`` is the path
+        # Hydra uses for non-multirun jobs.
+        return [f"hydra.run.dir={sweep_dir}"], False
 
     db_path = os.path.join(storage_dir, f"{study_prefix}_{name}.db")
     overrides = [
@@ -86,6 +100,7 @@ def _overrides_for_cell(
         f"hydra.sweeper.n_trials={n_trials}",
         f"hydra.sweeper.study_name={study_prefix}_{name}",
         f"hydra.sweeper.storage=sqlite:///{db_path}",
+        f"hydra.sweep.dir={sweep_dir}",
     ]
     return overrides, True
 
@@ -106,6 +121,7 @@ def render_phase_d_sbatch(
     study_prefix: str,
     n_trials: int,
     storage_dir: str,
+    sweeps_root: str,
     cli_overrides: dict[str, object] | None = None,
 ) -> str:
     """Render a single sbatch script for one Phase-D cell (or control)."""
@@ -114,6 +130,7 @@ def render_phase_d_sbatch(
         study_prefix=study_prefix,
         n_trials=n_trials,
         storage_dir=storage_dir,
+        sweeps_root=sweeps_root,
     )
     return render_sbatch(
         name,
@@ -168,6 +185,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--storage-dir", default="runs/optuna",
         help="Directory for the per-cell SQLite databases (default runs/optuna).",
     )
+    p.add_argument(
+        "--sweeps-root", default="runs/sweeps",
+        help=(
+            "Root for the per-cell sweep dirs.  Each cell's output lands at "
+            "{sweeps_root}/{study_prefix}_{cell}/{trial}/ — matching the "
+            "layout Phase-E ``report.py`` aggregates from (default runs/sweeps)."
+        ),
+    )
     # CLI passthrough for the sbatch resource block.
     p.add_argument("--partition", default=None)
     p.add_argument("--time", default=None)
@@ -189,8 +214,9 @@ def main(argv: list[str] | None = None) -> int:
         "nodes": args.nodes,
     }
 
-    # Ensure the storage dir exists so Optuna can open the SQLite files.
+    # Ensure the storage + sweeps dirs exist so the jobs can open their files.
     os.makedirs(args.storage_dir, exist_ok=True)
+    os.makedirs(args.sweeps_root, exist_ok=True)
 
     write_dir = args.write_dir
     if write_dir is not None:
@@ -202,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             study_prefix=args.study_prefix,
             n_trials=args.n_trials,
             storage_dir=args.storage_dir,
+            sweeps_root=args.sweeps_root,
             cli_overrides=cli_overrides,
         )
         if write_dir is None:

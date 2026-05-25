@@ -25,6 +25,13 @@ enumerator) plus two explicit control presets
 that pin the two sweep knobs at zero — values Optuna's log-uniform
 prior cannot sample.  See :mod:`.launch_phase_d` for the SLURM sbatch
 helper that emits one job per cell.
+
+Phase E (:mod:`.report`) is the reporting layer.  It scans every cell's
+sweep dir + matching Optuna DB, serialises the result to
+``summary.csv`` + ``records.jsonl``, and renders the three headline
+artifacts (σ_data drift trajectory plot, wallclock-to-target bar
+chart, markdown headline table) from the JSONL records alone — so
+plot iterations never touch the model or re-scan disk.
 """
 
 from . import cells, data, evals, experiments, hparams, model, sweeps
