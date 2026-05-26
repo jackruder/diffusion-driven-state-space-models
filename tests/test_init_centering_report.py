@@ -32,9 +32,13 @@ from experiments.init_centering.report import (
     TrialRecord,
     aggregate,
     load_records,
+    plot_baseline_form_ablation,
+    plot_baseline_mode_ablation,
     plot_sigma_data_drift,
+    plot_tracking_mode_ablation,
     plot_wallclock_to_target,
     save_artifacts,
+    write_distribution_panel,
     write_headline_table,
 )
 
@@ -305,6 +309,54 @@ def test_write_headline_table_emits_markdown(tmp_path: Path) -> None:
     assert "stage2_elbo_surrogate" in text
     for cell in _TEST_CELLS:
         assert cell in text
+
+
+def test_write_distribution_panel_emits_median_iqr_table(tmp_path: Path) -> None:
+    """Distribution panel has one row per cell with median + [Q1, Q3] cells."""
+    sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
+    records = aggregate(
+        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+    )
+    out_md = tmp_path / "distribution.md"
+    write_distribution_panel(records, str(out_md))
+    text = out_md.read_text()
+    assert "median [IQR]" in text
+    # One row per cell in the fixture.
+    for cell in _TEST_CELLS:
+        assert cell in text
+    # The fixture varies stage2_elbo_surrogate as 0.5 + 0.01 * k for k=0,1,2;
+    # median should appear as a number bracketed by [...]; spot-check format.
+    assert " [" in text and "]" in text
+
+
+def test_plot_baseline_form_ablation_writes_png(tmp_path: Path) -> None:
+    sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
+    records = aggregate(
+        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+    )
+    out_png = tmp_path / "pairwise" / "form.png"
+    plot_baseline_form_ablation(records, str(out_png))
+    assert out_png.is_file() and out_png.stat().st_size > 0
+
+
+def test_plot_baseline_mode_ablation_writes_png(tmp_path: Path) -> None:
+    sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
+    records = aggregate(
+        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+    )
+    out_png = tmp_path / "pairwise" / "mode.png"
+    plot_baseline_mode_ablation(records, str(out_png))
+    assert out_png.is_file() and out_png.stat().st_size > 0
+
+
+def test_plot_tracking_mode_ablation_writes_png(tmp_path: Path) -> None:
+    sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
+    records = aggregate(
+        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+    )
+    out_png = tmp_path / "pairwise" / "tracking.png"
+    plot_tracking_mode_ablation(records, str(out_png))
+    assert out_png.is_file() and out_png.stat().st_size > 0
 
 
 # ---------------------------------------------------------------------------

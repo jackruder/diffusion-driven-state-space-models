@@ -381,34 +381,53 @@ def _import_matplotlib():
     return plt
 
 
-def plot_sigma_data_drift(records: list[TrialRecord], out_path: str) -> str:
-    """Per-cell σ_data²(t) trajectories — the Phase-E headline figure.
+def _best_trial(trials: list[TrialRecord]) -> TrialRecord:
+    """Return the trial with the lowest ``optuna_value`` (or the first if none)."""
+    objective_trials = [t for t in trials if t.optuna_value is not None]
+    if objective_trials:
+        return min(objective_trials, key=lambda t: t.optuna_value)  # type: ignore[arg-type]
+    return trials[0]
 
-    One line per cell.  Y-axis: σ_data²(t) (the buffer value averaged
-    across trials within the cell).  Cells with no σ_data_drift
-    payload are skipped silently.
+
+def plot_sigma_data_drift(records: list[TrialRecord], out_path: str) -> str:
+    """Per-cell σ_data²(t) trajectories: best-trial heavy line + per-trial fan.
+
+    For each cell, plots the *best-by-objective* trial's σ_data
+    trajectory as a heavy coloured line, with every other trial in the
+    cell drawn behind it as a thin, low-alpha line in the same colour
+    ("fan plot"). This shows both the headline-cell value and the
+    distribution of trial outcomes inside the cell — the previous
+    cross-trial mean was misleading because trials have different
+    sweep knobs.
+
+    Cells with no σ_data_drift payload are skipped silently.
     """
     plt = _import_matplotlib()
     grouped = _group_by_cell(records)
+    cmap = plt.get_cmap("tab20")
 
     fig, ax = plt.subplots(figsize=(10, 6))
     plotted = 0
-    for cell, trials in sorted(grouped.items()):
-        # Stack each trial's buffer trajectory and average element-wise.
-        buffers = [t.sigma_data2_buffer for t in trials if t.sigma_data2_buffer]
-        if not buffers:
+    for idx, (cell, trials) in enumerate(sorted(grouped.items())):
+        trials_with_buf = [t for t in trials if t.sigma_data2_buffer]
+        if not trials_with_buf:
             continue
-        T = min(len(b) for b in buffers)
-        mean_buf = [
-            sum(b[i] for b in buffers) / len(buffers) for i in range(T)
-        ]
-        ts = list(range(1, T + 1))  # 1-based per the buffer convention
-        ax.plot(ts, mean_buf, label=cell, linewidth=1.0, alpha=0.85)
+        colour = cmap(idx % 20)
+        best = _best_trial(trials_with_buf)
+        # Fan of all trials behind the best — thin, low alpha, no label.
+        for t in trials_with_buf:
+            buf = t.sigma_data2_buffer
+            ts = list(range(1, len(buf) + 1))
+            ax.plot(ts, buf, color=colour, linewidth=0.5, alpha=0.25)
+        # Best-trial trajectory as the heavy headline line.
+        best_buf = best.sigma_data2_buffer
+        ts = list(range(1, len(best_buf) + 1))
+        ax.plot(ts, best_buf, color=colour, linewidth=2.0, alpha=0.95, label=cell)
         plotted += 1
 
     ax.set_xlabel("latent timestep t")
-    ax.set_ylabel(r"$\sigma_{data}^{2}(t)$  (mean across trials)")
-    ax.set_title("Phase E — σ_data drift trajectories (per cell)")
+    ax.set_ylabel(r"$\sigma_{data}^{2}(t)$  (best trial heavy; all trials faint)")
+    ax.set_title("Phase E — σ_data drift trajectories (best trial + fan)")
     ax.legend(fontsize="x-small", ncols=2, loc="best")
     ax.grid(True, linestyle=":", linewidth=0.5)
     fig.tight_layout()
@@ -470,9 +489,11 @@ def _fmt(x: float | None, digits: int = 4) -> str:
 def write_headline_table(records: list[TrialRecord], out_path: str) -> str:
     """Markdown headline table: one row per cell, 5 metrics + best objective.
 
-    For sweep cells (non-control) the per-cell aggregate is taken from
-    the **best trial** (min ``optuna_value``).  Controls have a single
-    trial and are listed verbatim.
+    Per-cell row pulled from the **best trial** (min ``optuna_value``).
+    See :func:`write_distribution_panel` for the sibling table that
+    reports the distribution of trial outcomes (median + IQR) per
+    cell — the two panels together let a reader see "best achievable"
+    next to "typical across the sweep" per CONTEXT.md § stage2_elbo_surrogate.
     """
     grouped = _group_by_cell(records)
 
@@ -484,12 +505,7 @@ def write_headline_table(records: list[TrialRecord], out_path: str) -> str:
     ]
     for cell in sorted(grouped.keys()):
         trials = grouped[cell]
-        # Pick the best trial (min objective if available, else first non-null).
-        objective_trials = [t for t in trials if t.optuna_value is not None]
-        if objective_trials:
-            best = min(objective_trials, key=lambda t: t.optuna_value)  # type: ignore[arg-type]
-        else:
-            best = trials[0]
+        best = _best_trial(trials)
         lines.append(
             "| {cell} | {form} | {mode} | {tracking} | {elbo} | {wc} | {crps} | {jsd} | {sd} | {n} |".format(
                 cell=cell,
@@ -508,6 +524,267 @@ def write_headline_table(records: list[TrialRecord], out_path: str) -> str:
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:
         f.write("\n".join(lines) + "\n")
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# Distribution panel (median + IQR per cell, per metric)
+# ---------------------------------------------------------------------------
+
+
+_DISTRIBUTION_METRICS: tuple[tuple[str, str, int], ...] = (
+    # (field_name, display_label, digits)
+    ("stage2_elbo_surrogate", "stage2_elbo_surrogate", 4),
+    ("wallclock_to_target_seconds", "wallclock_to_target (s)", 3),
+    ("crps_sum_latent_mean", "crps_sum_latent", 4),
+    ("gt_latent_jsd_mean", "gt_latent_jsd", 4),
+    ("sigma_data2_buffer_mean", "σ_data² buffer mean", 4),
+)
+
+
+def _median_iqr(values: list[float]) -> tuple[float, float, float] | None:
+    """Return ``(median, q1, q3)`` of ``values``; ``None`` if empty."""
+    values = [v for v in values if v is not None]
+    if not values:
+        return None
+    n = len(values)
+    s = sorted(values)
+
+    def _pct(p: float) -> float:
+        # Linear interpolation between order statistics (NumPy "linear" rule).
+        if n == 1:
+            return s[0]
+        k = p * (n - 1)
+        f = int(k)
+        c = min(f + 1, n - 1)
+        frac = k - f
+        return s[f] * (1 - frac) + s[c] * frac
+
+    return _pct(0.5), _pct(0.25), _pct(0.75)
+
+
+def _fmt_median_iqr(field: str, trials: list[TrialRecord], digits: int) -> str:
+    vals = [getattr(t, field) for t in trials]
+    summary = _median_iqr([v for v in vals if v is not None])
+    if summary is None:
+        return "-"
+    med, q1, q3 = summary
+    return f"{med:.{digits}g} [{q1:.{digits}g}, {q3:.{digits}g}]"
+
+
+def write_distribution_panel(records: list[TrialRecord], out_path: str) -> str:
+    """Markdown sibling-of-headline: per-cell median + IQR per metric.
+
+    Reports the distribution of trial outcomes within each cell so the
+    reader can compare "best achievable" (the headline table) against
+    "typical" (this panel) — wide IQR signals an unstable Optuna study,
+    a tight IQR signals the cell is converged and the headline number
+    is representative.
+    """
+    grouped = _group_by_cell(records)
+
+    header_cols = ["cell", "form", "mode", "tracking", "n_trials"] + [
+        f"{label} (median [IQR])" for _, label, _ in _DISTRIBUTION_METRICS
+    ]
+    sep = "|".join(["---"] * len(header_cols))
+    lines: list[str] = [
+        "# Phase E — per-cell distribution panel (median [Q1, Q3] across trials)",
+        "",
+        "| " + " | ".join(header_cols) + " |",
+        f"|{sep}|",
+    ]
+    for cell in sorted(grouped.keys()):
+        trials = grouped[cell]
+        row = [
+            cell,
+            trials[0].baseline_form,
+            trials[0].baseline_mode,
+            trials[0].tracking_mode,
+            str(len(trials)),
+        ]
+        for field, _label, digits in _DISTRIBUTION_METRICS:
+            row.append(_fmt_median_iqr(field, trials, digits))
+        lines.append("| " + " | ".join(row) + " |")
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# Pairwise-comparison panels (from init-experiment.org § Pairwise-comparison stories)
+# ---------------------------------------------------------------------------
+
+
+def _records_by_axes(
+    records: list[TrialRecord],
+) -> dict[tuple[str, str, str], TrialRecord]:
+    """Return ``{(form, mode, tracking): best_trial_for_cell}``."""
+    grouped = _group_by_cell(records)
+    out: dict[tuple[str, str, str], TrialRecord] = {}
+    for trials in grouped.values():
+        best = _best_trial(trials)
+        out[(best.baseline_form, best.baseline_mode, best.tracking_mode)] = best
+    return out
+
+
+_BASELINE_FORMS = ("zero", "identity", "linear", "mlp")
+_BASELINE_MODES = ("pinned", "learnable")
+_TRACKING_MODES = ("fixed", "global_ema", "per_t")
+
+
+def plot_baseline_form_ablation(
+    records: list[TrialRecord], out_path: str,
+) -> str:
+    """Baseline-form ablation: ``stage2_elbo_surrogate`` by form, faceted by (mode, tracking).
+
+    One subplot per (mode, tracking) cell; x-axis is the four baseline
+    forms (zero/identity/linear/mlp). Reveals whether residual
+    decomposition (identity vs zero), parametric baseline (linear vs
+    identity), and nonlinear capacity (mlp vs linear) help —
+    init-experiment.org § Pairwise-comparison stories, *Baseline form*.
+    """
+    plt = _import_matplotlib()
+    by_axes = _records_by_axes(records)
+
+    cols = _TRACKING_MODES
+    rows = _BASELINE_MODES
+    fig, axes = plt.subplots(
+        len(rows), len(cols),
+        figsize=(3.5 * len(cols), 3.0 * len(rows)),
+        sharey=True, squeeze=False,
+    )
+    for ri, mode in enumerate(rows):
+        for ci, tracking in enumerate(cols):
+            ax = axes[ri][ci]
+            ys = []
+            forms_plotted = []
+            for form in _BASELINE_FORMS:
+                # Pinned-only cells: skip the (param-free, learnable) entry
+                # since it auto-degenerates and the data lives under pinned.
+                lookup_mode = "pinned" if form in ("zero", "identity") and mode == "learnable" else mode
+                rec = by_axes.get((form, lookup_mode, tracking))
+                if rec is None or rec.stage2_elbo_surrogate is None:
+                    continue
+                ys.append(rec.stage2_elbo_surrogate)
+                forms_plotted.append(form)
+            xs = range(len(forms_plotted))
+            ax.bar(xs, ys, alpha=0.85)
+            ax.set_xticks(list(xs))
+            ax.set_xticklabels(forms_plotted, fontsize=8, rotation=30, ha="right")
+            ax.set_title(f"mode={mode}, tracking={tracking}", fontsize=9)
+            ax.grid(True, axis="y", linestyle=":", linewidth=0.5)
+        axes[ri][0].set_ylabel("best stage2_elbo_surrogate")
+    fig.suptitle("Phase E — baseline-form ablation (best trial per cell)")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    return out_path
+
+
+def plot_baseline_mode_ablation(
+    records: list[TrialRecord], out_path: str,
+) -> str:
+    """Baseline-mode ablation: Pinned vs Learnable for parametric forms.
+
+    One subplot per (form, tracking) for ``form ∈ {linear, mlp}`` (the
+    two parametric forms that admit Learnable). x-axis is the two
+    modes. Tests whether the soft anchor outperforms hard pinning —
+    init-experiment.org § Pairwise-comparison stories, *Baseline mode*.
+    """
+    plt = _import_matplotlib()
+    by_axes = _records_by_axes(records)
+
+    cols = _TRACKING_MODES
+    rows = ("linear", "mlp")
+    fig, axes = plt.subplots(
+        len(rows), len(cols),
+        figsize=(3.5 * len(cols), 3.0 * len(rows)),
+        sharey=True, squeeze=False,
+    )
+    for ri, form in enumerate(rows):
+        for ci, tracking in enumerate(cols):
+            ax = axes[ri][ci]
+            ys, labels = [], []
+            for mode in _BASELINE_MODES:
+                rec = by_axes.get((form, mode, tracking))
+                if rec is None or rec.stage2_elbo_surrogate is None:
+                    continue
+                ys.append(rec.stage2_elbo_surrogate)
+                labels.append(mode)
+            xs = range(len(labels))
+            ax.bar(xs, ys, alpha=0.85, color=["#1f77b4", "#ff7f0e"][: len(labels)])
+            ax.set_xticks(list(xs))
+            ax.set_xticklabels(labels, fontsize=9)
+            ax.set_title(f"form={form}, tracking={tracking}", fontsize=9)
+            ax.grid(True, axis="y", linestyle=":", linewidth=0.5)
+        axes[ri][0].set_ylabel("best stage2_elbo_surrogate")
+    fig.suptitle("Phase E — baseline-mode ablation (Pinned vs Learnable)")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    return out_path
+
+
+def plot_tracking_mode_ablation(
+    records: list[TrialRecord], out_path: str,
+) -> str:
+    """Tracking-mode ablation: fixed / global_ema / per_t at every (form, mode).
+
+    One subplot per (form, mode); x-axis is the three tracking modes.
+    Tests whether t-resolved tracking pays off — init-experiment.org §
+    Pairwise-comparison stories, *Tracking mode*.
+    """
+    plt = _import_matplotlib()
+    by_axes = _records_by_axes(records)
+
+    # (form, mode) panels, dropping the (param-free, learnable) pairs
+    # since those degenerate to pinned and would duplicate the pinned panel.
+    panels: list[tuple[str, str]] = []
+    for form in _BASELINE_FORMS:
+        for mode in _BASELINE_MODES:
+            if form in ("zero", "identity") and mode == "learnable":
+                continue
+            panels.append((form, mode))
+
+    n_cols = 3
+    n_rows = (len(panels) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(3.5 * n_cols, 3.0 * n_rows),
+        sharey=True, squeeze=False,
+    )
+    for i, (form, mode) in enumerate(panels):
+        ax = axes[i // n_cols][i % n_cols]
+        ys, labels = [], []
+        for tracking in _TRACKING_MODES:
+            rec = by_axes.get((form, mode, tracking))
+            if rec is None or rec.stage2_elbo_surrogate is None:
+                continue
+            ys.append(rec.stage2_elbo_surrogate)
+            labels.append(tracking)
+        xs = range(len(labels))
+        ax.bar(xs, ys, alpha=0.85)
+        ax.set_xticks(list(xs))
+        ax.set_xticklabels(labels, fontsize=8, rotation=30, ha="right")
+        ax.set_title(f"form={form}, mode={mode}", fontsize=9)
+        ax.grid(True, axis="y", linestyle=":", linewidth=0.5)
+    # Blank out unused subplots.
+    for j in range(len(panels), n_rows * n_cols):
+        axes[j // n_cols][j % n_cols].axis("off")
+    for r in range(n_rows):
+        axes[r][0].set_ylabel("best stage2_elbo_surrogate")
+    fig.suptitle("Phase E — tracking-mode ablation (fixed / global_ema / per_t)")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
     return out_path
 
 
@@ -537,7 +814,17 @@ def _cmd_plot(args: argparse.Namespace) -> int:
     plot_sigma_data_drift(records, os.path.join(out_dir, "sigma_data_drift.png"))
     plot_wallclock_to_target(records, os.path.join(out_dir, "wallclock_to_target.png"))
     write_headline_table(records, os.path.join(out_dir, "headline_table.md"))
-    print(f"Wrote plots + headline table to {out_dir}")
+    write_distribution_panel(records, os.path.join(out_dir, "distribution_panel.md"))
+    plot_baseline_form_ablation(
+        records, os.path.join(out_dir, "pairwise_baseline_form.png"),
+    )
+    plot_baseline_mode_ablation(
+        records, os.path.join(out_dir, "pairwise_baseline_mode.png"),
+    )
+    plot_tracking_mode_ablation(
+        records, os.path.join(out_dir, "pairwise_tracking_mode.png"),
+    )
+    print(f"Wrote plots + headline + distribution + pairwise panels to {out_dir}")
     return 0
 
 
