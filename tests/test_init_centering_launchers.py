@@ -52,6 +52,37 @@ def test_tiny_sbatch_carries_dataset_and_latent_dim_overrides(tmp_path) -> None:
     assert "hydra.sweeper.n_trials=2" in script
     # Cell-scoped study name so studies don't collide.
     assert f"ablation_test_{cell}__mv" in script
+    # Default n_jobs=1 leaves the override OFF (Optuna's default).
+    assert "n_jobs" not in script
+
+
+def test_tiny_sbatch_emits_n_jobs_override_when_set(tmp_path) -> None:
+    """n_jobs > 1 must surface as a hydra.sweeper.n_jobs override."""
+    storage = str(tmp_path / "optuna")
+    sweeps = str(tmp_path / "sweeps")
+    cell = cell_name("mlp", "pinned", "per_t")
+    script = render_tiny_sbatch(
+        cell, "nonlin_bimodal_lift_mv", 8, 4, "mv",
+        study_prefix="t",
+        n_trials=2,
+        storage_dir=storage,
+        sweeps_root=sweeps,
+        n_jobs=6,
+    )
+    assert "hydra.sweeper.n_jobs=6" in script
+
+
+def test_datasets_filter_subsets_jobs() -> None:
+    """--datasets restricts to a subset of dataset labels."""
+    from experiments.init_centering.launch_ablation_tiny import _iter_targets
+
+    mv_only = list(_iter_targets(None, datasets=["mv"]))
+    n_cells = sum(1 for _ in iter_cells())
+    assert len(mv_only) == n_cells
+    assert {label for _, _, _, _, label in mv_only} == {"mv"}
+
+    both = list(_iter_targets(None, datasets=None))
+    assert len(both) == n_cells * 2
 
 
 def test_paper_jobs_cross_product_size() -> None:

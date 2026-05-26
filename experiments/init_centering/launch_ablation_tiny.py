@@ -80,11 +80,12 @@ def _overrides_for_job(
     n_trials: int,
     storage_dir: str,
     sweeps_root: str,
+    n_jobs: int = 1,
 ) -> list[str]:
     job = _job_name(cell, ds_label)
     sweep_dir = os.path.join(sweeps_root, f"{study_prefix}_{job}")
     db_path = os.path.join(storage_dir, f"{study_prefix}_{job}.db")
-    return [
+    overrides = [
         "--multirun",
         "+sweep=init_ablation",
         f"hydra.sweeper.n_trials={n_trials}",
@@ -95,6 +96,9 @@ def _overrides_for_job(
         f"experiment.model.data_dim={data_dim}",
         f"experiment.model.latent_dim={latent_dim}",
     ]
+    if n_jobs > 1:
+        overrides.append(f"hydra.sweeper.n_jobs={n_jobs}")
+    return overrides
 
 
 def _resolve_exp_sbatch(name: str):
@@ -119,6 +123,7 @@ def render_tiny_sbatch(
     storage_dir: str,
     sweeps_root: str,
     cli_overrides: dict[str, object] | None = None,
+    n_jobs: int = 1,
 ) -> str:
     overrides = _overrides_for_job(
         cell, ds_name, data_dim, latent_dim, ds_label,
@@ -126,6 +131,7 @@ def render_tiny_sbatch(
         n_trials=n_trials,
         storage_dir=storage_dir,
         sweeps_root=sweeps_root,
+        n_jobs=n_jobs,
     )
     return render_sbatch(
         cell,
@@ -135,8 +141,13 @@ def render_tiny_sbatch(
     )
 
 
-def _iter_targets(only_cell: str | None) -> Iterable[tuple[str, str, int, int, str]]:
+def _iter_targets(
+    only_cell: str | None,
+    datasets: list[str] | None = None,
+) -> Iterable[tuple[str, str, int, int, str]]:
     jobs = all_tiny_jobs()
+    if datasets is not None:
+        jobs = [j for j in jobs if j[4] in datasets]
     if only_cell is None:
         yield from jobs
         return
@@ -179,6 +190,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optuna trials per (cell, dataset) job (default 40).",
     )
     p.add_argument(
+        "--n-jobs", type=int, default=1,
+        help=(
+            "Optuna trials run concurrently per study (default 1). "
+            "Concurrent trials share the GPU; tune against memory + "
+            "the per-trial footprint you observed locally."
+        ),
+    )
+    p.add_argument(
+        "--datasets", nargs="+", default=None,
+        choices=[label for _, _, _, label in TINY_DATASETS],
+        help=(
+            "Restrict to a subset of datasets by label (default: all). "
+            f"Choices: {[label for _, _, _, label in TINY_DATASETS]}."
+        ),
+    )
+    p.add_argument(
         "--storage-dir", default="runs/optuna",
         help="Directory for the per-job SQLite databases (default runs/optuna).",
     )
@@ -217,7 +244,9 @@ def main(argv: list[str] | None = None) -> int:
     if write_dir is not None:
         os.makedirs(write_dir, exist_ok=True)
 
-    for cell, ds_name, data_dim, latent_dim, ds_label in _iter_targets(args.cell):
+    for cell, ds_name, data_dim, latent_dim, ds_label in _iter_targets(
+        args.cell, datasets=args.datasets,
+    ):
         script = render_tiny_sbatch(
             cell, ds_name, data_dim, latent_dim, ds_label,
             study_prefix=args.study_prefix,
@@ -225,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
             storage_dir=args.storage_dir,
             sweeps_root=args.sweeps_root,
             cli_overrides=cli_overrides,
+            n_jobs=args.n_jobs,
         )
         job = _job_name(cell, ds_label)
         if write_dir is None:
