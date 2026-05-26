@@ -20,11 +20,12 @@ factory introduced in Phase B (cell parametrisation):
 Phase C adds the pilot Optuna sweep (``init_centering_pilot``
 experiment + ``init_pilot`` sweep preset).  Phase D registers the full
 18-cell grid (one named preset per cell, see :mod:`.cells` for the
-enumerator) plus two explicit control presets
-(``init_canonical_ctrl_sigma0`` and ``init_canonical_ctrl_npretrain0``)
-that pin the two sweep knobs at zero — values Optuna's log-uniform
-prior cannot sample.  See :mod:`.launch_phase_d` for the SLURM sbatch
-helper that emits one job per cell.
+enumerator). The two ``init_canonical_ctrl_*`` presets that originally
+pinned the sweep knobs at zero were removed per
+``docs/adr/0002-drop-canonical-controls.md``: σ_pert > 0 is mandatory
+protocol and n_pretrain = 0 is meaningless for parametric μ_p cells.
+See :mod:`.launch_phase_d` for the SLURM sbatch helper that emits one
+job per cell.
 
 Phase E (:mod:`.report`) is the reporting layer.  It scans every cell's
 sweep dir + matching Optuna DB, serialises the result to

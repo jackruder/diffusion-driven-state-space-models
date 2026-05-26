@@ -57,13 +57,14 @@ def _clear_global_hydra():
 
 
 def test_experiments_registered() -> None:
-    """All 36 named presets are reachable through the experiment store.
+    """All 34 named presets are reachable through the experiment store.
 
-    Phase D adds 18 cell presets (one per ablation-grid cell) plus 2
-    explicit control presets on top of the 16-preset Phase-C surface
-    (14 legacy + ``init_centering_smoke`` + ``init_centering_pilot``).
+    Phase D adds 18 cell presets (one per ablation-grid cell) on top of
+    the 16-preset Phase-C surface (14 legacy + ``init_centering_smoke``
+    + ``init_centering_pilot``). The 2 ``init_canonical_ctrl_*`` presets
+    were removed per ``docs/adr/0002-drop-canonical-controls.md``.
     """
-    assert len(EXPERIMENTS) == 36, EXPERIMENTS
+    assert len(EXPERIMENTS) == 34, EXPERIMENTS
 
 
 @pytest.mark.parametrize("name", EXPERIMENTS)

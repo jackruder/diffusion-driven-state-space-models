@@ -5,7 +5,6 @@ from __future__ import annotations
 from conf.registry import experiment_store
 from experiments._make import experiment
 from experiments.init_centering.cells import (
-    CANONICAL_CELL,
     cell_name,
     iter_cells,
 )
@@ -99,42 +98,8 @@ for _form, _mode, _tracking in iter_cells():
     experiment_store(_cell_exp, name=cell_name(_form, _mode, _tracking))
 
 
-# ---------------------------------------------------------------------------
-# Phase D control cells — the two settings Optuna's log-uniform cannot
-# sample.  Both pin the canonical cell and zero out exactly one sweep
-# knob, so the headline plot in Phase E can show "what happens at the
-# boundary the sweep never reaches".
-# ---------------------------------------------------------------------------
-
-_CANONICAL_FORM, _CANONICAL_MODE, _CANONICAL_TRACKING = CANONICAL_CELL
-
-init_canonical_ctrl_sigma0 = experiment(
-    data=Harmonic,
-    model=SmokeModel(
-        baseline_form=_CANONICAL_FORM,
-        baseline_mode=_CANONICAL_MODE,
-        tracking_mode=_CANONICAL_TRACKING,
-        stages=StagesB(sigma_pert=0.0),
-    ),
-    hparams=SmokeHparams,
-    training=Training800,
-    eval=PilotEval,
-    objective=PilotObjective,
-)
-experiment_store(init_canonical_ctrl_sigma0, name="init_canonical_ctrl_sigma0")
-
-
-init_canonical_ctrl_npretrain0 = experiment(
-    data=Harmonic,
-    model=SmokeModel(
-        baseline_form=_CANONICAL_FORM,
-        baseline_mode=_CANONICAL_MODE,
-        tracking_mode=_CANONICAL_TRACKING,
-        stages=StagesB(n_pretrain=0),
-    ),
-    hparams=SmokeHparams,
-    training=Training800,
-    eval=PilotEval,
-    objective=PilotObjective,
-)
-experiment_store(init_canonical_ctrl_npretrain0, name="init_canonical_ctrl_npretrain0")
+# NOTE: ``init_canonical_ctrl_sigma0`` and ``init_canonical_ctrl_npretrain0``
+# were removed per docs/adr/0002-drop-canonical-controls.md: σ_pert > 0
+# is mandatory protocol (no σ_pert=0 mode) and n_pretrain=0 is meaningless
+# for parametric μ_p cells. The sweep range on σ_pert covers
+# "operationally indistinguishable from 0" instead.

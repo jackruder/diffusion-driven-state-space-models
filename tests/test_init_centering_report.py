@@ -44,7 +44,9 @@ _TEST_CELLS = [
     cell_name("zero", "pinned", "fixed"),
     cell_name("mlp", "pinned", "per_t"),
 ]
-_TEST_CONTROL = "init_canonical_ctrl_sigma0"
+# Control presets were dropped per ADR-0002; the report layer keeps
+# the ``is_control`` field on TrialRecord as an extension point for
+# future ablation panels, but no preset currently sets it.
 
 
 def _fake_metrics_payload(
@@ -103,14 +105,6 @@ def _build_fake_sweep_layout(
             with open(trial_dir / "metrics.json", "w") as f:
                 json.dump(payload, f)
 
-    # Control: single trial, directly inside the sweep dir.
-    control_dir = sweeps_root / f"{study_prefix}_{_TEST_CONTROL}"
-    control_dir.mkdir()
-    with open(control_dir / "metrics.json", "w") as f:
-        json.dump(
-            _fake_metrics_payload(elbo=0.45, wallclock=110.0),
-            f,
-        )
     return sweeps_root, optuna_dir
 
 
@@ -160,8 +154,8 @@ def test_aggregate_returns_one_record_per_trial(tmp_path: Path) -> None:
     records = aggregate(
         str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
     )
-    # 2 cells × 3 trials + 1 control = 7 records
-    assert len(records) == 2 * 3 + 1
+    # 2 cells × 3 trials = 6 records
+    assert len(records) == 2 * 3
 
 
 def test_aggregate_lifts_headline_scalars_from_metrics_json(tmp_path: Path) -> None:
@@ -216,16 +210,13 @@ def test_aggregate_skips_missing_optuna_db_gracefully(tmp_path: Path) -> None:
             assert r.stage2_elbo_surrogate is not None
 
 
-def test_aggregate_marks_control_cells(tmp_path: Path) -> None:
-    """Control cells get ``is_control=True``; their sweep dir IS the run dir."""
+def test_aggregate_emits_no_control_records_post_adr_0002(tmp_path: Path) -> None:
+    """No record carries ``is_control=True`` since the controls were dropped."""
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     records = aggregate(
         str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
     )
-    controls = [r for r in records if r.is_control]
-    assert len(controls) == 1
-    assert controls[0].cell_name == _TEST_CONTROL
-    assert controls[0].trial_number == 0
+    assert all(not r.is_control for r in records)
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +303,7 @@ def test_write_headline_table_emits_markdown(tmp_path: Path) -> None:
     text = out_md.read_text()
     assert text.startswith("# Phase E")
     assert "stage2_elbo_surrogate" in text
-    for cell in _TEST_CELLS + [_TEST_CONTROL]:
+    for cell in _TEST_CELLS:
         assert cell in text
 
 

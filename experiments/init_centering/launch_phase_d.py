@@ -56,15 +56,13 @@ from experiments._sbatch import render_sbatch
 from experiments.init_centering.cells import cell_name, iter_cells
 
 
-CONTROL_CELLS: tuple[str, ...] = (
-    "init_canonical_ctrl_sigma0",
-    "init_canonical_ctrl_npretrain0",
-)
-
-
 def all_phase_d_cells() -> list[str]:
-    """The 20 named presets Phase D submits: 18 grid cells + 2 controls."""
-    return [cell_name(*c) for c in iter_cells()] + list(CONTROL_CELLS)
+    """The 18 named cell presets Phase D submits.
+
+    The two ``init_canonical_ctrl_*`` presets were removed per
+    ``docs/adr/0002-drop-canonical-controls.md``.
+    """
+    return [cell_name(*c) for c in iter_cells()]
 
 
 def _overrides_for_cell(
@@ -75,24 +73,18 @@ def _overrides_for_cell(
     storage_dir: str,
     sweeps_root: str,
 ) -> tuple[list[str], bool]:
-    """Build the Hydra overrides + multirun flag for a cell or control.
+    """Build the Hydra overrides + multirun flag for a cell.
 
-    Controls run as single jobs (no Optuna sweep); cells run as
-    multirun + ``+sweep=init_pilot``.  Each gets a cell-scoped
-    ``study_name`` and SQLite path so the sweeps don't share state.
+    Each cell runs as multirun + ``+sweep=init_pilot`` with a
+    cell-scoped ``study_name`` and SQLite path so the sweeps don't
+    share state.
 
     The cell's sweep dir is pinned at
     ``{sweeps_root}/{study_prefix}_{cell}/`` so Phase-E aggregation
     (see :mod:`.report`) can deterministically discover trial
-    metrics.json paths.  Control runs reuse the same dir for the
-    single-job output.
+    metrics.json paths.
     """
     sweep_dir = os.path.join(sweeps_root, f"{study_prefix}_{name}")
-    if name in CONTROL_CELLS:
-        # Single-job (non-multirun) control: ``hydra.run.dir`` is the path
-        # Hydra uses for non-multirun jobs.
-        return [f"hydra.run.dir={sweep_dir}"], False
-
     db_path = os.path.join(storage_dir, f"{study_prefix}_{name}.db")
     overrides = [
         "--multirun",

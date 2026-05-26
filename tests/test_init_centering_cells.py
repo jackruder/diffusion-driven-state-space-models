@@ -102,12 +102,17 @@ def test_all_18_cells_registered() -> None:
         assert cell_name(form, mode, tracking) in names
 
 
-def test_control_cells_registered() -> None:
-    """Both control presets (sigma_pert=0, n_pretrain=0) are registered."""
+def test_control_cells_no_longer_registered() -> None:
+    """The control presets were dropped per ADR-0002.
+
+    Defensive guard against accidental reintroduction: future code that
+    needs handoff-protocol ablations should register them as plain
+    ``ablation_canonical_*`` presets, not under the ``ctrl`` name.
+    """
     register_experiments()
     names = {name for _, name in store["experiment"]}
-    assert "init_canonical_ctrl_sigma0" in names
-    assert "init_canonical_ctrl_npretrain0" in names
+    assert "init_canonical_ctrl_sigma0" not in names
+    assert "init_canonical_ctrl_npretrain0" not in names
 
 
 # ---------------------------------------------------------------------------
@@ -162,22 +167,7 @@ def test_canonical_cell_preset_matches_pilot_axes() -> None:
     assert type(canonical.model.baseline) is type(pilot.model.baseline)
 
 
-# ---------------------------------------------------------------------------
-# Control cells
-# ---------------------------------------------------------------------------
-
-
-def test_sigma0_control_zeros_sigma_pert() -> None:
-    """``init_canonical_ctrl_sigma0`` instantiates with ``sigma_pert == 0``."""
-    cfg = store["experiment"]["experiment", "init_canonical_ctrl_sigma0"]
-    exp = instantiate(cfg)
-    stage2_handoff = exp.model.config.stages.stage_2.centering_handoff
-    assert stage2_handoff is not None
-    assert stage2_handoff.sigma_pert == 0.0
-
-
-def test_npretrain0_control_zeros_stage1_steps() -> None:
-    """``init_canonical_ctrl_npretrain0`` instantiates with stage-1 steps == 0."""
-    cfg = store["experiment"]["experiment", "init_canonical_ctrl_npretrain0"]
-    exp = instantiate(cfg)
-    assert exp.model.config.stages.stage_1.steps == 0
+# Control-cell tests were removed when the controls themselves were
+# dropped per ``docs/adr/0002-drop-canonical-controls.md``.
+# ``test_control_cells_no_longer_registered`` above guards against
+# accidental reintroduction.

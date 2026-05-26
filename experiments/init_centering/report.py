@@ -138,19 +138,9 @@ def _cell_axes_map() -> dict[str, tuple[str, str, str]]:
     return {_cell_name(f, m, t): (f, m, t) for f, m, t in iter_cells()}
 
 
-# The two control cells reuse the canonical cell's axes.
-_CONTROL_CELLS: dict[str, tuple[str, str, str]] = {
-    "init_canonical_ctrl_sigma0": ("mlp", "pinned", "per_t"),
-    "init_canonical_ctrl_npretrain0": ("mlp", "pinned", "per_t"),
-}
-
-
 def _resolve_cell_axes(cell: str) -> tuple[str, str, str] | None:
     """Return ``(form, mode, tracking)`` for any Phase-D cell name."""
-    axes = _cell_axes_map().get(cell)
-    if axes is not None:
-        return axes
-    return _CONTROL_CELLS.get(cell)
+    return _cell_axes_map().get(cell)
 
 
 def _safe_load_metrics_json(path: str) -> dict[str, Any] | None:
@@ -247,7 +237,6 @@ def iter_trial_records(
     *,
     optuna_dir: str,
     study_prefix: str,
-    include_controls: bool = True,
 ) -> Iterator[TrialRecord]:
     """Walk every Phase-D cell's sweep dir and yield one record per trial.
 
@@ -261,8 +250,6 @@ def iter_trial_records(
     """
     cells_axes = _cell_axes_map()
     targets: list[str] = sorted(cells_axes.keys())
-    if include_controls:
-        targets.extend(sorted(_CONTROL_CELLS.keys()))
 
     for cell in targets:
         sweep_dir = os.path.join(sweeps_root, f"{study_prefix}_{cell}")
@@ -274,7 +261,10 @@ def iter_trial_records(
             log.warning("Unknown cell %s; skipping.", cell)
             continue
         form, mode, tracking = axes
-        is_control = cell in _CONTROL_CELLS
+        # ``is_control`` retained on the record as an extension point
+        # for future ablation-panel records; the original control
+        # presets were dropped per ADR-0002.
+        is_control = False
 
         # Trial dirs are numbered subdirs.  Sort numerically.
         trial_dirs: list[tuple[int, str]] = []
@@ -282,8 +272,8 @@ def iter_trial_records(
             if entry.isdigit():
                 trial_dirs.append((int(entry), os.path.join(sweep_dir, entry)))
         if not trial_dirs:
-            # Controls run as single jobs (no multirun); the run_dir IS
-            # the sweep_dir.
+            # No multirun structure (single-job cell run); the run_dir
+            # IS the sweep_dir.
             trial_dirs = [(0, sweep_dir)]
 
         db_path = os.path.join(optuna_dir, f"{study_prefix}_{cell}.db")
@@ -313,7 +303,6 @@ def aggregate(
     *,
     optuna_dir: str,
     study_prefix: str,
-    include_controls: bool = True,
 ) -> list[TrialRecord]:
     """One-shot aggregation: returns all (cell, trial) records as a list."""
     return list(
@@ -321,7 +310,6 @@ def aggregate(
             sweeps_root,
             optuna_dir=optuna_dir,
             study_prefix=study_prefix,
-            include_controls=include_controls,
         )
     )
 
@@ -533,7 +521,6 @@ def _cmd_aggregate(args: argparse.Namespace) -> int:
         args.sweeps_root,
         optuna_dir=args.optuna_dir,
         study_prefix=args.study_prefix,
-        include_controls=not args.exclude_controls,
     )
     summary, jsonl = save_artifacts(records, args.out)
     print(f"Aggregated {len(records)} trials")
@@ -585,10 +572,6 @@ def _build_parser() -> argparse.ArgumentParser:
     agg_common.add_argument(
         "--study-prefix", default="phase_d",
         help="Study-name + sweep-dir prefix (default phase_d).",
-    )
-    agg_common.add_argument(
-        "--exclude-controls", action="store_true",
-        help="Skip the sigma0 / npretrain0 control runs.",
     )
     agg_common.add_argument(
         "--out", required=True,
