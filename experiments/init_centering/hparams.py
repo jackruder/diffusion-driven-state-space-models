@@ -63,7 +63,7 @@ def _build_init_centering_stages(
     *,
     baseline_mode: Literal["pinned", "learnable"] = "pinned",
     n_pretrain: int = 200,
-    n_stage2: int = 600,
+    n_stage2: int = 1000,
     sigma_pert: float = 1e-2,
     # LRs are parametrised as ``base_lr`` (encoder LR) with per-group
     # multipliers for decoder + transition. This replaces the prior
