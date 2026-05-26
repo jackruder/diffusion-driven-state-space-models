@@ -202,7 +202,14 @@ def _build_init_centering_model(
         S_k=diffusion_S_k,
         k_chunk=diffusion_k_chunk,
         num_steps=diffusion_num_steps,
-        k_sampling_mode="uniform",
+        # LSGM-style importance sampling per model-v2.org § Importance
+        # Sampling: p_k ∝ (β / (1 - α²))^γ focuses MC samples on the
+        # noisy τ timesteps where the ESM loss has higher variance.
+        # ``pk_gamma=1.0`` (the DiffusionV3ScheduleConfig default)
+        # leaves the distribution at its base shape; the IS reweighting
+        # in ``_esm_chunk_loss`` divides by ``K · p_k`` so the loss is
+        # an unbiased estimator regardless of the sampling distribution.
+        k_sampling_mode="lsgm_is",
     )
     stage2_transition = DiffusionV3Transition(
         baseline=baseline,
