@@ -25,7 +25,7 @@ from typing import Any, Literal
 import warnings
 from functools import partial
 
-from hydra_zen import builds, instantiate
+from hydra_zen import builds
 from omegaconf import MISSING
 
 from ddssm.dssd import DDSSM_base
@@ -44,7 +44,8 @@ from ddssm.centering.baselines import (
     IdentityBaseline,
 )
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from experiments.synthetic.model import Small1D
+from ddssm.encoder import GaussianEncoder
+from ddssm.decoder import GaussianDecoder
 from ddssm.transitions.diffusion_v3 import (
     DiffusionV3Transition,
     DiffusionV3ScheduleConfig,
@@ -100,16 +101,20 @@ def _build_init_centering_model(
     data_dim: int = 1,
     latent_dim: int = 4,
     emb_time_dim: int = 16,
-    channels: int = 32,
-    nheads: int = 4,
-    baseline_hidden_dim: int = 32,
+    # ``None`` ⇒ derive via the "channels = 16 × latent_dim" scaling rule
+    # locked in by CONTEXT.md § "Size axis". Set explicitly to override.
+    channels: int | None = None,
+    nheads: int | None = None,   # ``None`` ⇒ channels // 8 (head_dim = 8)
+    baseline_hidden_dim: int | None = None,  # ``None`` ⇒ 16 × latent_dim
+    encoder_hidden_dim: int | None = None,   # ``None`` ⇒ 16 × latent_dim
+    decoder_hidden_dim: int | None = None,   # ``None`` ⇒ 16 × latent_dim
     baseline_n_layers: int = 2,
     # --- Centering / regulariser scalars ---
     anchor_lambda: float | None = None,  # None ⇒ 0.0 (pinned) / 1e-2 (learnable)
     # --- Stage-2 diffusion schedule ---
     diffusion_S_k: int = 1,
     diffusion_k_chunk: int = 1,
-    diffusion_num_steps: int = 50,
+    diffusion_num_steps: int = 128,
     diffusion_layers: int = 2,
     # --- Plumb-through ---
     hyperparams: Any,
@@ -120,6 +125,12 @@ def _build_init_centering_model(
     The factory pattern is required so the *same* Python objects are
     passed to both transitions (so μ_p's parameters are shared and the
     handoff snapshot captures the right state).
+
+    Capacity scaling: ``channels``, ``baseline_hidden_dim``,
+    ``encoder_hidden_dim``, ``decoder_hidden_dim`` all default to
+    ``16 × latent_dim`` (CONTEXT.md § Size axis). ``nheads`` defaults to
+    ``channels // 8`` so attention head_dim stays at 8 across sizes. Pass
+    explicit values to override the scaling rule for a single knob.
 
     Auto-degeneracy: if ``baseline_form`` is one of the parameter-free
     forms (``zero`` / ``identity``) and ``baseline_mode`` is
@@ -142,6 +153,22 @@ def _build_init_centering_model(
         # 1e-2 under learnable matches model-v2.org § Baseline-mode
         # variants / Learnable's recommended soft-anchor strength.
         anchor_lambda = 0.0 if baseline_mode == "pinned" else 1e-2
+
+    # ---- size-matrix defaults (CONTEXT.md § "Size axis") ----
+    if channels is None:
+        channels = 16 * latent_dim
+    if baseline_hidden_dim is None:
+        baseline_hidden_dim = 16 * latent_dim
+    if encoder_hidden_dim is None:
+        encoder_hidden_dim = 16 * latent_dim
+    if decoder_hidden_dim is None:
+        decoder_hidden_dim = 16 * latent_dim
+    if nheads is None:
+        nheads = max(1, channels // 8)
+    if channels % nheads != 0:
+        raise ValueError(
+            f"channels ({channels}) must be divisible by nheads ({nheads})"
+        )
 
     # ---- shared ingredients ----
     baseline = _build_baseline(
@@ -191,9 +218,17 @@ def _build_init_centering_model(
         schedule=schedule,
     )
 
-    # ---- encoder / decoder / static slots from Small1D ----
-    encoder = instantiate(Small1D.encoder)
-    decoder = instantiate(Small1D.decoder)
+    # ---- encoder / decoder built inline (no Small1D dependency) ----
+    encoder = GaussianEncoder(
+        data_dim=data_dim, latent_dim=latent_dim, j=j,
+        emb_time_dim=emb_time_dim, use_mask=False,
+        hidden_dim=encoder_hidden_dim,
+    )
+    decoder = GaussianDecoder(
+        data_dim=data_dim, latent_dim=latent_dim, j=j,
+        emb_time_dim=emb_time_dim,
+        hidden_dim=decoder_hidden_dim,
+    )
 
     return DDSSM_base(
         encoder=encoder,
