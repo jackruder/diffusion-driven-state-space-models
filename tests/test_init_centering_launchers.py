@@ -33,27 +33,33 @@ def test_tiny_jobs_cover_full_cross_product() -> None:
     assert cells_seen == {cell_name(*c) for c in iter_cells()}
 
 
-def test_tiny_sbatch_carries_dataset_and_latent_dim_overrides(tmp_path) -> None:
-    """Rendered script must override experiment.data + data_dim + latent_dim."""
+def test_tiny_sbatch_carries_data_field_overrides(tmp_path) -> None:
+    """Rendered script must override experiment.data.* fields + model dims.
+
+    Cell presets bake in ``data=Harmonic``; we mutate the data fields
+    (mode, D, expose_gt_latents) rather than swap the whole subtree by
+    name (which Hydra would treat as a string assignment).
+    """
     storage = str(tmp_path / "optuna")
     sweeps = str(tmp_path / "sweeps")
     cell = cell_name("mlp", "pinned", "per_t")
     script = render_tiny_sbatch(
         cell, "nonlin_bimodal_lift_mv", 8, 4, "mv",
+        "nonlinear-bimodal-lift-mv", True,
         study_prefix="ablation_test",
         n_trials=2,
         storage_dir=storage,
         sweeps_root=sweeps,
     )
-    assert "experiment.data=nonlin_bimodal_lift_mv" in script
+    assert "experiment.data.mode=nonlinear-bimodal-lift-mv" in script
+    assert "experiment.data.D=8" in script
+    assert "experiment.data.expose_gt_latents=true" in script
     assert "experiment.model.data_dim=8" in script
     assert "experiment.model.latent_dim=4" in script
     assert "+sweep=init_ablation" in script
     assert "hydra.sweeper.n_trials=2" in script
-    # Cell-scoped study name so studies don't collide.
     assert f"ablation_test_{cell}__mv" in script
-    # Default n_jobs=1 leaves the override OFF (Optuna's default).
-    assert "n_jobs" not in script
+    assert "n_jobs" not in script  # default n_jobs=1
 
 
 def test_tiny_sbatch_emits_n_jobs_override_when_set(tmp_path) -> None:
@@ -63,6 +69,7 @@ def test_tiny_sbatch_emits_n_jobs_override_when_set(tmp_path) -> None:
     cell = cell_name("mlp", "pinned", "per_t")
     script = render_tiny_sbatch(
         cell, "nonlin_bimodal_lift_mv", 8, 4, "mv",
+        "nonlinear-bimodal-lift-mv", True,
         study_prefix="t",
         n_trials=2,
         storage_dir=storage,
@@ -79,7 +86,7 @@ def test_datasets_filter_subsets_jobs() -> None:
     mv_only = list(_iter_targets(None, datasets=["mv"]))
     n_cells = sum(1 for _ in iter_cells())
     assert len(mv_only) == n_cells
-    assert {label for _, _, _, _, label in mv_only} == {"mv"}
+    assert {j[4] for j in mv_only} == {"mv"}
 
     both = list(_iter_targets(None, datasets=None))
     assert len(both) == n_cells * 2
@@ -100,21 +107,25 @@ def test_paper_sbatch_uses_paper_latent_dim(tmp_path) -> None:
     # 1D dataset: tiny is latent_dim=1, paper is latent_dim=2.
     script_1d = render_paper_sbatch(
         cell, "nonlin_bimodal_lift_1d", 1, 2, "1d",
+        "nonlinear-bimodal-lift", True,
         study_prefix="paper_test",
         n_trials=80,
         storage_dir=storage,
         sweeps_root=sweeps,
     )
     assert "experiment.model.latent_dim=2" in script_1d
+    assert "experiment.data.mode=nonlinear-bimodal-lift" in script_1d
     # MV dataset: tiny is latent_dim=4, paper is latent_dim=8.
     script_mv = render_paper_sbatch(
         cell, "nonlin_bimodal_lift_mv", 8, 8, "mv",
+        "nonlinear-bimodal-lift-mv", True,
         study_prefix="paper_test",
         n_trials=80,
         storage_dir=storage,
         sweeps_root=sweeps,
     )
     assert "experiment.model.latent_dim=8" in script_mv
+    assert "experiment.data.mode=nonlinear-bimodal-lift-mv" in script_mv
     assert "hydra.sweeper.n_trials=80" in script_mv
 
 

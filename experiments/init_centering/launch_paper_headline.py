@@ -40,10 +40,11 @@ from experiments.init_centering.cells import iter_cells
 
 # Mirror of TINY_DATASETS in launch_ablation_tiny, but with the
 # paper-headline latent_dim (2× the data's true latent dim) and the
-# observation dim unchanged.
-PAPER_DATASETS: tuple[tuple[str, int, int, str], ...] = (
-    ("nonlin_bimodal_lift_1d", 1, 2, "1d"),
-    ("nonlin_bimodal_lift_mv", 8, 8, "mv"),
+# observation dim unchanged. Same tuple shape as TINY_DATASETS:
+# (preset_name, data_dim, latent_dim, label, mode, expose_gt_latents).
+PAPER_DATASETS: tuple[tuple[str, int, int, str, str, bool], ...] = (
+    ("nonlin_bimodal_lift_1d", 1, 2, "1d", "nonlinear-bimodal-lift", True),
+    ("nonlin_bimodal_lift_mv", 8, 8, "mv", "nonlinear-bimodal-lift-mv", True),
 )
 
 
@@ -59,12 +60,12 @@ def _validate_cells(cells: list[str]) -> None:
 
 def all_paper_jobs(
     top_cells: list[str],
-) -> list[tuple[str, str, int, int, str]]:
+) -> list[tuple[str, str, int, int, str, str, bool]]:
     """Cross-product of selected top cells × the two ablation datasets."""
-    out: list[tuple[str, str, int, int, str]] = []
+    out: list[tuple[str, str, int, int, str, str, bool]] = []
     for cell in top_cells:
-        for ds_name, data_dim, latent_dim, ds_label in PAPER_DATASETS:
-            out.append((cell, ds_name, data_dim, latent_dim, ds_label))
+        for ds_name, data_dim, latent_dim, ds_label, mode, expose_gt in PAPER_DATASETS:
+            out.append((cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt))
     return out
 
 
@@ -78,6 +79,8 @@ def _overrides_for_job(
     data_dim: int,
     latent_dim: int,
     ds_label: str,
+    mode: str,
+    expose_gt: bool,
     *,
     study_prefix: str,
     n_trials: int,
@@ -94,7 +97,10 @@ def _overrides_for_job(
         f"hydra.sweeper.study_name={study_prefix}_{job}",
         f"hydra.sweeper.storage=sqlite:///{db_path}",
         f"hydra.sweep.dir={sweep_dir}",
-        f"experiment.data={ds_name}",
+        # Per-field data override (cell presets bake in data=Harmonic).
+        f"experiment.data.mode={mode}",
+        f"experiment.data.D={data_dim}",
+        f"experiment.data.expose_gt_latents={'true' if expose_gt else 'false'}",
         f"experiment.model.data_dim={data_dim}",
         f"experiment.model.latent_dim={latent_dim}",
     ]
@@ -115,6 +121,8 @@ def render_paper_sbatch(
     data_dim: int,
     latent_dim: int,
     ds_label: str,
+    mode: str = "nonlinear-bimodal-lift",
+    expose_gt: bool = True,
     *,
     study_prefix: str,
     n_trials: int,
@@ -123,7 +131,7 @@ def render_paper_sbatch(
     cli_overrides: dict[str, object] | None = None,
 ) -> str:
     overrides = _overrides_for_job(
-        cell, ds_name, data_dim, latent_dim, ds_label,
+        cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt,
         study_prefix=study_prefix,
         n_trials=n_trials,
         storage_dir=storage_dir,
@@ -201,9 +209,9 @@ def main(argv: list[str] | None = None) -> int:
     if write_dir is not None:
         os.makedirs(write_dir, exist_ok=True)
 
-    for cell, ds_name, data_dim, latent_dim, ds_label in all_paper_jobs(args.top_cells):
+    for cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt in all_paper_jobs(args.top_cells):
         script = render_paper_sbatch(
-            cell, ds_name, data_dim, latent_dim, ds_label,
+            cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt,
             study_prefix=args.study_prefix,
             n_trials=args.n_trials,
             storage_dir=args.storage_dir,

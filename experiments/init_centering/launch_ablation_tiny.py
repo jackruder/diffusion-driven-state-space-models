@@ -42,26 +42,31 @@ from experiments._sbatch import render_sbatch
 from experiments.init_centering.cells import cell_name, iter_cells
 
 
-# (dataset_preset_name, data_dim, latent_dim_at_tiny, label) — the
-# ablation-grid runs every cell at both. Add new datasets here to
-# extend the grid; CONTEXT.md § "Init-experiment datasets" is the
-# source of truth.
-TINY_DATASETS: tuple[tuple[str, int, int, str], ...] = (
-    ("nonlin_bimodal_lift_1d", 1, 1, "1d"),
-    ("nonlin_bimodal_lift_mv", 8, 4, "mv"),
+# (preset_name, data_dim, latent_dim_at_tiny, label, mode_string,
+# expose_gt_latents). The grid runs every cell at every dataset
+# entry. ``mode_string`` is the underlying SyntheticDataset mode
+# (CLI override `experiment.data.mode=...`). The cell presets bake in
+# ``data=Harmonic``; we swap to the ablation mode by per-field
+# override since the cell preset doesn't use a defaults list.
+# Add new datasets here to extend the grid; CONTEXT.md § "Init-experiment
+# datasets" is the source of truth.
+TINY_DATASETS: tuple[tuple[str, int, int, str, str, bool], ...] = (
+    ("nonlin_bimodal_lift_1d", 1, 1, "1d", "nonlinear-bimodal-lift", True),
+    ("nonlin_bimodal_lift_mv", 8, 4, "mv", "nonlinear-bimodal-lift-mv", True),
 )
 
 
-def all_tiny_jobs() -> list[tuple[str, str, int, int, str]]:
+def all_tiny_jobs() -> list[tuple[str, str, int, int, str, str, bool]]:
     """Cross-product of the 18 cells × the two ablation datasets.
 
-    Returns ``[(cell_name, dataset_preset, data_dim, latent_dim, label), ...]``.
+    Returns
+    ``[(cell_name, dataset_preset, data_dim, latent_dim, label, mode, expose_gt), ...]``.
     """
-    out: list[tuple[str, str, int, int, str]] = []
+    out: list[tuple[str, str, int, int, str, str, bool]] = []
     for f, m, t in iter_cells():
         cell = cell_name(f, m, t)
-        for ds_name, data_dim, latent_dim, ds_label in TINY_DATASETS:
-            out.append((cell, ds_name, data_dim, latent_dim, ds_label))
+        for ds_name, data_dim, latent_dim, ds_label, mode, expose_gt in TINY_DATASETS:
+            out.append((cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt))
     return out
 
 
@@ -75,6 +80,8 @@ def _overrides_for_job(
     data_dim: int,
     latent_dim: int,
     ds_label: str,
+    mode: str,
+    expose_gt: bool,
     *,
     study_prefix: str,
     n_trials: int,
@@ -92,7 +99,11 @@ def _overrides_for_job(
         f"hydra.sweeper.study_name={study_prefix}_{job}",
         f"hydra.sweeper.storage=sqlite:///{db_path}",
         f"hydra.sweep.dir={sweep_dir}",
-        f"experiment.data={ds_name}",
+        # Per-field data override (cell presets bake in ``data=Harmonic``;
+        # we mutate the fields rather than swap the whole subtree by name).
+        f"experiment.data.mode={mode}",
+        f"experiment.data.D={data_dim}",
+        f"experiment.data.expose_gt_latents={'true' if expose_gt else 'false'}",
         f"experiment.model.data_dim={data_dim}",
         f"experiment.model.latent_dim={latent_dim}",
     ]
@@ -117,6 +128,8 @@ def render_tiny_sbatch(
     data_dim: int,
     latent_dim: int,
     ds_label: str,
+    mode: str = "nonlinear-bimodal-lift",
+    expose_gt: bool = True,
     *,
     study_prefix: str,
     n_trials: int,
@@ -126,7 +139,7 @@ def render_tiny_sbatch(
     n_jobs: int = 1,
 ) -> str:
     overrides = _overrides_for_job(
-        cell, ds_name, data_dim, latent_dim, ds_label,
+        cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt,
         study_prefix=study_prefix,
         n_trials=n_trials,
         storage_dir=storage_dir,
@@ -144,7 +157,7 @@ def render_tiny_sbatch(
 def _iter_targets(
     only_cell: str | None,
     datasets: list[str] | None = None,
-) -> Iterable[tuple[str, str, int, int, str]]:
+) -> Iterable[tuple[str, str, int, int, str, str, bool]]:
     jobs = all_tiny_jobs()
     if datasets is not None:
         jobs = [j for j in jobs if j[4] in datasets]
@@ -199,10 +212,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--datasets", nargs="+", default=None,
-        choices=[label for _, _, _, label in TINY_DATASETS],
+        choices=[entry[3] for entry in TINY_DATASETS],
         help=(
             "Restrict to a subset of datasets by label (default: all). "
-            f"Choices: {[label for _, _, _, label in TINY_DATASETS]}."
+            f"Choices: {[entry[3] for entry in TINY_DATASETS]}."
         ),
     )
     p.add_argument(
@@ -244,11 +257,11 @@ def main(argv: list[str] | None = None) -> int:
     if write_dir is not None:
         os.makedirs(write_dir, exist_ok=True)
 
-    for cell, ds_name, data_dim, latent_dim, ds_label in _iter_targets(
+    for cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt in _iter_targets(
         args.cell, datasets=args.datasets,
     ):
         script = render_tiny_sbatch(
-            cell, ds_name, data_dim, latent_dim, ds_label,
+            cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt,
             study_prefix=args.study_prefix,
             n_trials=args.n_trials,
             storage_dir=args.storage_dir,
