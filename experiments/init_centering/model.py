@@ -104,7 +104,6 @@ def _build_init_centering_model(
     # ``None`` ⇒ derive via the "channels = 16 × latent_dim" scaling rule
     # locked in by CONTEXT.md § "Size axis". Set explicitly to override.
     channels: int | None = None,
-    nheads: int | None = None,   # ``None`` ⇒ channels // 8 (head_dim = 8)
     baseline_hidden_dim: int | None = None,  # ``None`` ⇒ 16 × latent_dim
     encoder_hidden_dim: int | None = None,   # ``None`` ⇒ 16 × latent_dim
     decoder_hidden_dim: int | None = None,   # ``None`` ⇒ 16 × latent_dim
@@ -128,9 +127,11 @@ def _build_init_centering_model(
 
     Capacity scaling: ``channels``, ``baseline_hidden_dim``,
     ``encoder_hidden_dim``, ``decoder_hidden_dim`` all default to
-    ``16 × latent_dim`` (CONTEXT.md § Size axis). ``nheads`` defaults to
-    ``channels // 8`` so attention head_dim stays at 8 across sizes. Pass
-    explicit values to override the scaling rule for a single knob.
+    ``16 × latent_dim`` (CONTEXT.md § Size axis). The score-net's
+    feature mixer is convolutional (per ADR-0003); there is no
+    ``nheads`` knob anymore since attention is not used at our latent
+    dims. Pass explicit values to override the scaling rule for a
+    single knob.
 
     Auto-degeneracy: if ``baseline_form`` is one of the parameter-free
     forms (``zero`` / ``identity``) and ``baseline_mode`` is
@@ -163,13 +164,6 @@ def _build_init_centering_model(
         encoder_hidden_dim = 16 * latent_dim
     if decoder_hidden_dim is None:
         decoder_hidden_dim = 16 * latent_dim
-    if nheads is None:
-        nheads = max(1, channels // 8)
-    if channels % nheads != 0:
-        raise ValueError(
-            f"channels ({channels}) must be divisible by nheads ({nheads})"
-        )
-
     # ---- shared ingredients ----
     baseline = _build_baseline(
         baseline_form=baseline_form,
@@ -193,13 +187,15 @@ def _build_init_centering_model(
     )
 
     # ---- stage-2 transition (centered ESM/EDM) ----
+    # Feature mixer is ``conv`` (not transformer); see
+    # docs/adr/0003-score-net-feature-mixer-conv.md for the rationale.
     unet = partial(
         CSDIUnet,
         channels=channels,
         n_layers=diffusion_layers,
         embedding_dim=channels,
         residual_block=DiffResidualBlockConfig(
-            feature=FeatureMixerConfig(nheads=nheads, n_layers=1)
+            feature=FeatureMixerConfig(type="conv", n_layers=1)
         ),
     )
     schedule = DiffusionV3ScheduleConfig(

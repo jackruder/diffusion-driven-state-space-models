@@ -85,8 +85,11 @@ For each dataset, two architectural sizes are run:
 - **paper-headline**: 2× over-parametrised. `latent_dim` doubled (2 or 8);
   `channels` and `baseline_hidden_dim` scaled to match.
 `j = 1` and `diffusion_layers = 2` are held constant; `diffusion_num_steps = 128`
-is the default. The tiny size runs the full 18-cell ablation; paper-headline
-runs only the user-selected top-N cells per dataset (confirmation study).
+is the default. The score-net's feature mixer is `conv` (per
+[ADR-0003](./docs/adr/0003-score-net-feature-mixer-conv.md)) — there is no
+`nheads` knob since attention isn't used at these latent dims. The tiny size
+runs the full 18-cell ablation; paper-headline runs only the user-selected
+top-N cells per dataset (confirmation study).
 
 **Init-experiment datasets** *(forward-looking)*:
 The init-centering ablation runs on two synthetic datasets:
