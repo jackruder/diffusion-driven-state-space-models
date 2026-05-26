@@ -24,6 +24,7 @@ from typing import Literal
 from hydra_zen import builds
 
 from ddssm.stages import (
+    LambdaRampConf,
     StagesConf,
     StageLrsConf,
     EarlyStopSpec,
@@ -77,6 +78,17 @@ def _build_init_centering_stages(
     dec_lr: float | None = None,
     zinit_lr: float = LR,
     trans_lr: float | None = None,
+    # Per-stage λ-warmup parameters (CONTEXT.md § "lambda_warmup
+    # redesign"). Each stage runs a cosine ramp on its OWN stage-local
+    # step counter; the ramp covers ``warmup_frac × stage.steps`` and
+    # rises from ``lambda_start`` to 1.0. Stage 2's default ``λ_start``
+    # is 0.1 (higher than stage 1's 0.001) because the model is
+    # pretrained, not random — we only need to ease through the
+    # loss-form change, not relearn the rate-distortion tradeoff.
+    stage_1_lambda_start: float = 0.001,
+    stage_2_lambda_start: float = 0.1,
+    stage_1_warmup_frac: float = 0.25,
+    stage_2_warmup_frac: float = 0.10,
     log_every: int = 25,
     checkpoint_every: int = 200,
     early_stop_enabled: bool = False,
@@ -115,11 +127,24 @@ def _build_init_centering_stages(
         min_improvement=early_stop_min_improvement,
         warmup_steps=early_stop_warmup_steps,
     )
+    stage1_lambda = LambdaRampConf(
+        start=float(stage_1_lambda_start),
+        end=1.0,
+        steps=max(1, int(round(stage_1_warmup_frac * n_pretrain))),
+        delay=0,
+    )
+    stage2_lambda = LambdaRampConf(
+        start=float(stage_2_lambda_start),
+        end=1.0,
+        steps=max(1, int(round(stage_2_warmup_frac * n_stage2))),
+        delay=0,
+    )
     return StagesConf(
         stage_1=StageSpecConf(
             steps=int(n_pretrain),
             trainable=stage1_trainable,
             lrs=lrs,
+            lambda_ramp=stage1_lambda,
             log_every=log_every,
             val_every=0,
             checkpoint_every=checkpoint_every,
@@ -129,6 +154,7 @@ def _build_init_centering_stages(
             steps=int(n_stage2),
             trainable=stage2_trainable,
             lrs=lrs,
+            lambda_ramp=stage2_lambda,
             log_every=log_every,
             val_every=0,
             checkpoint_every=checkpoint_every,

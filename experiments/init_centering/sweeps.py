@@ -66,6 +66,14 @@ _INIT_ABLATION_PARAMS = {
         "tag(log, interval(0.1, 10.0))",
     "experiment.model.stages.trans_mult":
         "tag(log, interval(0.1, 10.0))",
+    # Per-stage λ-warmup fractions (CONTEXT.md § "lambda_warmup redesign").
+    # Cover 5-50% of stage 1 and 2-25% of stage 2 — the lower bound is
+    # "barely-any warmup", the upper bound is "warmup covers most of
+    # the stage".
+    "experiment.model.stages.stage_1_warmup_frac":
+        "tag(log, interval(0.05, 0.5))",
+    "experiment.model.stages.stage_2_warmup_frac":
+        "tag(log, interval(0.02, 0.25))",
 }
 
 

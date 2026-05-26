@@ -130,6 +130,12 @@ class DDSSMTrainer:
         self.device = device
 
         self.global_step = 0
+        # Per-stage λ schedule installed by ``StageOrchestrator`` before
+        # each stage. ``None`` (the single-fit / no-stages path) falls
+        # back to the global ``hparams``-driven schedule from
+        # ``_build_lambda_schedule``.
+        self._stage_lambda_fn: Callable[[int], float] | None = None
+        self._stage_start_step: int = 0
 
         # Ensure config is attached
         if not hasattr(self.model, "config"):
@@ -412,9 +418,16 @@ class DDSSMTrainer:
                 report_scaled=False,
             )
 
-        assert lambda_schedule is not None
-        sched_step = self.global_step + 1
-        current_lambda = lambda_schedule(sched_step)
+        # Prefer the per-stage λ schedule when ``StageOrchestrator``
+        # has installed one (it resets the clock at each stage boundary).
+        # Falls back to the global hparams schedule for single-fit runs.
+        if self._stage_lambda_fn is not None:
+            sched_step = self.global_step - self._stage_start_step + 1
+            current_lambda = self._stage_lambda_fn(sched_step)
+        else:
+            assert lambda_schedule is not None
+            sched_step = self.global_step + 1
+            current_lambda = lambda_schedule(sched_step)
         loss = distortion + current_lambda * rate
         metrics["optim/lambda"] = torch.tensor(current_lambda)
 

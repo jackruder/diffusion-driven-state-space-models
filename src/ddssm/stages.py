@@ -201,7 +201,32 @@ class StageOrchestrator:
             # 3. Per-module trainable flags.
             self.trainer._set_trainable(stage.trainable)
 
-            # 4. Run the stage's training loop.  ``trainer.fit``'s
+            # 4. Install the per-stage λ schedule. Computed on the
+            # stage-relative step counter (resets at every stage
+            # boundary). When ``stage.lambda_ramp`` is at its defaults
+            # (start=0.001, end=1.0, steps=None) the ramp covers the
+            # whole stage; per-stage factories
+            # (e.g. ``_build_init_centering_stages``) populate the
+            # ramp explicitly per the warmup-fraction grilling decision.
+            default_end = 1.0
+            try:
+                default_end = float(
+                    self.trainer.config.hyperparams.lambda_end
+                )
+            except AttributeError:
+                # Mock trainers in unit tests may lack ``config`` —
+                # fall back to the ``LambdaRampConf`` default.
+                pass
+            self.trainer._stage_lambda_fn = make_lambda_cosine(
+                stage.lambda_ramp,
+                total_steps=int(stage.steps),
+                default_end=default_end,
+            )
+            self.trainer._stage_start_step = int(
+                getattr(self.trainer, "global_step", 0)
+            )
+
+            # 5. Run the stage's training loop.  ``trainer.fit``'s
             # ``total_steps`` is the *cumulative* max step, not per-stage,
             # so we add the global step counter to the stage's budget.
             target = int(self.trainer.global_step) + int(stage.steps)

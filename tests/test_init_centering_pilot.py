@@ -99,7 +99,8 @@ def test_ablation_sweep_composes_via_cli() -> None:
     assert "optuna" in sweeper._target_.lower()
     assert sweeper.direction == "minimize"
     params = dict(sweeper.params)
-    # All 7 sweep axes from the grilling decision.
+    # All 9 sweep axes from the grilling decisions (7 from the
+    # original expand-sweep, +2 for per-stage λ warmup fractions).
     for key in (
         "experiment.model.stages.n_pretrain",
         "experiment.model.stages.sigma_pert",
@@ -108,6 +109,8 @@ def test_ablation_sweep_composes_via_cli() -> None:
         "experiment.model.stages.base_lr",
         "experiment.model.stages.dec_mult",
         "experiment.model.stages.trans_mult",
+        "experiment.model.stages.stage_1_warmup_frac",
+        "experiment.model.stages.stage_2_warmup_frac",
     ):
         assert key in params, f"missing sweep axis: {key}"
     # Sanity: at least the two handoff knobs are log-uniform.
