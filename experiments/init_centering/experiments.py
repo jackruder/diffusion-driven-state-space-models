@@ -1,4 +1,22 @@
-"""Named init-centering experiments: smoke + pilot + Phase-D 18-cell grid."""
+"""Named init-centering experiments: two role-specific smokes + 18-cell grid.
+
+The two smoke presets are the canonical entry points (CONTEXT.md § Simple-smoke
+cell / High-surface-smoke cell):
+
+- :data:`init_smoke_simple` — ``(zero, pinned, fixed)`` on the 1D ablation
+  dataset. Minimum surface + numerical V2 anchor. Use to validate the
+  pipeline is wired correctly without changing any cell-machinery
+  defaults.
+- :data:`init_smoke_high_surface` — ``(mlp, learnable, per_t)`` on the MV
+  ablation dataset. Exercises every code path: parametric μ_p, R_μp
+  regulariser under Learnable, per-t σ_data EMA, multivariate
+  observation lift. If this trains end-to-end, every grid cell does.
+
+The legacy ``init_centering_smoke`` and ``init_centering_pilot`` presets
+were dropped per CONTEXT.md (the term "pilot" was overloaded). Use the
+two smokes above + the 18-cell grid + the ``init_ablation`` sweep
+instead.
+"""
 
 from __future__ import annotations
 
@@ -8,54 +26,69 @@ from experiments.init_centering.cells import (
     cell_name,
     iter_cells,
 )
-from experiments.init_centering.data import Harmonic
+from experiments.init_centering.data import (
+    Harmonic,
+    NonlinBimodalLift1D,
+    NonlinBimodalLiftMV,
+)
 from experiments.init_centering.evals import PilotEval, PilotObjective
 from experiments.init_centering.hparams import SmokeHparams, StagesB, Training800
 from experiments.init_centering.model import SmokeModel
 
 
 # ---------------------------------------------------------------------------
-# Smoke preset — canonical cell, no objective, ``train()`` returns the
-# :class:`DDSSMTrainer` for inspection.  Wires every Phase 1–5 piece:
+# Simple-smoke cell: (zero, pinned, fixed) on the 1D ablation dataset.
+# No eval wired; ``train()`` returns the trainer for inspection.
+# Pairs with the V2-reduction test as the project's correctness anchor.
 #
-#   - shared baseline between BaselineGaussianTransition (stage 1) and
-#     DiffusionV3Transition (stage 2);
-#   - AuxPosterior + SigmaDataBuffer slots on DDSSM_base;
-#   - StagesConf with a CenteringHandoffConf between stage 1 and stage 2;
-#   - Harmonic data at T=32 (matches T_MAX in the model).
-#
-# Run: ``python -m ddssm.app experiment=init_centering_smoke``.
+# Run: ``python -m ddssm.app experiment=init_smoke_simple``.
 # ---------------------------------------------------------------------------
 
-init_centering_smoke = experiment(
-    data=Harmonic,
-    model=SmokeModel(stages=StagesB),
+init_smoke_simple = experiment(
+    data=NonlinBimodalLift1D,
+    model=SmokeModel(
+        baseline_form="zero",
+        baseline_mode="pinned",
+        tracking_mode="fixed",
+        latent_dim=1,
+        data_dim=1,
+        stages=StagesB,
+    ),
     hparams=SmokeHparams,
     training=Training800,
 )
-experiment_store(init_centering_smoke, name="init_centering_smoke")
+experiment_store(init_smoke_simple, name="init_smoke_simple")
 
 
 # ---------------------------------------------------------------------------
-# Pilot preset — same canonical cell, with the Phase-A eval pipeline +
-# the ``stage2_elbo_surrogate`` JSON-source objective wired so that
-# ``Experiment.train`` returns a scalar suitable for the Optuna sweep
-# in ``sweeps.py``.
+# High-surface-smoke cell: (mlp, learnable, per_t) on the MV ablation
+# dataset. Exercises parametric μ_p + R_μp + per-t σ_data EMA + the MV
+# observation lift. Eval + objective wired so it can also act as a
+# single-trial inspection target before launching the full sweep.
 #
-# Run a single trial: ``python -m ddssm.app experiment=init_centering_pilot``
-# Run the sweep:      ``python -m ddssm.app --multirun \
-#                          experiment=init_centering_pilot +sweep=init_pilot``
+# Run a single trial: ``python -m ddssm.app experiment=init_smoke_high_surface``
+# Run an exploratory sweep:
+#   python -m ddssm.app --multirun \
+#       experiment=init_smoke_high_surface +sweep=init_ablation \
+#       hydra.sweeper.n_trials=10
 # ---------------------------------------------------------------------------
 
-init_centering_pilot = experiment(
-    data=Harmonic,
-    model=SmokeModel(stages=StagesB),
+init_smoke_high_surface = experiment(
+    data=NonlinBimodalLiftMV,
+    model=SmokeModel(
+        baseline_form="mlp",
+        baseline_mode="learnable",
+        tracking_mode="per_t",
+        latent_dim=4,
+        data_dim=8,
+        stages=StagesB,
+    ),
     hparams=SmokeHparams,
     training=Training800,
     eval=PilotEval,
     objective=PilotObjective,
 )
-experiment_store(init_centering_pilot, name="init_centering_pilot")
+experiment_store(init_smoke_high_surface, name="init_smoke_high_surface")
 
 
 # ---------------------------------------------------------------------------

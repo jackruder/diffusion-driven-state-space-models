@@ -155,16 +155,11 @@ def test_cell_instantiates_with_correct_baseline_class(form, expected_baseline_c
     assert isinstance(exp.model.baseline, expected_baseline_cls)
 
 
-def test_canonical_cell_preset_matches_pilot_axes() -> None:
-    """The canonical cell preset and ``init_centering_pilot`` share their axes."""
-    canonical = instantiate(
-        store["experiment"]["experiment", cell_name(*CANONICAL_CELL)]
-    )
-    pilot = instantiate(store["experiment"]["experiment", "init_centering_pilot"])
-    # Regression guard: if Phase C and Phase D drift, fail loudly.
-    assert canonical.model.baseline_mode == pilot.model.baseline_mode
-    assert canonical.model.sigma_data.tracking_mode == pilot.model.sigma_data.tracking_mode
-    assert type(canonical.model.baseline) is type(pilot.model.baseline)
+# ``test_canonical_cell_preset_matches_pilot_axes`` was removed when the
+# ``init_centering_pilot`` preset was retired during the smoke
+# restructure (CONTEXT.md § "pilot cell" is deliberately not used).
+# The canonical cell still exists as a triple in ``cells.py`` and as a
+# named preset ``init_mlp_pinned_per_t`` in the 18-cell grid.
 
 
 # Control-cell tests were removed when the controls themselves were

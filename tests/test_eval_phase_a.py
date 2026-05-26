@@ -3,7 +3,7 @@
 Covers:
 
 - ``wallclock_to_target`` (CSV-derived; no model needed).
-- ``stage2_elbo_surrogate`` (smoke on the existing init_centering_smoke
+- ``stage2_elbo_surrogate`` (smoke on the existing init_smoke_simple
   preset; slow-marked).
 - ``sigma_data_drift`` (snapshot from ``model.sigma_data`` + the
   two-component decomposition).
@@ -246,7 +246,7 @@ def test_nonlinear_bimodal_lift_mv_kernel_samples_shape() -> None:
 
 
 @pytest.mark.slow
-def test_sigma_data_drift_snapshot_with_init_centering_smoke(tmp_path) -> None:
+def test_sigma_data_drift_snapshot_with_init_smoke_simple(tmp_path) -> None:
     """End-to-end snapshot via the smoke preset.
 
     Trains for a handful of steps then runs the metric on the
@@ -266,7 +266,7 @@ def test_sigma_data_drift_snapshot_with_init_centering_smoke(tmp_path) -> None:
 
     cfg = None
     for entry in store:
-        if entry["group"] == "experiment" and entry["name"] == "init_centering_smoke":
+        if entry["group"] == "experiment" and entry["name"] == "init_smoke_simple":
             cfg = entry["node"]
             break
     assert cfg is not None
@@ -315,7 +315,7 @@ def test_sigma_data_drift_snapshot_with_init_centering_smoke(tmp_path) -> None:
 
 
 @pytest.mark.slow
-def test_stage2_elbo_surrogate_with_init_centering_smoke(tmp_path) -> None:
+def test_stage2_elbo_surrogate_with_init_smoke_simple(tmp_path) -> None:
     """End-to-end: the metric runs on a trained smoke checkpoint."""
     from hydra_zen import instantiate
 
@@ -326,7 +326,7 @@ def test_stage2_elbo_surrogate_with_init_centering_smoke(tmp_path) -> None:
 
     cfg = None
     for entry in store:
-        if entry["group"] == "experiment" and entry["name"] == "init_centering_smoke":
+        if entry["group"] == "experiment" and entry["name"] == "init_smoke_simple":
             cfg = entry["node"]
             break
     assert cfg is not None

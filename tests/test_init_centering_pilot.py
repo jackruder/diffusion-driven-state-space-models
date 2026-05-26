@@ -1,17 +1,21 @@
-"""Phase-C tests for the ``init_centering_pilot`` experiment + ``init_pilot`` sweep.
+"""Tests for the ``init_smoke_high_surface`` experiment + ``init_ablation`` sweep.
 
 Verifies:
 
-* Both presets register into the appropriate ``conf.registry`` stores.
-* The pilot experiment's ``objective`` is configured with
-  ``source='json'`` and ``metric='stage2_elbo_surrogate'``.
-* The pilot sweep declares the two doc-mandated search axes
-  (``n_pretrain``, ``sigma_pert``) under
-  ``hydra.sweeper.params``.
-* The pilot eval spec lists the five Phase-A headline metrics.
+* The high-surface smoke preset and ``init_ablation`` sweep both
+  register into the appropriate ``conf.registry`` stores. The
+  back-compat alias ``init_pilot`` still resolves.
+* The high-surface smoke's ``objective`` is ``stage2_elbo_surrogate``
+  read from JSON.
+* The ablation sweep declares the seven search axes from the grilling
+  decision: ``n_pretrain``, ``sigma_pert``, ``anchor_lambda``,
+  ``lambda_sigma_p``, ``base_lr``, ``dec_mult``, ``trans_mult``.
+* The eval spec lists the five Phase-A headline metrics.
 
-The actual 20-trial Optuna run is a manual user-driven smoke; the
-fast suite only asserts the wiring is right.
+The legacy filename ``test_init_centering_pilot.py`` is retained for
+git-history continuity; the contents now exercise the renamed
+high-surface smoke per CONTEXT.md (the term "pilot" was overloaded
+and dropped during grilling).
 """
 
 from __future__ import annotations
@@ -40,30 +44,31 @@ def _clear_global_hydra():
         GlobalHydra.instance().clear()
 
 
-def test_pilot_experiment_registered() -> None:
-    """``init_centering_pilot`` shows up in the experiment store."""
+def test_high_surface_smoke_registered() -> None:
+    """``init_smoke_high_surface`` shows up in the experiment store."""
     register_experiments()
     names = [name for _, name in store["experiment"]]
-    assert "init_centering_pilot" in names
+    assert "init_smoke_high_surface" in names
 
 
-def test_pilot_sweep_registered() -> None:
-    """``init_pilot`` shows up in the sweep store."""
+def test_ablation_sweep_registered_with_back_compat_alias() -> None:
+    """``init_ablation`` is the canonical name; ``init_pilot`` aliases it."""
     register_experiments()
     names = [name for _, name in store["sweep"]]
-    assert "init_pilot" in names
+    assert "init_ablation" in names
+    assert "init_pilot" in names  # back-compat alias
 
 
-def test_pilot_experiment_instantiates() -> None:
-    """Pilot composes through Hydra and exposes the eval + objective specs."""
-    cfg = store["experiment"]["experiment", "init_centering_pilot"]
+def test_high_surface_smoke_instantiates() -> None:
+    """The high-surface smoke composes through Hydra with the right specs."""
+    cfg = store["experiment"]["experiment", "init_smoke_high_surface"]
     exp = instantiate(cfg)
     assert isinstance(exp, Experiment)
-    # Objective must be the JSON-source ``stage2_elbo_surrogate``.
+    # Objective: JSON-source stage2_elbo_surrogate.
     assert isinstance(exp.objective, ObjectiveSpec)
     assert exp.objective.metric == "stage2_elbo_surrogate"
     assert exp.objective.source == "json"
-    # Eval must list the five Phase-A headline metrics.
+    # Eval: five Phase-A headline metrics.
     assert exp.eval is not None
     assert set(exp.eval.metrics) == {
         "stage2_elbo_surrogate",
@@ -73,16 +78,20 @@ def test_pilot_experiment_instantiates() -> None:
         "gt_latent_jsd",
     }
     assert exp.eval.split == "val"
+    # Cell axes: (mlp, learnable, per_t) on the MV dataset.
+    assert exp.model.baseline_mode == "learnable"
+    assert exp.model.sigma_data.tracking_mode == "per_t"
+    assert exp.model.latent_dim == 4
 
 
-def test_pilot_sweep_composes_via_cli() -> None:
-    """``+sweep=init_pilot`` switches the sweeper and populates params."""
+def test_ablation_sweep_composes_via_cli() -> None:
+    """``+sweep=init_ablation`` switches the sweeper and populates params."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(
             config_name="config",
             overrides=[
-                "experiment=init_centering_pilot",
-                "+sweep=init_pilot",
+                "experiment=init_smoke_high_surface",
+                "+sweep=init_ablation",
             ],
             return_hydra_config=True,
         )
@@ -90,39 +99,43 @@ def test_pilot_sweep_composes_via_cli() -> None:
     assert "optuna" in sweeper._target_.lower()
     assert sweeper.direction == "minimize"
     params = dict(sweeper.params)
-    # Doc-mandated sweep axes.
-    assert "experiment.model.stages.n_pretrain" in params
-    assert "experiment.model.stages.sigma_pert" in params
-    # Sanity: the n_pretrain axis is a log-uniform integer range.
+    # All 7 sweep axes from the grilling decision.
+    for key in (
+        "experiment.model.stages.n_pretrain",
+        "experiment.model.stages.sigma_pert",
+        "experiment.model.anchor_lambda",
+        "experiment.hparams.lambda_sigma_p",
+        "experiment.model.stages.base_lr",
+        "experiment.model.stages.dec_mult",
+        "experiment.model.stages.trans_mult",
+    ):
+        assert key in params, f"missing sweep axis: {key}"
+    # Sanity: at least the two handoff knobs are log-uniform.
     assert "tag(log" in params["experiment.model.stages.n_pretrain"]
     assert "tag(log" in params["experiment.model.stages.sigma_pert"]
 
 
-def test_pilot_model_target_resolves_to_init_centering_factory() -> None:
-    """Pilot reuses the same model factory as the smoke preset."""
+def test_high_surface_smoke_resolves_to_init_centering_factory() -> None:
+    """The smoke uses the parametric init-centering factory."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(
             config_name="config",
-            overrides=["experiment=init_centering_pilot"],
+            overrides=["experiment=init_smoke_high_surface"],
         )
     target = cfg.experiment.model._target_
     assert target.endswith("_build_init_centering_model"), target
 
 
 @pytest.mark.slow
-def test_pilot_end_to_end_writes_metrics_json_and_returns_objective_value(
+def test_high_surface_smoke_end_to_end_writes_metrics_json(
     tmp_path: Path,
 ) -> None:
-    """The pilot's train() chains eval, writes ``metrics.json``, returns a float.
-
-    5 + 5 steps with the canonical cell; the
-    ``stage2_elbo_surrogate`` objective should land as a finite scalar
-    and ``metrics.json`` should appear in the run directory.
-    """
+    """train() chains eval, writes ``metrics.json``, returns a finite float."""
     import json
+    import math as _math
     import torch
 
-    cfg = store["experiment"]["experiment", "init_centering_pilot"]
+    cfg = store["experiment"]["experiment", "init_smoke_high_surface"]
     exp = instantiate(cfg)
     # Shrink stages for a fast run.
     exp.model.config.stages.stage_1.steps = 5
@@ -139,16 +152,12 @@ def test_pilot_end_to_end_writes_metrics_json_and_returns_objective_value(
 
     value = exp.train(device=torch.device("cpu"), run_dir=str(run_dir))
 
-    # The objective wires through Experiment.train and surfaces a scalar.
     assert isinstance(value, float)
-    import math as _math
     assert _math.isfinite(value), f"objective returned non-finite value: {value}"
 
-    # metrics.json must exist with the eval-pipeline's keys.
     metrics_json = run_dir / "metrics.json"
     assert metrics_json.exists(), "Phase-A metrics.json missing from run_dir"
     payload = json.loads(metrics_json.read_text())
     assert "stage2_elbo_surrogate" in payload, payload.keys()
 
-    # The final checkpoint was saved (needed for Phase-E reporting).
     assert (run_dir / "checkpoints" / "ckpt_final.pth").exists()

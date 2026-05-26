@@ -59,10 +59,13 @@ def _clear_global_hydra():
 def test_experiments_registered() -> None:
     """All 34 named presets are reachable through the experiment store.
 
-    Phase D adds 18 cell presets (one per ablation-grid cell) on top of
-    the 16-preset Phase-C surface (14 legacy + ``init_centering_smoke``
-    + ``init_centering_pilot``). The 2 ``init_canonical_ctrl_*`` presets
-    were removed per ``docs/adr/0002-drop-canonical-controls.md``.
+    Composition: 14 legacy presets + 18 cell presets (one per ablation-
+    grid cell) + 2 role-specific smokes (``init_smoke_simple`` and
+    ``init_smoke_high_surface``). The 2 ``init_canonical_ctrl_*``
+    presets were removed per ADR-0002, and the original
+    ``init_centering_smoke`` / ``init_centering_pilot`` presets were
+    replaced by the two role-specific smokes (CONTEXT.md drops the
+    "pilot" terminology).
     """
     assert len(EXPERIMENTS) == 34, EXPERIMENTS
 

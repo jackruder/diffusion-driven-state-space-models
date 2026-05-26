@@ -1,6 +1,6 @@
 """End-to-end smoke test for the model-v2 baseline-centering core.
 
-Drives ``init_centering_smoke`` for 5 + 5 steps via the orchestrator,
+Drives ``init_smoke_simple`` for 5 + 5 steps via the orchestrator,
 asserts that:
 
 * The run completes without raising.
@@ -16,7 +16,7 @@ asserts that:
 Marked ``slow`` because it constructs the full model + runs the
 orchestrator.  Excluded from the default suite; run with::
 
-    pytest tests/test_init_centering_smoke.py -m slow
+    pytest tests/test_init_smoke_simple.py -m slow
 """
 
 from __future__ import annotations
@@ -43,9 +43,9 @@ def _get_experiment_cfg(name: str):
     raise KeyError(f"Experiment {name!r} not registered")
 
 
-def test_init_centering_smoke_end_to_end(tmp_path: Path) -> None:
+def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     """5 + 5-step end-to-end run through stage 1 + handoff + stage 2."""
-    cfg = _get_experiment_cfg("init_centering_smoke")
+    cfg = _get_experiment_cfg("init_smoke_simple")
     exp = instantiate(cfg)
     # Shrink the stages for a fast smoke run.
     exp.model.config.stages.stage_1.steps = 5
@@ -111,9 +111,9 @@ def test_init_centering_smoke_end_to_end(tmp_path: Path) -> None:
         assert int(exp.model.sigma_data.ema_step.max()) == 5  # 5 stage-2 steps
 
 
-def test_init_centering_smoke_shares_baseline_instance() -> None:
+def test_init_smoke_simple_shares_baseline_instance() -> None:
     """Both transitions reference the *same* baseline Python object."""
-    cfg = _get_experiment_cfg("init_centering_smoke")
+    cfg = _get_experiment_cfg("init_smoke_simple")
     exp = instantiate(cfg)
     assert exp.model.baseline is exp.model.stage1_transition.baseline
     assert exp.model.baseline is exp.model.transition.baseline
