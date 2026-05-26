@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
+import csv
 import math
 import os
 import numpy as np
@@ -688,6 +689,183 @@ def eval_sigma_data_drift(
         "sigma_data2_component1_per_t": comp1_list,
         "sigma_data2_component2_per_t": comp2_list,
         "sigma_data2_decomposition_sum_per_t": decomp_sum,
+    }
+
+
+@register_metric("q_aux_kl_trajectory")
+def eval_q_aux_kl_trajectory(
+    ctx: EvalContext,
+    *,
+    collapse_threshold: float = 1e-3,
+) -> Dict[str, Any]:
+    """KL[q_Φ(z_0|z_1) ‖ N(0, I)] trajectory over training (secondary metric #5).
+
+    Reads the per-step ``loss/rate/init/kl_aux`` column from
+    ``run_dir/metrics.csv`` and returns the trajectory + summary
+    statistics. Per ``init-experiment.org`` § Secondary metrics: this
+    is the diagnostic for q_Φ posterior collapse. The KL should rise
+    off zero early in stage 1 and stabilise; collapsing back to zero
+    indicates q_Φ has ignored z_1 and the VHP has degenerated to the
+    homoskedastic prior.
+
+    Returns ``{q_aux_kl_trajectory_available: False}`` if the run dir
+    or CSV column is missing.
+    """
+    if ctx.run_dir is None:
+        return {"q_aux_kl_trajectory_available": False, "q_aux_kl_trajectory_reason": "no run_dir"}
+    csv_path = os.path.join(ctx.run_dir, "metrics.csv")
+    if not os.path.isfile(csv_path):
+        return {"q_aux_kl_trajectory_available": False, "q_aux_kl_trajectory_reason": "no metrics.csv"}
+    steps: list[int] = []
+    values: list[float] = []
+    try:
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            if "loss/rate/init/kl_aux" not in (reader.fieldnames or []):
+                return {
+                    "q_aux_kl_trajectory_available": False,
+                    "q_aux_kl_trajectory_reason": "kl_aux column missing",
+                }
+            for row in reader:
+                v_raw = row.get("loss/rate/init/kl_aux", "")
+                if v_raw == "" or v_raw is None:
+                    continue
+                try:
+                    v = float(v_raw)
+                except (TypeError, ValueError):
+                    continue
+                try:
+                    s = int(row.get("step", 0))
+                except (TypeError, ValueError):
+                    continue
+                steps.append(s)
+                values.append(v)
+    except OSError:
+        return {"q_aux_kl_trajectory_available": False, "q_aux_kl_trajectory_reason": "csv read error"}
+
+    if not values:
+        return {"q_aux_kl_trajectory_available": False, "q_aux_kl_trajectory_reason": "empty"}
+    final = float(values[-1])
+    mean_v = float(np.mean(values))
+    peak = float(max(values))
+    # Posterior collapse heuristic: peak rose above threshold but final
+    # value collapsed back below it.
+    collapsed = bool(peak > collapse_threshold and final < collapse_threshold)
+    return {
+        "q_aux_kl_trajectory_available": True,
+        "q_aux_kl_trajectory_steps": steps,
+        "q_aux_kl_trajectory_values": values,
+        "q_aux_kl_trajectory_final": final,
+        "q_aux_kl_trajectory_mean": mean_v,
+        "q_aux_kl_trajectory_peak": peak,
+        "q_aux_kl_trajectory_collapsed": collapsed,
+    }
+
+
+@register_metric("log_sigma_p2_collapse")
+def eval_log_sigma_p2_collapse(
+    ctx: EvalContext,
+    *,
+    max_batches: int = 4,
+    outlier_z_threshold: float = 2.0,
+) -> Dict[str, Any]:
+    """Per-(t, d) ``log σ_p²(z_{t-1})`` diagnostic (secondary metric #6).
+
+    Per ``init-experiment.org`` § Secondary metrics: the global anchor
+    ``R_σp`` can be satisfied by some (t, d) cells collapsing while
+    others inflate (balancing in aggregate). This metric surfaces that
+    pathology by computing the per-(t, d) batch mean of
+    ``log σ_p²(z_{t-1})_d`` over an evaluation trajectory sample and
+    flagging cells whose absolute mean exceeds ``outlier_z_threshold``
+    standard deviations from zero.
+
+    Requires ``model.baseline`` with a ``mean_and_logvar`` head (all
+    four baseline forms provide it, including the parameter-free
+    Zero/Identity via their state-conditional σ_p head).
+    """
+    if (
+        ctx.model is None
+        or ctx.loader is None
+        or getattr(ctx.model, "baseline", None) is None
+    ):
+        return {"log_sigma_p2_collapse_available": False}
+    model = ctx.model
+    device = ctx.device
+    transform = ctx.batch_transform
+    j = int(model.j)
+    d = int(model.latent_dim)
+    baseline = model.baseline
+
+    from ..net_utils import time_embedding
+
+    # Accumulate per-(t, d) sums across batches.
+    sums: dict[int, np.ndarray] = {}  # t -> (d,)
+    counts: dict[int, int] = {}
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(ctx.loader):
+            if batch_idx >= int(max_batches):
+                break
+            if transform is not None:
+                batch = transform(batch, device)
+            else:
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+            obs = batch["observed_data"]
+            mask = batch["observation_mask"]
+            tp = batch["timepoints"]
+            te = time_embedding(tp, model.emb_time_dim, device=device)
+            zs, _, _ = model._encode_latents(
+                observed_data=obs, time_embed=te, observation_mask=mask,
+            )
+            B, S, _, T = zs.shape
+            if T <= j:
+                continue
+            for t in range(j, T):
+                z_hist = zs[:, :, :, t - j : t].reshape(B * S, d, j)
+                _, log_sigma_p2 = baseline.mean_and_logvar(z_hist)
+                # Mean across the (B * S) axis → per-d.
+                per_d = log_sigma_p2.mean(dim=0).detach().cpu().numpy()
+                t_ext = t + 1  # 1-based
+                if t_ext in sums:
+                    sums[t_ext] += per_d
+                    counts[t_ext] += 1
+                else:
+                    sums[t_ext] = per_d.copy()
+                    counts[t_ext] = 1
+
+    if not sums:
+        return {"log_sigma_p2_collapse_available": False}
+    sorted_ts = sorted(sums.keys())
+    per_t_per_d: list[list[float]] = []
+    for t in sorted_ts:
+        mean_per_d = sums[t] / counts[t]
+        per_t_per_d.append([float(v) for v in mean_per_d])
+
+    flat = np.array(per_t_per_d, dtype=np.float64)  # (T, d)
+    overall_mean = float(flat.mean())
+    overall_std = float(flat.std(ddof=0))
+    # Outliers: (t, d) whose |value| exceeds threshold × std (deviation from 0).
+    outliers: list[tuple[int, int, float]] = []
+    if overall_std > 0:
+        for ti, t in enumerate(sorted_ts):
+            for di in range(d):
+                v = flat[ti, di]
+                if abs(v) > outlier_z_threshold * overall_std:
+                    outliers.append((int(t), int(di), float(v)))
+
+    return {
+        "log_sigma_p2_collapse_available": True,
+        "log_sigma_p2_t_indices": sorted_ts,
+        "log_sigma_p2_per_t_per_d": per_t_per_d,
+        "log_sigma_p2_mean": overall_mean,
+        "log_sigma_p2_std": overall_std,
+        "log_sigma_p2_n_outliers": len(outliers),
+        "log_sigma_p2_outliers": [
+            {"t": t, "d": di, "log_sigma_p2": v} for t, di, v in outliers
+        ],
     }
 
 

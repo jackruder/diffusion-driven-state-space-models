@@ -68,7 +68,8 @@ def test_high_surface_smoke_instantiates() -> None:
     assert isinstance(exp.objective, ObjectiveSpec)
     assert exp.objective.metric == "stage2_elbo_surrogate"
     assert exp.objective.source == "json"
-    # Eval: five Phase-A headline metrics.
+    # Eval: five Phase-A headline metrics + two secondary diagnostics
+    # (the trivial subset from the grilling decision on task #18).
     assert exp.eval is not None
     assert set(exp.eval.metrics) == {
         "stage2_elbo_surrogate",
@@ -76,6 +77,8 @@ def test_high_surface_smoke_instantiates() -> None:
         "wallclock_to_target",
         "crps_sum_latent",
         "gt_latent_jsd",
+        "q_aux_kl_trajectory",
+        "log_sigma_p2_collapse",
     }
     assert exp.eval.split == "val"
     # Cell axes: (mlp, learnable, per_t) on the MV dataset.

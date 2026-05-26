@@ -20,7 +20,10 @@ PilotObjective = Objective(
 )
 
 
-# The five Phase-A headline metrics, computed on the val split.
+# The five Phase-A headline metrics + two diagnostic secondary metrics
+# (per ``init-experiment.org`` § Secondary metrics, the trivial subset
+# from the grilling decision: #5 q_aux_kl_trajectory and #6
+# log_sigma_p2_collapse).
 PilotEval = Eval(
     metrics=[
         "stage2_elbo_surrogate",
@@ -28,6 +31,8 @@ PilotEval = Eval(
         "wallclock_to_target",
         "crps_sum_latent",
         "gt_latent_jsd",
+        "q_aux_kl_trajectory",
+        "log_sigma_p2_collapse",
     ],
     split="val",
     num_samples=16,

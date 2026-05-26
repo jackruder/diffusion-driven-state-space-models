@@ -8,7 +8,12 @@ along that axis for Pinned).
 
 Per-axis ranges:
 
-* ``n_pretrain``     — log-uniform integer ``range(50, 2000)``.
+* ``n_pretrain``     — log-uniform integer ``range(5, 500)``. Tightened
+                        from the original (50, 2000) per empirical
+                        observation that nonlinear-bimodal-lift converges
+                        around 250-300 stage-1 steps (so 2000 was wasteful)
+                        and that "almost no pretrain" (lower bound 5) is
+                        a useful regime to probe.
 * ``sigma_pert``     — log-uniform float ``interval(1e-3, 5e-2)`` —
                         tightened from the original ``(1e-4, 1e-1)``;
                         the lower bound is operationally indistinguishable
@@ -51,7 +56,7 @@ from conf.registry import sweep_store
 _INIT_ABLATION_PARAMS = {
     # Centering-handoff knobs.
     "experiment.model.stages.n_pretrain":
-        "tag(log, int(interval(50, 2000)))",
+        "tag(log, int(interval(5, 500)))",
     "experiment.model.stages.sigma_pert":
         "tag(log, interval(1e-3, 5e-2))",
     # Regulariser strengths.
