@@ -64,10 +64,19 @@ def _build_init_centering_stages(
     n_pretrain: int = 200,
     n_stage2: int = 600,
     sigma_pert: float = 1e-2,
-    enc_lr: float = LR,
-    dec_lr: float = LR,
+    # LRs are parametrised as ``base_lr`` (encoder LR) with per-group
+    # multipliers for decoder + transition. This replaces the prior
+    # 3-independent-log-uniforms sweep with a 1-base + 2-multiplier
+    # search, exploiting the correlation between the LRs. ``zinit_lr``
+    # stays separate (not swept by default). Pass ``enc_lr`` etc.
+    # explicitly to override the derived values.
+    base_lr: float = LR,
+    dec_mult: float = 1.0,
+    trans_mult: float = 1.0,
+    enc_lr: float | None = None,
+    dec_lr: float | None = None,
     zinit_lr: float = LR,
-    trans_lr: float = LR,
+    trans_lr: float | None = None,
     log_every: int = 25,
     checkpoint_every: int = 200,
     early_stop_enabled: bool = False,
@@ -81,8 +90,16 @@ def _build_init_centering_stages(
     ``baseline_mode`` so the declarative mask and the
     :func:`perform_centering_handoff` imperative freeze agree.
     """
+    # Derive per-group LRs from (base_lr, multipliers) unless explicit
+    # overrides are supplied.
+    effective_enc_lr = enc_lr if enc_lr is not None else base_lr
+    effective_dec_lr = dec_lr if dec_lr is not None else base_lr * dec_mult
+    effective_trans_lr = trans_lr if trans_lr is not None else base_lr * trans_mult
     lrs = StageLrsConf(
-        enc_lr=enc_lr, dec_lr=dec_lr, zinit_lr=zinit_lr, trans_lr=trans_lr,
+        enc_lr=effective_enc_lr,
+        dec_lr=effective_dec_lr,
+        zinit_lr=zinit_lr,
+        trans_lr=effective_trans_lr,
     )
     stage1_trainable = StageTrainableConf(
         encoder=True, decoder=True, z_init=False, transition=True, baseline=True,

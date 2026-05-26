@@ -170,8 +170,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Prefix for Optuna study_name + SQLite filename (default 'phase_d').",
     )
     p.add_argument(
-        "--n-trials", type=int, default=20,
-        help="Optuna trials per cell (default 20, ignored for controls).",
+        "--n-trials", type=int, default=40,
+        help=(
+            "Optuna trials per cell (default 40 for the tiny ablation grid; "
+            "pass 60-80 for paper-headline confirmation runs)."
+        ),
     )
     p.add_argument(
         "--storage-dir", default="runs/optuna",
