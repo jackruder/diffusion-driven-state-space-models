@@ -520,7 +520,7 @@ trajectory samples (same \(S\) trajectories as the current implementation); \(τ
 \(U[0,1]\); and \(z_t^{(τ)}\) from the closed-form Gaussian above via reparameterization
 \(z_t^{(τ)} = α_τ μ_t + \sqrt{α_τ^2 \boldsymbol{σ}_t^2 + σ_τ^2} \odot ε\), \(ε \sim \mathcal{N}(0, I)\),
 where the square-root and product \(\odot\) are element-wise: the per-dim vector
-\(α_τ^2 \boldsymbol{σ}_t^2 + σ_τ^2\) (object 2 of /Notation: three variance objects/)
+\(α_τ^2 \boldsymbol{σ}_t^2 + σ_τ^2\) (object 2 of [[Notation:]])
 has its component-wise square root multiplied component-wise by \(ε\).
 
 We will follow LSGM in performing importance sampling of the second expectation to reduce variance.
@@ -1069,7 +1069,7 @@ A minibatch yields \(N\) trajectory samples and hence \(N\) draws of
 \((\hat{μ}_{t,i}, \boldsymbol{σ}_{t,i})\) per \(t\) from the encoder analytic
 moments. The per-batch estimator
 \(\bar{σ}_{\mathrm{data}}^2(t)\) targets object (3) from the
-[[Notation: three variance objects]] list — the data-marginal variance
+[[Notation:]] list — the data-marginal variance
 \(σ_{\mathrm{data}}^2(t) = \tfrac{1}{D}\mathrm{tr}(\mathrm{Var}_{p_{\mathrm{data}}, q_φ}[\hat{z}_t^{(0)}]).\)
 
 **** EMA update and gradient flow
@@ -1151,8 +1151,7 @@ c_{\mathrm{in}}(\tilde{σ}_τ;\, t) = \frac{1}{\sqrt{\tilde{σ}_τ^2 + σ_{\math
 c_{\mathrm{noise}}(\tilde{σ}_τ) = \tfrac{1}{4}\ln \tilde{σ}_τ.
 \]
 At \(σ_{\mathrm{data}}(t) = 1\) these recover the canonical EDM constants from
-the previous section. The three variance objects from /Notation: three
-variance objects/ each have a separate role here:
+the previous section. The three variance objects from [[Notation: ]]each have a separate role here:
 \(\boldsymbol{σ}_t^2\) (object 1) enters the analytic score
 \(\hat{s}_q^{(τ)}\) via the per-sample variance
 \(\boldsymbol{Σ}_t^{(τ)} = \boldsymbol{σ}_t^2 + \tilde{σ}_τ^2\)
@@ -1483,6 +1482,307 @@ Learnable+Anchor) × (Fixed, Global EMA, Per-\(t\) EMA) is where
 [[Interaction with tracking-mode variants]] runs its
 Baseline-mode × Tracking-mode interaction analysis.
 
+
+* Exact likelihood evaluation
+The training objective optimizes an ELBO surrogate. For reporting
+held-out log-likelihoods we need a tighter estimator of
+\(\log p_ψ(x_{1:T})\). This section stacks four layers:
+
+1. /Per-transition prob-flow ODE./ Convert each SDE transition into a
+   deterministic flow whose log-density is computable via
+   instantaneous change-of-variables.
+2. /Native-coordinate score reconstruction./ Convert the
+   EDM-parameterized denoiser \(F_ψ\) into a native-coordinate score
+   \(s_ψ(z, τ, z_{t-1})\) consumable by the prob-flow ODE.
+3. /IWAE over trajectories./ Aggregate per-transition log-densities,
+   reconstruction terms, and the initial state into a bound on
+   \(\log p_ψ(x_{1:T})\) via importance sampling under the trained
+   encoder \(q_φ\) as proposal.
+4. /VHP initial state./ Handle \(\log p_ψ(z_1)\) via the auxiliary
+   \(z_0\) construction.
+
+Trace estimation (exact vs.\ Hutchinson) is treated as a transverse
+choice within Layer 1, in [[Divergence estimation]].
+
+*** What we actually estimate
+Throughout, we follow standard SGM practice (LSGM; Song et al.\ 2021)
+and report the likelihood of the /probability-flow ODE pushforward/
+\(p_ψ^{\mathrm{ode}}\) rather than the reverse-SDE generative density
+\(p_ψ^{\mathrm{sde}}\) trained against in [[SDE as a generative model]].
+By Song's Theorem 2 (recapped in [[Song's version (notation-adjusted)]]),
+\(p_ψ^{\mathrm{ode}} = p_ψ^{\mathrm{sde}}\) under the converged-score
+condition \(s_ψ = ∇\log ρ^{τ}\); off-convergence they differ by a
+model-misspecification term. The downstream notation uses
+\(p_ψ^{\mathrm{ode}}\) where the prob-flow ODE delivers the density
+directly, and reverts to \(p_ψ\) at the outermost level
+(\(\log p_ψ(x_{1:T})\)) when assembling the trajectory IWAE.
+
+** Probability-flow ODE log-density identity
+Under the forward SDE \(dz_t^{(τ)} = f(z_t^{(τ)}, τ)\,dτ + g(τ)\,dw\),
+the probability-flow ODE
+\[
+\frac{dz_t^{(τ)}}{dτ} \;=\; F_τ(z_t^{(τ)};\, z_{t-1})
+\;:=\; f(z_t^{(τ)}, τ) - \tfrac{1}{2}\, g^2(τ)\, s_ψ(z_t^{(τ)},\, τ,\, z_{t-1})
+\]
+is a deterministic flow whose marginals coincide with the SDE
+marginals when \(s_ψ = ∇\log ρ^τ\); off-convergence the prob-flow ODE
+pushforward defines its own family of densities
+\(p_ψ^{\mathrm{ode},τ}(\cdot \mid z_{t-1})\) (cf.\ [[What we actually estimate]]).
+Solving forward in \(τ\) from \(τ=0\) to \(τ=1\) gives a deterministic
+invertible map \(z_t^{(0)} \mapsto z_t^{(1)}\), and the instantaneous
+change-of-variables formula gives the /exact/ identity
+\begin{equation*}
+\boxed{\;
+\log p_ψ^{\mathrm{ode}}(z_t \mid z_{t-1})
+\;=\;
+\log p_ψ^{\mathrm{ode},1}\bigl(z_t^{(1)} \mid z_{t-1}\bigr) \;+\; \int_0^1 (∇ · F_τ)\bigl(z_t^{(τ)}\bigr)\, dτ,
+\;}
+\end{equation*}
+where \(z_t^{(0)} = z_t\) and \(z_t^{(τ)}\) follows the prob-flow ODE
+above. This identity is exact for any score \(s_ψ\) — it is purely a
+consequence of Liouville's equation for the deterministic flow (proof
+below).
+
+The endpoint density \(p_ψ^{\mathrm{ode},1}(\cdot \mid z_{t-1})\) is
+not available in closed form. Under the standard SGM assumption that
+the forward SDE is well-mixed by \(τ = 1\) /and/ the score is
+near-converged,
+\[
+\log p_ψ^{\mathrm{ode},1}(z_t^{(1)} \mid z_{t-1}) \;\approx\; \log π(z_t^{(1)}),
+\qquad π = \mathcal{N}(0, I).
+\]
+This is a separate approximation from \(p_ψ^{\mathrm{ode}} \approx p_ψ^{\mathrm{sde}}\)
+and is standard SGM-evaluation practice; the resulting bias is
+geometric in the SDE mixing time.
+
+*** Liouville derivation
+Liouville's equation for the prob-flow ODE is
+\[
+∂_τ p_τ + ∇ · (p_τ F_τ) = 0.
+\]
+Expanding the divergence and dividing by \(p_τ\),
+\[
+∂_τ \log p_τ \;=\; -(∇ · F_τ) \;-\; F_τ · ∇ \log p_τ.
+\]
+Along a trajectory \(z(τ)\) satisfying \(dz/dτ = F_τ(z(τ))\), the
+total derivative of \(\log p_τ(z(τ))\) is
+\[
+\frac{d \log p_τ(z(τ))}{dτ}
+\;=\; ∂_τ \log p_τ \big|_{z(τ)} + (∇ \log p_τ) · F_τ
+\;=\; -(∇ · F_τ)(z(τ)),
+\]
+since the convective term cancels. Integrating from \(τ = 0\) to
+\(τ = 1\) and rearranging yields the boxed identity.
+
+** Native-coordinate score reconstruction
+The trained network outputs \(F_ψ\) in centered+rescaled coordinates.
+To consume by the prob-flow ODE in native coordinates, chain the
+maps:
+1. Rescale: \(\tilde z = z / α_τ\) (cf.\ [[Change of Coordinates]]).
+2. Center: \(\hat z = \tilde z - μ_p(z_{t-1})\) (cf.\
+   [[Centered coordinates and encoder marginal]]).
+3. EDM denoiser: \(D_ψ(\hat z, τ, z_{t-1}) =
+   c_{\mathrm{skip}}(τ; t)\, \hat z + c_{\mathrm{out}}(τ; t)\,
+   F_ψ(c_{\mathrm{in}}\, \hat z, c_{\mathrm{noise}}, z_{t-1})\)
+   (cf.\ [[Encoder score target]]).
+4. Centered score (Tweedie):
+   \(\hat s_ψ = (D_ψ - \hat z) / \tilde σ_τ^2\)
+   (cf.\ [[Denoiser Parameterization]]).
+5. Shift-invariance: \(\tilde s_ψ(\tilde z) = \hat s_ψ(\hat z)\)
+   (verified in [[Encoder score target]]).
+6. Rescaling: \(s_ψ(z) = \tilde s_ψ(\tilde z) / α_τ\) (verified in
+   [[Change of Coordinates]]).
+
+Composing,
+\begin{equation*}
+\boxed{\;
+s_ψ(z, τ, z_{t-1})
+\;=\; \frac{1}{α_τ\, \tilde σ_τ^2}
+\Bigl[\, D_ψ\bigl(\hat z,\, τ,\, z_{t-1}\bigr) - \hat z \,\Bigr],
+\quad \hat z = \frac{z}{α_τ} - μ_p(z_{t-1}).
+\;}
+\end{equation*}
+For the VP-SDE (\(\tilde σ_τ^2 = (1 - α_τ^2)/α_τ^2\)), this reduces to
+\[
+s_ψ(z, τ, z_{t-1}) \;=\; \frac{α_τ}{1 - α_τ^2}\,\bigl[\,D_ψ - \hat z\,\bigr],
+\]
+which is the score consumed inside \(F_τ\) by the prob-flow ODE.
+
+** IWAE over trajectories
+Substituting \(p_ψ^{\mathrm{ode}}\) for the per-transition densities
+(cf.\ [[What we actually estimate]]), the marginal log-likelihood is
+\[
+\log p_ψ(x_{1:T})
+\;=\; \log \int q_φ(z_{1:T} \mid x_{1:T})\, \frac{p_ψ(z_{1:T}, x_{1:T})}{q_φ(z_{1:T} \mid x_{1:T})}\, dz_{1:T},
+\]
+and the IWAE estimator with \(K\) trajectory samples
+\(z_{1:T}^{(k)} \sim q_φ(\cdot \mid x_{1:T})\) is
+\[
+\widehat{\log p_ψ}^{(K)}(x_{1:T})
+\;:=\; \mathrm{logmeanexp}_{k=1,\ldots,K}(w_k),
+\qquad
+w_k = \log p_ψ\bigl(z_{1:T}^{(k)}, x_{1:T}\bigr) - \log q_φ\bigl(z_{1:T}^{(k)} \mid x_{1:T}\bigr).
+\]
+When the per-transition \(p_ψ^{\mathrm{ode}}\) is evaluated /exactly/
+(see [[Exact trace]]), this is a lower bound on \(\log p_ψ(x_{1:T})\)
+for any \(K\), tight as \(K \to ∞\) (Burda et al.\ 2016). Under
+Hutchinson trace estimation the strict lower-bound property is lost
+(see [[Validity of the IWAE bound under Hutchinson]] below). Each
+\(w_k\) decomposes as
+\begin{align*}
+\log p_ψ(z_{1:T}^{(k)}, x_{1:T})
+&= \log p_ψ(z_1^{(k)})
+ + \sum_{t=1}^T \log p_θ(x_t \mid z_t^{(k)})
+ + \sum_{t=2}^T \log p_ψ^{\mathrm{ode}}(z_t^{(k)} \mid z_{t-1}^{(k)}), \\
+\log q_φ(z_{1:T}^{(k)} \mid x_{1:T})
+&= \log q_φ(z_1^{(k)} \mid x_{1:T})
+ + \sum_{t=2}^T \log q_φ(z_t^{(k)} \mid z_{t-1}^{(k)}, x_{t:T}).
+\end{align*}
+Each \(\log p_ψ^{\mathrm{ode}}(z_t^{(k)} \mid z_{t-1}^{(k)})\) requires
+one prob-flow ODE solve. The encoder log-densities are analytic
+Gaussian; the decoder term is the chosen observation log-likelihood;
+\(\log p_ψ(z_1^{(k)})\) is handled in [[VHP initial state]] below.
+
+** VHP initial state
+From [[Reframing VHP to use diffusion]] the initial-state prior is
+the marginal (again using \(p_ψ^{\mathrm{ode}}\) for the per-transition
+density, cf.\ [[What we actually estimate]])
+\[
+p_ψ(z_1) \;=\; \int p_ψ^{\mathrm{ode}}(z_1 \mid z_0)\, \mathcal{N}(z_0; 0, I)\, dz_0
+\;=\; \mathbb{E}_{z_0 \sim \mathcal{N}(0, I)}\!\bigl[p_ψ^{\mathrm{ode}}(z_1 \mid z_0)\bigr].
+\]
+A direct Monte-Carlo estimator with \(J\) prior samples is
+\[
+\log p_ψ(z_1) \;\approx\;
+\mathrm{logmeanexp}_{j=1,\ldots,J}\!\bigl[\,\log p_ψ^{\mathrm{ode}}(z_1 \mid z_0^{(j)})\,\bigr],
+\quad z_0^{(j)} \sim \mathcal{N}(0, I).
+\]
+This is high-variance when \(z_1\) is in a tail of \(z_0 \mapsto z_1\).
+Reduce variance by using the trained auxiliary posterior
+\(q_Φ(z_0 \mid z_1)\) as proposal:
+\begin{equation*}
+\boxed{\;
+\log p_ψ(z_1) \;\approx\;
+\mathrm{logmeanexp}_{j=1,\ldots,J}\!\left[
+\log p_ψ^{\mathrm{ode}}(z_1 \mid z_0^{(j)}) + \log \mathcal{N}(z_0^{(j)}; 0, I) - \log q_Φ(z_0^{(j)} \mid z_1)
+\right],
+\;}
+\end{equation*}
+with \(z_0^{(j)} \sim q_Φ(\cdot \mid z_1)\). When the per-transition
+\(p_ψ^{\mathrm{ode}}\) is evaluated exactly, both estimators are IWAE
+lower bounds on \(\log p_ψ(z_1)\); the second has lower variance when
+\(q_Φ\) is well-trained, which is precisely what the stage-2 ELBO
+enforces. Under Hutchinson trace the strict lower-bound property is
+again lost (see [[Validity of the IWAE bound under Hutchinson]]).
+Each \(\log p_ψ^{\mathrm{ode}}(z_1 \mid z_0^{(j)})\) is a prob-flow ODE
+solve (Layer 1) applied with \(z_0^{(j)}\) in the conditioning slot.
+
+** Divergence estimation
+The integrand \(∇ · F_τ\) is the trace of a \(D × D\) Jacobian.
+\(F_τ\) splits as
+\[
+∇ · F_τ(z) \;=\; ∇ · f(z, τ) \;-\; \tfrac{1}{2}\, g^2(τ)\, ∇ · s_ψ(z, τ, z_{t-1}).
+\]
+For VP-SDE drift \(f(z, τ) = -\tfrac{1}{2}β(τ)\, z\), the first term is
+\(z\)-independent and closes analytically:
+\(∇ · f = -\tfrac{D}{2}β(τ)\).
+The score divergence \(∇ · s_ψ\) is the trace of the Jacobian of the
+neural-network output and must be estimated.
+
+*** Exact trace
+For \(D ≲ 32\), evaluate \(∂_d (s_ψ)_d\) for \(d = 1, \ldots, D\) via
+\(D\) reverse-mode passes. \(O(D^2)\) cost per ODE evaluation but
+zero variance.
+
+*** Hutchinson estimator
+For larger \(D\), use the Hutchinson identity: for any random vector
+\(v\) with \(\mathbb{E}[v v^⊤] = I_D\),
+\[
+\mathrm{tr}(A) \;=\; \mathbb{E}_v\bigl[v^⊤ A v\bigr].
+\]
+Standard choices are Rademacher (\(v_d \in \{±1\}\), independent) and
+standard Gaussian; Rademacher has lower variance for diagonal-heavy
+\(A\). Applied to the score Jacobian,
+\[
+\widehat{∇ · s_ψ}(z; v) \;:=\; v^⊤ \bigl(∂_z s_ψ\bigr) v,
+\qquad \mathbb{E}_v\!\left[\widehat{∇ · s_ψ}(z; v)\right] \;=\; ∇ · s_ψ(z),
+\]
+so the estimator is unbiased on the linear (trace) scale. The JVP
+\(v^⊤ (∂_z s_ψ)\) is one forward-mode autodiff pass; the outer dot
+product is free. Following FFJORD / Song & Ermon, draw \(v\) **once
+per ODE solve** and hold it fixed over the full \(τ \in [0, 1]\)
+integration; this keeps the integrand a smooth function of \(τ\) (the
+same \(v\) is consistent across solver steps) and the per-solve
+log-density estimate remains unbiased for \(\log p_ψ^{\mathrm{ode}}\).
+Multiple independent ODE solves at the same \((t, k)\) with different
+\(v\) are averaged in log-density space, giving a \(1/\sqrt{M}\)
+standard-error reduction of the unbiased log-density estimate.
+
+*** Validity of the IWAE bound under Hutchinson
+The standard IWAE inequality
+\(\log p_ψ(x_{1:T}) \geq \mathbb{E}[\mathrm{logmeanexp}_k(w_k)]\)
+relies on \(\exp(w_k)\) being an /unbiased/ estimator of the ratio
+\(p_ψ(z^{(k)}, x_{1:T}) / q_φ(z^{(k)} \mid x_{1:T})\). Under exact
+trace (see [[Exact trace]]), this holds exactly — the prob-flow ODE
+delivers \(\log p_ψ^{\mathrm{ode}}\) to ODE-solver tolerance and
+\(\exp(\widehat{w}_k)\) is unbiased.
+
+Under Hutchinson, the per-transition log-density estimate
+\(\widehat{\log p_ψ^{\mathrm{ode}}}\) is unbiased on the linear scale,
+but exponentiating an unbiased random log-density is /biased upward/
+by Jensen:
+\(\mathbb{E}[\exp(\widehat L)] \geq \exp(\mathbb{E}[\widehat L]) = p_ψ^{\mathrm{ode}}\).
+The IWAE bound therefore becomes approximate rather than strict. The
+upward bias on \(\exp\) per solve is, by the delta method, of order
+\(\tfrac{1}{2}\mathrm{Var}_v[\widehat L]\), which shrinks as \(1/M\)
+when averaging \(M\) Hutchinson draws in log-density space. For
+practical reporting we choose \(M\) large enough that this bias is
+small relative to the IWAE-K gap; standard SGM practice (FFJORD, LSGM)
+accepts the resulting estimator as the canonical NLL number without
+claiming a strict lower bound.
+
+*** Reporting protocol
+For ICLR-table NLL numbers we fix
+\((\mathrm{rtol} = \mathrm{atol} = 10^{-5},\, M = 10,\, K = 64,\, J = 64)\)
+across runs, where \(M\) is the number of Hutchinson draws averaged in
+log-density space at each \((t, k)\) before assembling \(w_k\), and
+\(K, J\) are IWAE counts. Reported: mean over evaluation trajectories
+with standard error.
+
+** Bias / variance summary
+| Source                                | Bias                                        | Knob                     |
+|---------------------------------------+---------------------------------------------+--------------------------|
+| Score mismatch \(p_ψ^{\mathrm{ode}} \neq p_ψ^{\mathrm{sde}}\) | Vanishes at converged \(s_ψ\) (Song Thm 2)  | Score-matching training  |
+| Endpoint approximation \(p_ψ^{\mathrm{ode},1} ≈ π\)  | \(O(\exp(-λ))\) in SDE mixing rate \(λ\)    | Forward-SDE horizon      |
+| ODE solver tolerance                  | \(O(\mathrm{tol})\) on log-density          | \(\mathrm{rtol, atol}\)  |
+| Hutchinson trace (linear scale)       | None (unbiased \(\log p_ψ^{\mathrm{ode}}\))  | \(M\)                    |
+| Hutchinson \(\to\) IWAE coupling      | Upward on \(\exp \widehat L\), \(\sim \tfrac{1}{2M}\mathrm{Var}_v[\widehat L]\) per solve | \(M\)        |
+| IWAE-\(K\) (exact trace)              | Lower bound; gap \(O(1/K)\)                 | \(K\)                    |
+| VHP-\(J\) (initial state, exact trace)| Lower bound; gap \(O(1/J)\)                 | \(J\)                    |
+
+Under /exact trace/ the total estimator is a lower bound on
+\(\log p_ψ(x_{1:T})\) modulo the score-mismatch and
+endpoint-approximation biases. Under /Hutchinson/ the bound is no
+longer strict; the estimator is approximate (see [[Validity of the
+IWAE bound under Hutchinson]]). To audit the gap, report
+\((K, J) \in \{1, 8, 64\}\) and \(M \in \{1, 10, 100\}\) and verify
+the value plateaus.
+
+** Reduction sanity check
+Two limiting cases provide sanity checks at evaluation time:
+1. /Encoder matches true posterior./ As
+   \(q_φ \to p_ψ(z_{1:T} \mid x_{1:T})\), all IWAE weights coincide and
+   the estimator collapses to the exact \(\log p_ψ(x_{1:T})\) at
+   \(K = 1\). Empirical signature: low spread of \(w_k\) within a
+   batch.
+2. /Prior matches encoder marginal./ As
+   \(p_ψ^{\mathrm{ode}}(z_t \mid z_{t-1}) \to q_φ(z_t \mid z_{t-1}, x_{t:T})\)
+   (equivalently, the trained score converges to the encoder marginal
+   score), each prob-flow ODE log-density equals the analytic encoder
+   Gaussian log-density from [[Closed-form target score]]. At
+   evaluation time this gives a per-transition consistency check: the
+   prob-flow ODE output should match the analytic Gaussian log-density
+   to ODE-solver tolerance.
 
 * Misc quotes from the LSGM paper to remember
 ** On Sampling Speed Improvements
