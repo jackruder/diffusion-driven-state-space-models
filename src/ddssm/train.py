@@ -711,6 +711,7 @@ class DDSSMTrainer:
                                 )
                                 early_stop_triggered = True
 
+
                     self._maybe_run_validation(
                         step=step,
                         val_loader=val_loader,
