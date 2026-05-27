@@ -10,8 +10,8 @@ loop (used at the stage-1 → stage-2 boundary per
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, List
+from typing import TYPE_CHECKING, List, Callable
+from dataclasses import field, dataclass
 
 from omegaconf import MISSING
 
@@ -36,16 +36,45 @@ class StageTrainableConf:
     """Per-module ``requires_grad`` mask for the stage.
 
     Matches the slot names used by :meth:`DDSSMTrainer._set_trainable`
-    (encoder / decoder / zinit / transition).  Note: ``z_init`` is the
-    legacy InitPrior; under the model-v2 VHP-via-diffusion path the
-    aux posterior is part of the *encoder* family (via DDSSM_base's
-    ``aux_posterior`` slot) and shares the encoder flag.
+    (encoder / decoder / zinit / transition / baseline).  Note:
+    ``z_init`` is the legacy InitPrior; under the model-v2 VHP-via-
+    diffusion path the aux posterior is part of the *encoder* family
+    (via DDSSM_base's ``aux_posterior`` slot) and shares the encoder
+    flag.  ``baseline`` controls the optional μ_p head from
+    ``model-v2.org`` § Generative baseline; stage 1 typically trains
+    it and stage 2 freezes it under Pinned mode (the
+    :func:`perform_centering_handoff` call also enforces the freeze
+    independently as a belt-and-suspenders safeguard).
     """
 
     encoder: bool = True
     decoder: bool = True
     z_init: bool = True
     transition: bool = True
+    baseline: bool = True
+
+
+@dataclass
+class EarlyStopSpec:
+    """ELBO-plateau early-stop spec for a single stage.
+
+    The trainer maintains a rolling window of ``loss/total`` values
+    (one entry per logged train step).  Once at least ``window``
+    entries are available *and* ``global_step >= warmup_steps``, the
+    trainer compares the mean of the older half of the window against
+    the mean of the newer half; if the relative drop
+    ``(old_mean - new_mean) / max(|old_mean|, eps)`` is below
+    ``min_improvement``, the stage exits early.
+
+    Per ``init-experiment.org`` § Hyperparameters this lets the
+    Optuna sweep over ``N_pretrain`` skip trials whose stage 1 has
+    already flatlined.
+    """
+
+    enabled: bool = False
+    window: int = 50
+    min_improvement: float = 1e-4
+    warmup_steps: int = 100
 
 
 @dataclass
@@ -80,6 +109,7 @@ class StageSpecConf:
     val_every: int = 100
     checkpoint_every: int = 1000
     centering_handoff: CenteringHandoffConf | None = None
+    early_stop: EarlyStopSpec | None = None
 
 
 @dataclass
@@ -171,7 +201,32 @@ class StageOrchestrator:
             # 3. Per-module trainable flags.
             self.trainer._set_trainable(stage.trainable)
 
-            # 4. Run the stage's training loop.  ``trainer.fit``'s
+            # 4. Install the per-stage λ schedule. Computed on the
+            # stage-relative step counter (resets at every stage
+            # boundary). When ``stage.lambda_ramp`` is at its defaults
+            # (start=0.001, end=1.0, steps=None) the ramp covers the
+            # whole stage; per-stage factories
+            # (e.g. ``_build_init_centering_stages``) populate the
+            # ramp explicitly per the warmup-fraction grilling decision.
+            default_end = 1.0
+            try:
+                default_end = float(
+                    self.trainer.config.hyperparams.lambda_end
+                )
+            except AttributeError:
+                # Mock trainers in unit tests may lack ``config`` —
+                # fall back to the ``LambdaRampConf`` default.
+                pass
+            self.trainer._stage_lambda_fn = make_lambda_cosine(
+                stage.lambda_ramp,
+                total_steps=int(stage.steps),
+                default_end=default_end,
+            )
+            self.trainer._stage_start_step = int(
+                getattr(self.trainer, "global_step", 0)
+            )
+
+            # 5. Run the stage's training loop.  ``trainer.fit``'s
             # ``total_steps`` is the *cumulative* max step, not per-stage,
             # so we add the global step counter to the stage's budget.
             target = int(self.trainer.global_step) + int(stage.steps)
@@ -185,4 +240,5 @@ class StageOrchestrator:
                 checkpoint_prefix=f"{key}",
                 amp=amp,
                 batch_transform=batch_transform,
+                early_stop=stage.early_stop,
             )

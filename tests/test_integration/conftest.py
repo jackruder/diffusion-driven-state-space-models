@@ -8,44 +8,42 @@ synthetic data.  All tests in this directory should be marked
 
 from __future__ import annotations
 
-from functools import partial
 from types import SimpleNamespace
 from typing import Callable
+from functools import partial
 
 import torch
-import torch.nn as nn
 
+from ddssm.dssd import DDSSM_base
+from ddssm.futsum import GRUFutureSummary
+from ddssm.decoder import GaussianDecoder
+from ddssm.encoder import GaussianEncoder
+from ddssm.fusions import ConcatLinearFusion
+from ddssm.diffnets import (
+    CSDIUnet,
+    ContextProducer,
+    FeatureMixerConfig,
+    ResidualBlockConfig,
+    DiffResidualBlockConfig,
+)
+from ddssm.combiners import CompoundCombiner
+from ddssm.gaussians import GaussianHead
+from ddssm.dist_heads import GaussianDistHead
 from ddssm.aggregators import ContextProducerAggregator
 from ddssm.aux_posterior import AuxPosterior
 from ddssm.centering.baselines import (
-    BaseBaseline,
-    IdentityBaseline,
-    LinearBaseline,
     MLPBaseline,
+    BaseBaseline,
     ZeroBaseline,
+    LinearBaseline,
+    IdentityBaseline,
 )
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.combiners import CompoundCombiner
-from ddssm.decoder import GaussianDecoder
-from ddssm.diffnets import (
-    ContextProducer,
-    CSDIUnet,
-    DiffResidualBlockConfig,
-    FeatureMixerConfig,
-    ResidualBlockConfig,
-)
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.dssd import DDSSM_base
-from ddssm.encoder import GaussianEncoder
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.futsum import GRUFutureSummary
-from ddssm.gaussians import GaussianHead
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
 from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3ScheduleConfig,
     DiffusionV3Transition,
+    DiffusionV3ScheduleConfig,
 )
-
+from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
 
 DATA_DIM = 1
 LATENT_DIM = 4
@@ -273,9 +271,9 @@ def run_stage(
 __all__ = [
     "DATA_DIM",
     "EMB_TIME",
-    "J",
     "LATENT_DIM",
     "T_MAX",
+    "J",
     "make_random_walk_data",
     "make_smooth_sine_data",
     "make_vhp_model",

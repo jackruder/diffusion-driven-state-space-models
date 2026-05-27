@@ -13,15 +13,14 @@ so a long-enough stage-1 run should bring ‖μ̂_t‖ close to zero.
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 from .conftest import (
-    make_smooth_sine_data,
-    make_vhp_model,
     run_stage,
+    make_vhp_model,
+    make_smooth_sine_data,
 )
-
 
 pytestmark = pytest.mark.slow
 
@@ -46,7 +45,7 @@ def _measure_centered_residual_norm(model, data) -> float:
         )
         mus = stats["mus"]  # (B, S, d, T)
         B, S, d, T = mus.shape
-        if T <= j:
+        if j >= T:
             return 0.0
         # For each t ≥ j+1, compute mu_p(z_hist) then ‖mu_t - mu_p‖.
         total = 0.0

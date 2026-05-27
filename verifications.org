@@ -123,14 +123,14 @@ before running full comparison experiments.
 
 ** Encoder / Decoder — Reconstruction Only
 
-Train only encoder, decoder, and z-initializer; transition is frozen and its
-loss term is disabled. This checks whether the posterior and decoder form a
-working VAE independently of the learned dynamics.
+Train only encoder, decoder, and z-initializer; transition is frozen via the
+trainable mask, so its parameters don't update even though the transition
+loss term is still reported. This checks whether the posterior and decoder
+form a working VAE independently of the learned dynamics.
 
 #+BEGIN_SRC sh
 python -m ddssm.app experiment=synthetic_gauss \
     'experiment.training.trainable.transition=false' \
-    'experiment.training.compute_trans=false' \
     'experiment.training.steps=500' \
     hydra.run.dir=runs/component/recon_only
 #+END_SRC

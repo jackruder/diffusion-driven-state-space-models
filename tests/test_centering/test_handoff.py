@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-from functools import partial
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
 import torch
+import pytest
 
 from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.baselines import MLPBaseline
 from ddssm.centering.handoff import (
     CenteringHandoffConf,
     perform_centering_handoff,
 )
+from ddssm.centering.baselines import MLPBaseline
 from ddssm.centering.sigma_data import SigmaDataBuffer
 from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
-
 
 B = 2
 D = 4

@@ -1,0 +1,135 @@
+# DDSSM compute resource profiles.
+# Edited via /compute-resources. Consumed by /compute-budget and /plan-campaign.
+#
+# `count` semantics differ for local vs SLURM profiles:
+#   - local: number of devices physically present
+#   - SLURM: number of GPUs requested per single job allocation
+#   - `count_max`: max concurrent GPUs across all jobs (SLURM only)
+
+profiles:
+
+  workstation:
+    description: "Primary dev box (hostname: compute) — single RTX 4090"
+    devices:
+      - kind: gpu
+        name: "NVIDIA GeForce RTX 4090"
+        count: 1
+        memory_gb: 24
+        compute_capability: "8.9"
+    availability: exclusive
+    storage:
+      runs_dir: runs/
+      scratch: /tmp/ddssm
+      optuna_db_dir: runs/optuna/
+      shared_fs: false
+    notes:
+      - "Intel i5-13600K, 20 threads, 31 GiB RAM"
+      - "1.8 TB free on /home; repo on same volume"
+
+  slurm-a100:
+    description: "1× A100 80 GB on the gpupriority partition (non-preemptible)"
+    devices:
+      - kind: gpu
+        name: "NVIDIA A100"
+        count: 1                              # GPUs per job allocation
+        count_max: 1                          # TODO: confirm max concurrent A100 jobs (set 1 as a safe lower bound)
+        memory_gb: 80
+        compute_capability: "8.0"
+    availability: slurm-queued
+    slurm:
+      partition: gpupriority
+      qos: null                               # TODO: fill if your account requires one
+      timeout_min_default: 720                # 12:00:00 per user default
+      cpus_per_task: 4
+      mem_gb: 64
+      preempt_window_s: null                  # not preemptible
+      max_jobs_concurrent: 1                  # TODO: confirm user quota on gpupriority
+      array_limit: null                       # TODO: confirm
+    storage:
+      runs_dir: TODO_CLUSTER_PATH/ddssm/runs           # e.g. /scratch/$USER/ddssm/runs — confirm at first launch
+      scratch: TODO_CLUSTER_PATH/ddssm/scratch
+      optuna_db_dir: TODO_CLUSTER_PATH/ddssm/optuna
+      shared_fs: true                         # confirmed: cluster FS visible across nodes
+    notes:
+      - "Use for high-value single-experiment runs; not the right pool for big sweeps."
+      - "Cluster storage paths are placeholders — confirm at first launch (use a path on the shared FS)."
+
+  slurm-a40-priority:
+    description: "A few A40s on gpupriority (non-preemptible) — small parallel sweeps"
+    devices:
+      - kind: gpu
+        name: "NVIDIA A40"
+        count: 1                              # GPUs per job allocation
+        count_max: 4                          # "a few" without preemption — adjust to actual ceiling
+        memory_gb: 48
+        compute_capability: "8.6"
+    availability: slurm-queued
+    slurm:
+      partition: gpupriority
+      qos: null                               # TODO: fill if your account requires one
+      timeout_min_default: 720
+      cpus_per_task: 4
+      mem_gb: 64
+      preempt_window_s: null                  # not preemptible
+      max_jobs_concurrent: 4                  # TODO: confirm; set 4 to match `count_max`
+      array_limit: null                       # TODO: confirm
+    storage:
+      runs_dir: TODO_CLUSTER_PATH/ddssm/runs
+      scratch: TODO_CLUSTER_PATH/ddssm/scratch
+      optuna_db_dir: TODO_CLUSTER_PATH/ddssm/optuna
+      shared_fs: true
+    notes:
+      - "Right tool for sweeps that need stable convergence — no preempt risk."
+      - "Tighter quota than gpuunsafe; do not over-request."
+
+  slurm-a40-preempt:
+    description: "Up to 20× A40 on gpuunsafe (preemptible) — big sweeps with resume"
+    devices:
+      - kind: gpu
+        name: "NVIDIA A40"
+        count: 1                              # GPUs per job allocation
+        count_max: 20                         # confirmed: up to 20 concurrent
+        memory_gb: 48
+        compute_capability: "8.6"
+    availability: preemptible
+    slurm:
+      partition: gpuunsafe
+      qos: null                               # TODO: fill if your account requires one
+      timeout_min_default: 720
+      cpus_per_task: 4
+      mem_gb: 64
+      preempt_window_s: null                  # UNKNOWN — depends on cluster load
+      max_jobs_concurrent: 20
+      array_limit: null                       # TODO: confirm
+    storage:
+      runs_dir: TODO_CLUSTER_PATH/ddssm/runs
+      scratch: TODO_CLUSTER_PATH/ddssm/scratch
+      optuna_db_dir: TODO_CLUSTER_PATH/ddssm/optuna
+      shared_fs: true
+    notes:
+      - "Preempt window not measured; can vary widely with cluster load."
+      - "Requires preempt-safe configuration: `checkpoint_every` tight, resume logic verified."
+      - "User preference: avoid unless really needed — start with slurm-a40-priority first."
+      - "Per `project-handoff-protocol-invariants`: parametric μ_p needs uninterrupted stage-1; "
+      - "preempt during stage-1 can leave μ_p un-converged. Plan accordingly."
+
+  laptop-cpu:
+    description: "Mobile CPU fallback for tiny smoke runs"
+    devices:
+      - kind: cpu
+        name: "Intel Core i5-1240P"
+        count: 1
+        memory_gb: 32
+    availability: exclusive
+    storage:
+      runs_dir: runs/
+      scratch: /tmp/ddssm
+      optuna_db_dir: runs/optuna/
+      shared_fs: false
+    notes:
+      - "CPU-only — for smoke runs and quick verification, not training."
+      - "Expect ≥ 10× slower per-step than workstation; pick presets accordingly."
+
+defaults:
+  active_profile: workstation
+  fallback_profile: laptop-cpu

@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 import torch
 
-from ddssm.experiment import Experiment, TrainableModules, TrainingScalars
+from ddssm.experiment import Experiment, TrainingScalars, TrainableModules
 
 
 def test_trainable_modules_defaults_all_true():

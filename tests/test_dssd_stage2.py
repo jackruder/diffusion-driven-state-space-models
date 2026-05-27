@@ -15,37 +15,35 @@ Verify that:
 
 from __future__ import annotations
 
-from functools import partial
 from types import SimpleNamespace
+from functools import partial
 
-import pytest
 import torch
 
+from ddssm.dssd import DDSSM_base
+from ddssm.futsum import GRUFutureSummary
+from ddssm.decoder import GaussianDecoder
+from ddssm.encoder import GaussianEncoder
+from ddssm.fusions import ConcatLinearFusion
+from ddssm.diffnets import (
+    CSDIUnet,
+    ContextProducer,
+    FeatureMixerConfig,
+    ResidualBlockConfig,
+    DiffResidualBlockConfig,
+)
+from ddssm.combiners import CompoundCombiner
+from ddssm.gaussians import GaussianHead
+from ddssm.dist_heads import GaussianDistHead
+from ddssm.aggregators import ContextProducerAggregator
 from ddssm.aux_posterior import AuxPosterior
 from ddssm.centering.baselines import MLPBaseline
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.combiners import CompoundCombiner
-from ddssm.aggregators import ContextProducerAggregator
-from ddssm.decoder import GaussianDecoder
-from ddssm.diffnets import (
-    ContextProducer,
-    CSDIUnet,
-    DiffResidualBlockConfig,
-    FeatureMixerConfig,
-    ResidualBlockConfig,
-)
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.dssd import DDSSM_base
-from ddssm.encoder import GaussianEncoder
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.futsum import GRUFutureSummary
-from ddssm.gaussians import GaussianHead
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
 from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3ScheduleConfig,
     DiffusionV3Transition,
+    DiffusionV3ScheduleConfig,
 )
-
+from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
 
 J = 2
 DATA_DIM = 3

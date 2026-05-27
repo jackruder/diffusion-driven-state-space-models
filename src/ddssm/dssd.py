@@ -547,8 +547,6 @@ class DDSSM_base(nn.Module):
         covariates: torch.Tensor | None = None,  # (B, V, T) or None
         static_covariates: torch.Tensor | None = None,  # (B, D, V_s) or None
         train: bool = True,
-        compute_recon: bool = True,  # compute elbo terms other than trans likelihood
-        compute_trans: bool = True,  # compute transition likelihood
         report_scaled: bool = True,
     ):
         """Compute ELBO loss and its components for a batch.
@@ -560,8 +558,6 @@ class DDSSM_base(nn.Module):
             covariates: Optional time-varying covariates, shape ``(B, V, T)``.
             static_covariates: Optional static categorical features, shape ``(B, D, V_s)``.
             train: If ``False``, also returns posterior samples/stats in ``stats``.
-            compute_recon: Whether to compute reconstruction and init-KL terms.
-            compute_trans: Whether to compute the transition likelihood term.
             report_scaled: If ``True``, also emit dimension-normalised variants of
                 each loss component under ``"<key>_scaled"`` keys in ``metrics``.
 
@@ -596,58 +592,47 @@ class DDSSM_base(nn.Module):
 
         # --- ELBO pieces ---
 
-        # initialize loss components
-        L_rec = L_init = L_rec_calib = torch.tensor(0.0, device=observed_data.device)
-        L_vhp = L_ent_init = torch.tensor(0.0, device=observed_data.device)
+        L_rec, L_rec_calib = self._reconstruction_loss(
+            observed_data=observed_data,
+            time_embed=time_embed,
+            zs=zs,
+            observation_mask=observation_mask,
+            covariates=covariates,
+            static_embed=static_embed,
+        )
 
-        # Transition KL term and any optional sub-components reported by the
-        # transition (e.g. L_p / L_q).  Empty when compute_trans is False.
-        L_trans = torch.tensor(0.0, device=observed_data.device)
-        trans_subterms: dict[str, torch.Tensor] = {}
+        init_terms = self._init_kl_loss(
+            zs,
+            logq_paths,
+            enc_stats,
+            time_embed,
+            covariates,
+        )
 
-        if compute_recon:
-            L_rec, L_rec_calib = self._reconstruction_loss(
-                observed_data=observed_data,
-                time_embed=time_embed,
-                zs=zs,
-                observation_mask=observation_mask,
-                covariates=covariates,
-                static_embed=static_embed,
-            )
+        L_init = init_terms["loss"]
+        L_vhp = init_terms.get(
+            "vhp", torch.tensor(0.0, device=observed_data.device)
+        )
+        L_ent_init = init_terms.get(
+            "entropy", torch.tensor(0.0, device=observed_data.device)
+        )
 
-            init_terms = self._init_kl_loss(
-                zs,
-                logq_paths,
-                enc_stats,
-                time_embed,
-                covariates,
-            )
-
-            L_init = init_terms["loss"]
-            L_vhp = init_terms.get(
-                "vhp", torch.tensor(0.0, device=observed_data.device)
-            )
-            L_ent_init = init_terms.get(
-                "entropy", torch.tensor(0.0, device=observed_data.device)
-            )
-
-        if compute_trans:
-            trans_terms = self._compute_transition_kl(
-                zs=zs,
-                logq_paths=logq_paths,
-                enc_stats=enc_stats,
-                time_embed=time_embed,
-                covariates=covariates,
-            )
-            L_trans = trans_terms["kl"]
-            trans_subterms = {k: v for k, v in trans_terms.items() if k != "kl"}
+        trans_terms = self._compute_transition_kl(
+            zs=zs,
+            logq_paths=logq_paths,
+            enc_stats=enc_stats,
+            time_embed=time_embed,
+            covariates=covariates,
+        )
+        L_trans = trans_terms["kl"]
+        trans_subterms = {k: v for k, v in trans_terms.items() if k != "kl"}
 
         # Model-v2 centering regularizers (free functions in
         # ``centering.regularizers``).  Both are 0 in paths that don't
         # apply, so the unconditional add is cheap and explicit.
         r_sigma_p = torch.tensor(0.0, device=observed_data.device)
         r_mu_p = torch.tensor(0.0, device=observed_data.device)
-        if compute_trans and self.baseline is not None:
+        if self.baseline is not None:
             # Build a flat (N, d, j) batch of z_hist samples from the
             # encoder paths for evaluating the regularizers.  Detached
             # so gradient flows only into the baseline / anchor, not
@@ -703,13 +688,11 @@ class DDSSM_base(nn.Module):
             "loss/rate/trans/r_mu_p": r_mu_p.detach(),
         }
         # Surface model-v2 init-term sub-components when present.
-        if compute_recon and self.aux_posterior is not None:
-            init_for_log = init_terms if "init_terms" in locals() else None  # type: ignore[possibly-undefined]
-            if init_for_log is not None:
-                if "kl_aux" in init_for_log:
-                    metrics["loss/rate/init/kl_aux"] = init_for_log["kl_aux"].detach()
-                if "loss_init" in init_for_log:
-                    metrics["loss/rate/init/loss_init"] = init_for_log["loss_init"].detach()
+        if self.aux_posterior is not None:
+            if "kl_aux" in init_terms:
+                metrics["loss/rate/init/kl_aux"] = init_terms["kl_aux"].detach()
+            if "loss_init" in init_terms:
+                metrics["loss/rate/init/loss_init"] = init_terms["loss_init"].detach()
         # Surface per-t σ_data²[t] buffer values when configured.  These
         # feed the post-hoc ``sigma_data_drift`` metric's trajectory plot
         # (init-experiment.org § Headline metrics, metric 6).  Logged once

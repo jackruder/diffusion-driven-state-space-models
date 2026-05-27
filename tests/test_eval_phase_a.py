@@ -3,7 +3,7 @@
 Covers:
 
 - ``wallclock_to_target`` (CSV-derived; no model needed).
-- ``stage2_elbo_surrogate`` (smoke on the existing init_centering_smoke
+- ``stage2_elbo_surrogate`` (smoke on the existing init_smoke_simple
   preset; slow-marked).
 - ``sigma_data_drift`` (snapshot from ``model.sigma_data`` + the
   two-component decomposition).
@@ -19,17 +19,16 @@ import csv
 import math
 from pathlib import Path
 
-import pytest
 import torch
+import pytest
 
-from ddssm.eval import EvalContext, METRIC_REGISTRY
+from ddssm.eval import METRIC_REGISTRY, EvalContext
 from ddssm.eval.metrics import (
     eval_sigma_data_drift,
-    eval_stage2_elbo_surrogate,
     eval_wallclock_to_target,
+    eval_stage2_elbo_surrogate,
 )
 from ddssm.eval.synthetic_kernels import KERNEL_REGISTRY
-
 
 # ---------------------------------------------------------------------------
 # wallclock_to_target — CSV-derived, no model needed
@@ -182,13 +181,72 @@ def test_lgssm_kernel_samples_have_right_shape_and_drift() -> None:
     assert abs(stds.mean() - 0.1) < 0.01
 
 
+def test_nonlinear_bimodal_lift_kernel_registered_1d_and_mv() -> None:
+    """Both nonlinear-bimodal-lift variants land in the kernel registry."""
+    assert "nonlinear-bimodal-lift" in KERNEL_REGISTRY
+    assert "nonlinear-bimodal-lift-mv" in KERNEL_REGISTRY
+
+
+def test_nonlinear_bimodal_lift_kernel_samples_are_bimodal_1d() -> None:
+    """The 1D kernel samples cluster around tanh(z_{t-1}) ± δ."""
+    import numpy as np
+    from ddssm.data.synthetic import NLBL_DELTA
+
+    kernel = KERNEL_REGISTRY["nonlinear-bimodal-lift"]
+    B, d, j, S = 1, 1, 1, 20_000
+    z_prev = 0.5
+    z_hist = np.full((B, d, j), z_prev, dtype=np.float32)
+    samples = kernel(z_hist, S=S)
+    assert samples.shape == (B, S, d)
+    expected_centers = np.array([np.tanh(z_prev) - NLBL_DELTA, np.tanh(z_prev) + NLBL_DELTA])
+    # Bin around each expected centre; both should hold roughly half of
+    # the samples (per-sample Rademacher sign).
+    mid = np.tanh(z_prev)
+    frac_below = float((samples[0, :, 0] < mid).mean())
+    assert 0.45 < frac_below < 0.55  # 50/50 bimodal
+    # Each cluster's empirical mean is near the expected centre.
+    below = samples[0, samples[0, :, 0] < mid, 0]
+    above = samples[0, samples[0, :, 0] >= mid, 0]
+    assert abs(below.mean() - expected_centers[0]) < 0.05
+    assert abs(above.mean() - expected_centers[1]) < 0.05
+
+
+def test_nonlinear_bimodal_lift_mv_kernel_uses_consistent_A() -> None:
+    """The MV kernel's A matrix matches what the data generator uses."""
+    import numpy as np
+    import torch
+    from ddssm.data.synthetic import (
+        NLBL_MV_A_SEED,
+        NLBL_MV_LATENT_D,
+    )
+    from ddssm.eval.synthetic_kernels import _mv_mixing_matrix
+
+    # Reconstruct what the data generator's matrix would be.
+    gen = torch.Generator().manual_seed(NLBL_MV_A_SEED)
+    A_data = torch.randn(NLBL_MV_LATENT_D, NLBL_MV_LATENT_D, generator=gen).numpy()
+    A_kernel = _mv_mixing_matrix()
+    np.testing.assert_array_equal(A_data, A_kernel)
+
+
+def test_nonlinear_bimodal_lift_mv_kernel_samples_shape() -> None:
+    """The MV kernel returns (B, S, d=NLBL_MV_LATENT_D)."""
+    import numpy as np
+    from ddssm.data.synthetic import NLBL_MV_LATENT_D
+
+    kernel = KERNEL_REGISTRY["nonlinear-bimodal-lift-mv"]
+    B, j, S = 3, 1, 100
+    z_hist = np.zeros((B, NLBL_MV_LATENT_D, j), dtype=np.float32)
+    samples = kernel(z_hist, S=S)
+    assert samples.shape == (B, S, NLBL_MV_LATENT_D)
+
+
 # ---------------------------------------------------------------------------
 # sigma_data_drift  (requires a model; smoke-marked)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_sigma_data_drift_snapshot_with_init_centering_smoke(tmp_path) -> None:
+def test_sigma_data_drift_snapshot_with_init_smoke_simple(tmp_path) -> None:
     """End-to-end snapshot via the smoke preset.
 
     Trains for a handful of steps then runs the metric on the
@@ -200,6 +258,7 @@ def test_sigma_data_drift_snapshot_with_init_centering_smoke(tmp_path) -> None:
         snapshot time.
     """
     from hydra_zen import instantiate
+
     from ddssm._experiment_registry import register_experiments
 
     register_experiments()
@@ -207,7 +266,7 @@ def test_sigma_data_drift_snapshot_with_init_centering_smoke(tmp_path) -> None:
 
     cfg = None
     for entry in store:
-        if entry["group"] == "experiment" and entry["name"] == "init_centering_smoke":
+        if entry["group"] == "experiment" and entry["name"] == "init_smoke_simple":
             cfg = entry["node"]
             break
     assert cfg is not None
@@ -256,9 +315,10 @@ def test_sigma_data_drift_snapshot_with_init_centering_smoke(tmp_path) -> None:
 
 
 @pytest.mark.slow
-def test_stage2_elbo_surrogate_with_init_centering_smoke(tmp_path) -> None:
+def test_stage2_elbo_surrogate_with_init_smoke_simple(tmp_path) -> None:
     """End-to-end: the metric runs on a trained smoke checkpoint."""
     from hydra_zen import instantiate
+
     from ddssm._experiment_registry import register_experiments
 
     register_experiments()
@@ -266,7 +326,7 @@ def test_stage2_elbo_surrogate_with_init_centering_smoke(tmp_path) -> None:
 
     cfg = None
     for entry in store:
-        if entry["group"] == "experiment" and entry["name"] == "init_centering_smoke":
+        if entry["group"] == "experiment" and entry["name"] == "init_smoke_simple":
             cfg = entry["node"]
             break
     assert cfg is not None
@@ -330,8 +390,8 @@ def _build_lgssm_eval_fixture():
 
 def test_crps_sum_latent_returns_unavailable_without_gt_latents() -> None:
     """When the loader has no gt_latent, the metric returns ``available: False``."""
-    from ddssm.data.datamodule import SyntheticDataModule
     from ddssm.eval.metrics import eval_crps_sum_latent
+    from ddssm.data.datamodule import SyntheticDataModule
 
     dm = SyntheticDataModule(mode="lgssm", T=4, D=1, N_per_split=2, batch_size=1)
     ctx = EvalContext(
@@ -347,8 +407,8 @@ def test_crps_sum_latent_returns_unavailable_without_gt_latents() -> None:
 
 def test_gt_latent_jsd_returns_unavailable_without_kernel() -> None:
     """A mode without a registered kernel → ``available: False``."""
-    from ddssm.data.datamodule import SyntheticDataModule
     from ddssm.eval.metrics import eval_gt_latent_jsd
+    from ddssm.data.datamodule import SyntheticDataModule
 
     dm = SyntheticDataModule(
         mode="harmonic",  # no kernel registered

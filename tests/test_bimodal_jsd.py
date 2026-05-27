@@ -5,16 +5,16 @@ from __future__ import annotations
 import math
 
 import numpy as np
-import pytest
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+import pytest
+from torch.utils.data import DataLoader
 
-from ddssm.eval import EvalContext, METRIC_REGISTRY
+from ddssm.eval import METRIC_REGISTRY, EvalContext
 from ddssm.eval.metrics import (
-    _bimodal_truth_mass,
     _hist_mass,
     _jsd_discrete,
     eval_bimodal_jsd,
+    _bimodal_truth_mass,
 )
 
 
@@ -86,6 +86,7 @@ def _make_bimodal_loader(B: int, T: int, seed: int = 0) -> DataLoader:
 
     class _DictDataset(torch.utils.data.Dataset):
         def __len__(self): return B
+
         def __getitem__(self, i):
             return {
                 "observed_data": x[i],

@@ -1,0 +1,118 @@
+"""Phase-C tests for :class:`ObjectiveSpec.source` (csv / json branch).
+
+Verifies the two read paths in isolation — CSV (legacy) and JSON
+(post-eval) — plus the failure modes (missing file, missing key,
+non-finite value) that surface as ``+inf`` so failed Optuna trials
+register cleanly under ``minimize``.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+
+import pytest
+
+from ddssm.experiment import ObjectiveSpec
+
+
+# ---------------------------------------------------------------------------
+# CSV source — preserves the pre-Phase-C behaviour.
+# ---------------------------------------------------------------------------
+
+
+def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    import csv as _csv
+
+    with open(path, "w", newline="") as f:
+        writer = _csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+
+
+def test_csv_source_returns_tail_mean(tmp_path: Path) -> None:
+    """Default CSV source: read tail of ``loss/total``."""
+    csv_path = tmp_path / "metrics.csv"
+    _write_csv(csv_path, [
+        {"step": str(i), "split": "train", "loss/total": str(float(i))}
+        for i in range(1, 11)
+    ])
+    spec = ObjectiveSpec(metric="loss/total", split="train", tail_frac=0.2)
+    # tail_frac=0.2 over 10 rows → tail_n=2 (rows 9.0 and 10.0)
+    assert spec.read(str(csv_path)) == pytest.approx(9.5)
+
+
+def test_csv_source_filters_by_split(tmp_path: Path) -> None:
+    """Rows whose ``split`` doesn't match are skipped."""
+    csv_path = tmp_path / "metrics.csv"
+    _write_csv(csv_path, [
+        {"step": "1", "split": "train", "loss/total": "1.0"},
+        {"step": "2", "split": "val",   "loss/total": "100.0"},
+        {"step": "3", "split": "train", "loss/total": "2.0"},
+    ])
+    train = ObjectiveSpec(metric="loss/total", split="train", tail_frac=1.0)
+    assert train.read(str(csv_path)) == pytest.approx(1.5)
+
+
+def test_csv_source_returns_inf_on_missing_file(tmp_path: Path) -> None:
+    """No CSV ⇒ ``+inf`` so the trial fails cleanly."""
+    spec = ObjectiveSpec(metric="loss/total")
+    assert math.isinf(spec.read(str(tmp_path / "nonexistent.csv")))
+
+
+def test_csv_source_accepts_run_dir(tmp_path: Path) -> None:
+    """Passing a run_dir (not a file) reads ``metrics.csv`` inside it."""
+    csv_path = tmp_path / "metrics.csv"
+    _write_csv(csv_path, [
+        {"step": "1", "split": "train", "loss/total": "0.7"},
+    ])
+    spec = ObjectiveSpec(metric="loss/total", split="train", tail_frac=1.0)
+    assert spec.read(str(tmp_path)) == pytest.approx(0.7)
+
+
+# ---------------------------------------------------------------------------
+# JSON source — Phase-C eval-as-objective branch.
+# ---------------------------------------------------------------------------
+
+
+def test_json_source_reads_scalar(tmp_path: Path) -> None:
+    """``source='json'`` indexes ``metrics.json`` by ``metric`` name."""
+    (tmp_path / "metrics.json").write_text(json.dumps({
+        "stage2_elbo_surrogate": 0.42,
+        "sigma_data_drift_mean": 0.1,
+    }))
+    spec = ObjectiveSpec(metric="stage2_elbo_surrogate", source="json")
+    assert spec.read(str(tmp_path)) == pytest.approx(0.42)
+
+
+def test_json_source_returns_inf_on_missing_key(tmp_path: Path) -> None:
+    """Missing key ⇒ ``+inf``."""
+    (tmp_path / "metrics.json").write_text(json.dumps({"other_metric": 1.0}))
+    spec = ObjectiveSpec(metric="stage2_elbo_surrogate", source="json")
+    assert math.isinf(spec.read(str(tmp_path)))
+
+
+def test_json_source_returns_inf_on_non_finite_value(tmp_path: Path) -> None:
+    """NaN / inf values surface as ``+inf`` (not as the raw value)."""
+    (tmp_path / "metrics.json").write_text(
+        '{"stage2_elbo_surrogate": "NaN"}'
+    )
+    spec = ObjectiveSpec(metric="stage2_elbo_surrogate", source="json")
+    result = spec.read(str(tmp_path))
+    assert math.isinf(result) and result > 0
+
+
+def test_json_source_returns_inf_on_missing_file(tmp_path: Path) -> None:
+    """No ``metrics.json`` ⇒ ``+inf``."""
+    spec = ObjectiveSpec(metric="anything", source="json")
+    assert math.isinf(spec.read(str(tmp_path)))
+
+
+def test_json_source_accepts_direct_file_path(tmp_path: Path) -> None:
+    """Direct JSON path is supported (mirrors CSV's direct-file path)."""
+    json_path = tmp_path / "custom.json"
+    json_path.write_text(json.dumps({"k": 7.0}))
+    spec = ObjectiveSpec(metric="k", source="json")
+    assert spec.read(str(json_path)) == pytest.approx(7.0)

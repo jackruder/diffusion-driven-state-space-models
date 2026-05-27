@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 from ddssm.transitions.diffusion_v2 import (
     DiffusionV2ScheduleConfig,

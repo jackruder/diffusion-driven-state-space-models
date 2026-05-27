@@ -1,33 +1,33 @@
 # tests/test_model.py
+from types import SimpleNamespace
 from functools import partial
+
 import torch
 import pytest
-from ddssm.aggregators import ContextProducerAggregator
-from ddssm.combiners import CompoundCombiner
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.net_utils import get_side_info, time_embedding
-from ddssm.encoder import GaussianEncoder, GaussianInitPrior
-from ddssm.decoder import GaussianDecoder
-from ddssm.transitions.transitions import GaussianTransition
-from ddssm.transitions.diffusion import DiffusionTransition
-from ddssm.transitions.diffusion_v2 import (
-    DiffusionV2ScheduleConfig,
-    DiffusionV2Transition,
-)
+
 from ddssm.dssd import DDSSM_base
+from ddssm.futsum import GRUFutureSummary
+from ddssm.decoder import GaussianDecoder
+from ddssm.encoder import GaussianEncoder, GaussianInitPrior
+from ddssm.fusions import ConcatLinearFusion
 from ddssm.diffnets import (
-    ContextProducer,
     CSDIUnet,
-    DiffResidualBlockConfig,
+    ContextProducer,
     FeatureMixerConfig,
     ResidualBlockConfig,
+    DiffResidualBlockConfig,
 )
+from ddssm.combiners import CompoundCombiner
 from ddssm.gaussians import GaussianHead
-from ddssm.futsum import GRUFutureSummary
-from ddssm.transitions.diffusion import DiffusionScheduleConfig
-from types import SimpleNamespace
-
+from ddssm.net_utils import get_side_info, time_embedding
+from ddssm.dist_heads import GaussianDistHead
+from ddssm.aggregators import ContextProducerAggregator
+from ddssm.transitions.diffusion import DiffusionTransition, DiffusionScheduleConfig
+from ddssm.transitions.transitions import GaussianTransition
+from ddssm.transitions.diffusion_v2 import (
+    DiffusionV2Transition,
+    DiffusionV2ScheduleConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Shared tiny config (channels=8 to keep tests fast; nheads=4 divides 8)
@@ -395,16 +395,16 @@ def test_ddssm_forward(model):
 @pytest.mark.parametrize("agg_name", ["identity", "gru", "mlp", "attention", "context"])
 def test_ddssm_forward_with_each_aggregator(agg_name):
     """Every aggregator backbone produces a finite ELBO end-to-end."""
+    from ddssm.fusions import ConcatLinearFusion
+    from ddssm.combiners import CompoundCombiner
+    from ddssm.dist_heads import GaussianDistHead
     from ddssm.aggregators import (
+        GRUAggregator,
+        MLPAggregator,
+        IdentityAggregator,
         AttentionAggregator,
         ContextProducerAggregator,
-        GRUAggregator,
-        IdentityAggregator,
-        MLPAggregator,
     )
-    from ddssm.combiners import CompoundCombiner
-    from ddssm.fusions import ConcatLinearFusion
-    from ddssm.dist_heads import GaussianDistHead
 
     # Identity requires j=1; others run with the test default j=2.
     j = 1 if agg_name == "identity" else J

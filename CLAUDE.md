@@ -68,7 +68,7 @@ If you need a new experiment, **add a Python file under `experiments/<family>/`*
 - `data: DDSSMDataModule` — train/val/test loaders + batch transform
 - `model: DDSSM_base` — the variational SSM (`src/ddssm/dssd.py`)
 - `build_trainer: Callable[..., DDSSMTrainer]` — partial trainer factory
-- `training: TrainingScalars` — `steps`, `log_every`, `validate_every`, `compute_recon`, `compute_trans`, `trainable` (per-module `requires_grad` mask), etc.
+- `training: TrainingScalars` — `steps`, `log_every`, `validate_every`, `trainable` (per-module `requires_grad` mask), etc.
 - `eval`, `viz`, `variance` — `EvalSpec` / `VizSpec` / `ProbeSpec` for the corresponding standalone stages
 - `objective: ObjectiveSpec` — reads `metrics.csv` and returns the mean tail loss; used as the Optuna objective. If `None`, `train()` returns the trainer instead.
 
@@ -83,7 +83,7 @@ The model exposes a `ProbeBatch` payload (encoded latents + log-q paths) reused 
 Selected via top-level Hydra groups: `transition`, `encoder`, `decoder`, `z_init`, `context`, `unet`, `time_mixer`, `feature_mixer`. The CSDI residual stack composes per-channel time and feature mixers (`conv`/`gru`/`identity` × `transformer`/`conv`/`identity`); MLP variants exist as ablations. See the table in `README.md`.
 
 ### Trainer: `DDSSMTrainer` (`src/ddssm/train.py`)
-Owns the optimizer per submodule (separate LRs for encoder/decoder/z_init/transition), AMP, CSV/TensorBoard/W&B logging, checkpointing, and the λ-warmup schedule. `_set_trainable(...)` toggles `requires_grad` per submodule. `compute_recon`/`compute_trans` flags route which loss terms accumulate. **For "recon only" set both `trainable.transition=False` AND `compute_trans=False`** — leaving either out leaks gradients or wastes optimizer state (documented in `TrainingScalars`).
+Owns the optimizer per submodule (separate LRs for encoder/decoder/z_init/transition), AMP, CSV/TensorBoard/W&B logging, checkpointing, and the λ-warmup schedule. `_set_trainable(...)` toggles `requires_grad` per submodule — that mask is the single mechanism for stage-aware gradient suppression. The forward pass always computes every ELBO term; frozen submodules just don't accumulate gradients.
 
 ### Multi-stage training: `src/ddssm/stages.py`
 `StageOrchestrator` runs sequential phases (e.g. recon-only → trans-only → joint) with per-stage trainable masks, LRs, scheduler, and λ-ramp. Configured via `StagesConf`.

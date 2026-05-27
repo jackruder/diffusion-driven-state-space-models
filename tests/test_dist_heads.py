@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 from ddssm.dist_heads import GaussianDistHead, MixtureGaussianDistHead
-
 
 B = 3
 D = 4

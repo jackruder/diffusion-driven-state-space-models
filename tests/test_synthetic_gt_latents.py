@@ -7,11 +7,10 @@ data module and exposes the underlying clean latent ``z`` to consumers
 
 from __future__ import annotations
 
-import pytest
 import torch
 
-from ddssm.data.datamodule import SyntheticDataModule
 from ddssm.data.synthetic import SyntheticDataset
+from ddssm.data.datamodule import SyntheticDataModule
 
 
 def test_legacy_no_gt_latent_field_by_default() -> None:
@@ -43,10 +42,12 @@ def test_lgssm_exposes_gt_latents() -> None:
     assert diff > 0.0
 
 
-def test_other_modes_dont_expose_gt_latent_even_with_flag() -> None:
-    """Non-LGSSM modes return no ``gt_latent`` even when the flag is on.
+def test_unsupported_modes_dont_expose_gt_latent_even_with_flag() -> None:
+    """Modes without a closed-form latent process ignore the flag.
 
-    Initial coverage is LGSSM-only.  Other modes opt-in over time.
+    ``harmonic`` generates ``x_t = sin(...) + noise`` directly — there
+    is no underlying latent dynamical system to expose, so the flag is
+    a silent no-op for it.
     """
     ds = SyntheticDataset(
         mode="harmonic",
@@ -59,6 +60,62 @@ def test_other_modes_dont_expose_gt_latent_even_with_flag() -> None:
     )
     item = ds[0]
     assert "gt_latent" not in item
+
+
+def test_nonlinear_bimodal_lift_1d_exposes_gt_latents() -> None:
+    """The 1D nonlinear-bimodal-lift mode exposes its scalar latent."""
+    from ddssm.data.synthetic import NLBL_SIGMA_X
+
+    ds = SyntheticDataset(
+        mode="nonlinear-bimodal-lift",
+        split="val",
+        N_per_split=4,
+        T=8,
+        D=1,
+        dataset_seed=0,
+        expose_gt_latents=True,
+    )
+    item = ds[0]
+    assert "gt_latent" in item
+    # Latent is scalar (d=1); observation is also D=1 here so shapes match.
+    assert item["gt_latent"].shape == (1, 8)
+    # Observation = lift(z) + noise: different from z (the lift is nonlinear).
+    diff = (item["observed_data"] - item["gt_latent"]).abs().mean().item()
+    assert diff > NLBL_SIGMA_X  # bigger than just the obs noise
+
+
+def test_nonlinear_bimodal_lift_mv_exposes_4d_gt_latent() -> None:
+    """The MV variant exposes a 4-D latent and an 8-D observation."""
+    from ddssm.data.synthetic import NLBL_MV_LATENT_D, NLBL_MV_OBS_D
+
+    ds = SyntheticDataset(
+        mode="nonlinear-bimodal-lift-mv",
+        split="val",
+        N_per_split=4,
+        T=8,
+        D=NLBL_MV_OBS_D,
+        dataset_seed=0,
+        expose_gt_latents=True,
+    )
+    item = ds[0]
+    assert "gt_latent" in item
+    assert item["gt_latent"].shape == (NLBL_MV_LATENT_D, 8)
+    assert item["observed_data"].shape == (NLBL_MV_OBS_D, 8)
+
+
+def test_nonlinear_bimodal_lift_mv_rejects_wrong_obs_dim() -> None:
+    """MV mode enforces D == NLBL_MV_OBS_D (the lift target)."""
+    import pytest
+
+    with pytest.raises(AssertionError, match="nonlinear-bimodal-lift-mv"):
+        SyntheticDataset(
+            mode="nonlinear-bimodal-lift-mv",
+            split="val",
+            N_per_split=2,
+            T=4,
+            D=3,  # wrong
+            dataset_seed=0,
+        )
 
 
 def test_data_module_threads_flag_to_dataset() -> None:

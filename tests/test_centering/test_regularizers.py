@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import torch
 
-from ddssm.centering.baselines import IdentityBaseline, MLPBaseline
+from ddssm.centering.baselines import MLPBaseline, IdentityBaseline
 from ddssm.centering.regularizers import r_mu_p_loss, r_sigma_p_loss
-
 
 B = 4
 D = 3

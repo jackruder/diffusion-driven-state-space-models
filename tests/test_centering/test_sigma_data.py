@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 from ddssm.centering.sigma_data import SigmaDataBuffer
-
 
 T_MAX = 5
 D = 3

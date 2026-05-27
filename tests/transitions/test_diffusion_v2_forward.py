@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 
 
 def test_forward_marginal_at_tau_max_is_standard_normal(transition):
@@ -49,7 +49,8 @@ def test_forward_marginal_at_intermediate_tau_matches_closed_form(transition):
 
 def test_forward_kernel_score_matches_analytical(transition):
     """In the degenerate ESM (mu_t = z_0, sigma2_t = 0) the recovered score is the
-    analytic VE-coord DSM kernel score ``-(z_tilde - z_0) / sigma_tilde**2``."""
+    analytic VE-coord DSM kernel score ``-(z_tilde - z_0) / sigma_tilde**2``.
+    """
     torch.manual_seed(2)
     N, d = 64, transition.latent_dim
     z0 = torch.randn(N, d)

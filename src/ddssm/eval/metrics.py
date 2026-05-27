@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
+import csv
 import math
 import os
 import numpy as np
@@ -501,6 +502,110 @@ def eval_wallclock_to_target(
     return null_result
 
 
+@register_metric("wallclock_to_relative_target")
+def eval_wallclock_to_relative_target(
+    ctx: EvalContext,
+    *,
+    target_column: str = "loss/total",
+    descent_frac: float = 0.9,
+    time_column: str = "time/elapsed_s",
+    step_column: str = "step",
+) -> Dict[str, Any]:
+    """Wall-clock at which a trial first reached a fraction of its own descent.
+
+    Unlike :func:`eval_wallclock_to_target` (which compares against a
+    fixed threshold), this metric is *self-referential*: each trial
+    defines its own target as
+
+        target_value = init_loss - descent_frac * (init_loss - final_loss)
+
+    where ``init_loss`` is the first finite value of ``target_column``
+    and ``final_loss`` is the last. Reports the step + seconds at
+    which the trial first crossed that value (descending). Always
+    defined for any non-degenerate trial, so useful as a
+    multi-objective diagnostic when paired with the absolute
+    :func:`eval_wallclock_to_target`.
+
+    Note: a trial whose loss bounces (descends then comes back up)
+    will report the time at which it first reached the implied
+    target — which may be mid-trajectory rather than at the end.
+    That is intentional: it measures descent efficiency, not final
+    fit quality.
+    """
+    null_result = {
+        "wallclock_to_relative_target_step": None,
+        "wallclock_to_relative_target_seconds": None,
+        "wallclock_to_relative_target_column": target_column,
+        "wallclock_to_relative_target_descent_frac": float(descent_frac),
+        "wallclock_to_relative_target_init_loss": None,
+        "wallclock_to_relative_target_final_loss": None,
+        "wallclock_to_relative_target_implied_target": None,
+    }
+    if not ctx.csv_path:
+        return null_result
+    import csv as _csv
+    init_v: float | None = None
+    final_v: float | None = None
+    # First pass: find init and final values.
+    try:
+        with open(ctx.csv_path, "r", newline="") as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                raw = row.get(target_column, "")
+                if raw in ("", None):
+                    continue
+                try:
+                    v = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(v):
+                    continue
+                if init_v is None:
+                    init_v = v
+                final_v = v
+    except OSError:
+        return null_result
+    if init_v is None or final_v is None or init_v <= final_v:
+        # No descent (init <= final means loss didn't go down).
+        return null_result
+    implied_target = init_v - float(descent_frac) * (init_v - final_v)
+    null_result["wallclock_to_relative_target_init_loss"] = float(init_v)
+    null_result["wallclock_to_relative_target_final_loss"] = float(final_v)
+    null_result["wallclock_to_relative_target_implied_target"] = float(implied_target)
+    # Second pass: find first crossing.
+    try:
+        with open(ctx.csv_path, "r", newline="") as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                raw = row.get(target_column, "")
+                if raw in ("", None):
+                    continue
+                try:
+                    v = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(v) or v > implied_target:
+                    continue
+                step_raw = row.get(step_column, "")
+                time_raw = row.get(time_column, "")
+                try:
+                    step_int = int(float(step_raw)) if step_raw not in ("", None) else None
+                except (TypeError, ValueError):
+                    step_int = None
+                try:
+                    elapsed = float(time_raw) if time_raw not in ("", None) else None
+                except (TypeError, ValueError):
+                    elapsed = None
+                return {
+                    **null_result,
+                    "wallclock_to_relative_target_step": step_int,
+                    "wallclock_to_relative_target_seconds": elapsed,
+                }
+    except OSError:
+        return null_result
+    return null_result
+
+
 @register_metric("stage2_elbo_surrogate")
 def eval_stage2_elbo_surrogate(
     ctx: EvalContext,
@@ -554,8 +659,6 @@ def eval_stage2_elbo_surrogate(
                 covariates=batch.get("covariates", None),
                 static_covariates=batch.get("static_covariates", None),
                 train=False,
-                compute_recon=True,
-                compute_trans=True,
                 report_scaled=False,
             )
             sums["stage2_elbo_surrogate"] += float(loss.item())
@@ -688,6 +791,183 @@ def eval_sigma_data_drift(
         "sigma_data2_component1_per_t": comp1_list,
         "sigma_data2_component2_per_t": comp2_list,
         "sigma_data2_decomposition_sum_per_t": decomp_sum,
+    }
+
+
+@register_metric("q_aux_kl_trajectory")
+def eval_q_aux_kl_trajectory(
+    ctx: EvalContext,
+    *,
+    collapse_threshold: float = 1e-3,
+) -> Dict[str, Any]:
+    """KL[q_Φ(z_0|z_1) ‖ N(0, I)] trajectory over training (secondary metric #5).
+
+    Reads the per-step ``loss/rate/init/kl_aux`` column from
+    ``run_dir/metrics.csv`` and returns the trajectory + summary
+    statistics. Per ``init-experiment.org`` § Secondary metrics: this
+    is the diagnostic for q_Φ posterior collapse. The KL should rise
+    off zero early in stage 1 and stabilise; collapsing back to zero
+    indicates q_Φ has ignored z_1 and the VHP has degenerated to the
+    homoskedastic prior.
+
+    Returns ``{q_aux_kl_trajectory_available: False}`` if the run dir
+    or CSV column is missing.
+    """
+    if ctx.run_dir is None:
+        return {"q_aux_kl_trajectory_available": False, "q_aux_kl_trajectory_reason": "no run_dir"}
+    csv_path = os.path.join(ctx.run_dir, "metrics.csv")
+    if not os.path.isfile(csv_path):
+        return {"q_aux_kl_trajectory_available": False, "q_aux_kl_trajectory_reason": "no metrics.csv"}
+    steps: list[int] = []
+    values: list[float] = []
+    try:
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            if "loss/rate/init/kl_aux" not in (reader.fieldnames or []):
+                return {
+                    "q_aux_kl_trajectory_available": False,
+                    "q_aux_kl_trajectory_reason": "kl_aux column missing",
+                }
+            for row in reader:
+                v_raw = row.get("loss/rate/init/kl_aux", "")
+                if v_raw == "" or v_raw is None:
+                    continue
+                try:
+                    v = float(v_raw)
+                except (TypeError, ValueError):
+                    continue
+                try:
+                    s = int(row.get("step", 0))
+                except (TypeError, ValueError):
+                    continue
+                steps.append(s)
+                values.append(v)
+    except OSError:
+        return {"q_aux_kl_trajectory_available": False, "q_aux_kl_trajectory_reason": "csv read error"}
+
+    if not values:
+        return {"q_aux_kl_trajectory_available": False, "q_aux_kl_trajectory_reason": "empty"}
+    final = float(values[-1])
+    mean_v = float(np.mean(values))
+    peak = float(max(values))
+    # Posterior collapse heuristic: peak rose above threshold but final
+    # value collapsed back below it.
+    collapsed = bool(peak > collapse_threshold and final < collapse_threshold)
+    return {
+        "q_aux_kl_trajectory_available": True,
+        "q_aux_kl_trajectory_steps": steps,
+        "q_aux_kl_trajectory_values": values,
+        "q_aux_kl_trajectory_final": final,
+        "q_aux_kl_trajectory_mean": mean_v,
+        "q_aux_kl_trajectory_peak": peak,
+        "q_aux_kl_trajectory_collapsed": collapsed,
+    }
+
+
+@register_metric("log_sigma_p2_collapse")
+def eval_log_sigma_p2_collapse(
+    ctx: EvalContext,
+    *,
+    max_batches: int = 4,
+    outlier_z_threshold: float = 2.0,
+) -> Dict[str, Any]:
+    """Per-(t, d) ``log σ_p²(z_{t-1})`` diagnostic (secondary metric #6).
+
+    Per ``init-experiment.org`` § Secondary metrics: the global anchor
+    ``R_σp`` can be satisfied by some (t, d) cells collapsing while
+    others inflate (balancing in aggregate). This metric surfaces that
+    pathology by computing the per-(t, d) batch mean of
+    ``log σ_p²(z_{t-1})_d`` over an evaluation trajectory sample and
+    flagging cells whose absolute mean exceeds ``outlier_z_threshold``
+    standard deviations from zero.
+
+    Requires ``model.baseline`` with a ``mean_and_logvar`` head (all
+    four baseline forms provide it, including the parameter-free
+    Zero/Identity via their state-conditional σ_p head).
+    """
+    if (
+        ctx.model is None
+        or ctx.loader is None
+        or getattr(ctx.model, "baseline", None) is None
+    ):
+        return {"log_sigma_p2_collapse_available": False}
+    model = ctx.model
+    device = ctx.device
+    transform = ctx.batch_transform
+    j = int(model.j)
+    d = int(model.latent_dim)
+    baseline = model.baseline
+
+    from ..net_utils import time_embedding
+
+    # Accumulate per-(t, d) sums across batches.
+    sums: dict[int, np.ndarray] = {}  # t -> (d,)
+    counts: dict[int, int] = {}
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(ctx.loader):
+            if batch_idx >= int(max_batches):
+                break
+            if transform is not None:
+                batch = transform(batch, device)
+            else:
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+            obs = batch["observed_data"]
+            mask = batch["observation_mask"]
+            tp = batch["timepoints"]
+            te = time_embedding(tp, model.emb_time_dim, device=device)
+            zs, _, _ = model._encode_latents(
+                observed_data=obs, time_embed=te, observation_mask=mask,
+            )
+            B, S, _, T = zs.shape
+            if T <= j:
+                continue
+            for t in range(j, T):
+                z_hist = zs[:, :, :, t - j : t].reshape(B * S, d, j)
+                _, log_sigma_p2 = baseline.mean_and_logvar(z_hist)
+                # Mean across the (B * S) axis → per-d.
+                per_d = log_sigma_p2.mean(dim=0).detach().cpu().numpy()
+                t_ext = t + 1  # 1-based
+                if t_ext in sums:
+                    sums[t_ext] += per_d
+                    counts[t_ext] += 1
+                else:
+                    sums[t_ext] = per_d.copy()
+                    counts[t_ext] = 1
+
+    if not sums:
+        return {"log_sigma_p2_collapse_available": False}
+    sorted_ts = sorted(sums.keys())
+    per_t_per_d: list[list[float]] = []
+    for t in sorted_ts:
+        mean_per_d = sums[t] / counts[t]
+        per_t_per_d.append([float(v) for v in mean_per_d])
+
+    flat = np.array(per_t_per_d, dtype=np.float64)  # (T, d)
+    overall_mean = float(flat.mean())
+    overall_std = float(flat.std(ddof=0))
+    # Outliers: (t, d) whose |value| exceeds threshold × std (deviation from 0).
+    outliers: list[tuple[int, int, float]] = []
+    if overall_std > 0:
+        for ti, t in enumerate(sorted_ts):
+            for di in range(d):
+                v = flat[ti, di]
+                if abs(v) > outlier_z_threshold * overall_std:
+                    outliers.append((int(t), int(di), float(v)))
+
+    return {
+        "log_sigma_p2_collapse_available": True,
+        "log_sigma_p2_t_indices": sorted_ts,
+        "log_sigma_p2_per_t_per_d": per_t_per_d,
+        "log_sigma_p2_mean": overall_mean,
+        "log_sigma_p2_std": overall_std,
+        "log_sigma_p2_n_outliers": len(outliers),
+        "log_sigma_p2_outliers": [
+            {"t": t, "d": di, "log_sigma_p2": v} for t, di, v in outliers
+        ],
     }
 
 

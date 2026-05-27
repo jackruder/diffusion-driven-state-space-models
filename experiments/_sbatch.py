@@ -102,11 +102,23 @@ def render_sbatch(
         'cd "$SLURM_SUBMIT_DIR"',
     ]
 
-    bake = " ".join(_shell_quote(o) for o in hydra_overrides)
-    if bake:
-        lines.append(f'exec python -m ddssm.app experiment={name} {bake} "$@"')
-    else:
-        lines.append(f'exec python -m ddssm.app experiment={name} "$@"')
+    # Hydra's argparse expects ``--``-prefixed flags (e.g. ``--multirun``)
+    # BEFORE positional overrides. Splitting + reordering avoids the
+    # "unrecognized arguments" error that surfaces when ``--multirun``
+    # sits in the middle of the override list.
+    overrides = list(hydra_overrides)
+    flag_args = [o for o in overrides if o.startswith("--")]
+    kv_args = [o for o in overrides if not o.startswith("--")]
+    flags_blob = " ".join(_shell_quote(o) for o in flag_args)
+    kvs_blob = " ".join(_shell_quote(o) for o in kv_args)
+    parts = ["exec python -m ddssm.app"]
+    if flags_blob:
+        parts.append(flags_blob)
+    parts.append(f"experiment={name}")
+    if kvs_blob:
+        parts.append(kvs_blob)
+    parts.append('"$@"')
+    lines.append(" ".join(parts))
 
     return "\n".join(lines) + "\n"
 

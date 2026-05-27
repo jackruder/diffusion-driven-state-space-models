@@ -5,6 +5,24 @@ import torch
 from torch.utils.data import Dataset
 
 
+# Nonlinear-bimodal-lift constants shared with
+# ``ddssm.eval.synthetic_kernels`` so the closed-form transition kernel
+# matches the data generator exactly.
+NLBL_DELTA = 2.0
+NLBL_SIGMA_Z = 0.1
+NLBL_SIGMA_X = 0.1
+NLBL_LIFT_HIDDEN = 8
+
+# Multivariate variant (``nonlinear-bimodal-lift-mv``):
+# latent ``d = NLBL_MV_LATENT_D`` driven through a fixed mixing matrix
+# ``A`` sampled once from ``NLBL_MV_A_SEED``; observation lifted via
+# a tanh-MLP to ``D = NLBL_MV_OBS_D`` channels.
+NLBL_MV_LATENT_D = 4
+NLBL_MV_OBS_D = 8
+NLBL_MV_HIDDEN_DIM = 16
+NLBL_MV_A_SEED = 12345
+
+
 class SyntheticDataset(Dataset):
     def __init__(
         self,
@@ -29,9 +47,10 @@ class SyntheticDataset(Dataset):
             expose_gt_latents: When True, ``__getitem__`` returns an
                 additional ``gt_latent`` field containing the
                 ground-truth latent ``z`` underlying each sequence.
-                Available for modes that have a closed-form latent
-                process (currently only ``lgssm``); other modes do not
-                expose this field even with the flag on.
+                Available for modes whose latent dynamics have a
+                registered closed-form transition kernel in
+                :mod:`ddssm.eval.synthetic_kernels`. Today: ``lgssm``,
+                ``nonlinear-bimodal-lift``, ``nonlinear-bimodal-lift-mv``.
         """
         self.mode = mode
         self.split = split
@@ -206,16 +225,12 @@ class SyntheticDataset(Dataset):
 
             data = z
         elif self.mode == "nonlinear-bimodal-lift":
-            # Latent:
+            # Latent (d = 1):
             #   z_t = tanh(z_{t-1}) + delta * s_t + sigma_z * eta_t
             # with s_t in {-1, +1}.
             # Observation:
             #   x_t = W2 @ tanh(W1 @ z_t + b1) + b2 + sigma_x * xi_t
             # where (W1, b1, W2, b2) are sampled once per dataset.
-            delta = 2.0
-            sigma_z = 0.1
-            sigma_x = 0.1
-            hidden_dim = 8
             data = torch.zeros(self.N_total, self.D, self.T)
 
             z = torch.zeros(self.N_total, 1, self.T)
@@ -224,19 +239,65 @@ class SyntheticDataset(Dataset):
                 s_t = (torch.randint(0, 2, (self.N_total, 1)).float() * 2.0) - 1.0
                 z[:, :, t] = (
                     torch.tanh(z[:, :, t - 1])
-                    + delta * s_t
-                    + sigma_z * torch.randn(self.N_total, 1)
+                    + NLBL_DELTA * s_t
+                    + NLBL_SIGMA_Z * torch.randn(self.N_total, 1)
                 )
 
-            W1 = torch.randn(hidden_dim, 1)
-            b1 = torch.randn(hidden_dim)
-            W2 = torch.randn(self.D, hidden_dim)
+            W1 = torch.randn(NLBL_LIFT_HIDDEN, 1)
+            b1 = torch.randn(NLBL_LIFT_HIDDEN)
+            W2 = torch.randn(self.D, NLBL_LIFT_HIDDEN)
             b2 = torch.randn(self.D)
 
             for t in range(self.T):
                 h_t = torch.tanh(z[:, :, t] @ W1.t() + b1)
                 x_t = h_t @ W2.t() + b2
-                data[:, :, t] = x_t + sigma_x * torch.randn(self.N_total, self.D)
+                data[:, :, t] = x_t + NLBL_SIGMA_X * torch.randn(self.N_total, self.D)
+
+            if self.expose_gt_latents:
+                self._all_gt_latents = z
+
+        elif self.mode == "nonlinear-bimodal-lift-mv":
+            # Multivariate variant: latent d = NLBL_MV_LATENT_D, observation
+            # lifted to D = NLBL_MV_OBS_D via a tanh-MLP. Per-dim independent
+            # bimodal signs (2^d attractors). A is sampled once from a fixed
+            # seed so ``synthetic_kernels.nonlinear_bimodal_lift_mv_kernel``
+            # can reconstruct it.
+            assert self.D == NLBL_MV_OBS_D, (
+                f"nonlinear-bimodal-lift-mv expects D={NLBL_MV_OBS_D} "
+                f"(matching NLBL_MV_OBS_D); got D={self.D}"
+            )
+            latent_d = NLBL_MV_LATENT_D
+            data = torch.zeros(self.N_total, self.D, self.T)
+
+            # Mixing matrix from a deterministic seed (kernel reads the same).
+            A_gen = torch.Generator().manual_seed(NLBL_MV_A_SEED)
+            A = torch.randn(latent_d, latent_d, generator=A_gen)
+
+            z = torch.zeros(self.N_total, latent_d, self.T)
+            z[:, :, 0] = torch.randn(self.N_total, latent_d)
+            for t in range(1, self.T):
+                s_t = (
+                    torch.randint(0, 2, (self.N_total, latent_d)).float() * 2.0
+                ) - 1.0
+                Az = z[:, :, t - 1] @ A.t()
+                z[:, :, t] = (
+                    torch.tanh(Az)
+                    + NLBL_DELTA * s_t
+                    + NLBL_SIGMA_Z * torch.randn(self.N_total, latent_d)
+                )
+
+            W1 = torch.randn(NLBL_MV_HIDDEN_DIM, latent_d)
+            b1 = torch.randn(NLBL_MV_HIDDEN_DIM)
+            W2 = torch.randn(self.D, NLBL_MV_HIDDEN_DIM)
+            b2 = torch.randn(self.D)
+
+            for t in range(self.T):
+                h_t = torch.tanh(z[:, :, t] @ W1.t() + b1)
+                x_t = h_t @ W2.t() + b2
+                data[:, :, t] = x_t + NLBL_SIGMA_X * torch.randn(self.N_total, self.D)
+
+            if self.expose_gt_latents:
+                self._all_gt_latents = z
 
         elif self.mode == "robot-basis-pursuit":
             assert self.D >= 2, "robot-basis-pursuit requires D>=2 (X and Y)"

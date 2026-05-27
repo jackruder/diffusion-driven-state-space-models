@@ -7,12 +7,12 @@ from pathlib import Path
 
 import matplotlib
 
-matplotlib.use("Agg")  # noqa: E402
+matplotlib.use("Agg")
 
-import pytest
 import torch
+import pytest
 
-from ddssm.viz import PLOT_REGISTRY, PlotContext, PlotSpec, VizSpec, visualize
+from ddssm.viz import PLOT_REGISTRY, VizSpec, PlotSpec, PlotContext, visualize
 from ddssm.viz.plots import plot_metrics_csv
 
 
@@ -145,6 +145,7 @@ def test_forecast_distribution_writes_png(tmp_path):
 
     class _DS(torch.utils.data.Dataset):
         def __len__(self): return B
+
         def __getitem__(self, i):
             return {
                 "observed_data": obs[i],

@@ -2,34 +2,37 @@
 
 import os
 import math
-import yaml
-from typing import Any, Callable, final
+from typing import TYPE_CHECKING, Any, Callable, final
 import tempfile
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext, contextmanager
+from collections import deque
 from dataclasses import asdict
 
+import yaml
 import torch
 
+if TYPE_CHECKING:
+    from .stages import EarlyStopSpec
+
 from torch import optim
-from torch.utils.data import DataLoader
+from hydra_zen import builds, instantiate
+from omegaconf import MISSING
 from torch.profiler import (
-    profile,
     ProfilerActivity,
+    profile,
     schedule,
     tensorboard_trace_handler,
 )
-
-from hydra_zen import builds, instantiate
-from omegaconf import MISSING
+from torch.utils.data import DataLoader
 
 from .dssd import DDSSM_base
 from .loggers import (
     CSVLogger,
     MetricSpec,
     MetricStore,
+    WandbLogger,
     ConsoleLogger,
     TensorBoardLogger,
-    WandbLogger,
 )
 from .train_utils import (
     param_groups_for_adamw,
@@ -104,7 +107,7 @@ class DDSSMTrainer:
             ``entity``, ``name``, ``tags``, ``config``, ``base_url``,
             ``enabled``).  Example::
 
-                wandb_config={
+                wandb_config = {
                     "project": "ddssm",
                     "entity": "my-team",
                     "base_url": "https://wandb.example.com",
@@ -127,6 +130,12 @@ class DDSSMTrainer:
         self.device = device
 
         self.global_step = 0
+        # Per-stage λ schedule installed by ``StageOrchestrator`` before
+        # each stage. ``None`` (the single-fit / no-stages path) falls
+        # back to the global ``hparams``-driven schedule from
+        # ``_build_lambda_schedule``.
+        self._stage_lambda_fn: Callable[[int], float] | None = None
+        self._stage_start_step: int = 0
 
         # Ensure config is attached
         if not hasattr(self.model, "config"):
@@ -198,6 +207,14 @@ class DDSSMTrainer:
         maybe_flag(getattr(self.model, "zinit", None), t.z_init)
         maybe_flag(getattr(self.model, "transition", None), t.transition)
         maybe_flag(getattr(self.model, "static_embeddings", None), t.encoder)
+        # aux_posterior is part of the encoder family (q_Φ in the doc).
+        maybe_flag(getattr(self.model, "aux_posterior", None), t.encoder)
+        # Baseline μ_p — declarative per-stage flag.  Stage 1 trains it,
+        # stage 2 freezes it under Pinned mode (matches the imperative
+        # freeze in :func:`perform_centering_handoff`).  Default ``True``
+        # keeps legacy models that lack a baseline a no-op.
+        baseline_flag = getattr(t, "baseline", True)
+        maybe_flag(getattr(self.model, "baseline", None), baseline_flag)
 
     def _rebuild_optimizer(
         self,
@@ -246,6 +263,7 @@ class DDSSMTrainer:
         **kwargs,
     ) -> "DDSSMTrainer":
         from omegaconf import OmegaConf
+
         cfg = OmegaConf.load(yaml_path)
         model = instantiate(cfg).to(device)
 
@@ -379,14 +397,12 @@ class DDSSMTrainer:
         batch: dict,
         amp: bool,
         lambda_schedule,
-        compute_recon: bool,
-        compute_trans: bool,
     ):
         observed = batch["observed_data"]
         observed_mask = batch["observation_mask"]
         timepoints = batch["timepoints"]
-        covariates = batch.get("covariates", None)
-        static_covariates = batch.get("static_covariates", None)
+        covariates = batch.get("covariates")
+        static_covariates = batch.get("static_covariates")
 
         with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
             _elbo, distortion, rate, metrics, _stats = self.model(
@@ -396,14 +412,19 @@ class DDSSMTrainer:
                 covariates=covariates,
                 static_covariates=static_covariates,
                 train=True,
-                compute_recon=compute_recon,
-                compute_trans=compute_trans,
                 report_scaled=False,
             )
 
-        assert lambda_schedule is not None
-        sched_step = self.global_step + 1
-        current_lambda = lambda_schedule(sched_step)
+        # Prefer the per-stage λ schedule when ``StageOrchestrator``
+        # has installed one (it resets the clock at each stage boundary).
+        # Falls back to the global hparams schedule for single-fit runs.
+        if self._stage_lambda_fn is not None:
+            sched_step = self.global_step - self._stage_start_step + 1
+            current_lambda = self._stage_lambda_fn(sched_step)
+        else:
+            assert lambda_schedule is not None
+            sched_step = self.global_step + 1
+            current_lambda = lambda_schedule(sched_step)
         loss = distortion + current_lambda * rate
         metrics["optim/lambda"] = torch.tensor(current_lambda)
 
@@ -453,6 +474,7 @@ class DDSSMTrainer:
         device: torch.device,
     ):
         import time as _time
+
         self.global_step += 1
         log_values = {
             "loss/total": torch.tensor(
@@ -476,8 +498,6 @@ class DDSSMTrainer:
         val_loader: DataLoader,
         batch_transform: Callable[[dict, torch.device], dict] | None,
         device: torch.device,
-        compute_recon: bool,
-        compute_trans: bool,
     ):
         self.model.eval()
         with torch.no_grad():
@@ -497,8 +517,6 @@ class DDSSMTrainer:
                     covariates=vcov,
                     static_covariates=vstatic_cov,
                     train=False,
-                    compute_recon=compute_recon,
-                    compute_trans=compute_trans,
                 )
                 self.metrics.update(
                     "val",
@@ -513,8 +531,6 @@ class DDSSMTrainer:
         validate_every: int,
         batch_transform: Callable[[dict, torch.device], dict] | None,
         device: torch.device,
-        compute_recon: bool,
-        compute_trans: bool,
     ):
         if val_loader is None or not validate_every or (step % validate_every != 0):
             return
@@ -522,8 +538,6 @@ class DDSSMTrainer:
             val_loader=val_loader,
             batch_transform=batch_transform,
             device=device,
-            compute_recon=compute_recon,
-            compute_trans=compute_trans,
         )
         self.metrics.epoch_end("val", self.global_step)
 
@@ -574,21 +588,31 @@ class DDSSMTrainer:
         # resume controls
         resume_from: str | None = None,  # path to ckpt to resume from
         batch_transform: Callable[[dict, torch.device], dict] | None = None,
-        compute_recon: bool = True,
-        compute_trans: bool = True,
         profile_steps: int = 0,
-    ):
+        early_stop: "EarlyStopSpec | None" = None,
+    ) -> int:
         """One optimizer step == one 'step'.
         Validation / checkpoints / logs are triggered by step counts.
         - Resumes from `resume_from` if provided (restores global_step, optimizer, EMA).
         - Uses grad accumulation and optional AMP for memory efficiency.
         - Profiles up to `profile_steps` optimizer steps if > 0.
-        """
+        - When ``early_stop`` is an enabled :class:`EarlyStopSpec`, the
+          loop terminates early if the rolling-window improvement of
+          ``loss/total`` falls below ``min_improvement``.
 
+        Returns the global step at which the loop exited.
+        """
         device = self.device
         self.model.to(device)
 
         lambda_schedule = self._build_lambda_schedule()
+
+        # Rolling window for the ELBO-plateau early-stop check.
+        es_active = bool(early_stop and early_stop.enabled)
+        loss_window: deque[float] = (
+            deque(maxlen=int(early_stop.window)) if es_active else deque()
+        )
+        early_stop_triggered = False
 
         # Make the console logger print every `log_every` steps
         for lg in self.metrics.loggers:
@@ -644,8 +668,6 @@ class DDSSMTrainer:
                             batch=batch,
                             amp=amp,
                             lambda_schedule=lambda_schedule,
-                            compute_recon=compute_recon,
-                            compute_trans=compute_trans,
                         )
 
                         self._backward_loss(loss, scaler=scaler, amp=amp)
@@ -666,14 +688,35 @@ class DDSSMTrainer:
                         device=device,
                     )
 
+                    if es_active:
+                        loss_window.append(accum_loss / self.grad_accum_steps)
+                        if (
+                            len(loss_window) == loss_window.maxlen
+                            and self.global_step >= early_stop.warmup_steps
+                        ):
+                            half = loss_window.maxlen // 2
+                            old_mean = sum(list(loss_window)[:half]) / max(half, 1)
+                            new_mean = sum(list(loss_window)[half:]) / max(
+                                loss_window.maxlen - half, 1
+                            )
+                            denom = max(abs(old_mean), 1e-12)
+                            rel_drop = (old_mean - new_mean) / denom
+                            if rel_drop < early_stop.min_improvement:
+                                print(
+                                    f"[early-stop] loss/total plateaued at "
+                                    f"step {self.global_step} "
+                                    f"(rel_drop={rel_drop:.3e} < "
+                                    f"{early_stop.min_improvement:.3e})",
+                                    flush=True,
+                                )
+                                early_stop_triggered = True
+
                     self._maybe_run_validation(
                         step=step,
                         val_loader=val_loader,
                         validate_every=validate_every,
                         batch_transform=batch_transform,
                         device=device,
-                        compute_recon=compute_recon,
-                        compute_trans=compute_trans,
                     )
 
                     self._maybe_save_checkpoint(
@@ -684,6 +727,9 @@ class DDSSMTrainer:
 
                     if do_profile:
                         prof.step()
+
+                    if early_stop_triggered:
+                        break
 
                 self.metrics.step_end("train", self.global_step)
 
@@ -717,6 +763,8 @@ class DDSSMTrainer:
         finally:
             if hasattr(self, "metrics"):
                 self.metrics.close()
+
+        return int(self.global_step)
 
 
 # ---------------------------------------------------------------------------

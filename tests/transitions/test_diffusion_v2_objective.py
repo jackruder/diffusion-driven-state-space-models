@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import torch
+import pytest
 
 from ddssm.transitions.diffusion_v2 import DiffusionV2ScheduleConfig
 
-from .conftest import compute_per_sample_loss, make_transition
+from .conftest import make_transition, compute_per_sample_loss
 
 
 def _build_pair(num_steps: int = 16):
