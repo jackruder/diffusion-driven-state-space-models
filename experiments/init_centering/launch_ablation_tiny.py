@@ -1,11 +1,16 @@
 """Render sbatch scripts for the tiny-size init-centering ablation grid.
 
 The "tiny" ablation grid is the cell ranking phase: every cell of the
-18-cell grid runs at the data's true latent dim (size matrix per
+ablation grid runs at the data's true latent dim (size matrix per
 CONTEXT.md § Size axis) on both the 1D and MV synthetic datasets,
 under the 7-dim ``init_ablation`` Optuna sweep with 40 trials each.
 
-Per (cell, dataset) tuple → one sbatch job. Total: 18 × 2 = 36 jobs.
+Per (cell, dataset) tuple → one sbatch job.
+
+Axis filters (``--baseline-forms``, ``--baseline-modes``,
+``--tracking-modes``) intersect with :func:`iter_cells` so a round can
+be gated to a subset — e.g. ``--baseline-modes pinned`` runs only the
+parameter-free (zero/identity) and pinned-μ_p cells.
 
 Run (dry-run by default, prints to stdout — nothing submitted)::
 
@@ -30,17 +35,22 @@ ablation, see :mod:`.launch_paper_headline`.
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from typing import Iterable
+import argparse
 
 from hydra_zen import instantiate
 
-from ddssm._experiment_registry import register_experiments
 from experiments._sbatch import render_sbatch
-from experiments.init_centering.cells import cell_name, iter_cells
-
+from ddssm._experiment_registry import register_experiments
+from experiments.init_centering.cells import (
+    BASELINE_FORMS,
+    BASELINE_MODES,
+    TRACKING_MODES,
+    cell_name,
+    iter_cells,
+)
 
 # (preset_name, data_dim, latent_dim_at_tiny, label, mode_string,
 # expose_gt_latents). The grid runs every cell at every dataset
@@ -56,14 +66,33 @@ TINY_DATASETS: tuple[tuple[str, int, int, str, str, bool], ...] = (
 )
 
 
-def all_tiny_jobs() -> list[tuple[str, str, int, int, str, str, bool]]:
-    """Cross-product of the 18 cells × the two ablation datasets.
+def all_tiny_jobs(
+    *,
+    baseline_forms: Iterable[str] | None = None,
+    baseline_modes: Iterable[str] | None = None,
+    tracking_modes: Iterable[str] | None = None,
+) -> list[tuple[str, str, int, int, str, str, bool]]:
+    """Cross-product of (filtered) cells × the two ablation datasets.
 
-    Returns
+    ``baseline_forms`` / ``baseline_modes`` / ``tracking_modes``
+    intersect with :func:`iter_cells`; ``None`` on any axis means
+    "keep every value on that axis".
+
+    Returns:
     ``[(cell_name, dataset_preset, data_dim, latent_dim, label, mode, expose_gt), ...]``.
     """
+    bf = None if baseline_forms is None else frozenset(baseline_forms)
+    bm = None if baseline_modes is None else frozenset(baseline_modes)
+    tm = None if tracking_modes is None else frozenset(tracking_modes)
+
     out: list[tuple[str, str, int, int, str, str, bool]] = []
     for f, m, t in iter_cells():
+        if bf is not None and f not in bf:
+            continue
+        if bm is not None and m not in bm:
+            continue
+        if tm is not None and t not in tm:
+            continue
         cell = cell_name(f, m, t)
         for ds_name, data_dim, latent_dim, ds_label, mode, expose_gt in TINY_DATASETS:
             out.append((cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt))
@@ -88,13 +117,15 @@ def _overrides_for_job(
     storage_dir: str,
     sweeps_root: str,
     n_jobs: int = 1,
+    sweep_group: str = "init_ablation",
+    wallclock_target: float | None = None,
 ) -> list[str]:
     job = _job_name(cell, ds_label)
     sweep_dir = os.path.join(sweeps_root, f"{study_prefix}_{job}")
     db_path = os.path.join(storage_dir, f"{study_prefix}_{job}.db")
     overrides = [
         "--multirun",
-        "+sweep=init_ablation",
+        f"+sweep={sweep_group}",
         f"hydra.sweeper.n_trials={n_trials}",
         f"hydra.sweeper.study_name={study_prefix}_{job}",
         f"hydra.sweeper.storage=sqlite:///{db_path}",
@@ -109,6 +140,12 @@ def _overrides_for_job(
     ]
     if n_jobs > 1:
         overrides.append(f"hydra.sweeper.n_jobs={n_jobs}")
+    if wallclock_target is not None:
+        # The init_centering eval already lists ``wallclock_to_target``;
+        # this override changes its target value for the round-1 sweep.
+        overrides.append(
+            f"experiment.eval.kwargs.wallclock_to_target.target_value={wallclock_target}"
+        )
     return overrides
 
 
@@ -117,7 +154,7 @@ def _resolve_exp_sbatch(name: str):
     register_experiments()
     from hydra_zen import store
 
-    node = store["experiment"][("experiment", name)]
+    node = store["experiment"]["experiment", name]
     exp = instantiate(node)
     return exp.sbatch
 
@@ -137,6 +174,8 @@ def render_tiny_sbatch(
     sweeps_root: str,
     cli_overrides: dict[str, object] | None = None,
     n_jobs: int = 1,
+    sweep_group: str = "init_ablation",
+    wallclock_target: float | None = None,
 ) -> str:
     overrides = _overrides_for_job(
         cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt,
@@ -145,6 +184,8 @@ def render_tiny_sbatch(
         storage_dir=storage_dir,
         sweeps_root=sweeps_root,
         n_jobs=n_jobs,
+        sweep_group=sweep_group,
+        wallclock_target=wallclock_target,
     )
     return render_sbatch(
         cell,
@@ -157,8 +198,16 @@ def render_tiny_sbatch(
 def _iter_targets(
     only_cell: str | None,
     datasets: list[str] | None = None,
+    *,
+    baseline_forms: list[str] | None = None,
+    baseline_modes: list[str] | None = None,
+    tracking_modes: list[str] | None = None,
 ) -> Iterable[tuple[str, str, int, int, str, str, bool]]:
-    jobs = all_tiny_jobs()
+    jobs = all_tiny_jobs(
+        baseline_forms=baseline_forms,
+        baseline_modes=baseline_modes,
+        tracking_modes=tracking_modes,
+    )
     if datasets is not None:
         jobs = [j for j in jobs if j[4] in datasets]
     if only_cell is None:
@@ -178,7 +227,8 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m experiments.init_centering.launch_ablation_tiny",
         description=(
             "Render sbatch scripts for the tiny init-centering ablation grid "
-            "(18 cells × 2 datasets = 36 jobs). Dry-run by default."
+            "(every cell × every dataset). Subset via --baseline-forms / "
+            "--baseline-modes / --tracking-modes. Dry-run by default."
         ),
     )
     mode = p.add_mutually_exclusive_group()
@@ -193,6 +243,51 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--cell", default=None,
         help="Render just one cell (both datasets).",
+    )
+    p.add_argument(
+        "--baseline-forms", nargs="+", default=None,
+        choices=list(BASELINE_FORMS),
+        help=(
+            "Restrict to a subset of baseline forms (default: all). "
+            f"Choices: {list(BASELINE_FORMS)}."
+        ),
+    )
+    p.add_argument(
+        "--baseline-modes", nargs="+", default=None,
+        choices=list(BASELINE_MODES),
+        help=(
+            "Restrict to a subset of baseline modes (default: all). "
+            f"Choices: {list(BASELINE_MODES)}."
+        ),
+    )
+    p.add_argument(
+        "--tracking-modes", nargs="+", default=None,
+        choices=list(TRACKING_MODES),
+        help=(
+            "Restrict to a subset of σ_data tracking modes (default: all). "
+            f"Choices: {list(TRACKING_MODES)}."
+        ),
+    )
+    p.add_argument(
+        "--sweep-group", default="init_ablation",
+        choices=["init_ablation", "init_ablation_moo"],
+        help=(
+            "Which registered sweep config to use. "
+            "'init_ablation' = single-objective TPE on stage2_elbo_surrogate; "
+            "'init_ablation_moo' = NSGA-II multi-objective on "
+            "(wallclock_to_target_seconds, stage2_elbo_surrogate). "
+            "MOO requires the cell experiments to use PilotMOObjective."
+        ),
+    )
+    p.add_argument(
+        "--wallclock-target", type=float, default=None,
+        help=(
+            "Override the ELBO target for the wallclock_to_target eval "
+            "metric. Sets "
+            "experiment.eval.kwargs.wallclock_to_target.target_value=<float>. "
+            "Defaults to the cell preset's bundled value "
+            "(PILOT_WALLCLOCK_TARGET = -30 at the time of writing)."
+        ),
     )
     p.add_argument(
         "--study-prefix", default="ablation",
@@ -258,8 +353,19 @@ def main(argv: list[str] | None = None) -> int:
         os.makedirs(write_dir, exist_ok=True)
 
     for cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt in _iter_targets(
-        args.cell, datasets=args.datasets,
+        args.cell,
+        datasets=args.datasets,
+        baseline_forms=args.baseline_forms,
+        baseline_modes=args.baseline_modes,
+        tracking_modes=args.tracking_modes,
     ):
+        # Per-call extras so the existing render_tiny_sbatch signature
+        # stays back-compat — we add MOO + target overrides only when set.
+        _extra_kwargs: dict = {
+            "sweep_group": args.sweep_group,
+        }
+        if args.wallclock_target is not None:
+            _extra_kwargs["wallclock_target"] = args.wallclock_target
         script = render_tiny_sbatch(
             cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt,
             study_prefix=args.study_prefix,
@@ -268,6 +374,7 @@ def main(argv: list[str] | None = None) -> int:
             sweeps_root=args.sweeps_root,
             cli_overrides=cli_overrides,
             n_jobs=args.n_jobs,
+            **_extra_kwargs,
         )
         job = _job_name(cell, ds_label)
         if write_dir is None:

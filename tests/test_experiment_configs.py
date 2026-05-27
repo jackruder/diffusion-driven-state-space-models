@@ -57,17 +57,18 @@ def _clear_global_hydra():
 
 
 def test_experiments_registered() -> None:
-    """All 34 named presets are reachable through the experiment store.
+    """All 28 named presets are reachable through the experiment store.
 
-    Composition: 14 legacy presets + 18 cell presets (one per ablation-
-    grid cell) + 2 role-specific smokes (``init_smoke_simple`` and
-    ``init_smoke_high_surface``). The 2 ``init_canonical_ctrl_*``
-    presets were removed per ADR-0002, and the original
-    ``init_centering_smoke`` / ``init_centering_pilot`` presets were
-    replaced by the two role-specific smokes (CONTEXT.md drops the
-    "pilot" terminology).
+    Composition: 14 legacy presets + 12 cell presets (one per ablation-
+    grid cell, post-``global_ema`` removal) + 2 role-specific smokes
+    (``init_smoke_simple`` and ``init_smoke_high_surface``). The 2
+    ``init_canonical_ctrl_*`` presets were removed per ADR-0002; the
+    original ``init_centering_smoke`` / ``init_centering_pilot`` presets
+    were replaced by the two role-specific smokes (CONTEXT.md drops the
+    "pilot" terminology); and the ``global_ema`` σ_data tracking
+    variant was dropped from the grid (cells.py).
     """
-    assert len(EXPERIMENTS) == 34, EXPERIMENTS
+    assert len(EXPERIMENTS) == 28, EXPERIMENTS
 
 
 @pytest.mark.parametrize("name", EXPERIMENTS)
@@ -147,7 +148,15 @@ def test_sweep_preset_composes(name: str) -> None:
     if sweeper.params:
         # Optuna search-space preset.
         assert "optuna" in sweeper._target_.lower()
-        assert sweeper.direction == "minimize"
+        # Single-objective sweeps use a scalar direction; multi-objective
+        # ones (e.g. ``init_ablation_moo``) use a list of directions
+        # matching the experiment's list-of-ObjectiveSpec length.
+        direction = sweeper.direction
+        if isinstance(direction, str):
+            assert direction == "minimize"
+        else:
+            assert all(d == "minimize" for d in direction)
+            assert len(direction) >= 2
         assert len(sweeper.params) > 0
 
 

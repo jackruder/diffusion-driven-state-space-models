@@ -30,6 +30,8 @@ from omegaconf import MISSING
 
 from ddssm.dssd import DDSSM_base
 from conf.registry import model_store
+from ddssm.decoder import GaussianDecoder
+from ddssm.encoder import GaussianEncoder
 from ddssm.diffnets import (
     CSDIUnet,
     FeatureMixerConfig,
@@ -44,8 +46,6 @@ from ddssm.centering.baselines import (
     IdentityBaseline,
 )
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.encoder import GaussianEncoder
-from ddssm.decoder import GaussianDecoder
 from ddssm.transitions.diffusion_v3 import (
     DiffusionV3Transition,
     DiffusionV3ScheduleConfig,
@@ -119,7 +119,7 @@ def _build_init_centering_model(
     hyperparams: Any,
     stages: Any,
 ) -> DDSSM_base:
-    """Construct an init-centering DDSSM model parametric over the 18-cell grid.
+    """Construct an init-centering DDSSM model parametric over the ablation grid.
 
     The factory pattern is required so the *same* Python objects are
     passed to both transitions (so μ_p's parameters are shared and the

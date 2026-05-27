@@ -52,7 +52,6 @@ from hydra_zen import make_config
 
 from conf.registry import sweep_store
 
-
 _INIT_ABLATION_PARAMS = {
     # Centering-handoff knobs.
     "experiment.model.stages.n_pretrain":
@@ -94,10 +93,28 @@ InitAblation = make_config(
 sweep_store(InitAblation, name="init_ablation")
 
 
+# Multi-objective variant. Same search space as ``InitAblation``, but
+# routes through the ``ddssm_optuna_moo`` sweeper preset (NSGA-II
+# sampler, ``direction: [minimize, minimize]``). Pair with a cell
+# experiment whose ``objective`` is a ``list[ObjectiveSpec]`` matching
+# the direction length — :data:`experiments.init_centering.evals.PilotMOObjective`.
+InitAblationMOO = make_config(
+    hydra_defaults=["_self_", {"override /hydra/sweeper": "ddssm_optuna_moo"}],
+    hydra=dict(
+        sweeper=dict(
+            # ListConfig of strings — NSGA-II uses both directions.
+            direction=["minimize", "minimize"],
+            params=_INIT_ABLATION_PARAMS,
+        ),
+    ),
+)
+sweep_store(InitAblationMOO, name="init_ablation_moo")
+
+
 # Back-compat alias. The launcher and CLI examples still reference
 # ``+sweep=init_pilot`` from the Phase-C era; keep the name working so
 # old commands don't break. New code should prefer ``init_ablation``.
 sweep_store(InitAblation, name="init_pilot")
 
 
-__all__ = ["InitAblation"]
+__all__ = ["InitAblation", "InitAblationMOO"]

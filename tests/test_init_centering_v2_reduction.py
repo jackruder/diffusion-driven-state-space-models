@@ -1,7 +1,7 @@
 """The simplest cell reduces to :class:`DiffusionV2Transition`.
 
 This is the headline correctness anchor for Phase D: the simplest cell
-in the 18-cell grid — ``(baseline_form="zero", baseline_mode="pinned",
+in the ablation grid — ``(baseline_form="zero", baseline_mode="pinned",
 tracking_mode="fixed")`` — is *configured* such that its stage-2
 transition agrees with plain ``DiffusionV2Transition`` in the regime
 where the two are mathematically equivalent.
@@ -32,26 +32,25 @@ from __future__ import annotations
 import math
 from functools import partial
 
-import pytest
 import torch
-from hydra.core.global_hydra import GlobalHydra
+import pytest
 from hydra_zen import instantiate
+from hydra.core.global_hydra import GlobalHydra
 
 from conf.registry import store
-from ddssm._experiment_registry import register_experiments
-from ddssm.centering.baselines import ZeroBaseline
 from ddssm.diffnets import (
     CSDIUnet,
-    DiffResidualBlockConfig,
     FeatureMixerConfig,
+    DiffResidualBlockConfig,
 )
+from ddssm.centering.baselines import ZeroBaseline
+from ddssm._experiment_registry import register_experiments
 from ddssm.transitions.diffusion_v2 import (
-    DiffusionV2ScheduleConfig,
     DiffusionV2Transition,
+    DiffusionV2ScheduleConfig,
 )
 from ddssm.transitions.diffusion_v3 import DiffusionV3Transition
 from experiments.init_centering.cells import cell_name
-
 
 SIMPLEST_CELL_NAME = cell_name("zero", "pinned", "fixed")
 

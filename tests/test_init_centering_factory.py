@@ -1,6 +1,6 @@
 """Phase-B factory tests for the parametric init-centering model builder.
 
-Verifies that :func:`_build_init_centering_model` honours the 18-cell
+Verifies that :func:`_build_init_centering_model` honours the ablation
 grid axes from ``init-experiment.org`` § Composition with the ablation
 grid:
 
@@ -33,7 +33,7 @@ from experiments.init_centering.hparams import _build_init_centering_stages
 
 
 def _cells():
-    """All 18 cells of the post-auto-clamp ablation grid."""
+    """Every cell of the post-auto-clamp ablation grid."""
     return list(iter_cells())
 
 
@@ -47,8 +47,8 @@ def _minimal_hparams() -> SimpleNamespace:
 
 
 @pytest.mark.parametrize("baseline_form,baseline_mode,tracking_mode", _cells())
-def test_all_18_cells_build(baseline_form, baseline_mode, tracking_mode) -> None:
-    """Every cell of the 18-cell grid builds without error."""
+def test_all_cells_build(baseline_form, baseline_mode, tracking_mode) -> None:
+    """Every cell of the ablation grid builds without error."""
     model = _build_init_centering_model(
         baseline_form=baseline_form,
         baseline_mode=baseline_mode,

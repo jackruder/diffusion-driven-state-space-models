@@ -99,15 +99,22 @@ class ObjectiveSpec:
       :func:`ddssm.eval.metrics.eval_stage2_elbo_surrogate`).  ``split``
       and ``tail_frac`` are ignored in this mode.
 
-    ``+inf`` is returned when the source file is missing, the column /
-    key is absent, or the value is non-finite — so failed trials surface
-    cleanly under Optuna's ``minimize`` direction.
+    When the primary value is unavailable (file missing, key absent,
+    value ``None`` or non-finite), the spec applies its ``penalty``:
+
+    * ``"inf"`` (default) — return ``+inf`` so the trial sorts last.
+    * ``"csv_tail_time"`` — substitute the last ``time/elapsed_s`` from
+      ``metrics.csv``. Use for wall-clock-to-target style objectives
+      where "never reached" should cost the trial's full training time
+      (its compute budget) rather than an unbounded sentinel — keeps
+      misses on the same units as hits.
     """
 
     metric: str = "loss/total"
     split: str = "train"
     tail_frac: float = 0.1
     source: Literal["csv", "json"] = "csv"
+    penalty: Literal["inf", "csv_tail_time"] = "inf"
 
     def read(self, run_dir_or_csv: str) -> float:
         """Read the objective value from ``run_dir`` (or, legacy: a CSV path).
@@ -120,6 +127,41 @@ class ObjectiveSpec:
         if self.source == "json":
             return self._read_json(run_dir_or_csv)
         return self._read_csv(run_dir_or_csv)
+
+    def _apply_penalty(self, run_dir_or_csv: str) -> float:
+        """Resolve the configured penalty when the primary value is unavailable."""
+        if self.penalty == "csv_tail_time":
+            return self._tail_time_from_csv(run_dir_or_csv)
+        return float("inf")
+
+    @staticmethod
+    def _tail_time_from_csv(run_dir_or_csv: str) -> float:
+        """Last finite ``time/elapsed_s`` from ``metrics.csv``, or ``+inf``."""
+        if not run_dir_or_csv:
+            return float("inf")
+        csv_path = (
+            os.path.join(run_dir_or_csv, "metrics.csv")
+            if os.path.isdir(run_dir_or_csv) else run_dir_or_csv
+        )
+        if not os.path.isfile(csv_path):
+            return float("inf")
+        last_time: float | None = None
+        try:
+            with open(csv_path, "r", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    raw = row.get("time/elapsed_s", "")
+                    if raw in ("", None):
+                        continue
+                    try:
+                        v = float(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(v):
+                        last_time = v
+        except OSError:
+            return float("inf")
+        return last_time if last_time is not None else float("inf")
 
     def _read_csv(self, path: str) -> float:
         # If caller passed a run_dir, append the conventional filename.
@@ -174,12 +216,12 @@ class ObjectiveSpec:
             return float("inf")
         value = data.get(self.metric)
         if value is None:
-            return float("inf")
+            return self._apply_penalty(run_dir)
         try:
             v = float(value)
         except (TypeError, ValueError):
-            return float("inf")
-        return v if math.isfinite(v) else float("inf")
+            return self._apply_penalty(run_dir)
+        return v if math.isfinite(v) else self._apply_penalty(run_dir)
 
 
 @dataclass
@@ -228,7 +270,7 @@ class Experiment:
     model: DDSSM_base
     build_trainer: Callable[..., DDSSMTrainer]
     training: TrainingScalars = field(default_factory=TrainingScalars)
-    objective: ObjectiveSpec | None = None
+    objective: ObjectiveSpec | list[ObjectiveSpec] | None = None
     eval: Any = None  # ddssm.eval.EvalSpec | None -- typed lazily to avoid circular import
     viz: Any = None  # ddssm.viz.VizSpec | None -- typed lazily to avoid circular import
     variance: Any = None  # ddssm.variance.ProbeSpec | None -- typed lazily
@@ -319,16 +361,57 @@ class Experiment:
         if self.objective is None:
             return trainer
 
-        # Phase C: when the objective comes from the eval pipeline,
-        # save a final checkpoint and chain :meth:`evaluate` so the
-        # metric is written to ``metrics.json`` before we read it.
-        if getattr(self.objective, "source", "csv") == "json":
+        # Multi-objective: ``objective`` is a list of ObjectiveSpec.
+        # Each is resolved the same way as a single-objective spec; the
+        # returned list is passed straight through to Optuna, which
+        # interprets it according to the sweeper's ``direction:`` list.
+        #
+        # When the experiment came through Hydra, ``self.objective`` is
+        # a ListConfig (not a Python list) and the list elements may
+        # still be DictConfig / dataclass configs (recursive
+        # instantiation doesn't dive into ``Any``-typed list fields).
+        # Lazy-instantiate so the same code handles "configured" and
+        # "raw Python" call sites.
+        try:
+            from omegaconf import ListConfig
+        except ImportError:
+            ListConfig = ()  # type: ignore[misc,assignment]
+        is_multi = isinstance(self.objective, (list, tuple, ListConfig))
+        raw_objectives: list = (
+            list(self.objective) if is_multi else [self.objective]
+        )
+        # OmegaConf strips ``_target_`` from list-of-dataclass-conf
+        # elements during outer instantiation, so we can't call
+        # ``hydra.utils.instantiate`` on the leftover DictConfig. The
+        # remaining fields ARE ObjectiveSpec.__init__ kwargs though,
+        # so rebuild directly.
+        objectives: list[ObjectiveSpec] = []
+        for o in raw_objectives:
+            if isinstance(o, ObjectiveSpec):
+                objectives.append(o)
+                continue
+            try:
+                from omegaconf import OmegaConf
+                fields = OmegaConf.to_container(o, resolve=True)  # type: ignore[arg-type]
+            except (ImportError, TypeError, ValueError):
+                fields = dict(o) if hasattr(o, "keys") else {}
+            fields = {k: v for k, v in fields.items() if k != "_target_"}
+            objectives.append(ObjectiveSpec(**fields))
+
+        # If any objective reads from metrics.json we need to evaluate
+        # before reading. Do it once and reuse for all json-source specs.
+        needs_eval = any(
+            getattr(o, "source", "csv") == "json" for o in objectives
+        )
+        if needs_eval:
             if self.eval is None:
                 log.warning(
-                    "Objective source='json' but self.eval is None; "
-                    "returning +inf so the trial is skipped cleanly."
+                    "json-source objective configured but self.eval is "
+                    "None; returning +inf for every objective so the "
+                    "trial is skipped cleanly."
                 )
-                return float("inf")
+                penalty_vals = [float("inf")] * len(raw_objectives)
+                return penalty_vals if is_multi else penalty_vals[0]
             final_ckpt = os.path.join(
                 self.model.config.checkpoint_dir, "ckpt_final.pth",
             )
@@ -338,18 +421,24 @@ class Experiment:
                 device=device, run_dir=run_dir,
                 checkpoint_path=final_ckpt, csv_path=csv_log_path,
             )
-            value = self.objective.read(run_dir)
-            log.info(
-                "Objective[json/%s] = %.6g", self.objective.metric, value,
-            )
-            return value
 
-        value = self.objective.read(csv_log_path)
-        log.info(
-            "Objective[%s/%s tail=%.2f] = %.6g",
-            self.objective.split, self.objective.metric, self.objective.tail_frac, value,
-        )
-        return value
+        values: list[float] = []
+        for o in objectives:
+            if o.source == "json":
+                v = o.read(run_dir)
+                log.info("Objective[json/%s] = %.6g", o.metric, v)
+            else:
+                v = o.read(csv_log_path)
+                log.info(
+                    "Objective[%s/%s tail=%.2f] = %.6g",
+                    o.split, o.metric, o.tail_frac, v,
+                )
+            values.append(v)
+
+        # Preserve scalar return shape when caller configured a single
+        # ObjectiveSpec — keeps the legacy single-objective Optuna path
+        # untouched.
+        return values if is_multi else values[0]
 
     # Backward-compat alias; ``ddssm.app`` calls ``train`` directly.
     run = train

@@ -18,8 +18,8 @@ original sweep dirs on disk*.
 
 from __future__ import annotations
 
-import json
 import os
+import json
 import shutil
 from pathlib import Path
 
@@ -32,16 +32,15 @@ from experiments.init_centering.report import (
     TrialRecord,
     aggregate,
     load_records,
+    save_artifacts,
+    write_headline_table,
+    plot_sigma_data_drift,
+    plot_wallclock_to_target,
+    write_distribution_panel,
     plot_baseline_form_ablation,
     plot_baseline_mode_ablation,
-    plot_sigma_data_drift,
     plot_tracking_mode_ablation,
-    plot_wallclock_to_target,
-    save_artifacts,
-    write_distribution_panel,
-    write_headline_table,
 )
-
 
 # A small representative subset of cells (not all 18, to keep tests fast).
 _TEST_CELLS = [
@@ -151,7 +150,7 @@ def _build_optuna_dbs(
 
 
 def test_aggregate_returns_one_record_per_trial(tmp_path: Path) -> None:
-    """aggregate yields one record per (cell, trial) seen on disk."""
+    """Aggregate yields one record per (cell, trial) seen on disk."""
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     _build_optuna_dbs(optuna_dir)
 

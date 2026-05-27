@@ -25,7 +25,7 @@ from experiments.init_centering.launch_paper_headline import (
 
 
 def test_tiny_jobs_cover_full_cross_product() -> None:
-    """36 jobs = 18 cells × 2 datasets."""
+    """All cells × all datasets = full Cartesian product."""
     jobs = all_tiny_jobs()
     n_cells = sum(1 for _ in iter_cells())
     assert len(jobs) == n_cells * len(TINY_DATASETS)

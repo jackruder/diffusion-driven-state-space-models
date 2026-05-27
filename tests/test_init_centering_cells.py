@@ -1,4 +1,4 @@
-"""Phase-D tests for the 18-cell ablation grid and the two control cells.
+"""Phase-D tests for the init-centering ablation grid + two control cells.
 
 The grid is enumerated by
 :func:`experiments.init_centering.cells.iter_cells`; every triple it
@@ -13,27 +13,27 @@ yields must round-trip through
 
 The expensive ``instantiate(...)`` checks run on three representative
 cells only — the parametric factory test in
-:mod:`tests.test_init_centering_factory` already covers all 18 at the
-factory level.
+:mod:`tests.test_init_centering_factory` already covers every cell at
+the factory level.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from hydra import compose, initialize_config_dir
-from hydra.core.global_hydra import GlobalHydra
+import pytest
 from hydra_zen import instantiate
+from hydra.core.global_hydra import GlobalHydra
 
 from conf.registry import store
-from ddssm._experiment_registry import register_experiments
 from ddssm.centering.baselines import (
-    IdentityBaseline,
-    LinearBaseline,
     MLPBaseline,
     ZeroBaseline,
+    LinearBaseline,
+    IdentityBaseline,
 )
+from ddssm._experiment_registry import register_experiments
 from experiments.init_centering.cells import (
     BASELINE_FORMS,
     BASELINE_MODES,
@@ -42,7 +42,6 @@ from experiments.init_centering.cells import (
     cell_name,
     iter_cells,
 )
-
 
 CONF_DIR = (
     Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf"
@@ -64,15 +63,15 @@ def _clear_global_hydra():
 # ---------------------------------------------------------------------------
 
 
-def test_iter_cells_yields_exactly_18_distinct_triples() -> None:
-    """The post-auto-clamp grid has 18 unique cells."""
+def test_iter_cells_yields_exactly_12_distinct_triples() -> None:
+    """The post-auto-clamp grid has 12 unique cells."""
     cells = list(iter_cells())
-    assert len(cells) == 18
-    assert len(set(cells)) == 18
-    # Spot-check the math: 2 param-free baselines × pinned-only × 3 tracking
-    # + 2 parametric baselines × 2 modes × 3 tracking = 6 + 12.
+    assert len(cells) == 12
+    assert len(set(cells)) == 12
+    # Spot-check the math: 2 param-free baselines × pinned-only × 2 tracking
+    # + 2 parametric baselines × 2 modes × 2 tracking = 4 + 8.
     pinned_only = [c for c in cells if c[0] in {"zero", "identity"}]
-    assert len(pinned_only) == 6
+    assert len(pinned_only) == 4
     assert all(c[1] == "pinned" for c in pinned_only)
 
 
@@ -94,7 +93,7 @@ def test_canonical_cell_is_in_grid() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_all_18_cells_registered() -> None:
+def test_all_cells_registered() -> None:
     """Every cell's preset name is registered in the experiment store."""
     register_experiments()
     names = {name for _, name in store["experiment"]}
@@ -123,7 +122,7 @@ def test_control_cells_no_longer_registered() -> None:
 _REPRESENTATIVE_CELLS = [
     ("zero", "pinned", "fixed"),       # simplest; reduces to V2 (see other test)
     ("mlp", "pinned", "per_t"),        # canonical cell (== Phase-C pilot)
-    ("linear", "learnable", "global_ema"),  # all-three-axes-distinct exemplar
+    ("linear", "learnable", "per_t"),  # all-three-axes-distinct exemplar
 ]
 
 

@@ -502,6 +502,110 @@ def eval_wallclock_to_target(
     return null_result
 
 
+@register_metric("wallclock_to_relative_target")
+def eval_wallclock_to_relative_target(
+    ctx: EvalContext,
+    *,
+    target_column: str = "loss/total",
+    descent_frac: float = 0.9,
+    time_column: str = "time/elapsed_s",
+    step_column: str = "step",
+) -> Dict[str, Any]:
+    """Wall-clock at which a trial first reached a fraction of its own descent.
+
+    Unlike :func:`eval_wallclock_to_target` (which compares against a
+    fixed threshold), this metric is *self-referential*: each trial
+    defines its own target as
+
+        target_value = init_loss - descent_frac * (init_loss - final_loss)
+
+    where ``init_loss`` is the first finite value of ``target_column``
+    and ``final_loss`` is the last. Reports the step + seconds at
+    which the trial first crossed that value (descending). Always
+    defined for any non-degenerate trial, so useful as a
+    multi-objective diagnostic when paired with the absolute
+    :func:`eval_wallclock_to_target`.
+
+    Note: a trial whose loss bounces (descends then comes back up)
+    will report the time at which it first reached the implied
+    target — which may be mid-trajectory rather than at the end.
+    That is intentional: it measures descent efficiency, not final
+    fit quality.
+    """
+    null_result = {
+        "wallclock_to_relative_target_step": None,
+        "wallclock_to_relative_target_seconds": None,
+        "wallclock_to_relative_target_column": target_column,
+        "wallclock_to_relative_target_descent_frac": float(descent_frac),
+        "wallclock_to_relative_target_init_loss": None,
+        "wallclock_to_relative_target_final_loss": None,
+        "wallclock_to_relative_target_implied_target": None,
+    }
+    if not ctx.csv_path:
+        return null_result
+    import csv as _csv
+    init_v: float | None = None
+    final_v: float | None = None
+    # First pass: find init and final values.
+    try:
+        with open(ctx.csv_path, "r", newline="") as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                raw = row.get(target_column, "")
+                if raw in ("", None):
+                    continue
+                try:
+                    v = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(v):
+                    continue
+                if init_v is None:
+                    init_v = v
+                final_v = v
+    except OSError:
+        return null_result
+    if init_v is None or final_v is None or init_v <= final_v:
+        # No descent (init <= final means loss didn't go down).
+        return null_result
+    implied_target = init_v - float(descent_frac) * (init_v - final_v)
+    null_result["wallclock_to_relative_target_init_loss"] = float(init_v)
+    null_result["wallclock_to_relative_target_final_loss"] = float(final_v)
+    null_result["wallclock_to_relative_target_implied_target"] = float(implied_target)
+    # Second pass: find first crossing.
+    try:
+        with open(ctx.csv_path, "r", newline="") as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                raw = row.get(target_column, "")
+                if raw in ("", None):
+                    continue
+                try:
+                    v = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(v) or v > implied_target:
+                    continue
+                step_raw = row.get(step_column, "")
+                time_raw = row.get(time_column, "")
+                try:
+                    step_int = int(float(step_raw)) if step_raw not in ("", None) else None
+                except (TypeError, ValueError):
+                    step_int = None
+                try:
+                    elapsed = float(time_raw) if time_raw not in ("", None) else None
+                except (TypeError, ValueError):
+                    elapsed = None
+                return {
+                    **null_result,
+                    "wallclock_to_relative_target_step": step_int,
+                    "wallclock_to_relative_target_seconds": elapsed,
+                }
+    except OSError:
+        return null_result
+    return null_result
+
+
 @register_metric("stage2_elbo_surrogate")
 def eval_stage2_elbo_surrogate(
     ctx: EvalContext,

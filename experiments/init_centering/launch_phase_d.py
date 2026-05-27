@@ -1,7 +1,7 @@
-"""Phase-D sbatch launcher — one SLURM job per cell of the 18-cell grid.
+"""Phase-D sbatch launcher — one SLURM job per cell of the ablation grid.
 
 Each cell becomes one Optuna multirun (20 trials by default) wired to
-its own SQLite study so the 18 sweeps run concurrently without
+its own SQLite study so the sweeps run concurrently without
 trampling each other.  The two Phase-D control cells
 (``sigma_pert=0``, ``n_pretrain=0``) submit as single (non-multirun)
 jobs because they have nothing to sweep over.
@@ -43,21 +43,20 @@ the loop to run::
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from typing import Iterable
+import argparse
 
 from hydra_zen import instantiate
 
-from ddssm._experiment_registry import register_experiments
-
 from experiments._sbatch import render_sbatch
+from ddssm._experiment_registry import register_experiments
 from experiments.init_centering.cells import cell_name, iter_cells
 
 
 def all_phase_d_cells() -> list[str]:
-    """The 18 named cell presets Phase D submits.
+    """The named cell presets Phase D submits.
 
     The two ``init_canonical_ctrl_*`` presets were removed per
     ``docs/adr/0002-drop-canonical-controls.md``.
@@ -102,7 +101,7 @@ def _resolve_exp_sbatch(name: str):
     register_experiments()
     from hydra_zen import store
 
-    node = store["experiment"][("experiment", name)]
+    node = store["experiment"]["experiment", name]
     exp = instantiate(node)
     return exp.sbatch
 
@@ -148,7 +147,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m experiments.init_centering.launch_phase_d",
         description=(
-            "Render sbatch scripts for the Phase-D 18-cell grid + 2 controls. "
+            "Render sbatch scripts for the Phase-D ablation grid + 2 controls. "
             "Default is --dry-run: prints scripts to stdout; nothing is submitted."
         ),
     )

@@ -19,7 +19,7 @@ term, :class:`SigmaDataBuffer` in the requested tracking mode, and a
 :class:`StagesConf` running ``stage_1`` → ``stage_2`` with a
 :class:`CenteringHandoffConf` between them.
 
-Phase D registers the full 18-cell grid (one named preset per cell,
+Phase D registers the full ablation grid (one named preset per cell,
 see :mod:`.cells` for the enumerator). The Optuna sweep
 ``+sweep=init_ablation`` (back-compat alias ``init_pilot``) defines
 the 7-dim search space the grilling settled on. The two
@@ -40,7 +40,7 @@ chart, markdown headline table) from the JSONL records alone — so
 plot iterations never touch the model or re-scan disk.
 """
 
-from . import cells, data, evals, experiments, hparams, model, sweeps
+from . import data, cells, evals, model, sweeps, hparams, experiments
 
 __all__ = [
     "cells",

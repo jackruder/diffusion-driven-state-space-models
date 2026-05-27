@@ -1,4 +1,4 @@
-"""Phase-E reporting layer for the init-centering 18-cell ablation grid.
+"""Phase-E reporting layer for the init-centering ablation grid.
 
 Three-stage pipeline keeps **plot iteration** decoupled from
 **model evaluation**:
@@ -44,17 +44,16 @@ layout produced by :mod:`.launch_phase_d`.
 
 from __future__ import annotations
 
-import argparse
-import csv
-import json
-import logging
 import os
+import csv
 import sys
-from dataclasses import asdict, dataclass, field
+import json
 from typing import Any, Iterable, Iterator
+import logging
+import argparse
+from dataclasses import field, asdict, dataclass
 
-from experiments.init_centering.cells import cell_name as _cell_name
-from experiments.init_centering.cells import iter_cells
+from experiments.init_centering.cells import cell_name as _cell_name, iter_cells
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +91,12 @@ class TrialRecord:
     stage2_elbo_surrogate: float | None = None
     wallclock_to_target_seconds: float | None = None
     wallclock_to_target_step: int | None = None
+    # Self-referential diagnostic (time to first reach 90% of own descent).
+    # Always defined for any non-degenerate trial, unlike the fixed-target
+    # wallclock above. Used in the report's MOO diagnostic plot.
+    wallclock_to_relative_target_seconds: float | None = None
+    wallclock_to_relative_target_step: int | None = None
+    wallclock_to_relative_target_implied_target: float | None = None
     crps_sum_latent_mean: float | None = None
     gt_latent_jsd_mean: float | None = None
     # σ_data²(t) summary scalars (mean of the buffer / decomposition sum).
@@ -121,6 +126,9 @@ _SCALAR_COLUMNS: tuple[str, ...] = (
     "stage2_elbo_surrogate",
     "wallclock_to_target_seconds",
     "wallclock_to_target_step",
+    "wallclock_to_relative_target_seconds",
+    "wallclock_to_relative_target_step",
+    "wallclock_to_relative_target_implied_target",
     "crps_sum_latent_mean",
     "gt_latent_jsd_mean",
     "sigma_data2_buffer_mean",
@@ -171,15 +179,25 @@ def _populate_metrics(record: TrialRecord, payload: dict[str, Any]) -> None:
     if isinstance(step, int):
         record.wallclock_to_target_step = step
 
-    if payload.get("crps_sum_latent_available", False):
+    rsecs = payload.get("wallclock_to_relative_target_seconds")
+    if isinstance(rsecs, (int, float)):
+        record.wallclock_to_relative_target_seconds = float(rsecs)
+    rstep = payload.get("wallclock_to_relative_target_step")
+    if isinstance(rstep, int):
+        record.wallclock_to_relative_target_step = rstep
+    impl = payload.get("wallclock_to_relative_target_implied_target")
+    if isinstance(impl, (int, float)):
+        record.wallclock_to_relative_target_implied_target = float(impl)
+
+    if payload.get("crps_sum_latent_available"):
         record.crps_sum_latent_mean = float(payload.get("crps_sum_latent_mean", 0.0))
         record.crps_sum_latent_per_t = list(payload.get("crps_sum_latent_per_t", []))
 
-    if payload.get("gt_latent_jsd_available", False):
+    if payload.get("gt_latent_jsd_available"):
         record.gt_latent_jsd_mean = float(payload.get("gt_latent_jsd_mean", 0.0))
         record.gt_latent_jsd_per_t = list(payload.get("gt_latent_jsd_per_t", []))
 
-    if payload.get("sigma_data_drift_available", False):
+    if payload.get("sigma_data_drift_available"):
         record.sigma_data2_buffer = list(payload.get("sigma_data2_buffer", []))
         record.sigma_data2_t_indices = list(payload.get("sigma_data2_t_indices", []))
         record.sigma_data2_component1_per_t = list(
@@ -194,22 +212,18 @@ def _populate_metrics(record: TrialRecord, payload: dict[str, Any]) -> None:
         )
 
 
-def _populate_optuna(
-    record: TrialRecord,
-    db_path: str,
-    study_name: str,
-) -> None:
-    """Pull trial value, state, params, duration from the cell's Optuna DB."""
+def _load_optuna_trials(db_path: str, study_name: str) -> list[Any] | None:
+    """Load all trials for a study; ``None`` if the DB is missing/broken."""
     if not os.path.isfile(db_path):
         log.info("Optuna DB %s missing; skipping trial-level join for %s",
                  db_path, study_name)
-        return
+        return None
     try:
         import optuna
     except ImportError:
         log.warning("optuna not installed; cannot join trial metadata for %s",
                     study_name)
-        return
+        return None
     try:
         study = optuna.load_study(
             study_name=study_name, storage=f"sqlite:///{db_path}",
@@ -217,14 +231,34 @@ def _populate_optuna(
     except (KeyError, ValueError) as exc:
         log.warning("Could not load Optuna study %s from %s: %s",
                     study_name, db_path, exc)
-        return
-    by_number = {t.number: t for t in study.trials}
-    trial = by_number.get(record.trial_number)
-    if trial is None:
-        return
-    record.optuna_value = (
-        float(trial.value) if trial.value is not None else None
-    )
+        return None
+    return list(study.trials)
+
+
+def _apply_optuna_trial(record: TrialRecord, trial: Any) -> None:
+    """Copy value/state/params/duration off an ``optuna.Trial`` into the record.
+
+    Handles both single- and multi-objective trials. For MOO trials,
+    ``optuna_value`` holds the *first* objective (the wallclock axis in
+    the round-1 MOO setup) so existing "best by optuna_value" callers
+    keep working. The full vector is read via ``trial.values`` from the
+    DB when ``plot_pareto_front`` needs it.
+    """
+    try:
+        v = trial.values  # multi-objective list
+    except AttributeError:
+        v = None
+    if v is not None and isinstance(v, (list, tuple)) and len(v) > 0:
+        record.optuna_value = float(v[0]) if v[0] is not None else None
+    else:
+        # Single-objective path. ``trial.value`` raises RuntimeError on
+        # MOO studies, hence the try/except guard.
+        try:
+            record.optuna_value = (
+                float(trial.value) if trial.value is not None else None
+            )
+        except RuntimeError:
+            record.optuna_value = None
     record.optuna_state = trial.state.name if trial.state is not None else None
     record.params = dict(trial.params)
     if trial.datetime_start is not None and trial.datetime_complete is not None:
@@ -237,6 +271,7 @@ def iter_trial_records(
     *,
     optuna_dir: str,
     study_prefix: str,
+    dataset: str | None = None,
 ) -> Iterator[TrialRecord]:
     """Walk every Phase-D cell's sweep dir and yield one record per trial.
 
@@ -245,14 +280,20 @@ def iter_trial_records(
         {sweeps_root}/{study_prefix}_{cell_name}/{trial_number}/metrics.json
         {optuna_dir}/{study_prefix}_{cell_name}.db
 
+    The tiny / paper_headline launchers add a ``__{ds_label}`` suffix
+    to the cell key (one cell × multiple datasets); pass ``dataset``
+    to look up that variant.
+
     Missing files / databases degrade gracefully — the trial just
     shows up in the output with ``None`` for the corresponding scalars.
     """
     cells_axes = _cell_axes_map()
     targets: list[str] = sorted(cells_axes.keys())
+    ds_suffix = f"__{dataset}" if dataset else ""
 
     for cell in targets:
-        sweep_dir = os.path.join(sweeps_root, f"{study_prefix}_{cell}")
+        cell_key = f"{cell}{ds_suffix}"
+        sweep_dir = os.path.join(sweeps_root, f"{study_prefix}_{cell_key}")
         if not os.path.isdir(sweep_dir):
             log.info("No sweep dir for %s at %s; skipping.", cell, sweep_dir)
             continue
@@ -266,35 +307,79 @@ def iter_trial_records(
         # presets were dropped per ADR-0002.
         is_control = False
 
-        # Trial dirs are numbered subdirs.  Sort numerically.
-        trial_dirs: list[tuple[int, str]] = []
-        for entry in sorted(os.listdir(sweep_dir)):
-            if entry.isdigit():
-                trial_dirs.append((int(entry), os.path.join(sweep_dir, entry)))
-        if not trial_dirs:
+        # Trial dirs may be flat integers (``0/``, ``1/``, ...) from a
+        # single-worker multirun, or worker-prefixed names like
+        # ``w0_0/``, ``w0_1/``, ``w1_0/`` from the multi-worker
+        # ablation script. Discover them by listing subdirs that
+        # contain a ``metrics.json``; sort by the directory's start
+        # time (``.hydra/hydra.yaml`` mtime) so the order matches the
+        # Optuna DB's ``datetime_start`` ordering — which is the join
+        # key when subdir names don't carry the global trial number.
+        candidates: list[tuple[float, str, str]] = []
+        for entry in os.listdir(sweep_dir):
+            p = os.path.join(sweep_dir, entry)
+            if not os.path.isdir(p):
+                continue
+            if not os.path.isfile(os.path.join(p, "metrics.json")):
+                continue
+            hydra_yaml = os.path.join(p, ".hydra", "hydra.yaml")
+            start_time = (
+                os.path.getmtime(hydra_yaml)
+                if os.path.isfile(hydra_yaml) else os.path.getmtime(p)
+            )
+            candidates.append((start_time, entry, p))
+        candidates.sort()
+
+        db_path = os.path.join(optuna_dir, f"{study_prefix}_{cell_key}.db")
+        study_name = f"{study_prefix}_{cell_key}"
+        db_trials_sorted: list = []
+        if not is_control:
+            loaded = _load_optuna_trials(db_path, study_name)
+            if loaded is not None:
+                db_trials_sorted = sorted(
+                    [t for t in loaded if t.datetime_start is not None],
+                    key=lambda t: t.datetime_start,
+                )
+
+        if not candidates:
             # No multirun structure (single-job cell run); the run_dir
-            # IS the sweep_dir.
+            # IS the sweep_dir. Preserve the legacy single-record path.
             trial_dirs = [(0, sweep_dir)]
+            for trial_number, run_dir in trial_dirs:
+                metrics_path = os.path.join(run_dir, "metrics.json")
+                payload = _safe_load_metrics_json(metrics_path) if os.path.isfile(metrics_path) else None
+                record = TrialRecord(
+                    cell_name=cell, baseline_form=form, baseline_mode=mode,
+                    tracking_mode=tracking, trial_number=trial_number,
+                    run_dir=run_dir, is_control=is_control,
+                )
+                if payload is not None:
+                    _populate_metrics(record, payload)
+                yield record
+            continue
 
-        db_path = os.path.join(optuna_dir, f"{study_prefix}_{cell}.db")
-        study_name = f"{study_prefix}_{cell}"
+        for i, (_, entry, run_dir) in enumerate(candidates):
+            # Use the matching DB trial's number when zip-by-start-time
+            # works; otherwise fall back to the integer in the subdir
+            # name (back-compat) or the position index.
+            if i < len(db_trials_sorted):
+                trial_number = int(db_trials_sorted[i].number)
+            elif entry.isdigit():
+                trial_number = int(entry)
+            else:
+                trial_number = i
 
-        for trial_number, run_dir in trial_dirs:
             metrics_path = os.path.join(run_dir, "metrics.json")
             payload = _safe_load_metrics_json(metrics_path) if os.path.isfile(metrics_path) else None
             record = TrialRecord(
-                cell_name=cell,
-                baseline_form=form,
-                baseline_mode=mode,
-                tracking_mode=tracking,
-                trial_number=trial_number,
-                run_dir=run_dir,
-                is_control=is_control,
+                cell_name=cell, baseline_form=form, baseline_mode=mode,
+                tracking_mode=tracking, trial_number=trial_number,
+                run_dir=run_dir, is_control=is_control,
             )
             if payload is not None:
                 _populate_metrics(record, payload)
-            if not is_control:
-                _populate_optuna(record, db_path, study_name)
+            if not is_control and i < len(db_trials_sorted):
+                _apply_optuna_trial(record, db_trials_sorted[i])
             yield record
 
 
@@ -303,6 +388,7 @@ def aggregate(
     *,
     optuna_dir: str,
     study_prefix: str,
+    dataset: str | None = None,
 ) -> list[TrialRecord]:
     """One-shot aggregation: returns all (cell, trial) records as a list."""
     return list(
@@ -310,6 +396,7 @@ def aggregate(
             sweeps_root,
             optuna_dir=optuna_dir,
             study_prefix=study_prefix,
+            dataset=dataset,
         )
     )
 
@@ -498,7 +585,7 @@ def write_headline_table(records: list[TrialRecord], out_path: str) -> str:
     grouped = _group_by_cell(records)
 
     lines: list[str] = [
-        "# Phase E — headline metrics (init-centering 18-cell grid)",
+        "# Phase E — headline metrics (init-centering ablation grid)",
         "",
         "| cell | form | mode | tracking | best stage2_elbo_surrogate | wallclock_to_target (s) | crps_sum_latent | gt_latent_jsd | σ_data² buffer mean | n_trials |",
         "|---|---|---|---|---|---|---|---|---|---|",
@@ -625,13 +712,13 @@ def _records_by_axes(
     out: dict[tuple[str, str, str], TrialRecord] = {}
     for trials in grouped.values():
         best = _best_trial(trials)
-        out[(best.baseline_form, best.baseline_mode, best.tracking_mode)] = best
+        out[best.baseline_form, best.baseline_mode, best.tracking_mode] = best
     return out
 
 
 _BASELINE_FORMS = ("zero", "identity", "linear", "mlp")
 _BASELINE_MODES = ("pinned", "learnable")
-_TRACKING_MODES = ("fixed", "global_ema", "per_t")
+_TRACKING_MODES = ("fixed", "per_t")
 
 
 def plot_baseline_form_ablation(
@@ -734,11 +821,11 @@ def plot_baseline_mode_ablation(
 def plot_tracking_mode_ablation(
     records: list[TrialRecord], out_path: str,
 ) -> str:
-    """Tracking-mode ablation: fixed / global_ema / per_t at every (form, mode).
+    """Tracking-mode ablation: fixed / per_t at every (form, mode).
 
-    One subplot per (form, mode); x-axis is the three tracking modes.
-    Tests whether t-resolved tracking pays off — init-experiment.org §
-    Pairwise-comparison stories, *Tracking mode*.
+    One subplot per (form, mode); x-axis is the two tracking modes.
+    Tests whether t-resolved tracking pays off vs. holding σ_data² = 1
+    — init-experiment.org § Pairwise-comparison stories, *Tracking mode*.
     """
     plt = _import_matplotlib()
     by_axes = _records_by_axes(records)
@@ -779,7 +866,104 @@ def plot_tracking_mode_ablation(
         axes[j // n_cols][j % n_cols].axis("off")
     for r in range(n_rows):
         axes[r][0].set_ylabel("best stage2_elbo_surrogate")
-    fig.suptitle("Phase E — tracking-mode ablation (fixed / global_ema / per_t)")
+    fig.suptitle("Phase E — tracking-mode ablation (fixed / per_t)")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    return out_path
+
+
+def _pareto_front_indices(points: list[tuple[float, float]]) -> list[int]:
+    """Indices of (x, y) points that are non-dominated under minimise-both.
+
+    Naive O(n²) sweep — fine for the 30-60 trials-per-cell scale.
+    """
+    n = len(points)
+    on_front = [True] * n
+    for i in range(n):
+        if not on_front[i]:
+            continue
+        xi, yi = points[i]
+        for j in range(n):
+            if i == j or not on_front[j]:
+                continue
+            xj, yj = points[j]
+            # j strictly dominates i if j <= i on both axes and < on at least one.
+            if xj <= xi and yj <= yi and (xj < xi or yj < yi):
+                on_front[i] = False
+                break
+    return [i for i, keep in enumerate(on_front) if keep]
+
+
+def plot_pareto_front(
+    records: list[TrialRecord], out_path: str,
+) -> str:
+    """Per-cell Pareto front: (wallclock_to_target_seconds, stage2_elbo_surrogate).
+
+    Round-1 MOO sweeps optimise these two axes jointly via NSGA-II.
+    The front per cell shows the trade-off between *speed* to a fixed
+    ELBO threshold and *depth* of final fit. Trials that never hit the
+    threshold (penalty = full training wallclock) cluster at the right
+    edge of the x-axis; trials with the deepest fits cluster at the
+    bottom of the y-axis.
+    """
+    plt = _import_matplotlib()
+    grouped = _group_by_cell(records)
+    cells = sorted(grouped.keys())
+    if not cells:
+        return out_path
+
+    n_cols = min(3, len(cells))
+    n_rows = (len(cells) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(4.0 * n_cols, 3.5 * n_rows),
+        squeeze=False,
+    )
+    for ci, cell in enumerate(cells):
+        ax = axes[ci // n_cols][ci % n_cols]
+        trials = grouped[cell]
+        pts: list[tuple[float, float]] = []
+        for t in trials:
+            # ``wallclock_to_target_seconds`` is ``None`` for trials that
+            # never reached the fixed target. Under MOO the penalty value
+            # (full training wallclock) is what Optuna stored as the
+            # first objective; surface that via ``optuna_value`` so
+            # misses are visible on the front, not silently dropped.
+            wc = t.wallclock_to_target_seconds
+            if wc is None:
+                wc = t.optuna_value
+            if wc is None or t.stage2_elbo_surrogate is None:
+                continue
+            pts.append((float(wc), float(t.stage2_elbo_surrogate)))
+        if not pts:
+            ax.set_title(f"{cell}  (no data)", fontsize=9)
+            ax.axis("off")
+            continue
+        xs, ys = zip(*pts)
+        ax.scatter(xs, ys, s=14, alpha=0.55, color="0.5", label="dominated")
+        front_idx = _pareto_front_indices(pts)
+        if front_idx:
+            fxs = [pts[i][0] for i in front_idx]
+            fys = [pts[i][1] for i in front_idx]
+            order = sorted(range(len(fxs)), key=lambda k: fxs[k])
+            fxs = [fxs[k] for k in order]
+            fys = [fys[k] for k in order]
+            ax.plot(fxs, fys, "-o", color="C3", markersize=6,
+                    linewidth=1.5, label=f"front (n={len(fxs)})")
+        ax.set_xlabel("wallclock to target (s)", fontsize=8)
+        ax.set_ylabel("stage2_elbo_surrogate", fontsize=8)
+        ax.set_title(cell.replace("init_", ""), fontsize=9)
+        ax.grid(True, linestyle=":", linewidth=0.5)
+        ax.legend(fontsize=7, loc="best")
+    for j in range(len(cells), n_rows * n_cols):
+        axes[j // n_cols][j % n_cols].axis("off")
+    fig.suptitle(
+        "Round-1 MOO Pareto front per cell — "
+        "(wallclock_to_target, stage2_elbo_surrogate), both minimise"
+    )
     fig.tight_layout(rect=(0, 0, 1, 0.96))
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -798,6 +982,7 @@ def _cmd_aggregate(args: argparse.Namespace) -> int:
         args.sweeps_root,
         optuna_dir=args.optuna_dir,
         study_prefix=args.study_prefix,
+        dataset=args.dataset,
     )
     summary, jsonl = save_artifacts(records, args.out)
     print(f"Aggregated {len(records)} trials")
@@ -824,6 +1009,7 @@ def _cmd_plot(args: argparse.Namespace) -> int:
     plot_tracking_mode_ablation(
         records, os.path.join(out_dir, "pairwise_tracking_mode.png"),
     )
+    plot_pareto_front(records, os.path.join(out_dir, "pareto_front.png"))
     print(f"Wrote plots + headline + distribution + pairwise panels to {out_dir}")
     return 0
 
@@ -861,6 +1047,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Study-name + sweep-dir prefix (default phase_d).",
     )
     agg_common.add_argument(
+        "--dataset", default=None,
+        help=(
+            "Dataset label appended as '__{dataset}' to each cell key "
+            "by launch_ablation_tiny / launch_paper_headline (e.g. 'mv', "
+            "'1d'). Omit when reporting on a single-dataset layout."
+        ),
+    )
+    agg_common.add_argument(
         "--out", required=True,
         help="Where to write summary.csv + records.jsonl.",
     )
@@ -887,9 +1081,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.cmd == "plot":
-        if args.in_dir is None and args.records is None:
-            parser.error("plot: one of --in or --records is required")
+    if args.cmd == "plot" and args.in_dir is None and args.records is None:
+        parser.error("plot: one of --in or --records is required")
 
     cmd = {
         "aggregate": _cmd_aggregate,

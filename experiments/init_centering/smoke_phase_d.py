@@ -3,7 +3,7 @@
 This is the recommended sanity check *before* submitting the real
 20-job SLURM batch.  It:
 
-1. Iterates every cell of the 18-cell grid + 2 controls.
+1. Iterates every cell of the ablation grid + 2 controls.
 2. Runs each as a single local ``python -m ddssm.app`` job (no
    Optuna, no SLURM, no multirun) with tiny step counts.
 3. Pins each cell's ``hydra.run.dir`` to
@@ -30,12 +30,12 @@ Custom step count + report::
 
 from __future__ import annotations
 
-import argparse
 import os
-import subprocess
 import sys
 import time
 from typing import Iterable
+import argparse
+import subprocess
 
 from experiments.init_centering.launch_phase_d import all_phase_d_cells
 

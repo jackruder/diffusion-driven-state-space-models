@@ -20,16 +20,16 @@ and dropped during grilling).
 
 from __future__ import annotations
 
-from hydra import compose, initialize_config_dir
-from hydra.core.global_hydra import GlobalHydra
-from hydra_zen import instantiate
-import pytest
-
-from conf.registry import store
-from ddssm._experiment_registry import register_experiments
-from ddssm.experiment import Experiment, ObjectiveSpec
 from pathlib import Path
 
+from hydra import compose, initialize_config_dir
+import pytest
+from hydra_zen import instantiate
+from hydra.core.global_hydra import GlobalHydra
+
+from conf.registry import store
+from ddssm.experiment import Experiment, ObjectiveSpec
+from ddssm._experiment_registry import register_experiments
 
 CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
 
@@ -75,6 +75,7 @@ def test_high_surface_smoke_instantiates() -> None:
         "stage2_elbo_surrogate",
         "sigma_data_drift",
         "wallclock_to_target",
+        "wallclock_to_relative_target",
         "crps_sum_latent",
         "gt_latent_jsd",
         "q_aux_kl_trajectory",
@@ -139,6 +140,7 @@ def test_high_surface_smoke_end_to_end_writes_metrics_json(
     """train() chains eval, writes ``metrics.json``, returns a finite float."""
     import json
     import math as _math
+
     import torch
 
     cfg = store["experiment"]["experiment", "init_smoke_high_surface"]

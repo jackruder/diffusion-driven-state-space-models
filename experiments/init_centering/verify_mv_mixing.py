@@ -29,16 +29,15 @@ Run::
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
+import argparse
 
 import numpy as np
-import torch
 
 from ddssm.data.synthetic import (
-    NLBL_MV_LATENT_D,
     NLBL_MV_OBS_D,
+    NLBL_MV_LATENT_D,
     SyntheticDataset,
 )
 

@@ -12,7 +12,7 @@ dataset). N is whatever the user picks via ``--top-cells``.
 Run (dry-run by default)::
 
     python -m experiments.init_centering.launch_paper_headline --dry-run \\
-        --top-cells init_mlp_pinned_per_t init_mlp_learnable_per_t init_linear_pinned_global_ema
+        --top-cells init_mlp_pinned_per_t init_mlp_learnable_per_t init_linear_pinned_fixed
 
 Write to disk::
 
@@ -25,18 +25,15 @@ Write to disk::
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
-from typing import Iterable
+import argparse
 
 from hydra_zen import instantiate
 
-from ddssm._experiment_registry import register_experiments
 from experiments._sbatch import render_sbatch
-from experiments.init_centering.cells import cell_name as _cell_name
-from experiments.init_centering.cells import iter_cells
-
+from ddssm._experiment_registry import register_experiments
+from experiments.init_centering.cells import cell_name as _cell_name, iter_cells
 
 # Mirror of TINY_DATASETS in launch_ablation_tiny, but with the
 # paper-headline latent_dim (2× the data's true latent dim) and the
@@ -110,7 +107,7 @@ def _resolve_exp_sbatch(name: str):
     register_experiments()
     from hydra_zen import store
 
-    node = store["experiment"][("experiment", name)]
+    node = store["experiment"]["experiment", name]
     exp = instantiate(node)
     return exp.sbatch
 
@@ -162,7 +159,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--top-cells", nargs="+", required=True, metavar="CELL",
         help="The N top cells from the ablation (variable arity). Example: "
-             "--top-cells init_mlp_pinned_per_t init_linear_learnable_global_ema",
+             "--top-cells init_mlp_pinned_per_t init_linear_learnable_fixed",
     )
     p.add_argument(
         "--study-prefix", default="paper",

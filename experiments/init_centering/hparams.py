@@ -24,11 +24,11 @@ from typing import Literal
 from hydra_zen import builds
 
 from ddssm.stages import (
-    LambdaRampConf,
     StagesConf,
     StageLrsConf,
     EarlyStopSpec,
     StageSpecConf,
+    LambdaRampConf,
     StageTrainableConf,
 )
 from ddssm.builders import Hparams, Training, CenteringHandoff

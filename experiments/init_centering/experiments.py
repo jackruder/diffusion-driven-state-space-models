@@ -1,4 +1,4 @@
-"""Named init-centering experiments: two role-specific smokes + 18-cell grid.
+"""Named init-centering experiments: two role-specific smokes + ablation grid.
 
 The two smoke presets are the canonical entry points (CONTEXT.md § Simple-smoke
 cell / High-surface-smoke cell):
@@ -14,7 +14,7 @@ cell / High-surface-smoke cell):
 
 The legacy ``init_centering_smoke`` and ``init_centering_pilot`` presets
 were dropped per CONTEXT.md (the term "pilot" was overloaded). Use the
-two smokes above + the 18-cell grid + the ``init_ablation`` sweep
+two smokes above + the ablation grid + the ``init_ablation`` sweep
 instead.
 """
 
@@ -22,19 +22,22 @@ from __future__ import annotations
 
 from conf.registry import experiment_store
 from experiments._make import experiment
-from experiments.init_centering.cells import (
-    cell_name,
-    iter_cells,
-)
 from experiments.init_centering.data import (
     Harmonic,
     NonlinBimodalLift1D,
     NonlinBimodalLiftMV,
 )
-from experiments.init_centering.evals import PilotEval, PilotObjective
-from experiments.init_centering.hparams import SmokeHparams, StagesB, Training800
+from experiments.init_centering.cells import (
+    cell_name,
+    iter_cells,
+)
+from experiments.init_centering.evals import (
+    PilotEval,
+    PilotMOObjective,
+    PilotObjective,
+)
 from experiments.init_centering.model import SmokeModel
-
+from experiments.init_centering.hparams import StagesB, Training800, SmokeHparams
 
 # ---------------------------------------------------------------------------
 # Simple-smoke cell: (zero, pinned, fixed) on the 1D ablation dataset.
@@ -92,7 +95,7 @@ experiment_store(init_smoke_high_surface, name="init_smoke_high_surface")
 
 
 # ---------------------------------------------------------------------------
-# Phase D — the full 18-cell ablation grid.
+# Phase D — the full ablation grid.
 #
 # One named preset per cell, all sharing the canonical-cell training
 # scaffold but with the three cell axes (``baseline_form``,
@@ -110,7 +113,7 @@ experiment_store(init_smoke_high_surface, name="init_smoke_high_surface")
 #       hydra.sweeper.n_trials=20 \
 #       hydra.sweeper.study_name=phase_d_mlp_pinned_per_t
 #
-# Submit all 18 cells via SLURM:
+# Submit every cell via SLURM:
 #   python -m experiments.init_centering.launch_phase_d --write-dir runs/sbatch/phase_d
 # ---------------------------------------------------------------------------
 
@@ -126,7 +129,12 @@ for _form, _mode, _tracking in iter_cells():
         hparams=SmokeHparams,
         training=Training800,
         eval=PilotEval,
-        objective=PilotObjective,
+        # Multi-objective: (wallclock_to_target, stage2_elbo_surrogate).
+        # Pair with the ``ddssm_optuna_moo`` sweeper preset that sets
+        # ``direction: [minimize, minimize]``. Override the target
+        # value via Hydra
+        # ``experiment.eval.kwargs.wallclock_to_target.target_value=...``.
+        objective=PilotMOObjective,
     )
     experiment_store(_cell_exp, name=cell_name(_form, _mode, _tracking))
 
