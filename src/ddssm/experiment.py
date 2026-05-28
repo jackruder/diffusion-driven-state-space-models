@@ -48,7 +48,7 @@ class TrainingScalars:
     validate_every: int = 0
     checkpoint_every: int | None = None
     checkpoint_prefix: str | None = None
-    amp: bool = False
+    amp: bool = True  # bf16 autocast (see train.py); project default
     profile_steps: int = 0
     resume_from: str | None = None
     trainable: StageTrainableConf | None = None

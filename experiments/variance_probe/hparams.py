@@ -24,7 +24,7 @@ Probe = Hparams(
 )
 
 
-Probe300 = Training(steps=300, log_every=20, checkpoint_every=25, amp=False)
+Probe300 = Training(steps=300, log_every=20, checkpoint_every=25, amp=True)
 
 
 hparams_store(Probe, name="probe")

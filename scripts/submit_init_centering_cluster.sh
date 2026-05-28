@@ -64,17 +64,17 @@ SBATCH_ACCOUNT=${SBATCH_ACCOUNT:-priority-michaelwojnowicz}
 # it has the most parameters in round 1 and is the headline cell.
 A100_CELL="init_mlp_pinned_per_t"
 
-# Concurrency knobs by GPU type. A40 is ~0.75× of an RTX 4090 for this
-# workload; to fit 96 trials × 5000 steps in 16h we need 6 A40 workers
-# (4 would push the cell wallclock to ~20-25h). A100 stays at 6 — it's
-# already so fast that more workers buy little.
-A100_WORKERS=6
-A40_WORKERS=6
+# Concurrency knobs by GPU type. 8 workers/tasks so 128 trials divide
+# evenly (16 each). On gpuunsafe each is its own array task (own A40); on
+# the packed gpupriority cells they share one GPU (~8×3.5 ≈ 28 GB on the
+# 48 GB A40 — comfortable). A40 is ~0.75× of an RTX 4090 for this workload.
+A100_WORKERS=8
+A40_WORKERS=8
 
 # Total Optuna trials per cell. Distributed across workers via
 # ``hydra.sweeper.n_trials = TOTAL_TRIALS / N_WORKERS`` — choose values
-# that divide cleanly (96 = 6×16 = 8×12; 48 = 6×8 = 4×12).
-TOTAL_TRIALS=${TOTAL_TRIALS:-96}
+# that divide cleanly (128 = 8×16; 96 = 6×16; 48 = 6×8 = 4×12).
+TOTAL_TRIALS=${TOTAL_TRIALS:-128}
 
 # Training and objective knobs (round-1 design):
 STAGE2_STEPS=${STAGE2_STEPS:-5000}

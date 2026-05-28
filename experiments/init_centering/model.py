@@ -110,6 +110,10 @@ def _build_init_centering_model(
     baseline_n_layers: int = 2,
     # --- Centering / regulariser scalars ---
     anchor_lambda: float | None = None,  # None ⇒ 0.0 (pinned) / 1e-2 (learnable)
+    # σ_data² tracking-EMA decay (used only by global_ema / per_t tracking
+    # modes; ignored when tracking_mode="fixed"). Distinct from the
+    # transition-weight EMA in ``hparams.ema_decay``.
+    sigma_data_ema_decay: float = 0.997,
     # --- Stage-2 diffusion schedule ---
     diffusion_S_k: int = 1,
     diffusion_k_chunk: int = 1,
@@ -173,6 +177,7 @@ def _build_init_centering_model(
     )
     sigma_data = SigmaDataBuffer(
         T_max=T_max, tracking_mode=tracking_mode, init_value=1.0,
+        ema_decay=sigma_data_ema_decay,
     )
 
     # ---- stage-1 transition (Gaussian closed-form) ----

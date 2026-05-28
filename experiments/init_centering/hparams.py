@@ -43,6 +43,7 @@ SmokeHparams = Hparams(
     S=1,
     batch_size=16,
     grad_accum_steps=1,
+    ema_decay=0.997,
     enc_lr=LR,
     dec_lr=LR,
     zinit_lr=LR,
@@ -55,7 +56,7 @@ LAMBDA_SIGMA_P = 1e-2
 
 # Single-fit fallback (used by Experiment.train *only* if model.config.stages
 # is None — the smoke preset configures stages so this is informational only).
-Training800 = Training(steps=800, log_every=25, checkpoint_every=200, amp=False)
+Training800 = Training(steps=800, log_every=25, checkpoint_every=200, amp=True)
 
 
 def _build_init_centering_stages(

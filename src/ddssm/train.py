@@ -591,7 +591,12 @@ class DDSSMTrainer:
         self._safe_resume(resume_from)
 
         data_iter = iter(train_loader)
-        scaler = torch.amp.GradScaler("cuda", enabled=amp)
+        # The autocast above uses bf16, which has fp32's exponent range and
+        # needs no gradient scaling — so the scaler stays disabled even under
+        # AMP. (GradScaler exists for fp16 underflow; enabling it for bf16 is
+        # dead work and bit-identical to disabled.) The amp branches in
+        # _backward_loss / _optimizer_step then pass through correctly.
+        scaler = torch.amp.GradScaler("cuda", enabled=False)
         start_step = self.global_step
 
         do_profile = profile_steps > 0
