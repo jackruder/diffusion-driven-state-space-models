@@ -7,7 +7,9 @@
 #   - `count_max`: max concurrent GPUs across all jobs (SLURM only)
 #
 # Cluster (all slurm-* profiles): Tempest (Montana State University)
-#   login: tempest-login   user: z89p425   account: priority-michaelwojnowicz
+#   login: tempest-login   user: z89p425
+#   account is PER-PARTITION: gpupriority → priority-michaelwojnowicz,
+#   gpuunsafe → group-michaelwojnowicz (wrong account → PartitionConfig).
 #   environment: lmod modules (no nix). uv is a module — no bootstrap.
 #   Setup steps for cluster runs:
 #     module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22
@@ -117,7 +119,7 @@ profiles:
     availability: preemptible
     slurm:
       partition: gpuunsafe
-      account: priority-michaelwojnowicz
+      account: group-michaelwojnowicz         # gpuunsafe requires the group- account, not priority-
       gres: gpu:a40:1                         # type-qualified
       qos: null
       timeout_min_default: 720

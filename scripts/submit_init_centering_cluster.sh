@@ -9,7 +9,9 @@
 #   - 6 cells                     -> A40  on gpuunsafe, preempt w/ --requeue (N=6).
 # All 8 run concurrently (gpuunsafe is uncapped; both gpupriority slots used).
 # GRES is type-qualified (gpu:a100:1 / gpu:a40:1) so cells land on the
-# intended GPU. Jobs run under the priority-michaelwojnowicz account.
+# intended GPU. Account is per-partition: gpupriority cells run under
+# priority-michaelwojnowicz, gpuunsafe cells under group-michaelwojnowicz
+# (wrong account → PENDING with Reason=PartitionConfig).
 #
 # Preemption note: gpuunsafe jobs can be killed and requeued. Per the
 # handoff protocol, parametric-μ_p forms need an uninterrupted stage-1;
@@ -56,9 +58,12 @@ CLUSTER_OPTUNA_DIR=${CLUSTER_OPTUNA_DIR:-${CLUSTER_BASE}/optuna}
 CLUSTER_VENV=${CLUSTER_VENV:-${CLUSTER_BASE}/.venv}
 MODULE_LOADS=${MODULE_LOADS:-"Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22"}
 
-# SLURM account. michaelwojnowicz is the account with GPU access on
-# Tempest. Override via SBATCH_ACCOUNT=<acct>; empty string omits it.
-SBATCH_ACCOUNT=${SBATCH_ACCOUNT:-priority-michaelwojnowicz}
+# SLURM account is PER-PARTITION on Tempest: gpupriority requires
+# priority-michaelwojnowicz, gpuunsafe requires group-michaelwojnowicz.
+# Submitting with the wrong account → the partition's AllowAccounts
+# rejects it → the job sits PENDING with Reason=PartitionConfig forever.
+PACKED_ACCOUNT=${PACKED_ACCOUNT:-priority-michaelwojnowicz}  # gpupriority cells
+ARRAY_ACCOUNT=${ARRAY_ACCOUNT:-group-michaelwojnowicz}       # gpuunsafe cells
 
 # A100 cell. The canonical (mlp, pinned, per_t) gets the fast GPU since
 # it has the most parameters in round 1 and is the headline cell.
@@ -104,9 +109,16 @@ A40_GRES=${A40_GRES:-gpu:a40:1}
 A40_PRIORITY_CELL=${A40_PRIORITY_CELL:-init_mlp_pinned_fixed}
 A40_PRIORITY_PARTITION=${A40_PRIORITY_PARTITION:-gpupriority}
 
+# Host RAM per job, by shape. gpuunsafe rejected 64G (PartitionConfig);
+# 16G schedules fine and is ample for a 1-worker array task. The packed
+# gpupriority cells run 8 worker processes in ONE job (~2 GB host RAM
+# each), so they get more. Tune PACKED_MEM down if gpupriority's
+# MaxMemPerNode is lower than this.
+ARRAY_MEM=${ARRAY_MEM:-16G}     # gpuunsafe array tasks (1 worker each)
+PACKED_MEM=${PACKED_MEM:-32G}   # gpupriority packed cells (8 workers/job)
+
 # Submission gating.
 DRY_RUN=${DRY_RUN:-0}        # 1 = don't sbatch, just render the wrapped scripts
-SBATCH_MEM=${SBATCH_MEM:-64G}
 # Cell filter (glob against the cell name, e.g. 'init_zero_pinned_fixed' or
 # 'init_zero*'). Default '*' = all 8 cells. Use it to submit one cell for a
 # small validation run before the full launch.
@@ -179,13 +191,6 @@ if [[ -n "$A40_PRIORITY_CELL" ]]; then
   echo "Pinning A40 cell '$A40_PRIORITY_CELL' to the non-preempt gpupriority A40."
 fi
 
-# Account directive, injected into each wrapped sbatch header. A comment
-# (not a blank line) when unset, to keep the header tidy.
-SBATCH_ACCOUNT_LINE="# (no --account configured)"
-if [[ -n "$SBATCH_ACCOUNT" ]]; then
-  SBATCH_ACCOUNT_LINE="#SBATCH --account=${SBATCH_ACCOUNT}"
-fi
-
 # 2. For each base sbatch, build a wrapper. Two shapes:
 #    - gpupriority cells (A100 + pinned A40): one job that PACKS N worker
 #      processes on its single non-preempt GPU, sharing the cell's study.
@@ -210,6 +215,8 @@ for base in "$SBATCH_DIR/_base"/init_*__mv.sbatch; do
     gpu_label="a100"
     partition=$A100_PARTITION
     gres=$A100_GRES
+    mem=$PACKED_MEM
+    account=$PACKED_ACCOUNT
     use_array=0
     # gpupriority is non-preemptible — no requeue needed.
     requeue_line="# (gpupriority: non-preemptible, no --requeue)"
@@ -220,6 +227,8 @@ for base in "$SBATCH_DIR/_base"/init_*__mv.sbatch; do
     gpu_label="a40-prio"
     partition=$A40_PRIORITY_PARTITION
     gres=$A40_GRES
+    mem=$PACKED_MEM
+    account=$PACKED_ACCOUNT
     use_array=0
     requeue_line="# (gpupriority A40: non-preemptible, no --requeue)"
   else
@@ -228,9 +237,19 @@ for base in "$SBATCH_DIR/_base"/init_*__mv.sbatch; do
     gpu_label="a40"
     partition=$A40_PARTITION
     gres=$A40_GRES
+    mem=$ARRAY_MEM
+    account=$ARRAY_ACCOUNT
     use_array=1
     # gpuunsafe is preemptible — array tasks each requeue independently.
     requeue_line="#SBATCH --requeue"
+  fi
+
+  # Per-cell account directive (partition-dependent on Tempest). A comment
+  # rather than a blank line when unset, to keep the header tidy.
+  if [[ -n "$account" ]]; then
+    acct_line="#SBATCH --account=${account}"
+  else
+    acct_line="# (no --account configured)"
   fi
 
   trials_per_worker=$(( TOTAL_TRIALS / n_workers ))
@@ -277,13 +296,13 @@ PY
 #!/bin/bash
 #SBATCH --job-name=${cell}__mv
 #SBATCH --partition=${partition}
-${SBATCH_ACCOUNT_LINE}
+${acct_line}
 #SBATCH --time=${time_budget}
 #SBATCH --gres=${gres}
 #SBATCH --requeue
 #SBATCH --array=0-${array_max}
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=${SBATCH_MEM}
+#SBATCH --mem=${mem}
 #SBATCH --nodes=1
 #SBATCH --output=${CLUSTER_RUNS_DIR}/slurm-${STUDY_PREFIX}-${cell}__mv-%A_%a.out
 
@@ -311,12 +330,12 @@ EOF
 #!/bin/bash
 #SBATCH --job-name=${cell}__mv
 #SBATCH --partition=${partition}
-${SBATCH_ACCOUNT_LINE}
+${acct_line}
 #SBATCH --time=${time_budget}
 #SBATCH --gres=${gres}
 ${requeue_line}
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=${SBATCH_MEM}
+#SBATCH --mem=${mem}
 #SBATCH --nodes=1
 #SBATCH --output=${CLUSTER_RUNS_DIR}/slurm-${STUDY_PREFIX}-${cell}__mv-%j.out
 
