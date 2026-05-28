@@ -71,14 +71,14 @@ ARRAY_ACCOUNT=${ARRAY_ACCOUNT:-group-michaelwojnowicz}       # gpuunsafe cells
 
 # A100 cell. The canonical (mlp, pinned, per_t) gets the fast GPU since
 # it has the most parameters in round 1 and is the headline cell.
-A100_CELL="init_mlp_pinned_per_t"
+A100_CELL=${A100_CELL:-init_mlp_pinned_per_t}
 
 # Concurrency knobs by GPU type. 8 workers/tasks so 128 trials divide
 # evenly (16 each). On gpuunsafe each is its own array task (own A40); on
 # the packed gpupriority cells they share one GPU (~8×3.5 ≈ 28 GB on the
 # 48 GB A40 — comfortable). A40 is ~0.75× of an RTX 4090 for this workload.
-A100_WORKERS=8
-A40_WORKERS=8
+A100_WORKERS=${A100_WORKERS:-8}
+A40_WORKERS=${A40_WORKERS:-8}
 
 # Total Optuna trials per cell. Distributed across workers via
 # ``hydra.sweeper.n_trials = TOTAL_TRIALS / N_WORKERS`` — choose values
