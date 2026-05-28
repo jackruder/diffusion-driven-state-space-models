@@ -257,6 +257,13 @@ for base in "$SBATCH_DIR/_base"/init_*__mv.sbatch; do
   fi
 
   trials_per_worker=$(( TOTAL_TRIALS / n_workers ))
+  # Integer division: if TOTAL_TRIALS < n_workers this is 0, which makes
+  # the sweeper run zero trials and then crash writing its summary into a
+  # sweep dir Hydra never created. Fail loudly instead.
+  if (( trials_per_worker < 1 )); then
+    echo "ERROR: cell '$cell' would run 0 trials/worker (TOTAL_TRIALS=$TOTAL_TRIALS / n_workers=$n_workers). Set TOTAL_TRIALS >= n_workers (or lower A40_WORKERS/A100_WORKERS)."
+    exit 1
+  fi
   # Pull the python command out of the launcher's base sbatch, then:
   #   - rewrite n_trials to per-worker,
   #   - substitute cluster paths in for the launcher's local staging
@@ -294,6 +301,9 @@ import sqlite3, pathlib, sys
 p = pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True, exist_ok=True)
 sqlite3.connect(str(p)).close()
 PY
+    # Pre-create the cell's hydra.sweep.dir so the sweeper's end-of-run
+    # optimization_results.yaml write never hits a missing directory.
+    mkdir -p "${CLUSTER_SWEEPS_DIR}/${STUDY_PREFIX}_${cell}__mv"
   fi
 
   wrapped="$SBATCH_DIR/${cell}__mv.sbatch"
