@@ -62,11 +62,11 @@ profiles:
       array_limit: null                       # TODO: confirm
     setup:
       - "module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22"
-      - "source /home/z89p425/ddssm/.venv/bin/activate   # or: uv run ..."
+      - "source /home/z89p425/diffusion-driven-state-space-models/.venv/bin/activate   # or: uv run ..."
     storage:
-      runs_dir: /home/z89p425/ddssm/runs
-      scratch: /home/z89p425/ddssm/scratch
-      optuna_db_dir: /home/z89p425/ddssm/optuna
+      runs_dir: /home/z89p425/diffusion-driven-state-space-models/runs
+      scratch: /home/z89p425/diffusion-driven-state-space-models/scratch
+      optuna_db_dir: /home/z89p425/diffusion-driven-state-space-models/optuna
       shared_fs: true                         # confirmed: cluster FS visible across nodes
     notes:
       - "Use for high-value single-experiment runs; not the right pool for big sweeps."
@@ -95,11 +95,11 @@ profiles:
       array_limit: null                       # TODO: confirm
     setup:
       - "module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22"
-      - "source /home/z89p425/ddssm/.venv/bin/activate   # or: uv run ..."
+      - "source /home/z89p425/diffusion-driven-state-space-models/.venv/bin/activate   # or: uv run ..."
     storage:
-      runs_dir: /home/z89p425/ddssm/runs
-      scratch: /home/z89p425/ddssm/scratch
-      optuna_db_dir: /home/z89p425/ddssm/optuna
+      runs_dir: /home/z89p425/diffusion-driven-state-space-models/runs
+      scratch: /home/z89p425/diffusion-driven-state-space-models/scratch
+      optuna_db_dir: /home/z89p425/diffusion-driven-state-space-models/optuna
       shared_fs: true
     notes:
       - "Confirmed (2026-05-27): gpupriority gives exactly 1 A100 + 1 A40, both"
@@ -130,11 +130,11 @@ profiles:
       array_limit: null                       # TODO: confirm
     setup:
       - "module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22"
-      - "source /home/z89p425/ddssm/.venv/bin/activate   # or: uv run ..."
+      - "source /home/z89p425/diffusion-driven-state-space-models/.venv/bin/activate   # or: uv run ..."
     storage:
-      runs_dir: /home/z89p425/ddssm/runs
-      scratch: /home/z89p425/ddssm/scratch
-      optuna_db_dir: /home/z89p425/ddssm/optuna
+      runs_dir: /home/z89p425/diffusion-driven-state-space-models/runs
+      scratch: /home/z89p425/diffusion-driven-state-space-models/scratch
+      optuna_db_dir: /home/z89p425/diffusion-driven-state-space-models/optuna
       shared_fs: true
     notes:
       - "Canonical A40 pool per the user (2026-05-27): A40 sweeps run here."

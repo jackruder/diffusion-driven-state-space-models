@@ -44,7 +44,11 @@
 # vars if you relocate to /scratch. The script refuses to submit while
 # any value still starts with TODO.
 
-CLUSTER_BASE=${CLUSTER_BASE:-/home/z89p425/ddssm}
+# Default to THIS repo's location: the script must be run from the repo
+# root (the launcher + venv below use repo-relative paths), so $PWD is the
+# checkout — on Tempest that's /home/z89p425/diffusion-driven-state-space-models.
+# The venv ($CLUSTER_BASE/.venv) is exactly where `uv sync` puts it.
+CLUSTER_BASE=${CLUSTER_BASE:-$PWD}
 CLUSTER_RUNS_DIR=${CLUSTER_RUNS_DIR:-${CLUSTER_BASE}/runs}
 CLUSTER_SWEEPS_DIR=${CLUSTER_SWEEPS_DIR:-${CLUSTER_BASE}/sweeps}
 CLUSTER_OPTUNA_DIR=${CLUSTER_OPTUNA_DIR:-${CLUSTER_BASE}/optuna}
