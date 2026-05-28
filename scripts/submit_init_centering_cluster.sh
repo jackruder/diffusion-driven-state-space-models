@@ -280,15 +280,19 @@ for base in "$SBATCH_DIR/_base"/init_*__mv.sbatch; do
   # (the dot in ``oc.env`` isn't a valid bash identifier).
   worker_cmd="${base_cmd} 'hydra.sweep.subdir=w\\\${oc.env:HYDRA_WORKER_ID}_\\\${hydra.job.num}' experiment.training.stages.n_stage2=${STAGE2_STEPS}"
 
-  # Pre-touch the SQLite store in WAL mode once, here on the submit node
-  # (/home is shared FS visible to compute nodes). Doing it once — not in
-  # each job/array-task — avoids array tasks racing on schema creation.
-  # Skipped under DRY_RUN (don't create cluster DBs while just rendering).
+  # Ensure the optuna dir + SQLite file exist, using the DEFAULT (rollback)
+  # journal — NOT WAL. WAL keeps its index in an mmap'd ``-shm`` file that
+  # cannot be shared across hosts on a network filesystem (Lustre /home),
+  # so array tasks on different nodes hit "disk I/O error". Rollback-journal
+  # SQLite works across nodes via POSIX locks. (If heavy 8-task concurrency
+  # later causes "database is locked", the robust fix is Optuna
+  # JournalStorage + JournalFileBackend, which is NFS-safe.) Skipped under
+  # DRY_RUN so rendering doesn't create cluster DBs.
   if (( ! DRY_RUN )); then
     .venv/bin/python - "$db_path" <<'PY'
 import sqlite3, pathlib, sys
 p = pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True, exist_ok=True)
-c = sqlite3.connect(str(p)); c.execute("PRAGMA journal_mode=WAL;"); c.close()
+sqlite3.connect(str(p)).close()
 PY
   fi
 
