@@ -23,6 +23,7 @@ from typing import Literal
 
 from hydra_zen import builds
 
+from ddssm.losses import FullELBO
 from ddssm.stages import (
     StagesConf,
     StageLrsConf,
@@ -30,6 +31,7 @@ from ddssm.stages import (
     StageSpecConf,
     LambdaRampConf,
     StageTrainableConf,
+    make_lambda_cosine,
 )
 from ddssm.builders import Hparams, Training, CenteringHandoff
 
@@ -41,17 +43,14 @@ SmokeHparams = Hparams(
     S=1,
     batch_size=16,
     grad_accum_steps=1,
-    lambda_schedule="cosine",
-    lambda_start=0.001,
-    lambda_end=1.0,
-    lambda_warmup_steps=LAMBDA_WARMUP,
     enc_lr=LR,
     dec_lr=LR,
     zinit_lr=LR,
     trans_lr=LR,
-    lambda_sigma_p=1e-2,  # stage-1 log-variance anchor (per model-v2.org
-    # § State-conditional prior variance; suggested 1e-2 starting point).
 )
+# Stage-1 λ_σp moved to the per-stage loss object in
+# ``_build_init_centering_stages`` (ADR-0004).
+LAMBDA_SIGMA_P = 1e-2
 
 
 # Single-fit fallback (used by Experiment.train *only* if model.config.stages
@@ -139,6 +138,27 @@ def _build_init_centering_stages(
         steps=max(1, int(round(stage_2_warmup_frac * n_stage2))),
         delay=0,
     )
+    # Per-stage loss objects (ADR-0004). Stage 1 carries the
+    # log-variance anchor `λ_σp`; stage 2's `λ_μp` is wired from the
+    # model's `anchor_lambda` at training time (the orchestrator's
+    # default-fallback path reads it).
+    stage1_loss = FullELBO(
+        rate_lambda=make_lambda_cosine(
+            stage1_lambda, total_steps=int(n_pretrain), default_end=1.0,
+        ),
+        lambda_sigma_p=LAMBDA_SIGMA_P,
+        lambda_mu_p=0.0,
+    )
+    stage2_loss = FullELBO(
+        rate_lambda=make_lambda_cosine(
+            stage2_lambda, total_steps=int(n_stage2), default_end=1.0,
+        ),
+        lambda_sigma_p=0.0,
+        # Stage 2 reads `anchor_lambda` off the model when learnable;
+        # the orchestrator's fallback path (loss=None) handles that.
+        # Setting an explicit value here would override it.
+        lambda_mu_p=0.0,
+    )
     return StagesConf(
         stage_1=StageSpecConf(
             steps=int(n_pretrain),
@@ -149,6 +169,7 @@ def _build_init_centering_stages(
             val_every=0,
             checkpoint_every=checkpoint_every,
             early_stop=es if early_stop_enabled else None,
+            loss=stage1_loss,
         ),
         stage_2=StageSpecConf(
             steps=int(n_stage2),
@@ -159,6 +180,9 @@ def _build_init_centering_stages(
             val_every=0,
             checkpoint_every=checkpoint_every,
             centering_handoff=CenteringHandoff(sigma_pert=float(sigma_pert)),
+            # Stage 2 leaves loss=None so the orchestrator builds a
+            # default FullELBO carrying the model's anchor_lambda as
+            # λ_μp (Learnable cells) or 0 (Pinned cells).
         ),
         run=["stage_1", "stage_2"],
     )

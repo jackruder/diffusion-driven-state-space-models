@@ -115,9 +115,6 @@ def _build_init_centering_model(
     diffusion_k_chunk: int = 1,
     diffusion_num_steps: int = 128,
     diffusion_layers: int = 2,
-    # --- Plumb-through ---
-    hyperparams: Any,
-    stages: Any,
 ) -> DDSSM_base:
     """Construct an init-centering DDSSM model parametric over the ablation grid.
 
@@ -241,8 +238,6 @@ def _build_init_centering_model(
         data_dim=data_dim,
         latent_dim=latent_dim,
         emb_time_dim=emb_time_dim,
-        hyperparams=hyperparams,
-        stages=stages,
         use_observation_mask=False,
         # --- VHP-via-diffusion + baseline-centering ---
         aux_posterior=aux_posterior,
@@ -259,8 +254,6 @@ def _build_init_centering_model(
 SmokeModel = builds(
     _build_init_centering_model,
     populate_full_signature=True,
-    hyperparams=MISSING,
-    stages=MISSING,
 )
 
 

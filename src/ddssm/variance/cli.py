@@ -361,6 +361,9 @@ def main(cfg: DictConfig):
 
     os.makedirs(run_dir, exist_ok=True)
     experiment = instantiate(cfg.experiment)
+    experiment.model_config_yaml = OmegaConf.to_yaml(
+        cfg.experiment.model, resolve=True,
+    )
 
     # Per-step sweep mode — auto-trains if no step checkpoints exist
     # yet, then probes every ckpt_step*.pth.

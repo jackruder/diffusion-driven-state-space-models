@@ -16,6 +16,7 @@ from dataclasses import field, dataclass
 from omegaconf import MISSING
 
 from .centering.handoff import CenteringHandoffConf, perform_centering_handoff
+from .losses import FullELBO, Loss
 
 if TYPE_CHECKING:
     from .train import DDSSMTrainer
@@ -110,6 +111,9 @@ class StageSpecConf:
     checkpoint_every: int = 1000
     centering_handoff: CenteringHandoffConf | None = None
     early_stop: EarlyStopSpec | None = None
+    # ADR-0004: per-stage loss object. None ⇒ orchestrator builds a
+    # default `FullELBO` from `lambda_ramp` + model-side reg weights.
+    loss: Loss | None = None
 
 
 @dataclass
@@ -146,7 +150,7 @@ def make_lambda_cosine(spec: LambdaRampConf, total_steps: int, default_end: floa
 
 
 class StageOrchestrator:
-    """Runs a sequence of training stages defined in ``DDSSMConfig.stages``.
+    """Runs a sequence of training stages defined in ``StagesConf``.
 
     For each stage in ``stages.run``:
 
@@ -160,9 +164,9 @@ class StageOrchestrator:
     5. Drive ``trainer.fit`` for ``stage.steps`` training steps.
     """
 
-    def __init__(self, trainer: "DDSSMTrainer", config) -> None:
+    def __init__(self, trainer: "DDSSMTrainer", stages: "StagesConf") -> None:
         self.trainer = trainer
-        self.cfg = config
+        self.stages = stages
 
     def run(
         self,
@@ -171,11 +175,11 @@ class StageOrchestrator:
         amp: bool = False,
         batch_transform=None,
     ) -> None:
-        """Execute every stage listed in ``config.stages.run``."""
-        stages = self.cfg.stages
+        """Execute every stage listed in ``stages.run``."""
+        stages = self.stages
         if stages is None:
             raise AttributeError(
-                "StageOrchestrator.run requires config.stages to be set"
+                "StageOrchestrator.run requires a StagesConf"
             )
 
         for key in stages.run:
@@ -203,28 +207,37 @@ class StageOrchestrator:
 
             # 4. Install the per-stage λ schedule. Computed on the
             # stage-relative step counter (resets at every stage
-            # boundary). When ``stage.lambda_ramp`` is at its defaults
-            # (start=0.001, end=1.0, steps=None) the ramp covers the
-            # whole stage; per-stage factories
-            # (e.g. ``_build_init_centering_stages``) populate the
-            # ramp explicitly per the warmup-fraction grilling decision.
+            # boundary). Per ADR-0004 the loss object owns the
+            # schedule shape; we still keep ``_stage_lambda_fn`` as a
+            # back-compat handle so legacy callers can introspect.
             default_end = 1.0
-            try:
-                default_end = float(
-                    self.trainer.config.hyperparams.lambda_end
-                )
-            except AttributeError:
-                # Mock trainers in unit tests may lack ``config`` —
-                # fall back to the ``LambdaRampConf`` default.
-                pass
-            self.trainer._stage_lambda_fn = make_lambda_cosine(
+            stage_rate_lambda = make_lambda_cosine(
                 stage.lambda_ramp,
                 total_steps=int(stage.steps),
                 default_end=default_end,
             )
+            self.trainer._stage_lambda_fn = stage_rate_lambda
             self.trainer._stage_start_step = int(
                 getattr(self.trainer, "global_step", 0)
             )
+            # Install the active loss object for this stage. If the
+            # preset declared `stage.loss`, use it. Otherwise build a
+            # default `FullELBO` from the stage's `lambda_ramp` and
+            # the model's `anchor_lambda` (the latter is the only
+            # non-loss-object source of λ_μp until anchor_lambda
+            # itself migrates onto the loss object — see ADR-0004
+            # follow-up).
+            if stage.loss is not None:
+                self.trainer._active_loss = stage.loss
+            else:
+                lambda_mu_p = float(
+                    getattr(self.trainer.model, "anchor_lambda", 0.0) or 0.0
+                )
+                self.trainer._active_loss = FullELBO(
+                    rate_lambda=stage_rate_lambda,
+                    lambda_sigma_p=0.0,
+                    lambda_mu_p=lambda_mu_p,
+                )
 
             # 5. Run the stage's training loop.  ``trainer.fit``'s
             # ``total_steps`` is the *cumulative* max step, not per-stage,

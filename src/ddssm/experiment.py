@@ -10,38 +10,24 @@ handles wiring; this class handles orchestration.
 
 from __future__ import annotations
 
+import os
 import csv
 import json
-import logging
 import math
-import os
 import random
-from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import Any, Literal, Callable
+import logging
+from dataclasses import field, dataclass
 
 import numpy as np
 import torch
 
-from .data.datamodule import DDSSMDataModule
 from .dssd import DDSSM_base
 from .train import DDSSMTrainer
+from .stages import StagesConf, StageTrainableConf
+from .data.datamodule import DDSSMDataModule
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class TrainableModules:
-    """Per-module ``requires_grad`` flags applied via ``trainer._set_trainable``.
-
-    Mirrors the ``StageTrainable`` shape used by the multi-stage
-    pipeline so a single field can express recon-only, trans-only, or
-    joint training without each experiment re-stating four flags.
-    """
-
-    encoder: bool = True
-    decoder: bool = True
-    z_init: bool = True
-    transition: bool = True
 
 
 @dataclass
@@ -51,6 +37,10 @@ class TrainingScalars:
     ``trainable`` is applied via ``trainer._set_trainable`` before
     ``fit``; freezing a submodule's ``requires_grad`` is what suppresses
     its gradient contribution for a stage.
+
+    ``stages`` is the multi-stage spec consumed by
+    :class:`StageOrchestrator` — see ``docs/adr/0004-loss-object-split.md``
+    for why this lives on ``training`` rather than ``model.config``.
     """
 
     steps: int = 1000
@@ -61,7 +51,8 @@ class TrainingScalars:
     amp: bool = False
     profile_steps: int = 0
     resume_from: str | None = None
-    trainable: TrainableModules | None = None
+    trainable: StageTrainableConf | None = None
+    stages: StagesConf | None = None
 
     def fit_kwargs(self) -> dict[str, Any]:
         return {
@@ -218,6 +209,47 @@ class ObjectiveSpec:
         return v if math.isfinite(v) else self._apply_penalty(run_dir)
 
 
+def _as_objective_spec(o: object) -> ObjectiveSpec:
+    """Return a live :class:`ObjectiveSpec`, rebuilding it if needed.
+
+    When ``Objectives.specs`` carries nested specs, OmegaConf coerces
+    each element into an ``ObjectiveSpec``-typed ``DictConfig`` and
+    drops its ``_target_``, so ``hydra.utils.instantiate`` never turns
+    it back into a real object with a ``.read`` method. Detect that case
+    (anything that isn't already an ``ObjectiveSpec`` with ``read``) and
+    reconstruct from the carried fields.
+    """
+    if isinstance(o, ObjectiveSpec):
+        return o
+    return ObjectiveSpec(
+        metric=getattr(o, "metric", "loss/total"),
+        split=getattr(o, "split", "train"),
+        tail_frac=getattr(o, "tail_frac", 0.1),
+        source=getattr(o, "source", "csv"),
+        penalty=getattr(o, "penalty", "inf"),
+    )
+
+
+@dataclass
+class Objectives:
+    """Wrapper for multi-objective Optuna runs.
+
+    Holds an ordered list of :class:`ObjectiveSpec` whose values are
+    returned as a Python list — matched against the sweeper's
+    ``direction:`` list. Use this explicit wrapper so the Hydra-zen
+    config carries a proper dataclass type (not a bare list of dicts);
+    that lets ``hydra.utils.instantiate`` recurse into the elements
+    instead of stripping ``_target_`` from list members.
+
+    ``specs`` is typed as bare ``list`` (no inner type) so OmegaConf's
+    strict validator accepts the zen-built ``Builds_ObjectiveSpec``
+    alongside plain :class:`ObjectiveSpec` instances; both work at
+    runtime via duck-typing on ``.metric`` / ``.source`` / ``.read``.
+    """
+
+    specs: list = field(default_factory=list)
+
+
 @dataclass
 class SBatch:
     """Slurm resource request attached to an experiment.
@@ -264,35 +296,40 @@ class Experiment:
     model: DDSSM_base
     build_trainer: Callable[..., DDSSMTrainer]
     training: TrainingScalars = field(default_factory=TrainingScalars)
-    objective: ObjectiveSpec | list[ObjectiveSpec] | None = None
+    objective: ObjectiveSpec | Objectives | None = None
     eval: Any = None  # ddssm.eval.EvalSpec | None -- typed lazily to avoid circular import
     viz: Any = None  # ddssm.viz.VizSpec | None -- typed lazily to avoid circular import
     variance: Any = None  # ddssm.variance.ProbeSpec | None -- typed lazily
     seed: int | None = 0
     wandb_config: dict | None = None
-    # Convenience: same Hparams instance the trainer reads via
-    # ``self.model.config.hyperparams``. Exposed here so callers can
-    # ``exp.hparams.lambda_warmup_steps=...`` or ``tweak(exp,
-    # hparams__lr=1e-3)`` without descending into ``model.config``.
+    # Single source of truth for optimiser-side hparams. Trainer reads
+    # this directly per ADR-0004 (no longer routed through
+    # ``model.config.hyperparams``). Exposed here so callers can
+    # ``exp.hparams.enc_lr=...`` or ``tweak(exp, hparams__lr=1e-3)``.
     hparams: Any = None
     # Slurm resource request, consumed by ``python -m experiments
     # sbatch``. Purely metadata at training time.
     sbatch: SBatch | None = None
+    # Resolved YAML of ``cfg.experiment.model`` (the hydra-zen
+    # ``builds()`` shape, not the runtime SimpleNamespace) — set by the
+    # Hydra entry points (``app.py``, ``evaluate.py``, ``visualize.py``,
+    # ``variance/cli.py``) before calling :meth:`train` /
+    # :meth:`evaluate` etc. Persisted into checkpoints so the load
+    # path can cross-check against a future preset edit (ADR-0005).
+    model_config_yaml: str | None = None
 
-    def train(self, *, device: torch.device, run_dir: str) -> float | DDSSMTrainer:
-        """Run training only. Eval and visualization are separate stages."""
+    def train(self, *, device: torch.device, run_dir: str) -> None:
+        """Run training only. Eval, viz, and objective reads are separate stages.
+
+        Stores the constructed trainer on ``self.trainer`` so
+        :meth:`objective_value` can save a final checkpoint and trigger
+        a json-source evaluate without rebuilding anything.
+        """
         _seed_everything(self.seed)
 
         os.makedirs(run_dir, exist_ok=True)
         csv_log_path = os.path.join(run_dir, "metrics.csv")
         tensorboard_dir = os.path.join(run_dir, "tb_logs")
-
-        # The trainer reads ``model.config.hyperparams.*``. When the caller
-        # passed an :class:`Experiment`-level ``hparams`` (e.g. via
-        # ``tweak(exp, hparams__lr=1e-3)``), make that the authoritative
-        # value seen by the trainer.
-        if self.hparams is not None:
-            self.model.config.hyperparams = self.hparams
 
         # Anchor the checkpoint directory inside ``run_dir`` so a run's
         # outputs are self-contained — Hydra defaults to ``chdir=False``,
@@ -302,13 +339,26 @@ class Experiment:
 
         log.info("Model: %d parameters", sum(p.numel() for p in self.model.parameters()))
         wandb_kwargs = self._wandb_kwargs(run_dir)
-        trainer = self.build_trainer(
+        # Per ADR-0004: caller-supplied ``exp.hparams`` is the single
+        # source of truth at training time. Pass it through to the
+        # trainer so ``tweak(exp, hparams__lr=...)`` reaches optim.
+        # When ``build_trainer`` is the canonical ``TrainerPartial``
+        # built by :func:`experiments._make.experiment`, ``hparams``
+        # is already curried in; this ``hparams=`` override wins so
+        # post-instantiation tweaks take effect.
+        trainer_kwargs: dict[str, Any] = dict(
             model=self.model,
             device=device,
             csv_log_path=csv_log_path,
             tensorboard_dir=tensorboard_dir,
             wandb_config=wandb_kwargs,
         )
+        if self.hparams is not None:
+            trainer_kwargs["hparams"] = self.hparams
+        if self.model_config_yaml is not None:
+            trainer_kwargs["model_config_yaml"] = self.model_config_yaml
+        trainer = self.build_trainer(**trainer_kwargs)
+        self.trainer = trainer
 
         if self.training.trainable is not None:
             log.info("Applying trainable mask: %s", self.training.trainable)
@@ -316,12 +366,12 @@ class Experiment:
 
         train_loader = self.data.train_loader()
         if train_loader is None:
-            log.info("No data attached. Returning trainer without fit().")
-            return trainer
+            log.info("No data attached. Skipping fit().")
+            return
 
         val_loader = self.data.val_loader() if self.training.validate_every > 0 else None
 
-        stages_cfg = getattr(self.model.config, "stages", None)
+        stages_cfg = self.training.stages
         if stages_cfg is not None and getattr(stages_cfg, "run", None):
             # Multi-stage path: drive StageOrchestrator instead of a single fit.
             from .stages import StageOrchestrator
@@ -330,7 +380,7 @@ class Experiment:
                 "Starting multi-stage run via StageOrchestrator (stages=%s)",
                 stages_cfg.run,
             )
-            orchestrator = StageOrchestrator(trainer, self.model.config)
+            orchestrator = StageOrchestrator(trainer, stages_cfg)
             orchestrator.run(
                 train_loader=train_loader,
                 val_loader=val_loader,
@@ -352,45 +402,39 @@ class Experiment:
                 **self.training.fit_kwargs(),
             )
 
-        if self.objective is None:
-            return trainer
+    def objective_value(
+        self, *, device: torch.device, run_dir: str,
+    ) -> float | list[float] | None:
+        """Resolve ``self.objective`` against the artefacts produced by :meth:`train`.
 
-        # Multi-objective: ``objective`` is a list of ObjectiveSpec.
-        # Each is resolved the same way as a single-objective spec; the
-        # returned list is passed straight through to Optuna, which
-        # interprets it according to the sweeper's ``direction:`` list.
-        #
-        # When the experiment came through Hydra, ``self.objective`` is
-        # a ListConfig (not a Python list) and the list elements may
-        # still be DictConfig / dataclass configs (recursive
-        # instantiation doesn't dive into ``Any``-typed list fields).
-        # Lazy-instantiate so the same code handles "configured" and
-        # "raw Python" call sites.
-        try:
-            from omegaconf import ListConfig
-        except ImportError:
-            ListConfig = ()  # type: ignore[misc,assignment]
-        is_multi = isinstance(self.objective, (list, tuple, ListConfig))
-        raw_objectives: list = (
-            list(self.objective) if is_multi else [self.objective]
-        )
-        # OmegaConf strips ``_target_`` from list-of-dataclass-conf
-        # elements during outer instantiation, so we can't call
-        # ``hydra.utils.instantiate`` on the leftover DictConfig. The
-        # remaining fields ARE ObjectiveSpec.__init__ kwargs though,
-        # so rebuild directly.
-        objectives: list[ObjectiveSpec] = []
-        for o in raw_objectives:
-            if isinstance(o, ObjectiveSpec):
-                objectives.append(o)
-                continue
-            try:
-                from omegaconf import OmegaConf
-                fields = OmegaConf.to_container(o, resolve=True)  # type: ignore[arg-type]
-            except (ImportError, TypeError, ValueError):
-                fields = dict(o) if hasattr(o, "keys") else {}
-            fields = {k: v for k, v in fields.items() if k != "_target_"}
-            objectives.append(ObjectiveSpec(**fields))
+        Returns:
+          * ``None`` when ``self.objective`` is unset.
+          * A scalar ``float`` for a single :class:`ObjectiveSpec`.
+          * A ``list[float]`` (matched against the sweeper's
+            ``direction:`` list) when ``self.objective`` is an
+            :class:`Objectives` wrapper.
+
+        Requires :meth:`train` to have been called first when any
+        objective has ``source="json"`` — the json-source branch saves
+        a final checkpoint, runs :meth:`evaluate`, and reads the
+        resulting ``metrics.json``.
+        """
+        if self.objective is None:
+            return None
+
+        csv_log_path = os.path.join(run_dir, "metrics.csv")
+
+        # Multi-objective: ``Objectives(specs=[...])`` wraps an ordered
+        # list whose values are returned as a Python list and matched
+        # against the sweeper's ``direction:`` list. Single-objective:
+        # ``ObjectiveSpec`` returns a scalar.
+        is_multi = isinstance(self.objective, Objectives)
+        objectives: list[ObjectiveSpec] = [
+            _as_objective_spec(o)
+            for o in (
+                list(self.objective.specs) if is_multi else [self.objective]
+            )
+        ]
 
         # If any objective reads from metrics.json we need to evaluate
         # before reading. Do it once and reuse for all json-source specs.
@@ -404,8 +448,15 @@ class Experiment:
                     "None; returning +inf for every objective so the "
                     "trial is skipped cleanly."
                 )
-                penalty_vals = [float("inf")] * len(raw_objectives)
+                penalty_vals = [float("inf")] * len(objectives)
                 return penalty_vals if is_multi else penalty_vals[0]
+            trainer = getattr(self, "trainer", None)
+            if trainer is None:
+                raise RuntimeError(
+                    "Experiment.objective_value: json-source objective "
+                    "requires that .train() ran first to populate "
+                    "self.trainer."
+                )
             final_ckpt = os.path.join(
                 self.model.config.checkpoint_dir, "ckpt_final.pth",
             )
@@ -433,9 +484,6 @@ class Experiment:
         # ObjectiveSpec — keeps the legacy single-objective Optuna path
         # untouched.
         return values if is_multi else values[0]
-
-    # Backward-compat alias; ``ddssm.app`` calls ``train`` directly.
-    run = train
 
     def evaluate(
         self,
@@ -543,8 +591,8 @@ class Experiment:
 
 __all__ = [
     "Experiment",
-    "TrainingScalars",
-    "TrainableModules",
     "ObjectiveSpec",
+    "Objectives",
     "SBatch",
+    "TrainingScalars",
 ]

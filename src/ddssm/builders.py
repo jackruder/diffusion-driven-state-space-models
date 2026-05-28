@@ -61,10 +61,11 @@ from .eval.runner import EvalSpec
 from .experiment import (
     Experiment,
     ObjectiveSpec,
+    Objectives as _ObjectivesDC,
     SBatch as _SBatchDC,
-    TrainableModules,
     TrainingScalars,
 )
+from .stages import StageTrainableConf
 from .fusions import ConcatLinearFusion, DKSFusion, GatedFusion
 from .futsum import GRUFutureSummary, TransformerFutureSummary
 from .gaussians import GaussianHead
@@ -424,13 +425,14 @@ Null = builds(NullDataModule, populate_full_signature=True)
 
 Hparams = builds(DDSSMHyperParamsConf, populate_full_signature=True)
 
-Trainable = builds(TrainableModules, populate_full_signature=True)
+Trainable = builds(StageTrainableConf, populate_full_signature=True)
 Training = builds(
     TrainingScalars,
     populate_full_signature=True,
     trainable=None,
 )
 Objective = builds(ObjectiveSpec, populate_full_signature=True)
+Objectives = builds(_ObjectivesDC, populate_full_signature=True)
 SBatch = builds(_SBatchDC, populate_full_signature=True)
 
 DDSSM = builds(
@@ -491,7 +493,7 @@ __all__ = [
     "Synthetic", "KDD", "Null",
     # Model + training
     "DDSSM", "Hparams",
-    "Trainable", "Training", "Objective", "SBatch",
+    "Trainable", "Training", "Objective", "Objectives", "SBatch",
     "TrainerPartial",
     # Eval / viz / variance
     "Eval", "Plot", "Viz",

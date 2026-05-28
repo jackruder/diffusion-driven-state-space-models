@@ -1,21 +1,23 @@
-"""DDSSMTrainer: training loop, checkpointing, and config I/O for DDSSM models."""
+"""DDSSMTrainer: training loop, EMA, logging, and the fit lifecycle.
+
+The ``.pth`` payload schema lives in :mod:`ddssm.checkpoint`; the
+trainer's ``save_checkpoint`` / ``restore_from_checkpoint`` delegate
+there.
+"""
 
 import os
 import math
 from typing import TYPE_CHECKING, Any, Callable, final
-import tempfile
 from contextlib import nullcontext, contextmanager
 from collections import deque
-from dataclasses import asdict
 
-import yaml
 import torch
 
 if TYPE_CHECKING:
     from .stages import EarlyStopSpec
 
 from torch import optim
-from hydra_zen import builds, instantiate
+from hydra_zen import builds
 from omegaconf import MISSING
 from torch.profiler import (
     ProfilerActivity,
@@ -37,17 +39,6 @@ from .loggers import (
 from .train_utils import (
     param_groups_for_adamw,
 )
-
-
-def _namespace_to_dict(obj: Any) -> Any:
-    """Recursively convert SimpleNamespace / objects to plain dicts for YAML serialisation."""
-    if hasattr(obj, "__dict__") and not isinstance(obj, type):
-        return {k: _namespace_to_dict(v) for k, v in vars(obj).items()}
-    if isinstance(obj, dict):
-        return {k: _namespace_to_dict(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_namespace_to_dict(v) for v in obj)
-    return obj
 
 
 class EMA:
@@ -120,49 +111,72 @@ class DDSSMTrainer:
         self,
         model: "DDSSM_base",
         device: torch.device,
+        hparams: Any = None,
         optimizer: optim.Optimizer | None = None,
         csv_log_path: str | None = None,
         tensorboard_dir: str = "runs/ddssm",
         wandb_config: dict | None = None,
         quiet: bool = False,
+        model_config_yaml: str | None = None,
     ):
         self.model = model.to(device)
         self.device = device
 
+        # Per ADR-0004: hparams flow directly into the trainer (no
+        # longer routed through ``model.config.hyperparams``). When
+        # ``None``, fall back to the project defaults — keeps direct
+        # ``DDSSMTrainer(model, device)`` in tests and notebooks
+        # working without spelling out optimisation knobs.
+        if hparams is None:
+            from .dssd import _default_hyperparams
+            hparams = _default_hyperparams()
+        self.hparams = hparams
+
+        # ADR-0005: resolved YAML of the model's hydra-zen builds()
+        # config. Persisted into checkpoints so the load path can warn
+        # on silent semantic drift (shapes preserved, builder semantics
+        # changed). ``None`` for ad-hoc constructions (tests, notebooks)
+        # that have no Hydra config to serialise.
+        self._model_config_yaml: str | None = model_config_yaml
+
         self.global_step = 0
         # Per-stage λ schedule installed by ``StageOrchestrator`` before
-        # each stage. ``None`` (the single-fit / no-stages path) falls
-        # back to the global ``hparams``-driven schedule from
-        # ``_build_lambda_schedule``.
+        # each stage. Retained for backwards-compat introspection by
+        # tests; the loss object now owns scheduling shape per
+        # ADR-0004. Single-fit runs use the constant λ inside the
+        # default ``FullELBO``.
         self._stage_lambda_fn: Callable[[int], float] | None = None
         self._stage_start_step: int = 0
+        # ADR-0004: active loss object (installed by orchestrator per
+        # stage; constructed lazily at fit() start otherwise).
+        from .losses import Loss
+        self._active_loss: Loss | None = None
 
         # Ensure config is attached
         if not hasattr(self.model, "config"):
             raise AttributeError("Model must have a `.config` attribute.")
-        self.config = self.model.config
 
         self.optimizer = optimizer
         if self.optimizer is None:
             self.optimizer = torch.optim.AdamW(
                 param_groups_for_adamw(
                     self.model,
-                    enc_lr=self.config.hyperparams.enc_lr,
-                    dec_lr=self.config.hyperparams.dec_lr,
-                    trans_lr=self.config.hyperparams.trans_lr,
-                    zinit_lr=self.config.hyperparams.zinit_lr,
-                    weight_decay=self.config.hyperparams.weight_decay,
+                    enc_lr=self.hparams.enc_lr,
+                    dec_lr=self.hparams.dec_lr,
+                    trans_lr=self.hparams.trans_lr,
+                    zinit_lr=self.hparams.zinit_lr,
+                    weight_decay=self.hparams.weight_decay,
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,
             )
 
         self.scheduler = None
-        self.weight_decay = self.config.hyperparams.weight_decay
+        self.weight_decay = self.hparams.weight_decay
 
-        self.grad_accum_steps = self.config.hyperparams.grad_accum_steps
+        self.grad_accum_steps = self.hparams.grad_accum_steps
 
-        self.ema_decay = self.config.hyperparams.ema_decay
+        self.ema_decay = self.hparams.ema_decay
         # EMA on the denoiser (used at sampling time)
         self.ema = EMA(self.model.transition, decay=self.ema_decay)
 
@@ -190,7 +204,7 @@ class DDSSMTrainer:
         self.checkpoint_dir = model.config.checkpoint_dir
 
     def get_batch_size(self) -> int:
-        return self.model.config.hyperparams.batch_size
+        return self.hparams.batch_size
 
     def _set_trainable(self, t):
         """t: StageTrainable"""
@@ -232,126 +246,53 @@ class DDSSMTrainer:
         self.optimizer = torch.optim.AdamW(groups, betas=(0.9, 0.999), eps=1e-8)
 
     # ------------------------
-    # Serialization / Checkpoint
+    # Serialization / Checkpoint  (schema owned by ddssm.checkpoint)
     # ------------------------
-    def save_config(self, path: str):
-        """Dump current config to YAML (supports Pydantic, dataclasses, or SimpleNamespace)."""
-        cfg = self.model.config
-        if hasattr(cfg, "model_dump"):
-            cfg_dict = cfg.model_dump()
-        elif hasattr(cfg, "dict"):
-            cfg_dict = cfg.dict()
-        elif hasattr(cfg, "__dict__"):
-            cfg_dict = {k: _namespace_to_dict(v) for k, v in vars(cfg).items()}
-        else:
-            try:
-                cfg_dict = asdict(cfg)
-            except Exception:
-                cfg_dict = {}
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(path, "w") as f:
-            yaml.safe_dump(cfg_dict, f)
+    def save_checkpoint(self, path: str) -> None:
+        """Persist trainer state via :mod:`ddssm.checkpoint`."""
+        from .checkpoint import save as _save
+        _save(self, path)
 
-    @classmethod
-    def load_from_yaml(
-        cls,
-        yaml_path: str,
-        device: torch.device,
-        optimizer: optim.Optimizer | None = None,
-        **kwargs,
-    ) -> "DDSSMTrainer":
-        from omegaconf import OmegaConf
+    def restore_from_checkpoint(self, path: str, strict: bool = True) -> dict:
+        """Resume: load model weights + optimiser + EMA tracker + step.
 
-        cfg = OmegaConf.load(yaml_path)
-        model = instantiate(cfg).to(device)
+        Loads *live* weights into the model (``load_ema=False``); the
+        EMA shadows go back into the trainer's EMA tracker, not into the
+        transition, so training continues exactly where it left off.
+        """
+        from .checkpoint import load_into_model
 
-        return cls(model, device, optimizer=optimizer, **kwargs)
-
-    @staticmethod
-    def _atomic_save(obj, path: str) -> None:
-        """Write to a temp file in the same dir, then atomically replace."""
-        path = str(path)
-        d = os.path.dirname(path) or "."
-        os.makedirs(d, exist_ok=True)
-
-        f = tempfile.NamedTemporaryFile(
-            prefix="tmp_save_", suffix=".pth", dir=d, delete=False
+        ckpt = load_into_model(
+            self.model, path, device=self.device, strict=strict, load_ema=False,
         )
-        tmppath = f.name
-        f.close()
-        try:
-            torch.save(obj, tmppath)
-            os.replace(tmppath, path)
-        except Exception:
-            try:
-                os.remove(tmppath)
-            except OSError:
-                pass
-            raise
-
-    def save_checkpoint(
-        self,
-        path: str,
-    ):
-        cfg = self.model.config
-        if hasattr(cfg, "model_dump"):
-            cfg_dict = cfg.model_dump()
-        elif hasattr(cfg, "dict"):
-            cfg_dict = cfg.dict()
-        elif hasattr(cfg, "__dict__"):
-            cfg_dict = {k: _namespace_to_dict(v) for k, v in vars(cfg).items()}
-        else:
-            try:
-                cfg_dict = asdict(cfg)
-            except Exception:
-                cfg_dict = {}
-
-        payload = {
-            "_format": "ddssm_ckpt_v1",
-            "config": cfg_dict,
-            "model_state": self.model.state_dict(),
-            "optimizer_state": (
-                self.optimizer.state_dict() if self.optimizer is not None else None
-            ),
-            "ema_decay": self.ema_decay,
-            "ema_state": getattr(self.ema, "shadow", None),
-            "global_step": int(self.global_step),
-            "grad_accum_steps": int(self.grad_accum_steps),
-        }
-        self._atomic_save(payload, path)
-
-    def restore_from_checkpoint(self, path: str, strict: bool = True):
-        ckpt = torch.load(path, map_location=self.device)
-
-        self.model.load_state_dict(ckpt["model_state"], strict=strict)
-
-        if ckpt.get("optimizer_state") is not None and self.optimizer is not None:
-            # works if param_groups match param_groups_for_adamw ordering
-            self.optimizer.load_state_dict(ckpt["optimizer_state"])
+        if ckpt.optimizer_state is not None and self.optimizer is not None:
+            self.optimizer.load_state_dict(ckpt.optimizer_state)
         else:
             print(
-                "[restore] Warning: optimizer state not found in checkpoint or optimizer is None."
+                "[restore] Warning: optimizer state not found in checkpoint "
+                "or optimizer is None."
             )
+        if ckpt.ema_state is not None and hasattr(self, "ema"):
+            self.ema.shadow = ckpt.ema_state
+            if ckpt.ema_decay is not None:
+                self.ema_decay = ckpt.ema_decay
+        self.global_step = ckpt.global_step
+        return {"grad_accum_steps": ckpt.grad_accum_steps}
 
-        if ckpt.get("ema_state") is not None and hasattr(self, "ema"):
-            # restore EMA shadow and (optionally) decay
-            self.ema.shadow = ckpt["ema_state"]
-            self.ema_decay = ckpt.get("ema_decay", self.ema_decay)
+    def _build_default_loss(self):
+        """Construct a default ``FullELBO`` from hparams for single-fit runs.
 
-        self.global_step = int(ckpt.get("global_step", 0))
+        Pre-ADR-0004 the trainer maintained an inline λ-schedule from
+        ``hparams.lambda_schedule`` etc.; that machinery is now
+        encapsulated inside ``FullELBO``. Multi-stage runs receive
+        per-stage loss objects from ``StageOrchestrator`` instead.
+        """
+        from .losses import FullELBO
 
-        return {
-            "grad_accum_steps": ckpt.get("grad_accum_steps", self.grad_accum_steps),
-        }
-
-    def _build_lambda_schedule(self):
         def linear_sched(start, end, warmup_steps, step):
             if step >= warmup_steps:
                 return end
-            pct = step / float(warmup_steps)
-            return start + (end - start) * pct
+            return start + (end - start) * (step / float(warmup_steps))
 
         def cosine_sched(start, end, warmup_steps, step):
             if step >= warmup_steps:
@@ -360,21 +301,25 @@ class DDSSMTrainer:
             cosine_factor = 0.5 * (1.0 - math.cos(math.pi * pct))
             return start + (end - start) * cosine_factor
 
-        if self.config.hyperparams.lambda_schedule == "linear":
-            return lambda step: linear_sched(
-                start=self.config.hyperparams.lambda_start,
-                end=self.config.hyperparams.lambda_end,
-                warmup_steps=self.config.hyperparams.lambda_warmup_steps,
-                step=step,
-            )
-        if self.config.hyperparams.lambda_schedule == "cosine":
-            return lambda step: cosine_sched(
-                start=self.config.hyperparams.lambda_start,
-                end=self.config.hyperparams.lambda_end,
-                warmup_steps=self.config.hyperparams.lambda_warmup_steps,
-                step=step,
-            )
-        return lambda step: 1.0
+        hp = self.hparams
+        kind = getattr(hp, "lambda_schedule", "none")
+        start = float(getattr(hp, "lambda_start", 0.001))
+        end = float(getattr(hp, "lambda_end", 1.0))
+        warmup = int(getattr(hp, "lambda_warmup_steps", 10))
+        if kind == "linear":
+            rate_lambda = lambda step: linear_sched(start, end, warmup, step)
+        elif kind == "cosine":
+            rate_lambda = lambda step: cosine_sched(start, end, warmup, step)
+        else:
+            rate_lambda = lambda step: 1.0
+
+        lambda_sigma_p = float(getattr(hp, "lambda_sigma_p", 0.0))
+        lambda_mu_p = float(getattr(self.model, "anchor_lambda", 0.0) or 0.0)
+        return FullELBO(
+            rate_lambda=rate_lambda,
+            lambda_sigma_p=lambda_sigma_p,
+            lambda_mu_p=lambda_mu_p,
+        )
 
     def _move_batch_to_device(self, batch: dict, device: torch.device) -> dict:
         return {
@@ -396,7 +341,6 @@ class DDSSMTrainer:
         self,
         batch: dict,
         amp: bool,
-        lambda_schedule,
     ):
         observed = batch["observed_data"]
         observed_mask = batch["observation_mask"]
@@ -405,7 +349,7 @@ class DDSSMTrainer:
         static_covariates = batch.get("static_covariates")
 
         with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
-            _elbo, distortion, rate, metrics, _stats = self.model(
+            components, metrics, _stats = self.model(
                 observed,
                 observed_mask,
                 timepoints,
@@ -415,18 +359,23 @@ class DDSSMTrainer:
                 report_scaled=False,
             )
 
-        # Prefer the per-stage λ schedule when ``StageOrchestrator``
-        # has installed one (it resets the clock at each stage boundary).
-        # Falls back to the global hparams schedule for single-fit runs.
-        if self._stage_lambda_fn is not None:
-            sched_step = self.global_step - self._stage_start_step + 1
-            current_lambda = self._stage_lambda_fn(sched_step)
-        else:
-            assert lambda_schedule is not None
-            sched_step = self.global_step + 1
-            current_lambda = lambda_schedule(sched_step)
-        loss = distortion + current_lambda * rate
-        metrics["optim/lambda"] = torch.tensor(current_lambda)
+        # Per ADR-0004: the active loss object owns the rate-λ schedule;
+        # the trainer just drives the step. Within an orchestrator stage
+        # the step counts from the stage boundary; in single-fit runs
+        # the orchestrator never sets ``_stage_start_step``, so it stays
+        # at 0 and the loss sees the global step directly.
+        step_within_stage = self.global_step - self._stage_start_step + 1
+        assert self._active_loss is not None, (
+            "Trainer.fit must install a default loss object before training"
+        )
+        loss = self._active_loss(components, step_within_stage)
+        # Surface the rate-λ for logging (the loss object knows its own
+        # schedule shape — read it back for the metrics dict).
+        from .losses import FullELBO
+        if isinstance(self._active_loss, FullELBO):
+            metrics["optim/lambda"] = torch.tensor(
+                self._active_loss.rate_lambda(step_within_stage)
+            )
 
         return loss, metrics, observed.size(0)
 
@@ -500,7 +449,16 @@ class DDSSMTrainer:
         device: torch.device,
     ):
         self.model.eval()
-        with torch.no_grad():
+        # Validate on the EMA model — the same transition weights the
+        # sampling path uses (ADR-0005). ``swap`` loads the EMA shadows
+        # for the duration of the loop and restores the live weights on
+        # exit so training continues unperturbed.
+        ema_ctx = (
+            self.ema.swap()
+            if getattr(self, "ema", None) is not None
+            else nullcontext()
+        )
+        with torch.no_grad(), ema_ctx:
             for vbatch in val_loader:
                 vbatch = self._prepare_batch(vbatch, device, batch_transform)
 
@@ -510,7 +468,7 @@ class DDSSMTrainer:
                 vcov = vbatch.get("covariates", None)
                 vstatic_cov = vbatch.get("static_covariates", None)
 
-                vloss, vmetrics, _ = self.model(
+                vcomponents, vmetrics, _ = self.model(
                     vwin,
                     vmask,
                     vtime,
@@ -518,6 +476,12 @@ class DDSSMTrainer:
                     static_covariates=vstatic_cov,
                     train=False,
                 )
+                # Validation reports the loss object's scalar at the
+                # current step (per ADR-0004).  Single-fit ``_stage_start_step``
+                # is 0, so this collapses to the global step.
+                vstep = self.global_step - self._stage_start_step + 1
+                assert self._active_loss is not None
+                vloss = self._active_loss(vcomponents, vstep)
                 self.metrics.update(
                     "val",
                     values={"loss/total": vloss, **vmetrics},
@@ -605,7 +569,11 @@ class DDSSMTrainer:
         device = self.device
         self.model.to(device)
 
-        lambda_schedule = self._build_lambda_schedule()
+        # Per ADR-0004: ensure an active loss object exists. The
+        # orchestrator installs one per stage; for single-fit runs we
+        # build a default ``FullELBO`` from hparams here.
+        if self._active_loss is None:
+            self._active_loss = self._build_default_loss()
 
         # Rolling window for the ELBO-plateau early-stop check.
         es_active = bool(early_stop and early_stop.enabled)
@@ -667,7 +635,6 @@ class DDSSMTrainer:
                         loss, metrics, weight = self._compute_loss_and_metrics(
                             batch=batch,
                             amp=amp,
-                            lambda_schedule=lambda_schedule,
                         )
 
                         self._backward_loss(loss, scaler=scaler, amp=amp)

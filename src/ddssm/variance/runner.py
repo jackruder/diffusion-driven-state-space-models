@@ -13,7 +13,7 @@ import torch
 
 from .metrics import PROBE_METRIC_REGISTRY, ProbeContext
 from .plots import PROBE_PLOT_REGISTRY, ProbePlotContext
-from .probe import _select_loader, run_probe
+from .probe import run_probe
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def variance(
     _write_rows(rows, raw_path)
     log.info("Wrote raw CSV → %s (%d rows)", raw_path, len(rows))
 
-    loader = _select_loader(experiment, spec.split)
+    loader = experiment.data.loader(spec.split)
 
     ctx = ProbeContext(
         model=experiment.model,

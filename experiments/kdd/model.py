@@ -23,7 +23,6 @@ from ddssm.builders import (
     GaussTransition,
     GRUFutSum,
     Head,
-    Hparams,
     IdentityAggregatorB,
     ResidualBlock,
     Schedule,
@@ -147,7 +146,6 @@ class KDD:
         emb_time_dim=emb_time_dim, covariate_dim=covariate_dim,
         encoder=encoder, decoder=decoder, z_init=z_init,
         transition=gauss_transition,
-        hyperparams=Hparams(),
         use_observation_mask=False,
     )
 
@@ -156,7 +154,6 @@ class KDD:
         emb_time_dim=emb_time_dim, covariate_dim=covariate_dim,
         encoder=encoder, decoder=decoder, z_init=z_init,
         transition=diff_transition,
-        hyperparams=Hparams(),
         use_observation_mask=False,
     )
 

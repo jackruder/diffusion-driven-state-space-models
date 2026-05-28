@@ -5,6 +5,17 @@
 #   - local: number of devices physically present
 #   - SLURM: number of GPUs requested per single job allocation
 #   - `count_max`: max concurrent GPUs across all jobs (SLURM only)
+#
+# Cluster (all slurm-* profiles): Tempest (Montana State University)
+#   login: tempest-login   user: z89p425   account: priority-michaelwojnowicz
+#   environment: lmod modules (no nix). uv is a module — no bootstrap.
+#   Setup steps for cluster runs:
+#     module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22
+#     uv sync               # uv.lock pins nvidia-cudnn-cu13 + cublas 13.x
+#   The PyTorch wheel index needs no override — uv.lock already targets cu13.
+#   GRES is type-qualified: request gpu:a100:1 or gpu:a40:1 (a bare gpu:1
+#   can land the wrong GPU type). Partition split: A100 → gpupriority
+#   (non-preemptible), A40 → gpuunsafe (preemptible, use --requeue).
 
 profiles:
 
@@ -32,86 +43,106 @@ profiles:
       - kind: gpu
         name: "NVIDIA A100"
         count: 1                              # GPUs per job allocation
-        count_max: 1                          # TODO: confirm max concurrent A100 jobs (set 1 as a safe lower bound)
+        count_max: 1                          # confirmed: exactly 1 A100 on gpupriority
         memory_gb: 80
         compute_capability: "8.0"
     availability: slurm-queued
     slurm:
       partition: gpupriority
-      qos: null                               # TODO: fill if your account requires one
+      account: priority-michaelwojnowicz
+      gres: gpu:a100:1                        # type-qualified — pins the A100
+      qos: null
       timeout_min_default: 720                # 12:00:00 per user default
       cpus_per_task: 4
       mem_gb: 64
       preempt_window_s: null                  # not preemptible
-      max_jobs_concurrent: 1                  # TODO: confirm user quota on gpupriority
+      max_jobs_concurrent: 1                  # confirmed: 1 A100 slot on gpupriority
       array_limit: null                       # TODO: confirm
+    setup:
+      - "module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22"
+      - "source /home/z89p425/ddssm/.venv/bin/activate   # or: uv run ..."
     storage:
-      runs_dir: TODO_CLUSTER_PATH/ddssm/runs           # e.g. /scratch/$USER/ddssm/runs — confirm at first launch
-      scratch: TODO_CLUSTER_PATH/ddssm/scratch
-      optuna_db_dir: TODO_CLUSTER_PATH/ddssm/optuna
+      runs_dir: /home/z89p425/ddssm/runs
+      scratch: /home/z89p425/ddssm/scratch
+      optuna_db_dir: /home/z89p425/ddssm/optuna
       shared_fs: true                         # confirmed: cluster FS visible across nodes
     notes:
       - "Use for high-value single-experiment runs; not the right pool for big sweeps."
-      - "Cluster storage paths are placeholders — confirm at first launch (use a path on the shared FS)."
+      - "Storage on /home (no /scratch quota headroom confirmed) — watch the home quota; torch venv is ~5 GB."
 
   slurm-a40-priority:
-    description: "A few A40s on gpupriority (non-preemptible) — small parallel sweeps"
+    description: "1× A40 on gpupriority (non-preemptible) — the single non-preempt A40 slot"
     devices:
       - kind: gpu
         name: "NVIDIA A40"
         count: 1                              # GPUs per job allocation
-        count_max: 4                          # "a few" without preemption — adjust to actual ceiling
+        count_max: 1                          # confirmed: exactly 1 A40 on gpupriority
         memory_gb: 48
         compute_capability: "8.6"
     availability: slurm-queued
     slurm:
       partition: gpupriority
-      qos: null                               # TODO: fill if your account requires one
+      account: priority-michaelwojnowicz
+      gres: gpu:a40:1                         # type-qualified
+      qos: null
       timeout_min_default: 720
       cpus_per_task: 4
       mem_gb: 64
       preempt_window_s: null                  # not preemptible
-      max_jobs_concurrent: 4                  # TODO: confirm; set 4 to match `count_max`
+      max_jobs_concurrent: 1                  # confirmed: 1 A40 slot on gpupriority
       array_limit: null                       # TODO: confirm
+    setup:
+      - "module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22"
+      - "source /home/z89p425/ddssm/.venv/bin/activate   # or: uv run ..."
     storage:
-      runs_dir: TODO_CLUSTER_PATH/ddssm/runs
-      scratch: TODO_CLUSTER_PATH/ddssm/scratch
-      optuna_db_dir: TODO_CLUSTER_PATH/ddssm/optuna
+      runs_dir: /home/z89p425/ddssm/runs
+      scratch: /home/z89p425/ddssm/scratch
+      optuna_db_dir: /home/z89p425/ddssm/optuna
       shared_fs: true
     notes:
-      - "Right tool for sweeps that need stable convergence — no preempt risk."
-      - "Tighter quota than gpuunsafe; do not over-request."
+      - "Confirmed (2026-05-27): gpupriority gives exactly 1 A100 + 1 A40, both"
+      - "non-preemptible. This profile is that single A40 slot — use it for the"
+      - "one A40 cell you most want immune to preemption; bulk A40 work goes to"
+      - "slurm-a40-preempt (gpuunsafe, unlimited)."
 
   slurm-a40-preempt:
-    description: "Up to 20× A40 on gpuunsafe (preemptible) — big sweeps with resume"
+    description: "A40 on gpuunsafe (preemptible, unlimited concurrent) — big sweeps with resume"
     devices:
       - kind: gpu
         name: "NVIDIA A40"
         count: 1                              # GPUs per job allocation
-        count_max: 20                         # confirmed: up to 20 concurrent
+        count_max: 999                        # unlimited per user (no account cap); sane ceiling only
         memory_gb: 48
         compute_capability: "8.6"
     availability: preemptible
     slurm:
       partition: gpuunsafe
-      qos: null                               # TODO: fill if your account requires one
+      account: priority-michaelwojnowicz
+      gres: gpu:a40:1                         # type-qualified
+      qos: null
       timeout_min_default: 720
       cpus_per_task: 4
       mem_gb: 64
       preempt_window_s: null                  # UNKNOWN — depends on cluster load
-      max_jobs_concurrent: 20
+      max_jobs_concurrent: 999                # unlimited jobs on gpuunsafe (confirmed 2026-05-27)
       array_limit: null                       # TODO: confirm
+    setup:
+      - "module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22"
+      - "source /home/z89p425/ddssm/.venv/bin/activate   # or: uv run ..."
     storage:
-      runs_dir: TODO_CLUSTER_PATH/ddssm/runs
-      scratch: TODO_CLUSTER_PATH/ddssm/scratch
-      optuna_db_dir: TODO_CLUSTER_PATH/ddssm/optuna
+      runs_dir: /home/z89p425/ddssm/runs
+      scratch: /home/z89p425/ddssm/scratch
+      optuna_db_dir: /home/z89p425/ddssm/optuna
       shared_fs: true
     notes:
+      - "Canonical A40 pool per the user (2026-05-27): A40 sweeps run here."
+      - "Submit with `#SBATCH --requeue` so a preempted job restarts and its"
+      - "fresh workers resume from the shared Optuna DB (completed trials persist)."
       - "Preempt window not measured; can vary widely with cluster load."
-      - "Requires preempt-safe configuration: `checkpoint_every` tight, resume logic verified."
-      - "User preference: avoid unless really needed — start with slurm-a40-priority first."
-      - "Per `project-handoff-protocol-invariants`: parametric μ_p needs uninterrupted stage-1; "
-      - "preempt during stage-1 can leave μ_p un-converged. Plan accordingly."
+      - "Per `project-handoff-protocol-invariants`: parametric μ_p needs an"
+      - "uninterrupted stage-1, so preempt during stage-1 can leave a *learnable*"
+      - "μ_p un-converged. Round-1 cells are baseline_mode=pinned (μ_p fixed), so a"
+      - "preempt-restart is safe; revisit this for learnable-μ_p cells."
 
   laptop-cpu:
     description: "Mobile CPU fallback for tiny smoke runs"
@@ -131,5 +162,5 @@ profiles:
       - "Expect ≥ 10× slower per-step than workstation; pick presets accordingly."
 
 defaults:
-  active_profile: workstation
-  fallback_profile: laptop-cpu
+  active_profile: slurm-a40-preempt          # A40 work runs on gpuunsafe per user directive
+  fallback_profile: workstation

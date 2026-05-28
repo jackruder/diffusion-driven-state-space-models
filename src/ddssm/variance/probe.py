@@ -23,16 +23,6 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def _select_loader(experiment, split: str):
-    if split == "train":
-        return experiment.data.train_loader()
-    if split == "val":
-        return experiment.data.val_loader()
-    if split == "test":
-        return experiment.data.test_loader()
-    raise ValueError(f"Unknown variance split: {split!r}")
-
-
 def _p_k_for_mode(transition: torch.nn.Module, mode: str) -> torch.Tensor:
     if not hasattr(transition, "p_k"):
         raise TypeError("Variance probe currently supports transitions with a p_k buffer.")
@@ -79,12 +69,14 @@ def run_probe(
     device: torch.device,
     checkpoint_path: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, torch.nn.Module]]:
-    model = experiment.model.to(device)
-    if checkpoint_path:
-        payload = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        state = payload["model_state"] if isinstance(payload, dict) and "model_state" in payload else payload
-        model.load_state_dict(state, strict=True)
-    model.eval()
+    from ..checkpoint import prepare_model
+
+    # ``prepare_model`` defaults to ``load_ema=True`` — the probe measures
+    # the sampling-path EMA shadows, matching training-time sampling
+    # (ADR-0005).
+    model = prepare_model(
+        experiment, checkpoint_path=checkpoint_path, device=device,
+    )
     _freeze_model(model, list(spec.freeze))
 
     if not hasattr(model, "transition"):
@@ -97,7 +89,7 @@ def run_probe(
         for mode in modes
     }
 
-    loader = _select_loader(experiment, spec.split)
+    loader = experiment.data.loader(spec.split)
     if loader is None:
         raise ValueError("Variance probe requires a non-empty loader.")
     transform = experiment.data.batch_transform

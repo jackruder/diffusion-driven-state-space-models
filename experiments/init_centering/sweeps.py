@@ -54,9 +54,9 @@ from conf.registry import sweep_store
 
 _INIT_ABLATION_PARAMS = {
     # Centering-handoff knobs.
-    "experiment.model.stages.n_pretrain":
+    "experiment.training.stages.n_pretrain":
         "tag(log, int(interval(5, 500)))",
-    "experiment.model.stages.sigma_pert":
+    "experiment.training.stages.sigma_pert":
         "tag(log, interval(1e-3, 5e-2))",
     # Regulariser strengths.
     "experiment.model.anchor_lambda":
@@ -64,19 +64,19 @@ _INIT_ABLATION_PARAMS = {
     "experiment.hparams.lambda_sigma_p":
         "tag(log, interval(1e-3, 1e-1))",
     # Base LR + per-group multipliers (replaces 3 independent LRs).
-    "experiment.model.stages.base_lr":
+    "experiment.training.stages.base_lr":
         "tag(log, interval(1e-5, 1e-3))",
-    "experiment.model.stages.dec_mult":
+    "experiment.training.stages.dec_mult":
         "tag(log, interval(0.1, 10.0))",
-    "experiment.model.stages.trans_mult":
+    "experiment.training.stages.trans_mult":
         "tag(log, interval(0.1, 10.0))",
     # Per-stage λ-warmup fractions (CONTEXT.md § "lambda_warmup redesign").
     # Cover 5-50% of stage 1 and 2-25% of stage 2 — the lower bound is
     # "barely-any warmup", the upper bound is "warmup covers most of
     # the stage".
-    "experiment.model.stages.stage_1_warmup_frac":
+    "experiment.training.stages.stage_1_warmup_frac":
         "tag(log, interval(0.05, 0.5))",
-    "experiment.model.stages.stage_2_warmup_frac":
+    "experiment.training.stages.stage_2_warmup_frac":
         "tag(log, interval(0.02, 0.25))",
 }
 

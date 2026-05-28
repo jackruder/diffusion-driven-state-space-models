@@ -36,7 +36,6 @@ from ddssm.builders import (
     GaussTransition,
     GRUFutSum,
     Head,
-    Hparams,
     IdentityAggregatorB,
     MLPUnet,
     ResidualBlock,
@@ -195,7 +194,6 @@ class Small1D:
         emb_time_dim=emb_time_dim, covariate_dim=covariate_dim,
         encoder=encoder, decoder=decoder, z_init=z_init,
         transition=gauss_transition,
-        hyperparams=Hparams(),
         use_observation_mask=False,
     )
 
@@ -204,7 +202,6 @@ class Small1D:
         emb_time_dim=emb_time_dim, covariate_dim=covariate_dim,
         encoder=encoder, decoder=decoder, z_init=z_init,
         transition=diff_transition,
-        hyperparams=Hparams(),
         use_observation_mask=False,
     )
 
@@ -275,7 +272,6 @@ class Robot2D:
         emb_time_dim=emb_time_dim, covariate_dim=covariate_dim,
         encoder=encoder, decoder=decoder, z_init=z_init,
         transition=gauss_transition,
-        hyperparams=Hparams(),
         use_observation_mask=False,
     )
 
@@ -284,7 +280,6 @@ class Robot2D:
         emb_time_dim=emb_time_dim, covariate_dim=covariate_dim,
         encoder=encoder, decoder=decoder, z_init=z_init,
         transition=diff_transition,
-        hyperparams=Hparams(),
         use_observation_mask=False,
     )
 

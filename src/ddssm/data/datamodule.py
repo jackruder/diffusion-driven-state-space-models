@@ -20,8 +20,9 @@ Two batch formats are advertised so the experiment can pick the right
 
 from __future__ import annotations
 
+import abc
 from dataclasses import dataclass, field
-from typing import Callable, Literal, Protocol, runtime_checkable
+from typing import Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -57,22 +58,51 @@ class DataMetadata:
     stds: torch.Tensor | None = None
     forecast_split: int | None = None
 
+    def forecast_split_or(self, override: int | None) -> int | None:
+        """The explicit ``override`` if given, else the dataset's ``forecast_split``.
 
-@runtime_checkable
-class DDSSMDataModule(Protocol):
-    """Protocol every concrete DataModule must satisfy."""
+        Standalone stages resolve their past/future boundary through
+        this: an eval/viz spec may set ``T_split`` explicitly, otherwise
+        the dataset's own ``forecast_split`` (``L1`` for windowed KDD,
+        ``None`` for sequence data) is used.
+        """
+        return int(override) if override is not None else self.forecast_split
+
+
+class DDSSMDataModule(abc.ABC):
+    """Abstract base every concrete DataModule extends.
+
+    Subclasses implement the three split loaders plus ``metadata``; the
+    base supplies :meth:`loader`, the ``split → loader`` dispatch shared
+    by every standalone stage (eval / viz / variance).
+    """
 
     batch_format: BatchFormat
     batch_transform: Callable[[dict, torch.device], dict]
 
+    @abc.abstractmethod
     def train_loader(self) -> DataLoader | None: ...
+    @abc.abstractmethod
     def val_loader(self) -> DataLoader | None: ...
+    @abc.abstractmethod
     def test_loader(self) -> DataLoader | None: ...
+
     @property
+    @abc.abstractmethod
     def metadata(self) -> DataMetadata: ...
 
+    def loader(self, split: str) -> DataLoader | None:
+        """Return the loader for ``split`` ∈ {``train``, ``val``, ``test``}."""
+        if split == "train":
+            return self.train_loader()
+        if split == "val":
+            return self.val_loader()
+        if split == "test":
+            return self.test_loader()
+        raise ValueError(f"Unknown split: {split!r}")
 
-class NullDataModule:
+
+class NullDataModule(DDSSMDataModule):
     """No data attached. Replaces the ``dataset=none`` sentinel.
 
     The experiment treats ``train_loader() is None`` as "build only,
@@ -99,7 +129,7 @@ class NullDataModule:
         return self._meta
 
 
-class SyntheticDataModule:
+class SyntheticDataModule(DDSSMDataModule):
     """Sequence-format DataModule wrapping :class:`SyntheticDataset`.
 
     Each item is a full ``(D, T)`` sequence. ``train``/``val``/``test``
@@ -182,7 +212,7 @@ class SyntheticDataModule:
         )
 
 
-class KDDDataModule:
+class KDDDataModule(DDSSMDataModule):
     """Windowed-format DataModule for the KDD Cup 2018 PM2.5 dataset.
 
     Loads a preprocessed ``.pt`` payload produced by

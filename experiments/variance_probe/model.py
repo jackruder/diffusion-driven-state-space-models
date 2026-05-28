@@ -13,7 +13,7 @@ the change propagates into the transition + DDSSM compositions.
 
 from __future__ import annotations
 
-from ddssm.builders import DDSSM, DiffV2Transition, Hparams, ScheduleV2
+from ddssm.builders import DDSSM, DiffV2Transition, ScheduleV2
 
 from conf.registry import model_store, schedule_store, transition_store
 
@@ -52,7 +52,6 @@ class ProbeSmall:
         emb_time_dim=emb_time_dim, covariate_dim=covariate_dim,
         encoder=Small1D.encoder, decoder=Small1D.decoder, z_init=Small1D.z_init,
         transition=transition,
-        hyperparams=Hparams(),
         use_observation_mask=False,
     )
 
@@ -82,7 +81,6 @@ class ProbeMediumModel:
         emb_time_dim=emb_time_dim, covariate_dim=covariate_dim,
         encoder=ProbeMedium.encoder, decoder=ProbeMedium.decoder, z_init=ProbeMedium.z_init,
         transition=transition,
-        hyperparams=Hparams(),
         use_observation_mask=False,
     )
 

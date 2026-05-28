@@ -19,6 +19,7 @@ from .encoder import (
     GaussianInitPrior,
 )
 from .gaussians import gaussian_entropy
+from .losses import LossComponents
 from .net_utils import (
     time_embedding,
 )
@@ -73,8 +74,6 @@ class DDSSM_base(nn.Module):
         logvar_min: Min clamp for decoder/encoder log-variance.
         logvar_max: Max clamp for decoder/encoder log-variance.
         S: Number of Monte Carlo encoder samples.
-        hyperparams: Namespace-like object with training hyperparameters.
-        stages: Optional stages config; passed through to config namespace.
         checkpoint_dir: Directory for checkpoints.
     """
 
@@ -95,8 +94,6 @@ class DDSSM_base(nn.Module):
         logvar_min: float = -7.0,
         logvar_max: float = 7.0,
         S: int = 1,
-        hyperparams=None,
-        stages=None,
         checkpoint_dir: str = "./checkpoints",
         # --- legacy InitPrior path ---
         z_init: BaseInitPrior | None = None,
@@ -167,14 +164,11 @@ class DDSSM_base(nn.Module):
         # Orchestrator flips this between stages.
         self.stage_selector: str = "stage_2"
 
-        # Build a config namespace so that DDSSMTrainer can access
-        # model.config.hyperparams.*, model.config.stages, model.config.checkpoint_dir
-        # without changes.
-        if hyperparams is None:
-            hyperparams = _default_hyperparams()
+        # Build a config namespace for ``model.config.checkpoint_dir``.
+        # Per ADR-0004, the trainer owns hyperparams directly (no
+        # longer routed via ``model.config.hyperparams``) and the
+        # multi-stage spec lives on ``Experiment.training.stages``.
         self.config = SimpleNamespace(
-            hyperparams=hyperparams,
-            stages=stages,
             checkpoint_dir=checkpoint_dir,
         )
 
@@ -539,6 +533,144 @@ class DDSSM_base(nn.Module):
             embedded.append(emb_layer(static_covariates[..., i].long()))
         return torch.cat(embedded, dim=-1)
 
+    @torch.no_grad()
+    def log_prob(
+        self,
+        observed_data: torch.Tensor,
+        observation_mask: torch.Tensor,
+        timepoints: torch.Tensor,
+        covariates: torch.Tensor | None = None,
+        static_covariates: torch.Tensor | None = None,
+        *,
+        K: int | None = None,
+        rtol: float = 1e-5,
+        atol: float = 1e-5,
+        method: str = "dopri5",
+        divergence_mode: str = "exact",
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        """Marginal log-likelihood ``log p_ψ(x_{1:T})`` via prob-flow IWAE.
+
+        See ``model-v2.org`` § "Exact likelihood evaluation".  Composes
+        the layer-1..3 primitives:
+
+          * Trajectory proposal: ``q_φ(z_{1:T} | x_{1:T})`` via
+            :meth:`_encode_latents` with ``K = self.S`` samples (override
+            via the ``K`` arg).  Per-step ``log q`` already lives in
+            ``logq_paths``; we sum across ``T`` for the trajectory total.
+          * Per-transition: :meth:`DiffusionV3Transition.log_prob` for
+            ``t = j..T-1`` via the probability-flow ODE.
+          * Decoder: :meth:`BaseDecoder.log_likelihood` summed across
+            ``t = 0..T-1``.
+          * Initial state: ``log p_ψ(z_{1:j})`` via
+            :meth:`DiffusionV3Transition.log_prob_init` (VHP IS under
+            ``q_Φ``) when an ``aux_posterior`` is present; otherwise 0.
+
+        Args:
+            observed_data, observation_mask, timepoints, covariates,
+                static_covariates: same shapes/semantics as
+                :meth:`forward`.
+            K: number of trajectory samples (defaults to ``self.S``).
+            rtol, atol, method, divergence_mode, generator: forwarded
+                to the per-transition prob-flow ODE solver.
+
+        Returns:
+            ``(B,)`` per-sequence log-likelihood estimate.
+        """
+        from .likelihood import iwae_log_likelihood
+
+        device = observed_data.device
+        dtype = observed_data.dtype
+        B, _, T = observed_data.shape
+        j = self.j
+
+        static_embed = self._embed_static(static_covariates)
+        time_embed = time_embedding(timepoints, self.emb_time_dim, device=device)
+        zs, logq_paths, _enc_stats = self._encode_latents(
+            observed_data=observed_data,
+            time_embed=time_embed,
+            observation_mask=observation_mask,
+            covariates=covariates,
+            static_embed=static_embed,
+        )
+
+        S = zs.shape[1]
+        K_use = S if K is None else K
+        if K_use > S:
+            raise ValueError(
+                f"requested K={K_use} > self.S={S}; increase model.S to draw more trajectories"
+            )
+        zs = zs[:, :K_use].contiguous()
+        logq_paths = logq_paths[:, :K_use].contiguous()
+
+        log_q_z = logq_paths.sum(dim=-1)
+
+        log_p_dec = torch.zeros(B, K_use, device=device, dtype=dtype)
+        for t in range(T):
+            x_t = observed_data[:, :, t]
+            m_t = observation_mask[:, :, t]
+            t_idx = torch.full((B,), t, device=device, dtype=torch.long)
+            for k in range(K_use):
+                z_hist = zs[:, k, :, : t + 1]
+                if z_hist.shape[-1] > j:
+                    z_hist = z_hist[..., -j:]
+                logp_t, _, _, _ = self.decoder.log_likelihood(
+                    x_t=x_t,
+                    z_hist=z_hist,
+                    time_embed=time_embed,
+                    time_idx=t_idx,
+                    observation_mask_t=m_t,
+                    covariates=covariates,
+                    static_embed=static_embed,
+                )
+                log_p_dec[:, k] = log_p_dec[:, k] + logp_t
+
+        transition = self._active_transition()
+        log_p_trans = torch.zeros(B, K_use, device=device, dtype=dtype)
+        for t in range(j, T):
+            if self.sigma_data is not None:
+                sigma_d2 = self.sigma_data.read(t + 1).expand(B).to(
+                    device=device, dtype=dtype
+                )
+            else:
+                sigma_d2 = torch.ones(B, device=device, dtype=dtype)
+            ctx = {
+                "hist_time_emb": time_embed[:, t - j : t, :],
+                "target_time_emb": time_embed[:, t : t + 1, :],
+            }
+            for k in range(K_use):
+                logp_t = transition.log_prob(
+                    z=zs[:, k, :, t],
+                    z_hist=zs[:, k, :, t - j : t],
+                    ctx=ctx,
+                    sigma_d2=sigma_d2,
+                    rtol=rtol,
+                    atol=atol,
+                    method=method,
+                    divergence_mode=divergence_mode,
+                    generator=generator,
+                )
+                log_p_trans[:, k] = log_p_trans[:, k] + logp_t
+
+        if self.aux_posterior is not None and hasattr(transition, "log_prob_init"):
+            log_p_init = transition.log_prob_init(
+                zs=zs,
+                aux_posterior=self.aux_posterior,
+                time_embed=time_embed,
+                sigma_data=self.sigma_data,
+                covariates=covariates,
+                rtol=rtol,
+                atol=atol,
+                method=method,
+                divergence_mode=divergence_mode,
+                generator=generator,
+            )  # (B, K_use)
+        else:
+            log_p_init = torch.zeros(B, K_use, device=device, dtype=dtype)
+
+        log_p_xz = log_p_init + log_p_trans + log_p_dec
+        return iwae_log_likelihood(log_p_xz, log_q_z, dim=-1)
+
     def forward(
         self,
         observed_data: torch.Tensor,  # (B, D, T)
@@ -562,10 +694,12 @@ class DDSSM_base(nn.Module):
                 each loss component under ``"<key>_scaled"`` keys in ``metrics``.
 
         Returns:
-            loss: Scalar ELBO loss (distortion + rate).
-            distortion: Reconstruction term L_rec.
-            rate: KL/prior term L_init + L_trans.
-            metrics: Dict of scalar tensors for logging.
+            components: ``LossComponents`` with unweighted per-term
+                tensors (recon, init_kl, trans_kl, r_sigma_p, r_mu_p).
+                The loss object applies its own weights and produces
+                the scalar that gets backpropped.
+            metrics: Dict of scalar tensors for logging (regularizer
+                values here are still WEIGHTED for log continuity).
             stats: Empty dict during training; contains ``zs``, ``mus``,
                 ``logvars`` when ``train=False``.
         """
@@ -628,41 +762,41 @@ class DDSSM_base(nn.Module):
         trans_subterms = {k: v for k, v in trans_terms.items() if k != "kl"}
 
         # Model-v2 centering regularizers (free functions in
-        # ``centering.regularizers``).  Both are 0 in paths that don't
-        # apply, so the unconditional add is cheap and explicit.
-        r_sigma_p = torch.tensor(0.0, device=observed_data.device)
-        r_mu_p = torch.tensor(0.0, device=observed_data.device)
+        # ``centering.regularizers``).  Returned UNWEIGHTED in
+        # `LossComponents`; the loss object applies `lambda_sigma_p`
+        # and `lambda_mu_p` (see ADR-0004). Stage gating stays here:
+        # the regularizer is exactly zero outside its applicable stage,
+        # regardless of the loss object's λ.
+        r_sigma_p_raw = torch.tensor(0.0, device=observed_data.device)
+        r_mu_p_raw = torch.tensor(0.0, device=observed_data.device)
         if self.baseline is not None:
             # Build a flat (N, d, j) batch of z_hist samples from the
             # encoder paths for evaluating the regularizers.  Detached
             # so gradient flows only into the baseline / anchor, not
             # back through the encoder.
             z_hist_samples = self._gather_z_hist_samples_for_regularizers(zs)
-            if (
-                self.stage_selector == "stage_1"
-                and self.config.hyperparams is not None
-                and getattr(self.config.hyperparams, "lambda_sigma_p", 0.0) > 0.0
-            ):
-                r_sigma_p = r_sigma_p_loss(
+            if self.stage_selector == "stage_1":
+                r_sigma_p_raw = r_sigma_p_loss(
                     baseline=self.baseline,
                     z_hist_samples=z_hist_samples,
-                    lambda_sigma_p=float(self.config.hyperparams.lambda_sigma_p),
+                    lambda_sigma_p=1.0,
                 )
             if (
                 self.stage_selector == "stage_2"
                 and self.baseline_mode == "learnable"
                 and self.baseline_anchor is not None
-                and self.anchor_lambda > 0.0
             ):
-                r_mu_p = r_mu_p_loss(
+                r_mu_p_raw = r_mu_p_loss(
                     baseline=self.baseline,
                     baseline_anchor=self.baseline_anchor,
                     z_hist_samples=z_hist_samples,
-                    lambda_mu_p=self.anchor_lambda,
+                    lambda_mu_p=1.0,
                 )
 
         distortion = L_rec
-        rate = L_init + L_trans + r_sigma_p + r_mu_p
+        # `loss` and `rate` in the metrics dict below are UNWEIGHTED
+        # post-ADR-0004 — the loss object owns weights now.
+        rate = L_init + L_trans + r_sigma_p_raw + r_mu_p_raw
         loss = distortion + rate
 
         dev = L_rec.device
@@ -684,8 +818,11 @@ class DDSSM_base(nn.Module):
             "loss/rate/trans/kl": L_trans.detach(),
             "loss/rate/total": rate.detach(),
             "calib/ratio_res2_to_sigma2": L_rec_calib.detach(),
-            "loss/rate/trans/r_sigma_p": r_sigma_p.detach(),
-            "loss/rate/trans/r_mu_p": r_mu_p.detach(),
+            # Post-ADR-0004: report UNWEIGHTED regularizer values.
+            # The loss object that's currently active owns the
+            # weighting; downstream eval applies it when it cares.
+            "loss/rate/trans/r_sigma_p": r_sigma_p_raw.detach(),
+            "loss/rate/trans/r_mu_p": r_mu_p_raw.detach(),
         }
         # Surface model-v2 init-term sub-components when present.
         if self.aux_posterior is not None:
@@ -728,7 +865,14 @@ class DDSSM_base(nn.Module):
             stats["mus"] = mus
             stats["logvars"] = logvars
 
-        return loss, distortion, rate, metrics, stats
+        components = LossComponents(
+            recon=L_rec,
+            init_kl=L_init,
+            trans_kl=L_trans,
+            r_sigma_p=r_sigma_p_raw,
+            r_mu_p=r_mu_p_raw,
+        )
+        return components, metrics, stats
 
     @torch.no_grad()
     def forecast(

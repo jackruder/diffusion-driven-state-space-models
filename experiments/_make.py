@@ -53,6 +53,7 @@ def experiment(
     model: Any,
     hparams: Any,
     training: Any,
+    stages: Any | None = None,
     eval: Any | None = None,
     viz: Any | None = None,
     objective: Any | None = None,
@@ -63,21 +64,26 @@ def experiment(
 ) -> Any:
     """Bind a model + dataset + training into an :class:`ExperimentC` config.
 
-    ``model.hyperparams`` is replaced with ``hparams`` so the two
-    Hparams instances inside the resulting tree are identical — the
-    trainer reads the experiment-level field and the DDSSM internals
-    read ``model.hyperparams``.
+    ``hparams`` is curried onto the ``build_trainer`` partial so the
+    trainer reads it directly (per ADR-0004 the model no longer
+    carries a ``hyperparams`` field). It is also stored on the
+    experiment so callers can introspect or ``tweak`` it.
+
+    ``stages`` is the multi-stage orchestration spec. When provided,
+    it is attached to ``training.stages``; per ADR-0004 the orchestrator
+    reads it from there rather than from ``model.config.stages``.
 
     ``sbatch`` is purely metadata at training time; it is read by
     ``python -m experiments sbatch <name>`` when emitting a Slurm
     submit script. Leave ``None`` to inherit the project default in
     :mod:`experiments._sbatch`.
     """
-    model = dataclasses.replace(model, hyperparams=hparams)
+    if stages is not None:
+        training = dataclasses.replace(training, stages=stages)
     return ExperimentC(
         data=data,
         model=model,
-        build_trainer=TrainerPartial(),
+        build_trainer=TrainerPartial(hparams=hparams),
         training=training,
         objective=objective,
         eval=eval,
@@ -189,13 +195,19 @@ def run(
     device: torch.device | None = None,
     run_dir: str = "./runs/adhoc",
 ) -> Any:
-    """Instantiate ``exp`` and call ``experiment.train(device, run_dir)``."""
+    """Instantiate ``exp``, train, then resolve the objective value (if any).
+
+    Mirrors :func:`ddssm.app.main` so notebook / script callers get the
+    same return shape as a Hydra run (``None`` when no objective is set,
+    otherwise the scalar / list returned by :meth:`Experiment.objective_value`).
+    """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(run_dir, exist_ok=True)
     save_yaml(exp, os.path.join(run_dir, "resolved_config.yaml"))
     experiment_obj = instantiate(exp)
-    return experiment_obj.train(device=device, run_dir=run_dir)
+    experiment_obj.train(device=device, run_dir=run_dir)
+    return experiment_obj.objective_value(device=device, run_dir=run_dir)
 
 
 __all__ = [

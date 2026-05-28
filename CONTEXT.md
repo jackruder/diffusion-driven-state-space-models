@@ -1,10 +1,50 @@
-# DDSSM — Init-Centering Experiment Context
+# DDSSM — Project Context
 
-Glossary for the init-centering ablation grid (Phases A–E shipped on
-branch `claude/update-documents-redo-plan-JzSxw`). This is the ranking
-of cells in `model-v2`'s baseline-centering scheme.
+Glossary for DDSSM. Two clusters: project-wide training infrastructure
+(used by every experiment) and the init-centering ablation grid
+(currently the only mature experiment family).
 
 ## Language
+
+### Training infrastructure
+
+**Loss components**:
+The per-term tensor outputs of `DDSSM_base.forward()` — `recon`,
+`kl_init`, `kl_trans`, `transition`. Computed unconditionally on every
+forward pass; selection and λ-weighting are the loss object's job.
+See [docs/adr/0004-loss-object-split.md](./docs/adr/0004-loss-object-split.md).
+_Avoid_: ELBO terms (ambiguous with the scalar), loss pieces.
+
+**Loss object** (a.k.a. **training objective**):
+A registered builder taking `(LossComponents, λ_state) → scalar`. Owns
+its own λ schedule. Pickable per-stage in `StageOrchestrator` runs;
+default is `FullELBO`. The **single source of truth** for "what scalar
+is being backpropped right now."
+_Avoid_: Loss function (too generic), objective function (collides with
+the Optuna objective below).
+
+**Tuning objective** (current type: `ObjectiveSpec`):
+The scalar read from `metrics.csv` / `metrics.json` that Optuna
+minimises across trials. Distinct from the **loss object** above —
+this one drives *trial ranking*, not training. Currently lives at
+`src/ddssm/experiment.py:ObjectiveSpec`.
+_Avoid_: Objective (without qualifier — ambiguous with loss object).
+
+**Trainable mask**:
+The per-submodule `requires_grad` mask attached to a stage
+(`StagesConf.trainable.{encoder, decoder, z_init, transition,
+baseline}`). Decides *which parameters update*; orthogonal to which
+loss components are summed.
+_Avoid_: Frozen modules (describes a state, not the mechanism).
+
+**Standalone stage** (a.k.a. **runner**):
+A read-only operation over a trained checkpoint — loads the model,
+runs across one data split, never trains. Current members: **eval**,
+**viz**, **variance probe** (planned: imputation, counterfactual).
+Each has its own Hydra entry point, registry, and context object.
+_Avoid_: Pipeline, post-processing step.
+
+### Init-centering ablation
 
 **Cell**:
 One point of the 18-cell ablation grid, identified by the triple

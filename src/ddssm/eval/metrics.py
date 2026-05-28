@@ -652,7 +652,7 @@ def eval_stage2_elbo_surrogate(
                     k: v.to(device) if isinstance(v, torch.Tensor) else v
                     for k, v in batch.items()
                 }
-            loss, _, _, metrics, _ = model(
+            components, metrics, _ = model(
                 batch["observed_data"],
                 batch["observation_mask"],
                 batch["timepoints"],
@@ -660,6 +660,19 @@ def eval_stage2_elbo_surrogate(
                 static_covariates=batch.get("static_covariates", None),
                 train=False,
                 report_scaled=False,
+            )
+            # Reconstruct the pre-ADR-0004 "loss/total" the eval used
+            # to read from forward()'s first return value: distortion
+            # + rate (with regularizers at their hparam weights).
+            hp = getattr(model.config, "hyperparams", None)
+            l_sp = float(getattr(hp, "lambda_sigma_p", 0.0)) if hp is not None else 0.0
+            l_mp = float(getattr(model, "anchor_lambda", 0.0) or 0.0)
+            loss = (
+                components.recon
+                + components.init_kl
+                + components.trans_kl
+                + l_sp * components.r_sigma_p
+                + l_mp * components.r_mu_p
             )
             sums["stage2_elbo_surrogate"] += float(loss.item())
             sums["recon"] += float(metrics.get("loss/distortion/rec", 0.0).item() if hasattr(metrics.get("loss/distortion/rec", 0.0), "item") else metrics.get("loss/distortion/rec", 0.0))

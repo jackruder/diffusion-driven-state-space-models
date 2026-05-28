@@ -56,7 +56,14 @@ def main(cfg: DictConfig):
         log.warning("Could not persist resolved_config.yaml: %s", e)
 
     experiment = instantiate(cfg.experiment)
-    return experiment.train(device=device, run_dir=run_dir)
+    # ADR-0005: snapshot the resolved model YAML so the trainer can
+    # persist it into checkpoints (and post-training stages can diff
+    # against it on load).
+    experiment.model_config_yaml = OmegaConf.to_yaml(
+        cfg.experiment.model, resolve=True,
+    )
+    experiment.train(device=device, run_dir=run_dir)
+    return experiment.objective_value(device=device, run_dir=run_dir)
 
 
 if __name__ == "__main__":

@@ -18,11 +18,13 @@
 #
 #   3. Stage-2 step budget actually honored. The original passed
 #      ``experiment.training.steps`` which is shadowed by
-#      ``model.stages.n_stage2`` in the init-centering cells — so the
+#      ``training.stages.n_stage2`` in the init-centering cells — so the
 #      "1200-step" runs only actually trained ~1300 steps because
 #      n_stage2's default is 1000. Most trials underfit. Here we bump
-#      ``experiment.model.stages.n_stage2`` directly. Default 4000
+#      ``experiment.training.stages.n_stage2`` directly. Default 4000
 #      (total ≈ 4000 + n_pretrain_sampled ≈ 4500 effective steps).
+#      (Path is training.stages.* per ADR-0004; the orchestrator reads
+#      stages from training.stages, not model.stages.)
 #
 # Resource notes for a single 24 GB GPU:
 #   * Single trial peaks ~3.5 GB → 4 workers × ~14 GB = comfortable.
@@ -139,8 +141,8 @@ PY
     #   * hydra.sweep.subdir: per-worker-prefixed unique subdir name.
     #     Note: single-quoted so the shell doesn't expand ${...} —
     #     OmegaConf resolves at config eval time inside Python.
-    #   * experiment.model.stages.n_stage2: actual step budget knob.
-    cmd="$base_cmd 'hydra.sweep.subdir=w\${oc.env:HYDRA_WORKER_ID}_\${hydra.job.num}' experiment.model.stages.n_stage2=$STAGE2_STEPS"
+    #   * experiment.training.stages.n_stage2: actual step budget knob.
+    cmd="$base_cmd 'hydra.sweep.subdir=w\${oc.env:HYDRA_WORKER_ID}_\${hydra.job.num}' experiment.training.stages.n_stage2=$STAGE2_STEPS"
     echo "    + worker $w → $log"
     HYDRA_WORKER_ID=$w eval "$cmd" > "$log" 2>&1 &
     pids+=($!)

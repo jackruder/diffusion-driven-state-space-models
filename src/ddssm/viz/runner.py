@@ -61,37 +61,6 @@ class VizSpec:
     T_split: int | None = None
 
 
-def _select_loader(experiment, split: str):
-    if split == "train":
-        return experiment.data.train_loader()
-    if split == "val":
-        return experiment.data.val_loader()
-    if split == "test":
-        return experiment.data.test_loader()
-    raise ValueError(f"Unknown viz split: {split!r}")
-
-
-def _resolve_T_split(spec: VizSpec, experiment) -> int | None:
-    if spec.T_split is not None:
-        return int(spec.T_split)
-    meta = getattr(experiment.data, "metadata", None)
-    if meta is None:
-        return None
-    return getattr(meta, "forecast_split", None)
-
-
-def _maybe_load_checkpoint(model: torch.nn.Module, ckpt_path: str | None, device: torch.device) -> None:
-    if ckpt_path is None:
-        log.warning("No checkpoint provided; visualizing randomly-initialised weights.")
-        return
-    if not os.path.isfile(ckpt_path):
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path!r}")
-    payload = torch.load(ckpt_path, map_location=device, weights_only=False)
-    state = payload["model_state"] if isinstance(payload, dict) and "model_state" in payload else payload
-    model.load_state_dict(state, strict=True)
-    log.info("Loaded checkpoint from %s", ckpt_path)
-
-
 def visualize(
     experiment,
     spec: VizSpec,
@@ -102,12 +71,14 @@ def visualize(
     csv_path: str | None = None,
 ) -> list[str]:
     """Run every plot named in ``spec`` and return the list of saved paths."""
-    model = experiment.model.to(device)
-    _maybe_load_checkpoint(model, checkpoint_path, device)
-    model.eval()
+    from ..checkpoint import prepare_model
 
-    loader = _select_loader(experiment, spec.split)
-    T_split = _resolve_T_split(spec, experiment)
+    model = prepare_model(
+        experiment, checkpoint_path=checkpoint_path, device=device,
+    )
+
+    loader = experiment.data.loader(spec.split)
+    T_split = experiment.data.metadata.forecast_split_or(spec.T_split)
 
     ctx = PlotContext(
         model=model,

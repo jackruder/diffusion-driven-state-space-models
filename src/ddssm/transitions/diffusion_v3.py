@@ -214,12 +214,79 @@ class DiffusionV3Transition(BaseTransition):
         self.k_sampling_mode = ismode
 
     # ------------------------------------------------------------------
-    # Disabled paths.
+    # Per-transition log-density via probability-flow ODE.
     # ------------------------------------------------------------------
-    def log_prob(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        raise NotImplementedError(
-            "DiffusionV3Transition does not implement log_prob; "
-            "transition_kl provides the centered ESM surrogate directly."
+    def log_prob(
+        self,
+        z: torch.Tensor,
+        z_hist: torch.Tensor,
+        ctx: Optional[Dict[str, Any]] = None,
+        mc_override: Optional[Dict[str, Any]] = None,
+        *,
+        sigma_d2: Optional[torch.Tensor] = None,
+        padding_mask: Optional[torch.Tensor] = None,
+        rtol: float = 1e-5,
+        atol: float = 1e-5,
+        method: str = "dopri5",
+        divergence_mode: str = "exact",
+        generator: Optional[torch.Generator] = None,
+    ) -> torch.Tensor:
+        """Native-coord per-transition log-density ``log p_ψ^ode(z | z_hist)``.
+
+        Layer 1 of the exact-likelihood evaluator (model-v2.org §
+        "Exact likelihood evaluation"): integrates the augmented
+        probability-flow ODE in native coordinates and returns the
+        Liouville log-density, using :func:`solve_prob_flow_logdensity`
+        with ``self.score`` as the score callable.
+
+        Args:
+            z: ``(B, d)`` evaluation point in native coords.
+            z_hist: ``(B, d, j)`` conditioning latents.
+            ctx: side-info dict; must include ``hist_time_emb`` and
+                ``target_time_emb``.
+            mc_override: ignored (kept for ``BaseTransition`` parity).
+            sigma_d2: ``(B,)`` ``σ_data²(t)`` per row.  Defaults to ones
+                (matches the V3 sampler's ``sigma_data ≡ 1`` fallback).
+            padding_mask: ``(B, j+1)`` padding-mask channel; defaults
+                to zeros (no padding).
+            rtol, atol, method: torchdiffeq adaptive-solver controls.
+            divergence_mode: ``"exact"`` (cycle 2) or ``"hutchinson"``
+                (cycle 3).
+
+        Returns:
+            ``(B,)`` per-row log-density.
+        """
+        del mc_override
+        from ..likelihood import solve_prob_flow_logdensity
+
+        if ctx is None:
+            raise ValueError("DiffusionV3Transition.log_prob requires ctx")
+        B, d = z.shape
+        if sigma_d2 is None:
+            sigma_d2 = torch.ones(B, device=z.device, dtype=z.dtype)
+
+        def score_fn(z_curr: torch.Tensor, tau_curr: torch.Tensor) -> torch.Tensor:
+            tau_b = tau_curr.expand(z_curr.shape[0]) if tau_curr.dim() == 0 else tau_curr
+            return self.score(
+                z=z_curr,
+                tau=tau_b,
+                z_hist=z_hist,
+                ctx=ctx,
+                sigma_d2=sigma_d2,
+                padding_mask=padding_mask,
+            )
+
+        return solve_prob_flow_logdensity(
+            score_fn=score_fn,
+            z0=z,
+            beta_min=float(self.schedule.beta_min),
+            beta_max=float(self.schedule.beta_max),
+            tau_min=float(self.schedule.tau_min),
+            rtol=rtol,
+            atol=atol,
+            method=method,
+            divergence_mode=divergence_mode,
+            generator=generator,
         )
 
     # ------------------------------------------------------------------
@@ -467,6 +534,152 @@ class DiffusionV3Transition(BaseTransition):
         return {"loss_init": loss_init, "kl_aux": kl_aux}
 
     # ------------------------------------------------------------------
+    # VHP initial-state log-density (model-v2.org § Exact likelihood, Layer 4).
+    # ------------------------------------------------------------------
+    def log_prob_init(
+        self,
+        zs: torch.Tensor,
+        aux_posterior: AuxPosterior,
+        time_embed: torch.Tensor,
+        sigma_data: Optional[SigmaDataBuffer] = None,
+        covariates: Optional[torch.Tensor] = None,
+        *,
+        J: int = 1,
+        rtol: float = 1e-5,
+        atol: float = 1e-5,
+        method: str = "dopri5",
+        divergence_mode: str = "exact",
+        generator: Optional[torch.Generator] = None,
+    ) -> torch.Tensor:
+        """VHP importance-sampled ``log p_ψ(z_{1:j})`` per trajectory.
+
+        Layer 4 of the exact-likelihood evaluator (model-v2.org § "VHP
+        initial state").  Mirrors :meth:`transition_kl_init`'s
+        mixed-history walk over the first ``j`` steps, but instead of the
+        ESM/EDM surrogate it accumulates the probability-flow ODE
+        log-densities ``log p_ψ^ode(z_step | z_hist_step)`` (via
+        :meth:`log_prob`) with ``z_0 ∼ q_Φ`` in the aux slots, then
+        reduces the importance weights
+
+            log p_ψ(z_{1:j}) ≈ logmeanexp_J[
+                Σ_step log p_ψ^ode(z_step | z_hist)
+                + log N(z_0; 0, I) − log q_Φ(z_0 | z_{1:j})
+            ]
+
+        via :func:`ddssm.likelihood.vhp.vhp_log_prob_init`.
+
+        Unlike :meth:`transition_kl_init` this is an evaluation-only
+        path: ``sigma_data`` is **read, never updated**, and no encoder
+        moments are needed (the target is the realised ``z_step`` from
+        ``zs``, not an ESM regression).
+
+        Args:
+            zs: ``(B, S, d, T)`` encoder latent samples; ``S`` is the
+                IWAE trajectory axis.
+            aux_posterior: ``q_Φ(z_0 | z_{1:j})``.
+            time_embed: ``(B, T, E_t)``.
+            sigma_data: ``σ_data²(t)`` buffer (read-only); ``None`` →
+                ``σ_data ≡ 1``.
+            covariates: ignored (baseline-centering doesn't condition on
+                them); kept for signature parity.
+            J: number of VHP importance draws.
+            rtol, atol, method, divergence_mode, generator: prob-flow ODE
+                controls forwarded to :meth:`log_prob`.
+
+        Returns:
+            ``(B, S)`` per-trajectory ``log p_ψ(z_{1:j})``.
+        """
+        del covariates
+        from ..likelihood import vhp_log_prob_init
+
+        B, S, d, T = zs.shape
+        j = self.j
+        device = zs.device
+        dtype = zs.dtype
+        if d != self.latent_dim:
+            raise ValueError(f"zs latent dim {d} != self.latent_dim {self.latent_dim}")
+        if T < j:
+            raise ValueError(f"zs has T={T} < j={j}")
+        BS = B * S
+        log_2pi = math.log(2.0 * math.pi)
+
+        z_init = zs[..., :j].mean(dim=1)  # (B, d, j)
+
+        log_p_draws: list[torch.Tensor] = []
+        log_q_draws: list[torch.Tensor] = []
+        log_prior_draws: list[torch.Tensor] = []
+        for _ in range(J):
+            z_aux, aux_mu, aux_logvar = aux_posterior.sample(z_init)  # (B, d, j) each
+
+            aux_var = aux_logvar.exp()
+            log_q = -0.5 * (
+                (z_aux - aux_mu).pow(2) / aux_var + aux_logvar + log_2pi
+            ).sum(dim=(1, 2))  # (B,)
+            log_prior = -0.5 * (z_aux.pow(2) + log_2pi).sum(dim=(1, 2))  # (B,)
+
+            z_hist = (
+                z_aux.unsqueeze(1).expand(B, S, d, j).reshape(BS, d, j).clone()
+            )
+            log_p = torch.zeros(BS, device=device, dtype=dtype)
+            for step in range(j):
+                if sigma_data is not None:
+                    sigma_d2 = sigma_data.read(step + 1).to(dtype=dtype).expand(BS)
+                else:
+                    sigma_d2 = torch.ones(BS, device=device, dtype=dtype)
+
+                padding_mask = torch.zeros(BS, j + 1, device=device, dtype=dtype)
+                n_aux_slots = j - step
+                if n_aux_slots > 0:
+                    padding_mask[:, :n_aux_slots] = 1.0
+
+                tgt_idx = step
+                hist_idx = torch.arange(
+                    tgt_idx - j, tgt_idx, device=device, dtype=torch.long
+                ).clamp(min=0, max=T - 1)
+                hist_te = time_embed.index_select(1, hist_idx)  # (B, j, E_t)
+                tgt_te = time_embed[:, tgt_idx : tgt_idx + 1, :]  # (B, 1, E_t)
+                time_win = (
+                    torch.cat([hist_te, tgt_te], dim=1)
+                    .unsqueeze(1)
+                    .expand(B, S, j + 1, self.emb_time_dim)
+                    .reshape(BS, j + 1, self.emb_time_dim)
+                )
+                ctx_step: Dict[str, torch.Tensor] = {
+                    "hist_time_emb": time_win[:, :j, :],
+                    "target_time_emb": time_win[:, j : j + 1, :],
+                }
+
+                z_t = zs[:, :, :, step].reshape(BS, d)
+                log_p = log_p + self.log_prob(
+                    z=z_t,
+                    z_hist=z_hist,
+                    ctx=ctx_step,
+                    sigma_d2=sigma_d2,
+                    padding_mask=padding_mask,
+                    rtol=rtol,
+                    atol=atol,
+                    method=method,
+                    divergence_mode=divergence_mode,
+                    generator=generator,
+                )
+
+                if j > 1:
+                    z_hist = torch.cat([z_hist[:, :, 1:], z_t.unsqueeze(-1)], dim=-1)
+                else:
+                    z_hist = z_t.unsqueeze(-1)
+
+            log_p_draws.append(log_p.reshape(B, S))
+            log_q_draws.append(log_q.unsqueeze(1).expand(B, S))
+            log_prior_draws.append(log_prior.unsqueeze(1).expand(B, S))
+
+        log_p_stack = torch.stack(log_p_draws, dim=-1)  # (B, S, J)
+        log_q_stack = torch.stack(log_q_draws, dim=-1)  # (B, S, J)
+        log_prior_stack = torch.stack(log_prior_draws, dim=-1)  # (B, S, J)
+        return vhp_log_prob_init(
+            log_p_stack, log_q_stack, log_prior_stack, dim=-1
+        )  # (B, S)
+
+    # ------------------------------------------------------------------
     # Per-chunk ESM loss in centered coordinates.
     # ------------------------------------------------------------------
     def _esm_chunk_loss(
@@ -668,6 +881,108 @@ class DiffusionV3Transition(BaseTransition):
         z_in = cin_ * z_hat
 
         return z_in, F_target
+
+    # ------------------------------------------------------------------
+    # Native-coord score (model-v2.org § Exact likelihood, Layer 2).
+    # ------------------------------------------------------------------
+    def score(
+        self,
+        z: torch.Tensor,
+        tau: torch.Tensor,
+        z_hist: torch.Tensor,
+        ctx: Dict[str, Any],
+        sigma_d2: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Native-coordinate score ``s_ψ(z, τ, z_{t-1})`` for the prob-flow ODE.
+
+        Composes the EDM-parameterized denoiser ``F_ψ`` into a
+        native-coordinate score per model-v2.org § Native-coordinate
+        score reconstruction::
+
+            ẑ      = z / α_τ − μ_p(z_hist)
+            D_ψ    = c_skip · ẑ + c_out · F_ψ(c_in · ẑ, τ, z_hist)
+            s_ψ(z) = (D_ψ − ẑ) / (α_τ · σ̃_τ²)
+
+        α(τ), σ̃(τ), c_noise(τ) are evaluated closed-form from the
+        VP-SDE schedule for arbitrary continuous τ ∈ (0, 1] — the buffer
+        grid is only used for ``transition_kl`` / sampling, not here.
+        The σ_data-dependent EDM constants follow the same per-row form
+        as :meth:`_vp_precondition`.
+
+        Args:
+            z: ``(B, d)`` latent in native coordinates.
+            tau: ``(B,)`` continuous τ value per row.
+            z_hist: ``(B, d, j)`` previous latents (conditioning).
+            ctx: must include ``hist_time_emb (B, j, E_t)`` and
+                ``target_time_emb (B, 1, E_t)``; optionally
+                ``hist_covariates``/``target_covariates``.
+            sigma_d2: ``(B,)`` σ_data²(t) per row.
+            padding_mask: ``(B, j+1)`` padding-mask channel; defaults
+                to zeros (no padding) matching the forecast-sampler path.
+
+        Returns:
+            ``(B, d)`` native-coordinate score.
+        """
+        B, d = z.shape
+        if d != self.latent_dim:
+            raise ValueError(f"z latent dim {d} != self.latent_dim {self.latent_dim}")
+        device = z.device
+        dtype = z.dtype
+        eps_dtype = torch.finfo(dtype).eps
+
+        beta_min = float(self.schedule.beta_min)
+        beta_max = float(self.schedule.beta_max)
+        int_beta = beta_min * tau + 0.5 * (beta_max - beta_min) * tau.pow(2)
+        alpha = torch.exp(-0.5 * int_beta)
+        alpha2 = alpha.pow(2).clamp_min(eps_dtype)
+        sigma_tilde2 = (1.0 - alpha2) / alpha2
+        sigma_tilde = sigma_tilde2.clamp_min(eps_dtype).sqrt()
+        c_noise = 0.25 * torch.log(sigma_tilde.clamp_min(eps_dtype))
+
+        sd2 = sigma_d2.clamp_min(eps_dtype)
+        denom = (sigma_tilde2 + sd2).clamp_min(eps_dtype)
+        sqrt_denom = denom.sqrt()
+        c_skip = sd2 / denom
+        c_out = (sigma_tilde * sd2.sqrt()) / sqrt_denom
+        c_in = 1.0 / sqrt_denom
+
+        alpha_col = alpha.unsqueeze(-1).clamp_min(eps_dtype)
+        mu_p = self.baseline.mean(z_hist)
+        z_hat = z / alpha_col - mu_p
+
+        if "hist_time_emb" not in ctx or "target_time_emb" not in ctx:
+            raise ValueError(
+                "DiffusionV3Transition.score requires hist/target time embeddings in ctx"
+            )
+        hist_time = ctx["hist_time_emb"]
+        tgt_time = ctx["target_time_emb"]
+        if "hist_covariates" in ctx:
+            hist_time = torch.cat([hist_time, ctx["hist_covariates"]], dim=-1)
+        if "target_covariates" in ctx:
+            tgt_time = torch.cat([tgt_time, ctx["target_covariates"]], dim=-1)
+        time_win = torch.cat([hist_time, tgt_time], dim=1)
+
+        cond_mask = torch.ones(B, d, self.j + 1, device=device, dtype=dtype)
+        cond_mask[..., -1] = 0.0
+        if padding_mask is None:
+            padding_mask = torch.zeros(B, self.j + 1, device=device, dtype=dtype)
+        side_win = get_side_info(
+            data_dim=self.latent_dim,
+            time_embed=time_win,
+            embed_layer=self.embed_layer,
+            cond_mask=cond_mask,
+            device=device,
+            padding_mask=padding_mask,
+        )
+
+        z_in = (c_in.unsqueeze(-1) * z_hat).unsqueeze(-1)
+        latent_w = torch.cat([z_hist, z_in], dim=2)
+        F_pred = self.diffmodel(latent_w, side_win, c_noise).squeeze(-1)
+
+        D_psi = c_skip.unsqueeze(-1) * z_hat + c_out.unsqueeze(-1) * F_pred
+        s_tilde = (D_psi - z_hat) / sigma_tilde2.unsqueeze(-1).clamp_min(eps_dtype)
+        return s_tilde / alpha_col
 
     # ------------------------------------------------------------------
     # Sampling: VP probability-flow ODE in centered coords.

@@ -242,6 +242,33 @@ def test_elbo_plateau_early_stop_triggers(small_model, tmp_path):
     )
 
 
+def test_validation_runs_under_ema_swap(small_model, tmp_path):
+    """``_run_validation`` enters the EMA swap so val uses the EMA model (ADR-0005)."""
+    from contextlib import contextmanager
+
+    trainer = DDSSMTrainer(
+        model=small_model, device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+    )
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+
+    entered: list[int] = []
+    real_swap = trainer.ema.swap
+
+    @contextmanager
+    def _spy_swap():
+        entered.append(1)
+        with real_swap():
+            yield
+
+    trainer.ema.swap = _spy_swap  # type: ignore[assignment]
+    trainer.fit(
+        train_loader=loader, val_loader=loader, total_steps=2,
+        validate_every=1, log_every=1, checkpoint_every=None, amp=False,
+    )
+    assert entered, "validation did not enter the EMA swap"
+
+
 def test_elbo_plateau_disabled_runs_full_budget(small_model, tmp_path):
     """``early_stop=None`` leaves the loop running until ``total_steps``."""
     trainer = DDSSMTrainer(

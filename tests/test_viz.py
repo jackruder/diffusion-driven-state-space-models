@@ -12,6 +12,7 @@ matplotlib.use("Agg")
 import torch
 import pytest
 
+from ddssm.data.datamodule import DDSSMDataModule, DataMetadata
 from ddssm.viz import PLOT_REGISTRY, VizSpec, PlotSpec, PlotContext, visualize
 from ddssm.viz.plots import plot_metrics_csv
 
@@ -54,9 +55,9 @@ def test_visualize_runner_smoke(tmp_path):
     csv_path = tmp_path / "m.csv"
     _write_csv(csv_path, [{"step": "0", "loss/total": "1.0"}, {"step": "1", "loss/total": "0.5"}])
 
-    class _StubData:
+    class _StubData(DDSSMDataModule):
         batch_transform = staticmethod(lambda b, d: b)
-        metadata = type("_M", (), {"forecast_split": None})()
+        metadata = DataMetadata(data_dim=1, forecast_split=None)
 
         def train_loader(self): return None
         def val_loader(self): return None
@@ -82,9 +83,9 @@ def test_visualize_runner_smoke(tmp_path):
 
 
 def test_visualize_runner_unknown_plot_raises(tmp_path):
-    class _StubData:
+    class _StubData(DDSSMDataModule):
         batch_transform = staticmethod(lambda b, d: b)
-        metadata = type("_M", (), {"forecast_split": None})()
+        metadata = DataMetadata(data_dim=1, forecast_split=None)
 
         def train_loader(self): return None
         def val_loader(self): return None

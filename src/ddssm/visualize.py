@@ -56,6 +56,9 @@ def main(cfg: DictConfig):
         csv_path = os.path.join(orig_cwd, csv_path)
 
     experiment = instantiate(cfg.experiment)
+    experiment.model_config_yaml = OmegaConf.to_yaml(
+        cfg.experiment.model, resolve=True,
+    )
     return experiment.visualize(
         device=device,
         run_dir=run_dir,

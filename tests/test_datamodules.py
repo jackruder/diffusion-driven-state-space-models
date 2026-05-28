@@ -87,13 +87,37 @@ def test_kdd_datamodule_smoke():
     assert meta.T == dm.L1 + dm.L2
 
 
-def test_datamodule_protocol_runtime_check():
-    # All concrete datamodules satisfy the Protocol at runtime.
+def test_datamodule_abc_membership():
+    # All concrete datamodules inherit the ABC (nominal isinstance).
     assert isinstance(NullDataModule(), DDSSMDataModule)
     assert isinstance(
         SyntheticDataModule(mode="lgssm", T=8, D=1, N_per_split=4, batch_size=2),
         DDSSMDataModule,
     )
+
+
+def test_loader_dispatch_by_split():
+    """``loader(split)`` routes to the matching split loader; bad split raises."""
+    dm = SyntheticDataModule(mode="lgssm", T=8, D=1, N_per_split=4, batch_size=2)
+    assert dm.loader("train") is not None
+    assert dm.loader("val") is not None
+    assert dm.loader("test") is not None
+    with pytest.raises(ValueError, match="Unknown split"):
+        dm.loader("holdout")
+    # NullDataModule has no data — every split is None, no raise on known splits.
+    null = NullDataModule()
+    assert null.loader("train") is None
+    assert null.loader("test") is None
+
+
+def test_forecast_split_or_resolution():
+    """``forecast_split_or`` prefers the explicit override, else the dataset's split."""
+    seq = DataMetadata(data_dim=1, forecast_split=None)
+    assert seq.forecast_split_or(None) is None       # sequence data, no override
+    assert seq.forecast_split_or(16) == 16           # spec override wins
+    windowed = DataMetadata(data_dim=6, forecast_split=72)
+    assert windowed.forecast_split_or(None) == 72     # dataset boundary
+    assert windowed.forecast_split_or(10) == 10       # override still wins
 
 
 # ---------------------------------------------------------------------------

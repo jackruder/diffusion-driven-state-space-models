@@ -25,7 +25,7 @@ an Optuna axis — see report.py.
 
 from __future__ import annotations
 
-from ddssm.builders import Eval, Objective
+from ddssm.builders import Eval, Objective, Objectives
 
 # Legacy single-objective spec (still used by smoke tests and the
 # variance probe family). Read from ``metrics.json`` since the metric
@@ -35,10 +35,11 @@ PilotObjective = Objective(
     source="json",
 )
 
-# Two-axis multi-objective spec. ``Experiment.objective`` accepts a
-# list of ObjectiveSpec and returns a list[float] when one is wired
-# in; the sweeper's ``direction: [minimize, minimize]`` handles it.
-PilotMOObjective = [
+# Two-axis multi-objective spec. ``Objectives`` wraps the ordered list
+# so Hydra-zen instantiates each ``ObjectiveSpec`` properly; the
+# returned list[float] is matched against the sweeper's
+# ``direction: [minimize, minimize]``.
+PilotMOObjective = Objectives(specs=[
     Objective(
         metric="wallclock_to_target_seconds",
         source="json",
@@ -48,7 +49,7 @@ PilotMOObjective = [
         metric="stage2_elbo_surrogate",
         source="json",
     ),
-]
+])
 
 
 # Default ELBO target for the wallclock objective. Round-1 sweeps use

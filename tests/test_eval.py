@@ -11,6 +11,7 @@ from unittest.mock import patch
 import torch
 import pytest
 
+from ddssm.data.datamodule import DDSSMDataModule, DataMetadata
 from ddssm.eval import METRIC_REGISTRY, EvalSpec, EvalContext, evaluate
 from ddssm.eval.metrics import eval_loss_tail, eval_energy_score
 
@@ -52,9 +53,9 @@ def test_evaluate_runner_writes_metrics_json(tmp_path):
     rows = [{"split": "train", "step": str(i), "loss/total": str(0.5)} for i in range(20)]
     _write_csv(csv_path, rows)
 
-    class _StubData:
+    class _StubData(DDSSMDataModule):
         batch_transform = staticmethod(lambda b, d: b)
-        metadata = type("_M", (), {"forecast_split": None})()
+        metadata = DataMetadata(data_dim=1, forecast_split=None)
 
         def train_loader(self): return None
         def val_loader(self): return None
@@ -97,9 +98,9 @@ def test_evalspec_per_metric_kwargs_forwarded(tmp_path):
     rows = [{"split": "train", "step": str(i), "metric_a": str(0.7)} for i in range(10)]
     _write_csv(csv_path, rows)
 
-    class _StubData:
+    class _StubData(DDSSMDataModule):
         batch_transform = staticmethod(lambda b, d: b)
-        metadata = type("_M", (), {"forecast_split": None})()
+        metadata = DataMetadata(data_dim=1, forecast_split=None)
 
         def train_loader(self): return None
         def val_loader(self): return None
@@ -210,23 +211,22 @@ def test_energy_score_accumulates_across_batches():
 def test_unknown_metric_raises():
     spec = EvalSpec(metrics=["nope"], split="val")
 
-    class _Stub:
-        class data:
-            batch_transform = staticmethod(lambda b, d: b)
-            metadata = type("_M", (), {"forecast_split": None})()
+    class _StubData(DDSSMDataModule):
+        batch_transform = staticmethod(lambda b, d: b)
+        metadata = DataMetadata(data_dim=1, forecast_split=None)
 
-            @staticmethod
-            def train_loader(): return None
-            @staticmethod
-            def val_loader(): return None
-            @staticmethod
-            def test_loader(): return None
+        def train_loader(self): return None
+        def val_loader(self): return None
+        def test_loader(self): return None
 
-        class model(torch.nn.Module):
-            def __init__(self): super().__init__(); self.lin = torch.nn.Linear(1, 1)
-            def to(self, d): return self
+    class _StubModel(torch.nn.Module):
+        def __init__(self): super().__init__(); self.lin = torch.nn.Linear(1, 1)
+        def to(self, d): return self
 
-        model = model()
+    class _StubExpt:
+        def __init__(self):
+            self.data = _StubData()
+            self.model = _StubModel()
 
     with pytest.raises(KeyError):
-        evaluate(_Stub(), spec, device=torch.device("cpu"), run_dir="/tmp/_nope")
+        evaluate(_StubExpt(), spec, device=torch.device("cpu"), run_dir="/tmp/_nope")
