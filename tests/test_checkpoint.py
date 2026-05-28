@@ -17,7 +17,6 @@ class _Toy(nn.Module):
         super().__init__()
         self.lin = nn.Linear(2, 2)
         self.transition = nn.Linear(2, 2)
-        self.config = SimpleNamespace(checkpoint_dir="ckpts")
 
 
 def _fake_trainer(model: _Toy, *, yaml: str | None = "m: 1") -> SimpleNamespace:

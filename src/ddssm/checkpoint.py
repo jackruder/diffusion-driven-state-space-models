@@ -33,17 +33,6 @@ log = logging.getLogger(__name__)
 _FORMAT = "ddssm_ckpt_v1"
 
 
-def _namespace_to_dict(obj: Any) -> Any:
-    """Recursively convert SimpleNamespace / objects to plain dicts."""
-    if hasattr(obj, "__dict__") and not isinstance(obj, type):
-        return {k: _namespace_to_dict(v) for k, v in vars(obj).items()}
-    if isinstance(obj, dict):
-        return {k: _namespace_to_dict(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_namespace_to_dict(v) for v in obj)
-    return obj
-
-
 def _atomic_save(obj: Any, path: str) -> None:
     """Write to a temp file in the same dir, then atomically replace."""
     path = str(path)
@@ -76,9 +65,6 @@ class Checkpoint:
     ema_state: dict | None = None
     global_step: int = 0
     grad_accum_steps: int = 1
-    # Transitional: asdict dump of ``model.config``. Dead on the read
-    # path post ADR-0005, kept one release as a debugging aid.
-    config: Any = None
 
     @classmethod
     def from_trainer(cls, trainer) -> "Checkpoint":
@@ -94,13 +80,11 @@ class Checkpoint:
             ema_state=getattr(ema, "shadow", None),
             global_step=int(trainer.global_step),
             grad_accum_steps=int(trainer.grad_accum_steps),
-            config=_namespace_to_dict(trainer.model.config),
         )
 
     def to_payload(self) -> dict:
         return {
             "_format": _FORMAT,
-            "config": self.config,
             "model_config_yaml": self.model_config_yaml,
             "model_state": self.model_state,
             "optimizer_state": self.optimizer_state,
@@ -127,7 +111,6 @@ class Checkpoint:
             ema_state=payload.get("ema_state"),
             global_step=int(payload.get("global_step", 0)),
             grad_accum_steps=int(payload.get("grad_accum_steps", 1)),
-            config=payload.get("config"),
         )
 
 

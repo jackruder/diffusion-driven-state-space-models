@@ -663,9 +663,10 @@ def eval_stage2_elbo_surrogate(
             )
             # Reconstruct the pre-ADR-0004 "loss/total" the eval used
             # to read from forward()'s first return value: distortion
-            # + rate (with regularizers at their hparam weights).
-            hp = getattr(model.config, "hyperparams", None)
-            l_sp = float(getattr(hp, "lambda_sigma_p", 0.0)) if hp is not None else 0.0
+            # + rate (with regularizers at their hparam weights). The
+            # σ_p weight lives on the trainer's hparams (ADR-0004), which
+            # the read-only eval stage has no handle on, so it is omitted.
+            l_sp = 0.0
             l_mp = float(getattr(model, "anchor_lambda", 0.0) or 0.0)
             loss = (
                 components.recon

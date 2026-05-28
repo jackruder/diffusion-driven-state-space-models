@@ -330,12 +330,11 @@ class Experiment:
         os.makedirs(run_dir, exist_ok=True)
         csv_log_path = os.path.join(run_dir, "metrics.csv")
         tensorboard_dir = os.path.join(run_dir, "tb_logs")
-
         # Anchor the checkpoint directory inside ``run_dir`` so a run's
         # outputs are self-contained — Hydra defaults to ``chdir=False``,
-        # so the model's class-default ``./checkpoints`` would otherwise
-        # land next to the invocation CWD rather than the run.
-        self.model.config.checkpoint_dir = os.path.join(run_dir, "checkpoints")
+        # so the trainer's default ``./checkpoints`` would otherwise land
+        # next to the invocation CWD rather than the run.
+        checkpoint_dir = os.path.join(run_dir, "checkpoints")
 
         log.info("Model: %d parameters", sum(p.numel() for p in self.model.parameters()))
         wandb_kwargs = self._wandb_kwargs(run_dir)
@@ -351,6 +350,7 @@ class Experiment:
             device=device,
             csv_log_path=csv_log_path,
             tensorboard_dir=tensorboard_dir,
+            checkpoint_dir=checkpoint_dir,
             wandb_config=wandb_kwargs,
         )
         if self.hparams is not None:
@@ -458,7 +458,7 @@ class Experiment:
                     "self.trainer."
                 )
             final_ckpt = os.path.join(
-                self.model.config.checkpoint_dir, "ckpt_final.pth",
+                run_dir, "checkpoints", "ckpt_final.pth",
             )
             trainer.save_checkpoint(final_ckpt)
             log.info("Saved final checkpoint to %s", final_ckpt)

@@ -115,6 +115,7 @@ class DDSSMTrainer:
         optimizer: optim.Optimizer | None = None,
         csv_log_path: str | None = None,
         tensorboard_dir: str = "runs/ddssm",
+        checkpoint_dir: str = "./checkpoints",
         wandb_config: dict | None = None,
         quiet: bool = False,
         model_config_yaml: str | None = None,
@@ -151,10 +152,6 @@ class DDSSMTrainer:
         # stage; constructed lazily at fit() start otherwise).
         from .losses import Loss
         self._active_loss: Loss | None = None
-
-        # Ensure config is attached
-        if not hasattr(self.model, "config"):
-            raise AttributeError("Model must have a `.config` attribute.")
 
         self.optimizer = optimizer
         if self.optimizer is None:
@@ -201,7 +198,7 @@ class DDSSMTrainer:
             loggers=loggers,
         )
 
-        self.checkpoint_dir = model.config.checkpoint_dir
+        self.checkpoint_dir = checkpoint_dir
 
     def get_batch_size(self) -> int:
         return self.hparams.batch_size

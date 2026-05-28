@@ -69,7 +69,6 @@ class DDSSM_base(nn.Module):
         logvar_min: Min clamp for decoder/encoder log-variance.
         logvar_max: Max clamp for decoder/encoder log-variance.
         S: Number of Monte Carlo encoder samples.
-        checkpoint_dir: Directory for checkpoints.
     """
 
     def __init__(
@@ -89,7 +88,6 @@ class DDSSM_base(nn.Module):
         logvar_min: float = -7.0,
         logvar_max: float = 7.0,
         S: int = 1,
-        checkpoint_dir: str = "./checkpoints",
         # --- VHP-via-diffusion + baseline-centering path (the only init path) ---
         aux_posterior: AuxPosterior | None = None,
         baseline: BaseBaseline | None = None,
@@ -155,14 +153,6 @@ class DDSSM_base(nn.Module):
 
         # Orchestrator flips this between stages.
         self.stage_selector: str = "stage_2"
-
-        # Build a config namespace for ``model.config.checkpoint_dir``.
-        # Per ADR-0004, the trainer owns hyperparams directly (no
-        # longer routed via ``model.config.hyperparams``) and the
-        # multi-stage spec lives on ``Experiment.training.stages``.
-        self.config = SimpleNamespace(
-            checkpoint_dir=checkpoint_dir,
-        )
 
     def _encode_latents(
         self,
