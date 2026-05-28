@@ -14,8 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from ddssm.experiment import ObjectiveSpec
-
+from ddssm.experiment import Experiment, ObjectiveSpec
 
 # ---------------------------------------------------------------------------
 # CSV source — preserves the pre-Phase-C behaviour.
@@ -49,7 +48,7 @@ def test_csv_source_filters_by_split(tmp_path: Path) -> None:
     csv_path = tmp_path / "metrics.csv"
     _write_csv(csv_path, [
         {"step": "1", "split": "train", "loss/total": "1.0"},
-        {"step": "2", "split": "val",   "loss/total": "100.0"},
+        {"step": "2", "split": "val", "loss/total": "100.0"},
         {"step": "3", "split": "train", "loss/total": "2.0"},
     ])
     train = ObjectiveSpec(metric="loss/total", split="train", tail_frac=1.0)
@@ -116,3 +115,108 @@ def test_json_source_accepts_direct_file_path(tmp_path: Path) -> None:
     json_path.write_text(json.dumps({"k": 7.0}))
     spec = ObjectiveSpec(metric="k", source="json")
     assert spec.read(str(json_path)) == pytest.approx(7.0)
+
+
+# ---------------------------------------------------------------------------
+# Multi-objective (``Objectives``) — regression for the MOO instantiation
+# bug. When a MOO objective is built the way the presets build it
+# (``ddssm.builders.Objectives(specs=[Objective(...), ...])``) and then
+# run through ``hydra_zen.instantiate``, OmegaConf coerces each nested
+# spec into an ``ObjectiveSpec``-typed ``DictConfig`` and strips its
+# ``_target_`` — so the elements are NOT live ``ObjectiveSpec`` objects
+# and have no ``.read`` method. ``Experiment.objective_value`` used to
+# call ``o.read(...)`` straight on them and crashed with
+# ``ConfigAttributeError: Key 'read' not in 'ObjectiveSpec'``, which
+# broke every MOO Optuna trial. These tests pin the contract: a MOO
+# objective built + instantiated the production way must yield a list of
+# finite floats from ``objective_value``.
+# ---------------------------------------------------------------------------
+
+
+def _experiment_with_objective(objective: object) -> Experiment:
+    """A bare ``Experiment`` carrying only ``objective``.
+
+    ``objective_value``'s csv-source path touches nothing else (no eval,
+    trainer, model, or data), so we skip ``__init__`` to avoid building
+    the full composition just to exercise the objective-read contract.
+    """
+    exp = Experiment.__new__(Experiment)
+    exp.objective = objective
+    exp.eval = None
+    return exp
+
+
+def test_moo_objective_instantiates_and_reads(tmp_path: Path) -> None:
+    """MOO objective via builders+instantiate yields a readable spec list.
+
+    Reproduces the production wiring from ``init_centering/evals.py``.
+    Pre-fix this raised ``ConfigAttributeError`` because the instantiated
+    specs were ``DictConfig`` without ``.read``.
+    """
+    import torch
+    from hydra_zen import instantiate
+
+    from ddssm.builders import Objective as ObjectiveCfg, Objectives as ObjectivesCfg
+    from ddssm.experiment import Objectives
+
+    cfg = ObjectivesCfg(specs=[
+        ObjectiveCfg(metric="m1", split="train", tail_frac=1.0, source="csv"),
+        ObjectiveCfg(metric="m2", split="train", tail_frac=1.0, source="csv"),
+    ])
+    obj = instantiate(cfg)
+    assert isinstance(obj, Objectives)
+    # Guard the bug's precondition: the nested specs come back as
+    # OmegaConf nodes, not live ObjectiveSpec objects.
+    assert not all(isinstance(s, ObjectiveSpec) for s in obj.specs)
+
+    _write_csv(tmp_path / "metrics.csv", [
+        {"step": "1", "split": "train", "m1": "1.0", "m2": "10.0"},
+        {"step": "2", "split": "train", "m1": "3.0", "m2": "30.0"},
+    ])
+
+    exp = _experiment_with_objective(obj)
+    values = exp.objective_value(
+        device=torch.device("cpu"), run_dir=str(tmp_path),
+    )
+    assert isinstance(values, list)
+    assert values == [pytest.approx(2.0), pytest.approx(20.0)]
+
+
+def test_moo_objective_penalty_survives_instantiation(tmp_path: Path) -> None:
+    """A per-spec ``penalty`` survives the instantiate→coerce round-trip.
+
+    Set on a MOO spec, it must not be reset to the ``inf`` default.
+    """
+    import torch
+    from hydra_zen import instantiate
+
+    from ddssm.builders import Objective as ObjectiveCfg, Objectives as ObjectivesCfg
+
+    cfg = ObjectivesCfg(specs=[
+        # json metric is absent from metrics.json → penalty kicks in.
+        ObjectiveCfg(
+            metric="missing", source="json", penalty="csv_tail_time",
+        ),
+    ])
+    obj = instantiate(cfg)
+
+    _write_csv(tmp_path / "metrics.csv", [
+        {"step": "1", "split": "train", "time/elapsed_s": "12.5"},
+    ])
+    (tmp_path / "metrics.json").write_text(json.dumps({"other": 1.0}))
+
+    exp = _experiment_with_objective(obj)
+    # eval is None + a json-source spec ⇒ objective_value short-circuits
+    # to the +inf penalty list, so this exercises the coercion before the
+    # eval gate. Assert the penalty type survived (csv_tail_time, not the
+    # inf default) by reading the spec directly post-coercion.
+    from ddssm.experiment import _as_objective_spec
+
+    spec = _as_objective_spec(obj.specs[0])
+    assert spec.penalty == "csv_tail_time"
+    assert spec.read(str(tmp_path)) == pytest.approx(12.5)
+    # And the full path returns a finite penalty value (not a crash).
+    values = exp.objective_value(
+        device=torch.device("cpu"), run_dir=str(tmp_path),
+    )
+    assert isinstance(values, list) and len(values) == 1

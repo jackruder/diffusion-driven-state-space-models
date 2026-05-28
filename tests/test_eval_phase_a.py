@@ -272,14 +272,14 @@ def test_sigma_data_drift_snapshot_with_init_smoke_simple(tmp_path) -> None:
     assert cfg is not None
 
     exp = instantiate(cfg)
-    exp.model.config.stages.stage_1.steps = 3
-    exp.model.config.stages.stage_2.steps = 3
-    exp.model.config.stages.stage_1.log_every = 1
-    exp.model.config.stages.stage_2.log_every = 1
-    exp.model.config.stages.stage_1.val_every = 0
-    exp.model.config.stages.stage_2.val_every = 0
-    exp.model.config.stages.stage_1.checkpoint_every = 100
-    exp.model.config.stages.stage_2.checkpoint_every = 100
+    exp.training.stages.stage_1.steps = 3
+    exp.training.stages.stage_2.steps = 3
+    exp.training.stages.stage_1.log_every = 1
+    exp.training.stages.stage_2.log_every = 1
+    exp.training.stages.stage_1.val_every = 0
+    exp.training.stages.stage_2.val_every = 0
+    exp.training.stages.stage_1.checkpoint_every = 100
+    exp.training.stages.stage_2.checkpoint_every = 100
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     exp.train(device=torch.device("cpu"), run_dir=str(run_dir))
@@ -332,14 +332,14 @@ def test_stage2_elbo_surrogate_with_init_smoke_simple(tmp_path) -> None:
     assert cfg is not None
 
     exp = instantiate(cfg)
-    exp.model.config.stages.stage_1.steps = 3
-    exp.model.config.stages.stage_2.steps = 3
-    exp.model.config.stages.stage_1.log_every = 1
-    exp.model.config.stages.stage_2.log_every = 1
-    exp.model.config.stages.stage_1.val_every = 0
-    exp.model.config.stages.stage_2.val_every = 0
-    exp.model.config.stages.stage_1.checkpoint_every = 100
-    exp.model.config.stages.stage_2.checkpoint_every = 100
+    exp.training.stages.stage_1.steps = 3
+    exp.training.stages.stage_2.steps = 3
+    exp.training.stages.stage_1.log_every = 1
+    exp.training.stages.stage_2.log_every = 1
+    exp.training.stages.stage_1.val_every = 0
+    exp.training.stages.stage_2.val_every = 0
+    exp.training.stages.stage_1.checkpoint_every = 100
+    exp.training.stages.stage_2.checkpoint_every = 100
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     exp.train(device=torch.device("cpu"), run_dir=str(run_dir))

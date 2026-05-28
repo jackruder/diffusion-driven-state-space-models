@@ -48,14 +48,14 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     cfg = _get_experiment_cfg("init_smoke_simple")
     exp = instantiate(cfg)
     # Shrink the stages for a fast smoke run.
-    exp.model.config.stages.stage_1.steps = 5
-    exp.model.config.stages.stage_2.steps = 5
-    exp.model.config.stages.stage_1.log_every = 1
-    exp.model.config.stages.stage_2.log_every = 1
-    exp.model.config.stages.stage_1.val_every = 0
-    exp.model.config.stages.stage_2.val_every = 0
-    exp.model.config.stages.stage_1.checkpoint_every = 100
-    exp.model.config.stages.stage_2.checkpoint_every = 100
+    exp.training.stages.stage_1.steps = 5
+    exp.training.stages.stage_2.steps = 5
+    exp.training.stages.stage_1.log_every = 1
+    exp.training.stages.stage_2.log_every = 1
+    exp.training.stages.stage_1.val_every = 0
+    exp.training.stages.stage_2.val_every = 0
+    exp.training.stages.stage_1.checkpoint_every = 100
+    exp.training.stages.stage_2.checkpoint_every = 100
 
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)

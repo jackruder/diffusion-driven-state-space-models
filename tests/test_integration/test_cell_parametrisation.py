@@ -69,8 +69,6 @@ def test_cell_handoff_produces_consistent_baseline_freeze(
         baseline_form=baseline_form,
         baseline_mode=baseline_mode,
         tracking_mode=tracking_mode,
-        hyperparams=_hparams(),
-        stages=stages,
     )
 
     # The factory's auto-degenerate clamp may have rewritten the mode.
@@ -121,8 +119,6 @@ def test_cell_tracking_mode_freeze_semantics(tracking_mode, tmp_path) -> None:
         baseline_form="mlp",
         baseline_mode="pinned",
         tracking_mode=tracking_mode,
-        hyperparams=_hparams(),
-        stages=stages,
     )
     assert model.sigma_data.tracking_mode == tracking_mode
 

@@ -39,7 +39,7 @@ class _DummyTrainer:
         self.calls.append(("fit", kw.get("total_steps"), kw.get("checkpoint_prefix")))
 
 
-def _make_config(stage_2_with_handoff: bool) -> SimpleNamespace:
+def _make_config(stage_2_with_handoff: bool) -> StagesConf:
     stage_1 = StageSpecConf(
         steps=10,
         trainable=StageTrainableConf(),
@@ -54,8 +54,7 @@ def _make_config(stage_2_with_handoff: bool) -> SimpleNamespace:
         log_every=5, val_every=10, checkpoint_every=10,
         centering_handoff=handoff,
     )
-    stages = StagesConf(stage_1=stage_1, stage_2=stage_2, run=["stage_1", "stage_2"])
-    return SimpleNamespace(stages=stages)
+    return StagesConf(stage_1=stage_1, stage_2=stage_2, run=["stage_1", "stage_2"])
 
 
 def test_orchestrator_flips_stage_selector() -> None:

@@ -192,7 +192,6 @@ def make_vhp_model(
         data_dim=DATA_DIM,
         latent_dim=LATENT_DIM,
         emb_time_dim=EMB_TIME,
-        hyperparams=_make_hparams(lambda_sigma_p=lambda_sigma_p),
         use_observation_mask=False,
         aux_posterior=aux_posterior,
         baseline=baseline,
@@ -257,11 +256,12 @@ def run_stage(
     for _ in range(n_steps):
         batch = data_factory()
         optimizer.zero_grad(set_to_none=True)
-        loss, _, _, metrics, _ = model(
+        components, metrics, _ = model(
             batch["observed_data"],
             batch["observation_mask"],
             batch["timepoints"],
         )
+        loss = components.total()
         loss.backward()
         optimizer.step()
         metrics_log.append({k: v.detach().clone() for k, v in metrics.items()})

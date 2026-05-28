@@ -169,7 +169,6 @@ def test_constructor_requires_one_of_z_init_or_aux_posterior() -> None:
             data_dim=DATA_DIM,
             latent_dim=LATENT_DIM,
             emb_time_dim=EMB_TIME,
-            hyperparams=_make_hparams(),
             # neither z_init nor aux_posterior
         )
 
@@ -191,7 +190,6 @@ def test_constructor_rejects_both_z_init_and_aux_posterior() -> None:
             data_dim=DATA_DIM,
             latent_dim=LATENT_DIM,
             emb_time_dim=EMB_TIME,
-            hyperparams=_make_hparams(),
             z_init=_make_zinit(),
             aux_posterior=AuxPosterior(latent_dim=LATENT_DIM, j=J),
         )
@@ -214,20 +212,19 @@ def test_legacy_z_init_path_still_works() -> None:
         data_dim=DATA_DIM,
         latent_dim=LATENT_DIM,
         emb_time_dim=EMB_TIME,
-        hyperparams=_make_hparams(),
         z_init=z_init,
     )
     # The legacy path lives in zinit; aux_posterior is None.
     assert model.aux_posterior is None
     batch = _make_batch(B=2, T=5)
-    loss, distortion, rate, metrics, _ = model(
+    components, metrics, _ = model(
         batch["observed_data"],
         batch["observation_mask"],
         batch["timepoints"],
     )
-    assert torch.isfinite(loss)
-    assert torch.isfinite(distortion)
-    assert torch.isfinite(rate)
+    assert torch.isfinite(components.total())
+    assert torch.isfinite(components.recon)
+    assert torch.isfinite(components.elbo_reg() - components.recon)
     # Legacy entropy / vhp keys are populated.
     assert "loss/rate/init/entropy" in metrics
 
@@ -254,7 +251,6 @@ def _make_vhp_model(lambda_sigma_p: float = 0.0) -> DDSSM_base:
         data_dim=DATA_DIM,
         latent_dim=LATENT_DIM,
         emb_time_dim=EMB_TIME,
-        hyperparams=_make_hparams(lambda_sigma_p=lambda_sigma_p),
         aux_posterior=aux,
         baseline=baseline,
         sigma_data=sigma_data,
@@ -268,14 +264,14 @@ def test_vhp_stage1_forward_produces_finite_loss() -> None:
     """Forward pass on the VHP path returns finite losses + expected metric keys."""
     model = _make_vhp_model()
     batch = _make_batch(B=2, T=5)
-    loss, distortion, rate, metrics, _ = model(
+    components, metrics, _ = model(
         batch["observed_data"],
         batch["observation_mask"],
         batch["timepoints"],
     )
-    assert torch.isfinite(loss)
-    assert torch.isfinite(distortion)
-    assert torch.isfinite(rate)
+    assert torch.isfinite(components.total())
+    assert torch.isfinite(components.recon)
+    assert torch.isfinite(components.elbo_reg() - components.recon)
     # New VHP-related keys present.
     assert "loss/rate/init/kl_aux" in metrics
     assert "loss/rate/init/loss_init" in metrics
@@ -291,7 +287,7 @@ def test_vhp_stage1_r_sigma_p_active_with_lambda() -> None:
     """When ``λ_σp > 0`` the regularizer contributes a non-zero metric."""
     model = _make_vhp_model(lambda_sigma_p=1.0)
     batch = _make_batch(B=2, T=5)
-    _, _, _, metrics, _ = model(
+    _, metrics, _ = model(
         batch["observed_data"],
         batch["observation_mask"],
         batch["timepoints"],

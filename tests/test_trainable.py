@@ -1,4 +1,4 @@
-"""Tests for TrainableModules + Experiment.train trainable wiring."""
+"""Tests for trainable-mask wiring through Experiment.train."""
 
 from __future__ import annotations
 
@@ -6,16 +6,17 @@ from unittest.mock import MagicMock
 
 import torch
 
-from ddssm.experiment import Experiment, TrainingScalars, TrainableModules
+from ddssm.experiment import Experiment, TrainingScalars
+from ddssm.stages import StageTrainableConf
 
 
 def test_trainable_modules_defaults_all_true():
-    t = TrainableModules()
-    assert t.encoder and t.decoder and t.z_init and t.transition
+    t = StageTrainableConf()
+    assert t.encoder and t.decoder and t.z_init and t.transition and t.baseline
 
 
 def test_recon_only_freezes_transition():
-    t = TrainableModules(encoder=True, decoder=True, z_init=True, transition=False)
+    t = StageTrainableConf(encoder=True, decoder=True, z_init=True, transition=False)
     assert not t.transition
     assert t.encoder and t.decoder and t.z_init
 
@@ -28,7 +29,7 @@ def test_train_calls_set_trainable_when_specified():
     expt.objective = None
     expt.training = TrainingScalars(
         steps=0, log_every=1,
-        trainable=TrainableModules(encoder=True, decoder=True, z_init=True, transition=False),
+        trainable=StageTrainableConf(encoder=True, decoder=True, z_init=True, transition=False),
     )
 
     fake_data = MagicMock()
@@ -42,8 +43,8 @@ def test_train_calls_set_trainable_when_specified():
     fake_trainer = MagicMock()
     expt.build_trainer = MagicMock(return_value=fake_trainer)
 
-    result = expt.train(device=torch.device("cpu"), run_dir="/tmp/_set_trainable_test")
-    assert result is fake_trainer
+    expt.train(device=torch.device("cpu"), run_dir="/tmp/_set_trainable_test")
+    assert expt.trainer is fake_trainer
     fake_trainer._set_trainable.assert_called_once_with(expt.training.trainable)
 
 

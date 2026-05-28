@@ -174,7 +174,6 @@ def _make_stage2_model(
         data_dim=DATA_DIM,
         latent_dim=LATENT_DIM,
         emb_time_dim=EMB_TIME,
-        hyperparams=_make_hparams(),
         aux_posterior=aux,
         baseline=baseline,
         baseline_anchor=anchor,
@@ -191,14 +190,14 @@ def test_stage2_forward_finite() -> None:
     """End-to-end stage-2 forward returns finite losses + expected metrics."""
     model = _make_stage2_model()
     batch = _make_batch(B=2, T=5)
-    loss, distortion, rate, metrics, _ = model(
+    components, metrics, _ = model(
         batch["observed_data"],
         batch["observation_mask"],
         batch["timepoints"],
     )
-    assert torch.isfinite(loss)
-    assert torch.isfinite(distortion)
-    assert torch.isfinite(rate)
+    assert torch.isfinite(components.total())
+    assert torch.isfinite(components.recon)
+    assert torch.isfinite(components.elbo_reg() - components.recon)
     assert "loss/rate/init/kl_aux" in metrics
     assert "loss/rate/init/loss_init" in metrics
     assert "loss/rate/trans/r_mu_p" in metrics
@@ -208,7 +207,7 @@ def test_stage2_entropy_term_is_zero() -> None:
     """Stage-2 entropy term cancels per § Entropy cancellation in stage 2."""
     model = _make_stage2_model()
     batch = _make_batch(B=2, T=5)
-    _, _, _, metrics, _ = model(
+    _, metrics, _ = model(
         batch["observed_data"],
         batch["observation_mask"],
         batch["timepoints"],
@@ -224,7 +223,7 @@ def test_stage2_r_mu_p_zero_after_snapshot() -> None:
         baseline_mode="learnable", anchor_lambda=1.0, snapshot_anchor=True,
     )
     batch = _make_batch(B=2, T=5)
-    _, _, _, metrics, _ = model(
+    _, metrics, _ = model(
         batch["observed_data"],
         batch["observation_mask"],
         batch["timepoints"],
@@ -242,7 +241,7 @@ def test_stage2_r_mu_p_positive_after_drift() -> None:
         for p in model.baseline.parameters():
             p.data.add_(0.5)
     batch = _make_batch(B=2, T=5)
-    _, _, _, metrics, _ = model(
+    _, metrics, _ = model(
         batch["observed_data"],
         batch["observation_mask"],
         batch["timepoints"],
@@ -259,7 +258,7 @@ def test_stage2_r_mu_p_zero_under_pinned_mode() -> None:
         for p in model.baseline.parameters():
             p.data.add_(0.5)
     batch = _make_batch(B=2, T=5)
-    _, _, _, metrics, _ = model(
+    _, metrics, _ = model(
         batch["observed_data"],
         batch["observation_mask"],
         batch["timepoints"],

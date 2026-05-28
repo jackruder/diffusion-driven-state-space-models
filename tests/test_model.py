@@ -114,7 +114,6 @@ def model():
         encoder=make_encoder(), decoder=make_decoder(),
         z_init=make_zinit(), transition=make_gaussian_transition(),
         j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
-        hyperparams=make_hyperparams(),
     )
 
 
@@ -376,9 +375,9 @@ def test_ddssm_forward(model):
     mask = torch.ones(B, DATA_DIM, T)
     timepoints = torch.arange(T).unsqueeze(0).expand(B, -1)
     result = model(observed_data=x, observation_mask=mask, timepoints=timepoints)
-    loss, distortion, rate, metrics, stats = result
-    assert loss.ndim == 0  # scalar
-    assert distortion.ndim == 0
+    components, metrics, stats = result
+    assert components.total().ndim == 0  # scalar
+    assert components.recon.ndim == 0
     # New transition KL metric key (replaces former trans/total, trans/diff,
     # trans/entropy).  GaussianTransition + Gaussian encoder uses closed-form
     # KL so no L_p/L_q sub-component keys are emitted.
@@ -448,15 +447,15 @@ def test_ddssm_forward_with_each_aggregator(agg_name):
     model = DDSSM_base(
         encoder=enc, decoder=dec, z_init=zin, transition=trans,
         j=j, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
-        hyperparams=make_hyperparams(),
     )
 
     B, T = 2, 5
     x = torch.randn(B, DATA_DIM, T)
     mask = torch.ones(B, DATA_DIM, T)
     timepoints = torch.arange(T).unsqueeze(0).expand(B, -1)
-    loss, _dist, _rate, _metrics, _stats = model(
+    components, _metrics, _stats = model(
         observed_data=x, observation_mask=mask, timepoints=timepoints,
     )
+    loss = components.total()
     assert loss.ndim == 0
     assert torch.isfinite(loss).item()

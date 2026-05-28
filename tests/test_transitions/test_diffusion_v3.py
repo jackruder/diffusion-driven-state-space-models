@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from functools import partial
 
 import torch
@@ -167,6 +168,202 @@ def test_transition_kl_rejects_mc_only_encoder() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Native-coord score reconstruction (model-v2.org § Exact likelihood, Layer 2)
+# ---------------------------------------------------------------------------
+
+
+def test_score_matches_closed_form_under_zero_init_diffmodel() -> None:
+    """Score collapses to ``-ẑ / (α · (σ̃² + σ_d²))`` when F_ψ ≡ 0.
+
+    With V3's default zero-init final projection both ``weight`` and
+    ``bias`` of ``output_projection2`` are zero, so ``F_ψ`` outputs zero
+    exactly and the EDM denoiser reduces to ``D_ψ = c_skip · ẑ``.
+    Substituting into the native-coord score
+        s_ψ(z, τ, z_hist) = (D_ψ − ẑ) / (α_τ · σ̃_τ²),
+            ẑ = z/α_τ − μ_p(z_hist),
+    with ``c_skip = σ_d² / (σ̃² + σ_d²)`` gives the closed form
+        s_ψ = -ẑ / (α_τ · (σ̃_τ² + σ_d²)).
+
+    Exercises the full Layer-2 composition (rescale + center + EDM skip
+    path + Tweedie + de-rescale) at a continuous τ value that is *not*
+    on the discrete schedule grid — the implementation must compute
+    α(τ), σ̃(τ) closed-form for downstream prob-flow ODE use.
+    """
+    torch.manual_seed(42)
+    baseline = MLPBaseline(latent_dim=D, j=J)
+    transition = _make_v3(baseline)
+    transition.eval()
+
+    out_w = transition.diffmodel.output_projection2.weight
+    out_b = transition.diffmodel.output_projection2.bias
+    assert torch.equal(out_w, torch.zeros_like(out_w))
+    assert out_b is None or torch.equal(out_b, torch.zeros_like(out_b))
+
+    z = torch.randn(B, D)
+    tau = torch.full((B,), 0.4)
+    z_hist = torch.randn(B, D, J)
+    ctx = {
+        "hist_time_emb": torch.randn(B, J, EMB_TIME),
+        "target_time_emb": torch.randn(B, 1, EMB_TIME),
+    }
+    sigma_d2 = torch.tensor([0.7, 1.3])
+
+    beta_min = transition.schedule.beta_min
+    beta_max = transition.schedule.beta_max
+    int_beta = beta_min * tau + 0.5 * (beta_max - beta_min) * tau.pow(2)
+    alpha = torch.exp(-0.5 * int_beta)
+    sigma_tilde2 = (1.0 - alpha.pow(2)) / alpha.pow(2)
+
+    mu_p = baseline.mean(z_hist)
+    z_hat = z / alpha.unsqueeze(-1) - mu_p
+    expected = -z_hat / (
+        alpha.unsqueeze(-1) * (sigma_tilde2.unsqueeze(-1) + sigma_d2.unsqueeze(-1))
+    )
+
+    actual = transition.score(
+        z=z,
+        tau=tau,
+        z_hist=z_hist,
+        ctx=ctx,
+        sigma_d2=sigma_d2,
+    )
+
+    assert actual.shape == (B, D)
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Prob-flow ODE log-density (model-v2.org § Exact likelihood, Layer 1)
+# ---------------------------------------------------------------------------
+
+
+def test_log_prob_matches_analytic_gaussian_when_score_is_marginal() -> None:
+    """Prob-flow ODE log-density matches analytic Gaussian when score is the marginal score.
+
+    Reduction sanity check #2 from model-v2.org § Exact likelihood:
+    when the trained score equals the analytic encoder-marginal score
+    of ``N(μ_t, σ_t²)``, the prob-flow ODE pushforward IS that Gaussian,
+    so ``log_prob(z)`` matches ``log N(z; μ_t, σ_t²)`` to ODE-solver
+    tolerance (modulo endpoint and tau_min approximations).
+
+    The schedule uses a stiff ``β_max=50`` so the endpoint approximation
+    ``log p_ψ^{ode,1} ≈ log N(0, I)`` is sub-tolerance (``α(1) ≈ 4e-6``).
+    """
+    torch.manual_seed(0)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
+    schedule = DiffusionV3ScheduleConfig(
+        S_k=1, k_chunk=1, num_steps=20,
+        beta_min=0.1, beta_max=50.0, tau_min=1e-3,
+        k_sampling_mode="uniform",
+    )
+    transition = _make_v3(baseline, schedule=schedule)
+    transition.eval()
+
+    mu_t = torch.tensor([[0.3, -0.4], [0.5, 0.2]])
+    sigma2_t = torch.tensor([[0.7, 1.1], [0.5, 0.9]])
+
+    beta_min = schedule.beta_min
+    beta_max = schedule.beta_max
+
+    def analytic_score(z, tau, z_hist, ctx, sigma_d2, padding_mask=None):
+        if tau.dim() == 0:
+            tau = tau.expand(z.shape[0])
+        int_beta = beta_min * tau + 0.5 * (beta_max - beta_min) * tau.pow(2)
+        alpha = torch.exp(-0.5 * int_beta).unsqueeze(-1)
+        alpha2 = alpha.pow(2)
+        marginal_var = alpha2 * sigma2_t + (1.0 - alpha2)
+        return -(z - alpha * mu_t) / marginal_var
+
+    transition.score = analytic_score
+
+    z = torch.tensor([[0.2, 0.4], [-0.1, 0.3]])
+    z_hist = torch.zeros(B, D, J)
+    ctx = {
+        "hist_time_emb": torch.zeros(B, J, EMB_TIME),
+        "target_time_emb": torch.zeros(B, 1, EMB_TIME),
+    }
+    sigma_d2 = torch.ones(B)
+
+    actual = transition.log_prob(
+        z=z, z_hist=z_hist, ctx=ctx, sigma_d2=sigma_d2,
+        rtol=1e-7, atol=1e-7,
+    )
+
+    expected = (
+        -0.5 * ((z - mu_t).pow(2) / sigma2_t).sum(dim=-1)
+        - 0.5 * sigma2_t.log().sum(dim=-1)
+        - 0.5 * D * math.log(2.0 * math.pi)
+    )
+
+    assert actual.shape == (B,)
+    assert torch.allclose(actual, expected, atol=5e-3, rtol=5e-3)
+
+
+def test_log_prob_hutchinson_matches_exact_for_diagonal_jacobian() -> None:
+    """Hutchinson estimator equals exact-trace when the score Jacobian is diagonal.
+
+    Cycle-3 tracer. The analytic encoder marginal of an isotropic
+    Gaussian has score ``s(z) = -(z − αμ_t)/σ_τ²`` with Jacobian
+    ``J = -I/σ_τ²`` — purely diagonal.  With Rademacher ``v ∈ {±1}``
+    and ``|v|² = D`` deterministically, ``vᵀ J v = -D/σ_τ² = tr(J)``
+    exactly — zero variance per draw.  So Hutchinson and exact-trace
+    must agree to ODE-solver tolerance for any ``v``.
+
+    Still exercises the full Hutchinson code path (probe generation,
+    ``grad_outputs=v`` reverse-mode pass, ``vᵀ J v`` reduction): a
+    broken probe distribution or wrong reduction would shift the
+    answer in a way this test catches.
+    """
+    torch.manual_seed(0)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
+    schedule = DiffusionV3ScheduleConfig(
+        S_k=1, k_chunk=1, num_steps=20,
+        beta_min=0.1, beta_max=50.0, tau_min=1e-3,
+        k_sampling_mode="uniform",
+    )
+    transition = _make_v3(baseline, schedule=schedule)
+    transition.eval()
+
+    mu_t = torch.tensor([[0.3, -0.4], [0.5, 0.2]])
+    sigma2_t = torch.tensor([[0.7, 1.1], [0.5, 0.9]])
+
+    beta_min = schedule.beta_min
+    beta_max = schedule.beta_max
+
+    def analytic_score(z, tau, z_hist, ctx, sigma_d2, padding_mask=None):
+        if tau.dim() == 0:
+            tau = tau.expand(z.shape[0])
+        int_beta = beta_min * tau + 0.5 * (beta_max - beta_min) * tau.pow(2)
+        alpha = torch.exp(-0.5 * int_beta).unsqueeze(-1)
+        alpha2 = alpha.pow(2)
+        marginal_var = alpha2 * sigma2_t + (1.0 - alpha2)
+        return -(z - alpha * mu_t) / marginal_var
+
+    transition.score = analytic_score
+
+    z = torch.tensor([[0.2, 0.4], [-0.1, 0.3]])
+    z_hist = torch.zeros(B, D, J)
+    ctx = {
+        "hist_time_emb": torch.zeros(B, J, EMB_TIME),
+        "target_time_emb": torch.zeros(B, 1, EMB_TIME),
+    }
+    sigma_d2 = torch.ones(B)
+
+    common_kwargs = dict(
+        z=z, z_hist=z_hist, ctx=ctx, sigma_d2=sigma_d2,
+        rtol=1e-7, atol=1e-7,
+    )
+    exact_logp = transition.log_prob(divergence_mode="exact", **common_kwargs)
+
+    gen = torch.Generator().manual_seed(123)
+    hutch_logp = transition.log_prob(
+        divergence_mode="hutchinson", generator=gen, **common_kwargs
+    )
+
+    assert hutch_logp.shape == (B,)
+    assert torch.allclose(hutch_logp, exact_logp, atol=1e-4, rtol=1e-4)
+
 def test_transition_kl_updates_sigma_data_per_t() -> None:
     """``transition_kl`` updates buffer slots for every visited t."""
     j = J
@@ -327,6 +524,51 @@ def test_transition_kl_init_grad_flows_to_aux_posterior() -> None:
     (out["loss_init"] + out["kl_aux"]).backward()
     aux_grads = [p.grad for p in aux.parameters() if p.grad is not None]
     assert len(aux_grads) > 0
+
+
+# ---------------------------------------------------------------------------
+# log_prob_init  (VHP initial-state log-density)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("j", [1, 2])
+def test_log_prob_init_shape_and_finite(j: int) -> None:
+    """``log_prob_init`` returns a finite ``(B, S)`` per-trajectory log-density."""
+    baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    transition = _make_v3(baseline, j=j)
+    transition.eval()
+    aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    zs, _, time_embed, _ = _make_batch(j=j)
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed", init_value=1.0)
+    out = transition.log_prob_init(
+        zs=zs,
+        aux_posterior=aux,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
+    )
+    assert out.shape == (B, S)
+    assert torch.isfinite(out).all()
+
+
+def test_log_prob_init_does_not_update_sigma_data() -> None:
+    """Unlike ``transition_kl_init``, log-density eval must not touch the buffer."""
+    j = 2
+    baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    transition = _make_v3(baseline, j=j)
+    transition.eval()
+    aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    zs, _, time_embed, _ = _make_batch(j=j)
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t", ema_decay=0.0)
+    pre_step = sigma_data.ema_step.clone()
+    pre_val = sigma_data.sigma_data2.clone()
+    transition.log_prob_init(
+        zs=zs,
+        aux_posterior=aux,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
+    )
+    assert torch.equal(sigma_data.ema_step, pre_step)
+    assert torch.equal(sigma_data.sigma_data2, pre_val)
 
 
 # ---------------------------------------------------------------------------

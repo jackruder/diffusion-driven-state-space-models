@@ -106,20 +106,20 @@ def test_ablation_sweep_composes_via_cli() -> None:
     # All 9 sweep axes from the grilling decisions (7 from the
     # original expand-sweep, +2 for per-stage λ warmup fractions).
     for key in (
-        "experiment.model.stages.n_pretrain",
-        "experiment.model.stages.sigma_pert",
+        "experiment.training.stages.n_pretrain",
+        "experiment.training.stages.sigma_pert",
         "experiment.model.anchor_lambda",
         "experiment.hparams.lambda_sigma_p",
-        "experiment.model.stages.base_lr",
-        "experiment.model.stages.dec_mult",
-        "experiment.model.stages.trans_mult",
-        "experiment.model.stages.stage_1_warmup_frac",
-        "experiment.model.stages.stage_2_warmup_frac",
+        "experiment.training.stages.base_lr",
+        "experiment.training.stages.dec_mult",
+        "experiment.training.stages.trans_mult",
+        "experiment.training.stages.stage_1_warmup_frac",
+        "experiment.training.stages.stage_2_warmup_frac",
     ):
         assert key in params, f"missing sweep axis: {key}"
     # Sanity: at least the two handoff knobs are log-uniform.
-    assert "tag(log" in params["experiment.model.stages.n_pretrain"]
-    assert "tag(log" in params["experiment.model.stages.sigma_pert"]
+    assert "tag(log" in params["experiment.training.stages.n_pretrain"]
+    assert "tag(log" in params["experiment.training.stages.sigma_pert"]
 
 
 def test_high_surface_smoke_resolves_to_init_centering_factory() -> None:
@@ -146,19 +146,20 @@ def test_high_surface_smoke_end_to_end_writes_metrics_json(
     cfg = store["experiment"]["experiment", "init_smoke_high_surface"]
     exp = instantiate(cfg)
     # Shrink stages for a fast run.
-    exp.model.config.stages.stage_1.steps = 5
-    exp.model.config.stages.stage_2.steps = 5
-    exp.model.config.stages.stage_1.log_every = 1
-    exp.model.config.stages.stage_2.log_every = 1
-    exp.model.config.stages.stage_1.val_every = 0
-    exp.model.config.stages.stage_2.val_every = 0
-    exp.model.config.stages.stage_1.checkpoint_every = 100
-    exp.model.config.stages.stage_2.checkpoint_every = 100
+    exp.training.stages.stage_1.steps = 5
+    exp.training.stages.stage_2.steps = 5
+    exp.training.stages.stage_1.log_every = 1
+    exp.training.stages.stage_2.log_every = 1
+    exp.training.stages.stage_1.val_every = 0
+    exp.training.stages.stage_2.val_every = 0
+    exp.training.stages.stage_1.checkpoint_every = 100
+    exp.training.stages.stage_2.checkpoint_every = 100
 
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    value = exp.train(device=torch.device("cpu"), run_dir=str(run_dir))
+    exp.train(device=torch.device("cpu"), run_dir=str(run_dir))
+    value = exp.objective_value(device=torch.device("cpu"), run_dir=str(run_dir))
 
     assert isinstance(value, float)
     assert _math.isfinite(value), f"objective returned non-finite value: {value}"

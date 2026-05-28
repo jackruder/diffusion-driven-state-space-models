@@ -37,13 +37,6 @@ def _cells():
     return list(iter_cells())
 
 
-def _minimal_hparams() -> SimpleNamespace:
-    return SimpleNamespace(
-        S=1, batch_size=4, grad_accum_steps=1, ema_decay=0.999, weight_decay=1e-2,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=10, enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4,
-        lambda_sigma_p=1e-2,
-    )
 
 
 @pytest.mark.parametrize("baseline_form,baseline_mode,tracking_mode", _cells())
@@ -53,8 +46,6 @@ def test_all_cells_build(baseline_form, baseline_mode, tracking_mode) -> None:
         baseline_form=baseline_form,
         baseline_mode=baseline_mode,
         tracking_mode=tracking_mode,
-        hyperparams=_minimal_hparams(),
-        stages=None,
     )
     assert model.baseline_mode == baseline_mode
     assert model.sigma_data is not None
@@ -76,8 +67,6 @@ def test_baseline_form_dispatch(form, expected_cls) -> None:
         baseline_form=form,
         baseline_mode="pinned",
         tracking_mode="per_t",
-        hyperparams=_minimal_hparams(),
-        stages=None,
     )
     assert isinstance(model.baseline, expected_cls)
 
@@ -91,8 +80,6 @@ def test_param_free_forms_autoclamp_learnable_to_pinned(form) -> None:
             baseline_form=form,
             baseline_mode="learnable",
             tracking_mode="per_t",
-            hyperparams=_minimal_hparams(),
-            stages=None,
         )
     assert model.baseline_mode == "pinned"
     assert any("auto-degenerate" in str(w.message) for w in caught), (
@@ -106,8 +93,6 @@ def test_pinned_default_anchor_lambda_is_zero() -> None:
         baseline_form="mlp",
         baseline_mode="pinned",
         tracking_mode="per_t",
-        hyperparams=_minimal_hparams(),
-        stages=None,
     )
     assert model.anchor_lambda == 0.0
 
@@ -118,8 +103,6 @@ def test_learnable_default_anchor_lambda_is_nonzero() -> None:
         baseline_form="mlp",
         baseline_mode="learnable",
         tracking_mode="per_t",
-        hyperparams=_minimal_hparams(),
-        stages=None,
     )
     assert model.anchor_lambda == pytest.approx(1e-2)
 
@@ -131,8 +114,6 @@ def test_explicit_anchor_lambda_overrides_default() -> None:
         baseline_mode="pinned",
         tracking_mode="per_t",
         anchor_lambda=0.7,
-        hyperparams=_minimal_hparams(),
-        stages=None,
     )
     assert model.anchor_lambda == pytest.approx(0.7)
 
@@ -142,8 +123,6 @@ def test_invalid_baseline_form_raises() -> None:
     with pytest.raises(ValueError, match="baseline_form must be one of"):
         _build_init_centering_model(
             baseline_form="quadratic",   # not a registered form
-            hyperparams=_minimal_hparams(),
-            stages=None,
         )
 
 
