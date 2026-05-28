@@ -79,6 +79,12 @@ def run_probe(
     )
     _freeze_model(model, list(spec.freeze))
 
+    # The probe measures score-net gradient/loss variance at fixed model
+    # state — freeze σ_data so transition_kl's EMA update doesn't mutate
+    # the buffer across replicas.
+    if getattr(model, "sigma_data", None) is not None:
+        model.sigma_data.frozen = True
+
     if not hasattr(model, "transition"):
         raise TypeError("Model is missing transition module for variance probing.")
 
@@ -155,6 +161,7 @@ def run_probe(
                     trans.zero_grad(set_to_none=True)
                     out = trans.transition_kl(
                         **probe_batch.as_kwargs(),
+                        sigma_data=model.sigma_data,
                         mc_override={
                             "eps": shared_eps,
                             "k_idx": shared_k_idx[cell.k_sampling_mode],
@@ -203,6 +210,7 @@ def run_probe(
                         trans.zero_grad(set_to_none=True)
                         out = trans.transition_kl(
                             **probe_batch.as_kwargs(),
+                            sigma_data=model.sigma_data,
                             mc_override={
                                 "eps": forced_eps,
                                 "k_idx": forced_idx,

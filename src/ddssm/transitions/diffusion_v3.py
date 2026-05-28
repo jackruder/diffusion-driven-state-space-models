@@ -301,12 +301,19 @@ class DiffusionV3Transition(BaseTransition):
         sigma_data: SigmaDataBuffer,
         covariates: Optional[torch.Tensor] = None,
         mc_override: Optional[Dict[str, Any]] = None,
+        return_per_sample: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Centered ESM/EDM loss over ``t = j+1 … T``.
 
         Returns ``{"kl": ...}``.  ``R_μp`` is added at the
         :class:`DDSSM_base.forward` level via the free function — V3
         is a pure loss-computer per the plan's ownership decisions.
+
+        With ``return_per_sample`` (the variance-probe path) also returns
+        ``L_p`` (the unnormalised summed ESM loss) and ``L_p_per_sample``
+        (the per-sequence-sample loss, summed over target timesteps). The
+        default per-timestep chunking gives ``N = B·S`` rows per chunk, so
+        the per-sample vectors align across timesteps and sum elementwise.
         """
         del logq_paths
         if (
@@ -327,8 +334,12 @@ class DiffusionV3Transition(BaseTransition):
         device = zs.device
         dtype = zs.dtype
         kl_sum = torch.zeros((), device=device, dtype=dtype)
+        per_sample_acc: Optional[torch.Tensor] = None
         n_target_steps = max(0, T - j)
         if n_target_steps == 0:
+            if return_per_sample:
+                zeros = torch.zeros(B * S, device=device, dtype=dtype)
+                return {"kl": kl_sum, "L_p": kl_sum, "L_p_per_sample": zeros}
             return {"kl": kl_sum}
 
         mus = enc_stats["mus"]
@@ -378,8 +389,17 @@ class DiffusionV3Transition(BaseTransition):
                 sigma_d2_per_row=sigma_d2_per_row,
                 padding_mask=padding_mask,
                 mc_override=mc_override,
+                return_per_sample=return_per_sample,
             )
-            kl_sum = kl_sum + chunk_loss
+            if return_per_sample:
+                # chunk_loss is the per-sample (N=B*S,) vector for this t.
+                per_sample_acc = (
+                    chunk_loss if per_sample_acc is None
+                    else per_sample_acc + chunk_loss
+                )
+                kl_sum = kl_sum + chunk_loss.sum()
+            else:
+                kl_sum = kl_sum + chunk_loss
 
             # σ_data update at this chunk's timesteps.
             mu_p_chunk = self.baseline.mean(z_hist_flat)  # (N, d)
@@ -394,6 +414,12 @@ class DiffusionV3Transition(BaseTransition):
 
         denom = float(B * S * n_target_steps)
         kl = kl_sum / denom
+        if return_per_sample:
+            return {
+                "kl": kl,
+                "L_p": kl_sum,            # unnormalised summed ESM loss
+                "L_p_per_sample": per_sample_acc,
+            }
         return {"kl": kl}
 
     # ------------------------------------------------------------------
@@ -691,12 +717,15 @@ class DiffusionV3Transition(BaseTransition):
         sigma_d2_per_row: torch.Tensor,  # (N,)
         padding_mask: torch.Tensor,   # (N, j+1)
         mc_override: Optional[Dict[str, Any]] = None,
+        return_per_sample: bool = False,
     ) -> torch.Tensor:
         """Centered ESM regression: ``E_τ E_q[w · ‖F_ψ − F*‖²]``.
 
         Returns the *summed-over-N* weighted squared error (caller
-        normalises).  Centering: ``μ̂ = μ_t − μ_p(z_hist)``; the sampler
-        draws ``ẑ_t^(τ) = μ̂ + √(σ_t² + σ̃²)·ε`` in centered coords.
+        normalises), or the per-sample ``(N,)`` vector when
+        ``return_per_sample`` (used by the variance probe).  Centering:
+        ``μ̂ = μ_t − μ_p(z_hist)``; the sampler draws
+        ``ẑ_t^(τ) = μ̂ + √(σ_t² + σ̃²)·ε`` in centered coords.
         """
         N, d = mu_t.shape
         device = mu_t.device
@@ -829,6 +858,8 @@ class DiffusionV3Transition(BaseTransition):
             total_sqerr = total_sqerr + sqerr.view(N, kc).sum(dim=1)
 
         per_sample = total_sqerr / float(self.S_k)
+        if return_per_sample:
+            return per_sample
         return per_sample.sum()
 
     # ------------------------------------------------------------------
