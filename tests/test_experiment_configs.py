@@ -9,6 +9,10 @@ must:
 * Resolve through the Hydra CLI bridge
   (``ddssm._experiment_registry.register_experiments`` →
   ``compose(config_name='config', overrides=[experiment=NAME])``).
+
+Post legacy-purge the only family is init-centering (V3 / VHP path);
+the synthetic / kdd / variance_probe families were deleted (their
+datasets survive as library code in ``ddssm.data.presets``).
 """
 
 from __future__ import annotations
@@ -57,18 +61,14 @@ def _clear_global_hydra():
 
 
 def test_experiments_registered() -> None:
-    """All 28 named presets are reachable through the experiment store.
+    """All 14 init-centering presets are reachable through the store.
 
-    Composition: 14 legacy presets + 12 cell presets (one per ablation-
-    grid cell, post-``global_ema`` removal) + 2 role-specific smokes
-    (``init_smoke_simple`` and ``init_smoke_high_surface``). The 2
-    ``init_canonical_ctrl_*`` presets were removed per ADR-0002; the
-    original ``init_centering_smoke`` / ``init_centering_pilot`` presets
-    were replaced by the two role-specific smokes (CONTEXT.md drops the
-    "pilot" terminology); and the ``global_ema`` σ_data tracking
-    variant was dropped from the grid (cells.py).
+    Composition: 12 ablation-grid cell presets (one per cell, post-
+    ``global_ema`` removal) + 2 role-specific smokes (``init_smoke_simple``
+    and ``init_smoke_high_surface``).
     """
-    assert len(EXPERIMENTS) == 28, EXPERIMENTS
+    assert len(EXPERIMENTS) == 14, EXPERIMENTS
+    assert all(name.startswith("init_") for name in EXPERIMENTS), EXPERIMENTS
 
 
 @pytest.mark.parametrize("name", EXPERIMENTS)
@@ -87,41 +87,33 @@ def test_experiment_cli_compose(name: str) -> None:
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config", overrides=[f"experiment={name}"])
     assert cfg.experiment.training.steps > 0
-    # Legacy presets target DDSSM_base directly; the model-v2 init-
-    # centering preset uses a factory wrapper that constructs
-    # DDSSM_base with shared baseline/aux instances.
+    # The init-centering preset builds DDSSM_base through a factory
+    # wrapper that wires shared baseline / aux instances.
     target = cfg.experiment.model._target_
-    assert (
-        target.endswith("DDSSM_base")
-        or target.endswith("_build_init_centering_model")
-    ), target
+    assert target.endswith("_build_init_centering_model"), target
     assert cfg.experiment.data._target_
 
 
-def test_default_experiment_is_harmonic_gauss() -> None:
+def test_default_experiment_is_init_smoke_simple() -> None:
+    """The default composes to the canonical (zero, pinned, fixed) anchor cell."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config")
     assert cfg.experiment.data._target_.endswith("SyntheticDataModule")
-    assert cfg.experiment.model.transition._target_.endswith("GaussianTransition")
-    assert cfg.experiment.model.encoder._target_.endswith("GaussianEncoder")
-    assert cfg.experiment.model.decoder._target_.endswith("GaussianDecoder")
-    assert cfg.experiment.model.z_init._target_.endswith("GaussianInitPrior")
+    assert cfg.experiment.model._target_.endswith("_build_init_centering_model")
+    assert cfg.experiment.model.baseline_form == "zero"
+    assert cfg.experiment.model.baseline_mode == "pinned"
+    assert cfg.experiment.model.tracking_mode == "fixed"
 
 
-@pytest.mark.parametrize("name,expected_dim,expected_j", [
-    ("harmonic_gauss", 1, 1),
-    ("bimodal_gauss", 1, 1),
-    ("robot_2d_gauss", 2, 2),
-    ("kdd_gauss", 6, 1),
+@pytest.mark.parametrize("name,expected_data_dim,expected_latent", [
+    ("init_smoke_simple", 1, 1),
+    ("init_smoke_high_surface", 8, 4),
 ])
-def test_experiment_shape_baked_in(name: str, expected_dim: int, expected_j: int) -> None:
-    """Shapes are resolved to concrete ints, not interpolation strings."""
+def test_experiment_shape_baked_in(name: str, expected_data_dim: int, expected_latent: int) -> None:
+    """Factory shape kwargs resolve to concrete ints, not interpolation strings."""
     exp = _exp(name)
-    assert exp.model.data_dim == expected_dim
-    assert exp.model.j == expected_j
-    assert exp.model.encoder.data_dim == expected_dim
-    assert exp.model.encoder.j == expected_j
-    assert exp.model.transition.j == expected_j
+    assert exp.model.data_dim == expected_data_dim
+    assert exp.model.latent_dim == expected_latent
 
 
 def test_objective_returns_inf_on_missing_csv(tmp_path) -> None:
@@ -133,10 +125,9 @@ def test_objective_returns_inf_on_missing_csv(tmp_path) -> None:
 def test_sweep_preset_composes(name: str) -> None:
     """Every registered sweep preset composes via ``+sweep=NAME``.
 
-    Optuna search presets (``synthetic_lr``, ``kdd_phase1``)
-    additionally swap in the ``ddssm_optuna`` sweeper and populate a
-    non-empty search space; config-preset sweeps (``variance_probe``)
-    only tweak experiment fields and leave the sweeper at defaults.
+    The init-centering Optuna presets (``init_ablation``, ``init_pilot``)
+    swap in the ``ddssm_optuna`` sweeper and populate a non-empty search
+    space; ``init_ablation_moo`` uses a list of minimize directions.
     """
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(
@@ -146,11 +137,7 @@ def test_sweep_preset_composes(name: str) -> None:
         )
     sweeper = cfg.hydra.sweeper
     if sweeper.params:
-        # Optuna search-space preset.
         assert "optuna" in sweeper._target_.lower()
-        # Single-objective sweeps use a scalar direction; multi-objective
-        # ones (e.g. ``init_ablation_moo``) use a list of directions
-        # matching the experiment's list-of-ObjectiveSpec length.
         direction = sweeper.direction
         if isinstance(direction, str):
             assert direction == "minimize"
@@ -160,19 +147,7 @@ def test_sweep_preset_composes(name: str) -> None:
         assert len(sweeper.params) > 0
 
 
-@pytest.mark.parametrize("name,expected_metrics", [
-    ("harmonic_gauss", ["mae", "crps_sum"]),
-    ("bimodal_gauss", ["energy_score", "crps_sum"]),
-    ("robot_2d_gauss", ["energy_score", "crps_sum"]),
-])
-def test_eval_metrics(name: str, expected_metrics: list) -> None:
-    assert list(_exp(name).eval.metrics) == expected_metrics
-
-
-@pytest.mark.parametrize("name,expected_first_plot", [
-    ("harmonic_gauss", "forecast_1d"),
-    ("bimodal_gauss", "forecast_1d"),
-    ("robot_2d_gauss", "forecast_2d_spatial"),
-])
-def test_viz_first_plot(name: str, expected_first_plot: str) -> None:
-    assert _exp(name).viz.plots[0].name == expected_first_plot
+def test_high_surface_smoke_eval_metrics() -> None:
+    """The high-surface smoke wires the Phase-A headline eval metrics."""
+    metrics = list(_exp("init_smoke_high_surface").eval.metrics)
+    assert "stage2_elbo_surrogate" in metrics

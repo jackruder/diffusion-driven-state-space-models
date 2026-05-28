@@ -529,8 +529,8 @@ class GaussianTransition(BaseTransition):
             B, 0, self.j, device=device, dtype=dtype
         )  # (B, 0, j)
 
-        # context token
-        x = self.context_producer.forward(
+        # context token (via __call__ so the in-place torch.compile fires)
+        x = self.context_producer(
             combined=combined,
             mask_embedded=mask_embedded,
             hist_time_emb=hist_time_emb,

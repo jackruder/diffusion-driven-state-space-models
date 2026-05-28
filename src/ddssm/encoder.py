@@ -360,7 +360,7 @@ class GaussianEncoder(BaseEncoder):
                 [h_time_embed, covariates.permute(0, 2, 1)], dim=-1
             )
 
-        h = self.fut_sum_module.forward(
+        h = self.fut_sum_module(  # __call__ so the in-place torch.compile fires
             observed_data=observed_data.permute(0, 2, 1),  # (B, T, D)
             observed_mask=cond_mask.permute(0, 2, 1) if cond_mask is not None else None,
             t_emb=h_time_embed,
@@ -700,7 +700,7 @@ class GaussianInitPrior(BaseInitPrior):
         # an empty mask tensor of the right shape (B, 0, j)
         empty_mask = torch.zeros(B, 0, self.j, device=z_init.device, dtype=z_init.dtype)
 
-        h = self.context_producer_aux.forward(
+        h = self.context_producer_aux(  # __call__ so the in-place torch.compile fires
             combined=z_proj,
             mask_embedded=empty_mask,
             hist_time_emb=time_init,
@@ -898,7 +898,7 @@ class GaussianInitPrior(BaseInitPrior):
         pad_mask_emb = self.pad_mask_embed(pad_mask.unsqueeze(-1))  # (B, j, E_pad)
         pad_mask_emb = pad_mask_emb.permute(0, 2, 1)  # (B, E_pad, j)
 
-        x = self.context_producer_init.forward(
+        x = self.context_producer_init(  # __call__ so the in-place torch.compile fires
             combined=combined,
             mask_embedded=pad_mask_emb,
             hist_time_emb=hist_time_emb,

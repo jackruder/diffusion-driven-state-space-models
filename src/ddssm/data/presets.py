@@ -1,16 +1,20 @@
-"""Synthetic data-module configs (closed-form modes).
+"""Library dataset-module presets (closed-form synthetic modes).
 
-Generated on the fly by :class:`SyntheticDataModule`; every dataset
-here shares ``T=32`` and ``batch_size=32``. To bump the sequence
-length or batch size globally, change them once at the top.
+Reusable ``SyntheticDataModule`` configs, generated on the fly. Lives in
+the library (not under an experiment family) so any experiment can
+import them — the init-centering ablation reuses
+``NonlinBimodalLift1D/MV``, and ``verifications.org`` exercises the
+harmonic / bimodal / robot modes.
+
+Every dataset shares ``T=32`` and ``batch_size=32``; change them once at
+the top. Registration into the Hydra ``data_store`` (so ``data=NAME``
+CLI overrides resolve) happens in :mod:`experiments.datasets`.
 """
 
 from __future__ import annotations
 
 from ddssm.builders import Synthetic
 from ddssm.data.synthetic import NLBL_MV_OBS_D
-
-from conf.registry import data_store
 
 
 T = 32
@@ -55,10 +59,7 @@ NonlinBimodalLiftMV = Synthetic(
 )
 
 
-data_store(LGSSM, name="lgssm")
-data_store(Harmonic, name="harmonic")
-data_store(Bimodal, name="bimodal")
-data_store(BimodalNoisy, name="bimodal_noisy")
-data_store(Robot2D, name="robot2d")
-data_store(NonlinBimodalLift1D, name="nonlin_bimodal_lift_1d")
-data_store(NonlinBimodalLiftMV, name="nonlin_bimodal_lift_mv")
+__all__ = [
+    "LGSSM", "Harmonic", "Bimodal", "BimodalNoisy", "Robot2D",
+    "NonlinBimodalLift1D", "NonlinBimodalLiftMV",
+]

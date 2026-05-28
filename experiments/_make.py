@@ -1,31 +1,27 @@
 """Slim composer + run/override/serialise helpers for DDSSM experiments.
 
-The named models and datasets live under
-``experiments/{synthetic,variance_probe,kdd}/`` — each registers
-itself to the relevant store in :mod:`conf.registry` on import. To
-define a new experiment, import a registered model + dataset and
-call :func:`experiment` (it ties them together and keeps
-``model.hyperparams`` in sync with the experiment's ``hparams``)::
+Dataset configs are library code in :mod:`ddssm.data.presets`; model
+factories live in the experiment families (e.g.
+:mod:`experiments.init_centering.model`). To define a new experiment,
+import a model factory + a dataset and call :func:`experiment` (it ties
+them together and curries ``hparams`` onto the trainer)::
 
-    from ddssm.builders import Eval, Hparams, Plot, Training, Viz
+    from ddssm.builders import Eval, Hparams, Training
     from conf.registry import experiment_store
     from experiments._make import experiment, run
-    from experiments.synthetic.model import Small1D
-    from experiments.synthetic.data import Harmonic
+    from experiments.init_centering.model import SmokeModel
+    from ddssm.data.presets import NonlinBimodalLift1D
 
     exp = experiment(
-        data=Harmonic, model=Small1D.gauss_model,
-        hparams=Hparams(S=1, lambda_warmup_steps=200, batch_size=32,
+        data=NonlinBimodalLift1D,
+        model=SmokeModel(baseline_form="zero", latent_dim=1, data_dim=1),
+        hparams=Hparams(S=1, batch_size=16,
                         enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4),
-        training=Training(steps=1000, log_every=25, checkpoint_every=200),
-        eval=Eval(metrics=["mae", "crps_sum"], split="val",
-                  num_samples=32, T_split=16),
-        viz=Viz(plots=[Plot("forecast_1d", "forecast.png",
-                            kwargs={"n_show": 4})],
-                split="val", num_samples=32, T_split=16),
+        training=Training(steps=800, log_every=25, checkpoint_every=200),
+        eval=Eval(metrics=["stage2_elbo_surrogate"], split="val"),
     )
-    experiment_store(exp, name="harmonic_gauss")
-    run(exp, run_dir="runs/harmonic_gauss")
+    experiment_store(exp, name="my_cell")
+    run(exp, run_dir="runs/my_cell")
 
 For ad-hoc variants in a notebook / sweep, derive from a registered
 experiment with :func:`override` (Hydra-CLI-style strings or dicts).

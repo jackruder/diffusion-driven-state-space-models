@@ -5,10 +5,10 @@ in a notebook, org src block, or Python script. Each name here is a
 ``builds(...)`` config — call it like a function with keyword
 overrides::
 
-    from ddssm.builders import DiffTransition, Schedule, Unet
-    t = DiffTransition(
+    from ddssm.builders import DiffV3Transition, ScheduleV3, Unet
+    t = DiffV3Transition(
         unet=Unet(channels=64, n_layers=4),
-        schedule=Schedule(sigma_min=0.01, S_k=20),
+        schedule=ScheduleV3(S_k=20),
     )
 
 Shape kwargs (``data_dim``, ``latent_dim``, ``j``, ``emb_time_dim``,
@@ -71,11 +71,6 @@ from .futsum import GRUFutureSummary, TransformerFutureSummary
 from .gaussians import GaussianHead
 from .train import DDSSMTrainer
 from .transitions.baseline_gaussian import BaselineGaussianTransition
-from .transitions.diffusion import DiffusionScheduleConfig, DiffusionTransition
-from .transitions.diffusion_v2 import (
-    DiffusionV2ScheduleConfig,
-    DiffusionV2Transition,
-)
 from .transitions.diffusion_v3 import (
     DiffusionV3ScheduleConfig,
     DiffusionV3Transition,
@@ -117,8 +112,6 @@ DiffResidualBlock = builds(
 # Schedules (plain dataclasses already; re-export under short names).
 # ---------------------------------------------------------------------------
 
-Schedule = DiffusionScheduleConfig
-ScheduleV2 = DiffusionV2ScheduleConfig
 ScheduleV3 = DiffusionV3ScheduleConfig
 
 # ---------------------------------------------------------------------------
@@ -337,23 +330,6 @@ GaussTransition = builds(
     gaussian_head=Head(),
 )
 
-DiffTransition = builds(
-    DiffusionTransition,
-    populate_full_signature=True,
-    **_SHAPE_LAT,
-    unet=Unet(),
-    schedule=Schedule(),
-)
-
-DiffV2Transition = builds(
-    DiffusionV2Transition,
-    populate_full_signature=True,
-    **_SHAPE_LAT,
-    unet=Unet(),
-    schedule=ScheduleV2(),
-)
-
-
 # ---------------------------------------------------------------------------
 # Model-v2 baseline-centering builders.
 # ---------------------------------------------------------------------------
@@ -472,7 +448,7 @@ __all__ = [
     # Mixer / residual-block builders (instantiate to runtime dataclasses)
     "TimeMixer", "FeatureMixer", "ResidualBlock", "DiffResidualBlock",
     # Schedules
-    "Schedule", "ScheduleV2", "ScheduleV3",
+    "ScheduleV3",
     # Architectural builders
     "Head", "Context", "MLPContext", "Unet", "MLPUnet",
     "GRUFutSum", "TransformerFutSum",
@@ -484,7 +460,7 @@ __all__ = [
     "GaussianDistHeadB", "MoGDistHeadB",
     # Module-slot builders
     "Encoder", "Decoder", "ZInit",
-    "GaussTransition", "DiffTransition", "DiffV2Transition",
+    "GaussTransition",
     # Model-v2 baseline-centering builders
     "ZeroBaselineB", "IdentityBaselineB", "LinearBaselineB", "MLPBaselineB",
     "AuxPosteriorB", "SigmaDataBufferB",

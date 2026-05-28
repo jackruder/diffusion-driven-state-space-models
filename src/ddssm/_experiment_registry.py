@@ -1,11 +1,11 @@
 """Bridge the hydra-zen ``store`` singleton to Hydra's ConfigStore.
 
 Importing :mod:`experiments` runs every ``<store>(thing, name=...)``
-call in the three family subpackages
-(:mod:`experiments.synthetic`, :mod:`experiments.variance_probe`,
-:mod:`experiments.kdd`). The default :obj:`hydra_zen.store`
-singleton then holds the full registry across every group; one
-``store.add_to_hydra_store()`` call publishes the whole thing into
+call in :mod:`experiments.datasets` (library dataset presets) and the
+:mod:`experiments.init_centering` family. The default
+:obj:`hydra_zen.store` singleton then holds the full registry across
+every group; one ``store.add_to_hydra_store()`` call publishes the
+whole thing into
 Hydra's :class:`ConfigStore`. The Hydra CLI
 (``python -m ddssm.app experiment=NAME model=NAME data=NAME ...``)
 resolves them like any preset.

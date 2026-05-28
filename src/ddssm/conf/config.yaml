@@ -1,14 +1,12 @@
 # Top-level Hydra config for DDSSM.
 #
-# Experiments are notebook-first: each file under ``experiments/`` in
-# the repo root composes an ``Experiment`` via
-# :func:`experiments._make.experiment`. The default selects
-# ``experiments/harmonic_gauss.py``; switch with ``experiment=NAME``
-# where ``NAME`` is the module name (no ``.py``). To tweak a knob,
-# either edit the experiment file or override on the CLI with dotted
+# Experiments are composed in Python under ``experiments/`` and
+# registered via :func:`experiments._make.experiment`. The default is
+# the canonical init-centering anchor cell; switch with
+# ``experiment=NAME``. To tweak a knob, override on the CLI with dotted
 # paths, e.g. ``experiment.training.steps=200``.
 
 defaults:
-  - experiment: harmonic_gauss
+  - experiment: init_smoke_simple
   - wandb: disabled
   - _self_

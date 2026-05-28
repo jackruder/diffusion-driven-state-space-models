@@ -211,8 +211,8 @@ class GaussianDecoder(BaseDecoder):
         mask_emb = self.mask_embed(pad_mask.unsqueeze(-1))  # (B, j, E_mask)
         mask_emb = mask_emb.permute(0, 2, 1)  # (B, E_mask, j)
 
-        # run context producer
-        x = self.context_producer.forward(
+        # run context producer (via __call__ so the in-place torch.compile fires)
+        x = self.context_producer(
             combined=combined,
             mask_embedded=mask_emb,
             hist_time_emb=hist_time_emb,

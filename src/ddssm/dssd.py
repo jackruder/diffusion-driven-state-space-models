@@ -24,7 +24,6 @@ from .net_utils import (
     time_embedding,
 )
 from .transitions.transitions import BaseTransition, GaussianTransition
-from .transitions.diffusion import DiffusionTransition
 
 
 @dataclass
