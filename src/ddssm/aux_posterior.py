@@ -12,13 +12,13 @@ initial-state term.  It is NOT part of the baseline-centering
 machinery in :mod:`ddssm.centering` — only the *transition*
 machinery is centered; the aux posterior is centering-agnostic.
 
-The implementation is the parameter-free pieces of the legacy
-:class:`ddssm.encoder.GaussianInitPrior` (its ``context_producer_aux``,
-``aux_proj``, ``aux_posterior_head``, ``aux_posterior_params``,
+The implementation is the parameter-free pieces of the now-removed
+legacy InitPrior (its ``context_producer_aux``, ``aux_proj``,
+``aux_posterior_head``, ``aux_posterior_params``,
 ``sample_aux_posterior``) reduced to a small MLP.  The InitPrior's
 own Gaussian head + ``latent_init`` padding module + hierarchical-KL
 bound are NOT ported — they are replaced by the t=1..j VHP path that
-the transitions own.
+the transitions own (see :doc:`ADR-0006 </adr/0006-polymorphic-transition-interface>`).
 
 Per the doc, ``q_Φ`` is described as a "small diagonal-Gaussian MLP
 head" conditioned on z_1 (or, in the general-j case, z_{1:j}).  We
@@ -117,7 +117,7 @@ class AuxPosterior(nn.Module):
 
         Computed per-element then summed over the ``j·d`` dims, then
         averaged over the batch — matches the convention used by the
-        existing :class:`GaussianInitPrior.hierarchical_kl`.
+        now-removed legacy InitPrior's hierarchical-KL bound.
 
         Args:
             aux_mu: ``(B, d, j)`` posterior means.

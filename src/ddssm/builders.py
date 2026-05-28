@@ -56,7 +56,7 @@ from .diffnets import (
 )
 from .dist_heads import GaussianDistHead, MixtureGaussianDistHead
 from .dssd import DDSSM_base, DDSSMHyperParamsConf  # dataclasses
-from .encoder import GaussianEncoder, GaussianInitPrior
+from .encoder import GaussianEncoder
 from .eval.runner import EvalSpec
 from .experiment import (
     Experiment,
@@ -312,16 +312,6 @@ Decoder = builds(
     gaussian_head=Head(),
 )
 
-ZInit = builds(
-    GaussianInitPrior,
-    populate_full_signature=True,
-    **_SHAPE_LAT,
-    context=Context(),
-    aux_context=Context(),
-    gaussian_head=Head(clamp_logvar_min=-10.0),
-    aux_posterior_head=Head(clamp_logvar_min=-10.0),
-)
-
 GaussTransition = builds(
     GaussianTransition,
     populate_full_signature=True,
@@ -395,7 +385,7 @@ Null = builds(NullDataModule, populate_full_signature=True)
 
 # ---------------------------------------------------------------------------
 # Model, hyperparameters, training.
-# ``DDSSM`` takes already-instantiated encoder/decoder/z_init/transition
+# ``DDSSM`` takes already-instantiated encoder/decoder/transition
 # Confs from the caller; no interpolation.
 # ---------------------------------------------------------------------------
 
@@ -459,7 +449,7 @@ __all__ = [
     "Combiner",
     "GaussianDistHeadB", "MoGDistHeadB",
     # Module-slot builders
-    "Encoder", "Decoder", "ZInit",
+    "Encoder", "Decoder",
     "GaussTransition",
     # Model-v2 baseline-centering builders
     "ZeroBaselineB", "IdentityBaselineB", "LinearBaselineB", "MLPBaselineB",

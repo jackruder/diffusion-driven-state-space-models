@@ -7,8 +7,9 @@ from hydra_zen import builds, instantiate
 
 from ddssm.dssd import DDSSM_base
 from ddssm.train import DDSSMTrainer
+from ddssm.aux_posterior import AuxPosterior
 from ddssm.decoder import GaussianDecoder
-from ddssm.encoder import GaussianEncoder, GaussianInitPrior
+from ddssm.encoder import GaussianEncoder
 from ddssm.fusions import ConcatLinearFusion
 from ddssm.combiners import CompoundCombiner
 from ddssm.dist_heads import GaussianDistHead
@@ -62,18 +63,14 @@ def make_small_model():
         hidden_dim=CHANNELS,
         context=_CTX, gaussian_head=_GH,
     )
-    zinit = GaussianInitPrior(
-        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS,
-        context=_CTX, aux_context=_CTX, gaussian_head=_GH, aux_posterior_head=_GH,
-    )
     trans = GaussianTransition(
         latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
         context=_CTX, gaussian_head=_GH,
     )
+    aux = AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=CHANNELS, n_layers=1)
     return DDSSM_base(
-        encoder=enc, decoder=dec, z_init=zinit, transition=trans,
+        encoder=enc, decoder=dec, transition=trans, aux_posterior=aux,
         j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
     )
 

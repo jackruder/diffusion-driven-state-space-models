@@ -406,9 +406,13 @@ def test_transition_kl_init_shape_and_finite(j: int) -> None:
         time_embed=time_embed,
         sigma_data=sigma_data,
     )
-    assert set(out.keys()) == {"loss_init", "kl_aux"}
-    assert torch.isfinite(out["loss_init"])
-    assert torch.isfinite(out["kl_aux"])
+    assert set(out.keys()) == {"loss", "entropy", "vhp", "kl_aux", "loss_init"}
+    for k in ("loss", "entropy", "vhp", "kl_aux", "loss_init"):
+        assert torch.isfinite(out[k])
+    # V3 cancels the encoder entropy in stage 2: entropy == 0, loss == vhp.
+    assert out["entropy"].item() == 0.0
+    assert torch.allclose(out["loss"], out["vhp"])
+    assert torch.allclose(out["vhp"], out["loss_init"] + out["kl_aux"])
 
 
 def test_transition_kl_init_updates_sigma_data_at_init_slots() -> None:

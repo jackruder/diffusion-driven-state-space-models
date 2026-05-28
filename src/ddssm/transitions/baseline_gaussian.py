@@ -17,8 +17,8 @@ Provides two entry points:
   loop: samples auxiliary latents from ``q_Φ`` and computes the
   cross-entropy MC estimate ``-log p_ψ(z_t | z_hist_t)`` against the
   encoder sample, with the history mixing from all-aux at t=1 to one-
-  aux-plus-(j-1)-real at t=j (matches the existing
-  :meth:`ddssm.encoder.GaussianInitPrior.hierarchical_kl` walk).
+  aux-plus-(j-1)-real at t=j (the same hierarchical walk the
+  now-removed legacy InitPrior performed; see ADR-0006).
 
 Both entry points update the shared :class:`~ddssm.centering.sigma_data.SigmaDataBuffer`
 when one is supplied — passive accumulation per ``model-v2.org``
@@ -244,100 +244,44 @@ class BaselineGaussianTransition(BaseTransition):
     # ------------------------------------------------------------------
     # transition_kl_init for t = 1 … j  (VHP-via-diffusion init term)
     # ------------------------------------------------------------------
-    def transition_kl_init(
+    def _score_init_step(
         self,
+        *,
+        step: int,
+        z_t: torch.Tensor,            # (BS, d)
+        z_hist: torch.Tensor,         # (BS, d, j)
         enc_stats: GaussianStats,
-        zs: torch.Tensor,  # (B, S, d, T)
-        aux_posterior: AuxPosterior,
-        time_embed: torch.Tensor,  # (B, T, E_t)  unused
-        sigma_data: Optional[SigmaDataBuffer] = None,
-        covariates: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
-        """Stage-1 VHP init-term: cross-entropy ``-log p_ψ(z_t | z_hist_t)``.
+        time_embed: torch.Tensor,     # unused — baseline doesn't condition on time
+        sigma_data: Optional[SigmaDataBuffer],
+        B: int,
+        S: int,
+        T: int,
+    ) -> torch.Tensor:
+        """Closed-form cross-entropy ``-log p_ψ(z_t | z_hist)`` (summed over B·S).
 
-        Walks ``t = 1 … j`` with the same mixed-history pattern as
-        :meth:`GaussianInitPrior.hierarchical_kl`: ``z_hist_t`` starts
-        as ``z_aux`` (drawn from ``q_Φ``) and each step shifts in the
-        previous real ``z_{t-1}``.
-
-        Returns ``{"loss_init", "kl_aux"}``:
-
-        * ``loss_init`` — sum over ``t = 1 … j`` of
-          ``-log p_ψ(z_t | z_hist_t)``, averaged over the encoder S
-          samples and the batch.  This is the cross-entropy term
-          (encoder-entropy NOT subtracted; ``DDSSM_base.forward``
-          adds the stage-1 ``-H(q_φ)`` explicitly per ``model-v2.org``
-          § Assembled losses for stage 1).
-        * ``kl_aux`` — analytic ``KL[q_Φ || N(0, I)]``, averaged over
-          the batch.
-
-        Per § State-conditional prior variance the σ_p head is shared
-        with μ_p; the closed-form log-density uses both heads.
+        Per § State-conditional prior variance the σ_p head is shared with
+        μ_p; the log-density uses both heads. Also updates ``sigma_data``
+        at this init ``t`` (1-based) from the centered encoder moments. The
+        shared :meth:`BaseTransition._init_entropy_term` default adds
+        ``-H(q_φ)`` so the assembled init term is the full stage-1 loss.
         """
-        del time_embed, covariates  # unused — baseline does not condition on them
-        B, S, d, T = zs.shape
-        j = self.j
-        device, dtype = zs.device, zs.dtype
-        if d != self.latent_dim:
-            raise ValueError(f"zs latent dim {d} != self.latent_dim {self.latent_dim}")
-        if T < j:
-            raise ValueError(f"zs has T={T} < j={j}")
-        if (
-            "mus" not in enc_stats
-            or "logvars" not in enc_stats
-            or enc_stats["mus"] is None
-            or enc_stats["logvars"] is None
-        ):
-            raise ValueError(
-                "transition_kl_init requires Gaussian encoder stats (mus, logvars)."
+        del time_embed  # baseline does not condition on time
+        BS = B * S
+        d = self.latent_dim
+        p_mu, p_logvar = self.baseline.mean_and_logvar(z_hist)
+        log_p = _gaussian_log_prob_flat(z_t, p_mu, p_logvar)  # (BS,)
+
+        if sigma_data is not None:
+            q_mu = enc_stats["mus"][:, :, :, step].reshape(BS, d)
+            q_logvar = enc_stats["logvars"][:, :, :, step].reshape(BS, d)
+            mu_hat = q_mu - p_mu
+            sigma_data.update(
+                t_idx=torch.tensor([step + 1], device=z_t.device),
+                mu_hat_batch=mu_hat,
+                sigma_t2_batch=q_logvar.exp(),
             )
 
-        # Sample auxiliary latents from q_Φ(z_aux | z_{1:j}).  We use the
-        # mean over the encoder S samples of z_{1:j} as the conditioning
-        # for q_Φ — the aux posterior is conditioned on the actual
-        # observed initial latents, not per-S samples.
-        z_init = zs[..., :j].mean(dim=1)  # (B, d, j)
-        z_aux, aux_mu, aux_logvar = aux_posterior.sample(z_init)  # (B, d, j) each
-
-        # Walk the j init steps with mixed history.
-        BS = B * S
-        # Broadcast z_aux to per-S so each S sample sees the same z_aux
-        # (z_aux is conditioned on the S-averaged z_init; reusing per-S
-        # is the standard reparameterised-MC choice).
-        z_hist = z_aux.unsqueeze(1).expand(B, S, d, j).reshape(BS, d, j).clone()
-
-        total_neg_logp = torch.zeros(BS, device=device, dtype=dtype)
-        for step in range(j):
-            # z_t ~ encoder, shape (BS, d).
-            z_t = zs[:, :, :, step].reshape(BS, d)
-
-            p_mu, p_logvar = self.baseline.mean_and_logvar(z_hist)
-            log_p = _gaussian_log_prob_flat(z_t, p_mu, p_logvar)  # (BS,)
-            total_neg_logp = total_neg_logp - log_p
-
-            # σ_data buffer update at this t (1-based).
-            if sigma_data is not None:
-                q_mu = enc_stats["mus"][:, :, :, step].reshape(BS, d)
-                q_logvar = enc_stats["logvars"][:, :, :, step].reshape(BS, d)
-                mu_hat = q_mu - p_mu
-                sigma_t2 = q_logvar.exp()
-                sigma_data.update(
-                    t_idx=torch.tensor([step + 1], device=device),
-                    mu_hat_batch=mu_hat,
-                    sigma_t2_batch=sigma_t2,
-                )
-
-            # Shift history: drop oldest, append the real z_t.
-            if self.j > 1:
-                z_hist = torch.cat([z_hist[:, :, 1:], z_t.unsqueeze(-1)], dim=-1)
-            else:
-                z_hist = z_t.unsqueeze(-1)
-
-        # Aggregate over (B, S).
-        loss_init = total_neg_logp.view(B, S).mean(dim=1).mean()
-        kl_aux = aux_posterior.kl_against_standard_normal(aux_mu, aux_logvar)
-
-        return {"loss_init": loss_init, "kl_aux": kl_aux}
+        return (-log_p).sum()
 
 
 # ---------------------------------------------------------------------------

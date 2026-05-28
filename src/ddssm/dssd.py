@@ -14,11 +14,8 @@ from .centering.sigma_data import SigmaDataBuffer
 from .decoder import BaseDecoder, GaussianDecoder
 from .encoder import (
     BaseEncoder,
-    BaseInitPrior,
     GaussianEncoder,
-    GaussianInitPrior,
 )
-from .gaussians import gaussian_entropy
 from .losses import LossComponents
 from .net_utils import (
     time_embedding,
@@ -59,7 +56,6 @@ class DDSSM_base(nn.Module):
     Args:
         encoder: Instantiated encoder module.
         decoder: Instantiated decoder module.
-        z_init: Instantiated initialisation prior module.
         transition: Instantiated transition module.
         j: Number of history steps used by each module.
         data_dim: Observed data dimension D.
@@ -94,9 +90,7 @@ class DDSSM_base(nn.Module):
         logvar_max: float = 7.0,
         S: int = 1,
         checkpoint_dir: str = "./checkpoints",
-        # --- legacy InitPrior path ---
-        z_init: BaseInitPrior | None = None,
-        # --- model-v2 VHP-via-diffusion + baseline-centering path ---
+        # --- VHP-via-diffusion + baseline-centering path (the only init path) ---
         aux_posterior: AuxPosterior | None = None,
         baseline: BaseBaseline | None = None,
         baseline_anchor: BaseBaseline | None = None,
@@ -131,13 +125,13 @@ class DDSSM_base(nn.Module):
         else:
             self.total_static_dim = 0
 
-        # Mutual exclusion: either the legacy InitPrior path or the VHP
-        # path, never both.  The two reach the same ELBO slot via
-        # ``_init_kl_loss`` but require different machinery.
-        if (z_init is None) == (aux_posterior is None):
+        # The init (first-j-states) term is the hierarchical VHP walk owned
+        # by the transition (ADR-0006); it requires an aux posterior q_Φ.
+        if aux_posterior is None:
             raise ValueError(
-                "Exactly one of z_init (legacy InitPrior path) and "
-                "aux_posterior (VHP-via-diffusion path) must be supplied."
+                "aux_posterior is required: DDSSM_base computes the initial-"
+                "state term via the transition's hierarchical VHP walk "
+                "(transition_kl_init), which needs q_Φ(z_aux | z_{1:j})."
             )
         if baseline_mode not in ("pinned", "learnable"):
             raise ValueError(
@@ -147,7 +141,6 @@ class DDSSM_base(nn.Module):
         # Sub-modules (already instantiated)
         self.encoder: BaseEncoder = encoder
         self.decoder = decoder
-        self.zinit: BaseInitPrior | None = z_init
         self.transition = transition
 
         # --- model-v2 slots ---
@@ -366,63 +359,15 @@ class DDSSM_base(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """Initialization loss for the first ``j`` latent steps.
 
-        Two paths:
-
-        * Legacy InitPrior: ``ℒ_init = E_q[log q(z_{1:j}) - log p_η(z_{1:j})]``,
-          computed by :meth:`BaseInitPrior.compute_init_loss`.  Returns the
-          existing ``{"loss", "entropy", "vhp"}`` dict.
-
-        * Model-v2 VHP-via-diffusion (``self.aux_posterior is not None``):
-          delegate to the *active* transition's
-          :meth:`transition_kl_init`, which returns
-          ``{"loss_init", "kl_aux"}``.  This method then assembles
-          ``L_init`` per the stage:
-
-            - Stage 1: ``L_init = -H(q_φ(z_{1:j}|x)) + loss_init + kl_aux``
-              (encoder entropy is the ``L_init^entropy`` term).
-            - Stage 2: ``L_init = loss_init + kl_aux`` (entropy cancels
-              per ``model-v2.org`` § Entropy cancellation in stage 2;
-              ``loss_init`` is the entropy-cancelled ESM surrogate).
-
-          The returned dict carries ``loss``, ``entropy`` (the
-          ``-H`` term used in stage 1, or 0 in stage 2), and ``vhp``
-          (the per-stage VHP body, i.e. ``loss_init + kl_aux``), so the
-          forward-pass metric machinery is unchanged.  ``kl_aux`` is
-          also surfaced as an extra key for trainer logging.
+        Pure pass-through to the active transition's hierarchical VHP init
+        walk (:meth:`BaseTransition.transition_kl_init`). Per ADR-0006 the
+        transition owns the per-step scoring, the encoder-entropy policy
+        (``-H`` for closed-form, ``0`` for the ESM-cancelling diffusion
+        path), and any σ_data update — the model does not gate on
+        transition type. Returns ``{loss, entropy, vhp, kl_aux, loss_init}``.
         """
-        B, S, d, T = zs.shape
-        j = self.j
-        device = zs.device
-
-        # We only compute loss for t = 1 ... j
-        steps = min(j, T)
-
-        assert steps == j
-
-        if self.aux_posterior is None:
-            # Legacy InitPrior path — unchanged.
-            assert self.zinit is not None
-            zs_init = zs[..., :steps]
-            logq_init = logq_paths[..., :steps] if logq_paths is not None else None
-            start_idx = torch.zeros(B, dtype=torch.long, device=device)
-            return self.zinit.compute_init_loss(
-                zs_init=zs_init,
-                logq_init=logq_init,
-                enc_stats=enc_stats,
-                time_embed=time_embed,
-                start_idx=start_idx,
-                covariates=covariates,
-            )
-
-        # Model-v2 VHP-via-diffusion path.
-        active = self._active_transition()
-        if not hasattr(active, "transition_kl_init"):
-            raise TypeError(
-                f"Active transition {type(active).__name__} does not "
-                "implement transition_kl_init; required for the VHP-via-"
-                "diffusion init term."
-            )
-        init_terms = active.transition_kl_init(
+        del logq_paths  # the VHP path scores encoder moments, not sampled log-q
+        return self._active_transition().transition_kl_init(
             enc_stats=enc_stats,
             zs=zs,
             aux_posterior=self.aux_posterior,
@@ -430,27 +375,6 @@ class DDSSM_base(nn.Module):
             sigma_data=self.sigma_data,
             covariates=covariates,
         )
-        loss_init = init_terms["loss_init"]
-        kl_aux = init_terms["kl_aux"]
-
-        # Encoder entropy contribution.  Stage 1 adds -H(q_φ(z_{1:j}|x));
-        # stage 2 omits it (cancels with the ESM expansion).
-        if self.stage_selector == "stage_1" and "logvars" in enc_stats:
-            lv_init = enc_stats["logvars"][..., :steps]  # (B, S, d, j)
-            H_q = gaussian_entropy(lv_init).mean()  # scalar
-            neg_H = -H_q
-        else:
-            neg_H = torch.zeros((), device=device, dtype=zs.dtype)
-
-        vhp_body = loss_init + kl_aux
-        total_loss = neg_H + vhp_body
-        return {
-            "loss": total_loss,
-            "entropy": neg_H,
-            "vhp": vhp_body,
-            "kl_aux": kl_aux,
-            "loss_init": loss_init,
-        }
 
     def _active_transition(self) -> nn.Module:
         """Return the transition picked by :attr:`stage_selector`."""
@@ -483,19 +407,18 @@ class DDSSM_base(nn.Module):
         sub-components for logging).
         """
         active = self._active_transition()
+        # Uniform interface (ADR-0006): every transition's ``transition_kl``
+        # accepts ``sigma_data``; the ones that don't use it ignore it.
         transition_kwargs: dict[str, Any] = {
             "enc_stats": enc_stats,
             "zs": zs,
             "logq_paths": logq_paths,
             "time_embed": time_embed,
+            "sigma_data": self.sigma_data,
             "covariates": covariates,
         }
         if mc_override is not None:
             transition_kwargs["mc_override"] = mc_override
-        # Forward σ_data only when the transition is one of the model-v2
-        # transitions that accepts it.
-        if self.sigma_data is not None and _accepts_sigma_data(active):
-            transition_kwargs["sigma_data"] = self.sigma_data
         return active.transition_kl(**transition_kwargs)
 
     def _gather_z_hist_samples_for_regularizers(
@@ -1112,23 +1035,6 @@ def _default_hyperparams():
         lambda_sigma_p=0.0,  # default off; model-v2 stage 1 sets > 0
     )
 
-
-def _accepts_sigma_data(transition: nn.Module) -> bool:
-    """True if the transition's ``transition_kl`` accepts a ``sigma_data`` kwarg.
-
-    Lets :meth:`DDSSM_base._compute_transition_kl` forward the buffer
-    only to the new model-v2 transitions (BaselineGaussian / V3) without
-    breaking the legacy V2 / GaussianTransition calls.
-    """
-    import inspect
-    method = getattr(transition, "transition_kl", None)
-    if method is None:
-        return False
-    try:
-        sig = inspect.signature(method)
-    except (TypeError, ValueError):
-        return False
-    return "sigma_data" in sig.parameters
 
 
 # ---------------------------------------------------------------------------

@@ -22,15 +22,19 @@ Defines the ``BaseTransition`` interface and the concrete ``GaussianTransition``
 
 import math
 from functools import partial
-from typing import Any, Callable, Dict, Iterator, Tuple, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Tuple, Optional
 
 import torch
 import torch.nn as nn
 
 
 from ..encoder import GaussianHead, ContextProducer
-from ..gaussians import GaussianStats, gaussian_kl_divergence
+from ..gaussians import GaussianStats, gaussian_entropy, gaussian_kl_divergence
 from ..torch_compile import maybe_compile
+
+if TYPE_CHECKING:
+    from ..aux_posterior import AuxPosterior
+    from ..centering.sigma_data import SigmaDataBuffer
 
 
 def _mc_entropy_from_logq(
@@ -248,6 +252,128 @@ class BaseTransition(nn.Module):
         caller will surface as logging metrics.
         """
         raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Hierarchical VHP init term (t = 1 … j) — shared walk + hooks.
+    # ------------------------------------------------------------------
+    def transition_kl_init(
+        self,
+        enc_stats: GaussianStats,
+        zs: torch.Tensor,                 # (B, S, d, T)
+        aux_posterior: "AuxPosterior",
+        time_embed: torch.Tensor,         # (B, T, E_t)
+        sigma_data: "Optional[SigmaDataBuffer]" = None,
+        covariates: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Hierarchical VHP init term over ``t = 1 … j`` (shared walk).
+
+        Samples the auxiliary previous states ``z_aux ~ q_Φ(·|z_{1:j})``,
+        walks ``t = 1 … j`` with the mixed ``z_aux → real`` history, and
+        accumulates the per-step score via the polymorphic
+        :meth:`_score_init_step` hook. Returns the **complete** init
+        decomposition ``{loss, entropy, vhp, kl_aux, loss_init}``; the
+        entropy policy (:meth:`_init_entropy_term`) and any σ_data update
+        (inside :meth:`_score_init_step`) are owned by the subclass, so
+        :class:`DDSSM_base` never gates on transition type.
+        """
+        del covariates  # init does not condition on covariates
+        if enc_stats.get("mus") is None or enc_stats.get("logvars") is None:
+            raise ValueError(
+                "transition_kl_init requires Gaussian encoder stats (mus, logvars)."
+            )
+        B, S, d, T = zs.shape
+        j = self.j
+        if d != self.latent_dim:
+            raise ValueError(f"zs latent dim {d} != self.latent_dim {self.latent_dim}")
+        if T < j:
+            raise ValueError(f"zs has T={T} < j={j}")
+        device, dtype = zs.device, zs.dtype
+        BS = B * S
+
+        # Aux latents conditioned on the S-averaged encoder samples.
+        z_init = zs[..., :j].mean(dim=1)  # (B, d, j)
+        z_aux, aux_mu, aux_logvar = aux_posterior.sample(z_init)
+        z_hist = (
+            z_aux.unsqueeze(1).expand(B, S, d, j).reshape(BS, d, j).clone()
+        )
+
+        total = torch.zeros((), device=device, dtype=dtype)
+        for step in range(j):
+            z_t = zs[:, :, :, step].reshape(BS, d)
+            total = total + self._score_init_step(
+                step=step, z_t=z_t, z_hist=z_hist, enc_stats=enc_stats,
+                time_embed=time_embed, sigma_data=sigma_data, B=B, S=S, T=T,
+            )
+            # Shift history: drop oldest, append the real z_t.
+            if j > 1:
+                z_hist = torch.cat([z_hist[:, :, 1:], z_t.unsqueeze(-1)], dim=-1)
+            else:
+                z_hist = z_t.unsqueeze(-1)
+
+        loss_init = total / float(BS)
+        kl_aux = aux_posterior.kl_against_standard_normal(aux_mu, aux_logvar)
+        entropy = self._init_entropy_term(enc_stats)
+        vhp = loss_init + kl_aux
+        return {
+            "loss": entropy + vhp,
+            "entropy": entropy,
+            "vhp": vhp,
+            "kl_aux": kl_aux,
+            "loss_init": loss_init,
+        }
+
+    def _score_init_step(
+        self,
+        *,
+        step: int,
+        z_t: torch.Tensor,            # (BS, d) encoder sample at this init step
+        z_hist: torch.Tensor,        # (BS, d, j) mixed aux→real history
+        enc_stats: GaussianStats,
+        time_embed: torch.Tensor,    # (B, T, E_t)
+        sigma_data: "Optional[SigmaDataBuffer]",
+        B: int,
+        S: int,
+        T: int,
+    ) -> torch.Tensor:
+        """Per-step init score, **summed over B·S**. Override per transition.
+
+        Implementations also own any σ_data update at this step.
+        """
+        raise NotImplementedError
+
+    def _init_entropy_term(self, enc_stats: GaussianStats) -> torch.Tensor:
+        """Encoder-entropy contribution to the init loss.
+
+        Default: ``-H(q_φ(z_{1:j}|x))`` (closed-form Gaussian transitions
+        need the full entropy). The diffusion path overrides this to ``0``
+        because its ESM expansion already cancels the encoder entropy.
+        """
+        lv_init = enc_stats["logvars"][..., : self.j]
+        return -gaussian_entropy(lv_init).mean()
+
+    def _init_step_time_ctx(
+        self, step: int, time_embed: torch.Tensor, B: int, S: int, T: int,
+    ) -> Dict[str, torch.Tensor]:
+        """Build the ``(BS, j, E_t)`` history + ``(BS, 1, E_t)`` target time windows.
+
+        Shared by the transitions whose init scoring is time-conditioned
+        (closed-form Gaussian, diffusion). History slots map to abstract
+        timesteps ``t-j … t-1`` clamped into ``[0, T-1]``.
+        """
+        j = self.j
+        E = self.emb_time_dim
+        device = time_embed.device
+        hist_idx = torch.arange(
+            step - j, step, device=device, dtype=torch.long
+        ).clamp(min=0, max=T - 1)
+        hist_te = time_embed.index_select(1, hist_idx)        # (B, j, E)
+        tgt_te = time_embed[:, step : step + 1, :]            # (B, 1, E)
+        win = torch.cat([hist_te, tgt_te], dim=1)             # (B, j+1, E)
+        win = win.unsqueeze(1).expand(B, S, j + 1, E).reshape(B * S, j + 1, E)
+        return {
+            "hist_time_emb": win[:, :j, :],
+            "target_time_emb": win[:, j : j + 1, :],
+        }
 
     def log_prob(
         self,
@@ -587,12 +713,38 @@ class GaussianTransition(BaseTransition):
             return log_p.squeeze(1)  # (B,)
         return log_p  # (B, S)
 
+    def _score_init_step(
+        self,
+        *,
+        step: int,
+        z_t: torch.Tensor,            # (BS, d)
+        z_hist: torch.Tensor,         # (BS, d, j)
+        enc_stats: GaussianStats,
+        time_embed: torch.Tensor,     # (B, T, E_t)
+        sigma_data: "Optional[SigmaDataBuffer]",
+        B: int,
+        S: int,
+        T: int,
+    ) -> torch.Tensor:
+        """Closed-form ``-log p_ψ(z_t | z_hist)`` for one init step (summed B·S).
+
+        Scores the encoder sample ``z_t`` under the Gaussian prior
+        ``p_ψ(·|z_hist)`` (same head as the ``t>j`` term). No σ_data — the
+        plain Gaussian transition does not use EDM preconditioning; the
+        base ``_init_entropy_term`` default adds ``-H(q_φ)``.
+        """
+        del sigma_data  # plain Gaussian transition does not track σ_data
+        ctx_step = self._init_step_time_ctx(step, time_embed, B, S, T)
+        log_p = self.log_prob(z_t, z_hist, ctx=ctx_step)  # (BS,)
+        return (-log_p).sum()
+
     def transition_kl(
         self,
         enc_stats: GaussianStats,
         zs: torch.Tensor,  # (B, S, d, T)
         logq_paths: torch.Tensor,  # (B, S, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
+        sigma_data: "Optional[SigmaDataBuffer]" = None,  # accepted for the uniform interface; unused
         covariates: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Transition KL term for the Gaussian prior.

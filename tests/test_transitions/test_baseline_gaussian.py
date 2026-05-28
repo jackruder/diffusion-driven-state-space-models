@@ -210,11 +210,13 @@ def test_transition_kl_init_shape_and_finite(j: int) -> None:
         aux_posterior=aux,
         time_embed=time_embed,
     )
-    assert set(out) == {"loss_init", "kl_aux"}
-    assert out["loss_init"].shape == ()
-    assert out["kl_aux"].shape == ()
-    assert torch.isfinite(out["loss_init"])
-    assert torch.isfinite(out["kl_aux"])
+    assert set(out) == {"loss", "entropy", "vhp", "kl_aux", "loss_init"}
+    for k in ("loss", "entropy", "vhp", "kl_aux", "loss_init"):
+        assert out[k].shape == ()
+        assert torch.isfinite(out[k])
+    # BaselineGaussian uses the default entropy policy: loss = -H + vhp.
+    assert torch.allclose(out["loss"], out["entropy"] + out["vhp"])
+    assert torch.allclose(out["vhp"], out["loss_init"] + out["kl_aux"])
 
 
 def test_transition_kl_init_walks_mixed_history() -> None:

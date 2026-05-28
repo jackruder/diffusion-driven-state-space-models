@@ -425,139 +425,71 @@ class DiffusionV3Transition(BaseTransition):
     # ------------------------------------------------------------------
     # transition_kl_init  (t = 1 … j)
     # ------------------------------------------------------------------
-    def transition_kl_init(
-        self,
-        enc_stats: GaussianStats,
-        zs: torch.Tensor,
-        aux_posterior: AuxPosterior,
-        time_embed: torch.Tensor,
-        sigma_data: SigmaDataBuffer,
-        covariates: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
-        """Stage-2 VHP init term — same ESM/EDM surrogate at t = 1 … j.
+    def _init_entropy_term(self, enc_stats: GaussianStats) -> torch.Tensor:
+        """Stage-2 ESM expansion already cancels the encoder entropy → 0.
 
-        Mirrors :meth:`BaselineGaussianTransition.transition_kl_init`'s
-        mixed-history walk but uses the centered ESM/EDM surrogate
-        (with the padding-mask channel flagging aux slots) instead of
-        the closed-form Gaussian log-density.
-
-        Per ``model-v2.org`` § Entropy cancellation in stage 2, the
-        returned ``loss_init`` is the entropy-cancelled surrogate;
-        :class:`DDSSM_base` does *not* add ``-H(q_φ)`` separately.
-
-        Returns ``{"loss_init", "kl_aux"}``.
+        Overrides the base default (`-H(q_φ)`); per ``model-v2.org``
+        § Entropy cancellation in stage 2 the ESM ``loss_init`` is the
+        entropy-cancelled surrogate.
         """
-        del covariates  # baseline-centering doesn't condition on them
-        if (
-            "mus" not in enc_stats
-            or "logvars" not in enc_stats
-            or enc_stats["mus"] is None
-            or enc_stats["logvars"] is None
-        ):
-            raise ValueError(
-                "transition_kl_init requires Gaussian encoder stats (mus, logvars)."
-            )
+        lv = enc_stats["logvars"]
+        return torch.zeros((), device=lv.device, dtype=lv.dtype)
 
-        B, S, d, T = zs.shape
-        j = self.j
-        device = zs.device
-        dtype = zs.dtype
-        if d != self.latent_dim:
-            raise ValueError(f"zs latent dim {d} != self.latent_dim {self.latent_dim}")
-        if T < j:
-            raise ValueError(f"zs has T={T} < j={j}")
+    def _score_init_step(
+        self,
+        *,
+        step: int,
+        z_t: torch.Tensor,            # (BS, d)  unused (history already shifted by base)
+        z_hist: torch.Tensor,         # (BS, d, j)
+        enc_stats: GaussianStats,
+        time_embed: torch.Tensor,     # (B, T, E_t)
+        sigma_data: SigmaDataBuffer,
+        B: int,
+        S: int,
+        T: int,
+    ) -> torch.Tensor:
+        """Centered ESM/EDM surrogate for one init step (summed over B·S).
 
-        # Sample aux latents from q_Φ(z_aux | z_{1:j}), conditioned on the
-        # S-averaged encoder samples.
-        z_init = zs[..., :j].mean(dim=1)  # (B, d, j)
-        z_aux, aux_mu, aux_logvar = aux_posterior.sample(z_init)  # (B, d, j) each
-
+        The padding-mask channel flags the ``j - step`` aux slots. Also
+        updates ``sigma_data`` at this init ``t``.
+        """
+        del z_t  # the base walk owns the history shift
         BS = B * S
-        # Broadcast z_aux per-S so every S sample sees the same aux draw.
-        z_hist = (
-            z_aux.unsqueeze(1)
-            .expand(B, S, d, j)
-            .reshape(BS, d, j)
-            .clone()
+        d = self.latent_dim
+        dtype = z_hist.dtype
+        device = z_hist.device
+
+        mu_t_flat = enc_stats["mus"][:, :, :, step].reshape(BS, d)
+        sigma2_t_flat = enc_stats["logvars"][:, :, :, step].exp().reshape(BS, d)
+
+        t_external = step + 1
+        sigma_d2_per_row = sigma_data.read(t_external).to(dtype=dtype).expand(BS)
+
+        # Padding mask: first ``j - step`` slots are aux (1.0); target slot 0.
+        j = self.j
+        padding_mask = torch.zeros(BS, j + 1, device=device, dtype=dtype)
+        n_aux_slots = j - step
+        if n_aux_slots > 0:
+            padding_mask[:, :n_aux_slots] = 1.0
+
+        ctx_step = self._init_step_time_ctx(step, time_embed, B, S, T)
+
+        chunk_loss = self._esm_chunk_loss(
+            mu_t=mu_t_flat,
+            sigma2_t=sigma2_t_flat,
+            z_hist=z_hist,
+            ctx=ctx_step,
+            sigma_d2_per_row=sigma_d2_per_row,
+            padding_mask=padding_mask,
         )
 
-        # Build per-step time-window context lazily.  At each init step we
-        # need (BS, j+1, E_t) for the side-info construction.
-        total_loss = torch.zeros((), device=device, dtype=dtype)
-        for step in range(j):
-            # z_t encoder stats, (BS, d).
-            mu_t_flat = enc_stats["mus"][:, :, :, step].reshape(BS, d)
-            sigma2_t_flat = enc_stats["logvars"][:, :, :, step].exp().reshape(BS, d)
-
-            # σ_data lookup at 1-based t = step + 1.
-            t_external = step + 1
-            sigma_d2_value = sigma_data.read(t_external).to(dtype=dtype)
-            sigma_d2_per_row = sigma_d2_value.expand(BS)
-
-            # Padding mask over the (j+1) slots of the score-net window:
-            # the first ``j - step`` slots are aux (1.0), the next
-            # ``step`` slots are real (0.0), and the last slot is the
-            # target (0.0).
-            padding_mask = torch.zeros(BS, j + 1, device=device, dtype=dtype)
-            n_aux_slots = j - step
-            if n_aux_slots > 0:
-                padding_mask[:, :n_aux_slots] = 1.0
-
-            # Build the (BS, j+1, E_t) time window for the init step.
-            # The j history slots correspond to abstract timesteps
-            # ``t - j … t - 1`` (1-based ``t``).  We clamp the
-            # abstract-time index to ``[0, T - 1]`` so the side-info
-            # tensor can use the encoder's time_embed grid.
-            tgt_idx = step  # 0-based code index of z_t
-            hist_idx = torch.arange(
-                tgt_idx - j, tgt_idx, device=device, dtype=torch.long,
-            ).clamp(min=0, max=T - 1)
-            # (j, E_t)
-            hist_te_per_batch = time_embed.index_select(1, hist_idx)  # (B, j, E_t)
-            tgt_te_per_batch = time_embed[:, tgt_idx : tgt_idx + 1, :]  # (B, 1, E_t)
-            time_win_batch = torch.cat(
-                [hist_te_per_batch, tgt_te_per_batch], dim=1
-            )  # (B, j+1, E_t)
-            time_win = (
-                time_win_batch.unsqueeze(1)
-                .expand(B, S, j + 1, self.emb_time_dim)
-                .reshape(BS, j + 1, self.emb_time_dim)
-            )
-
-            ctx_step: Dict[str, torch.Tensor] = {
-                "hist_time_emb": time_win[:, :j, :],
-                "target_time_emb": time_win[:, j : j + 1, :],
-            }
-
-            chunk_loss = self._esm_chunk_loss(
-                mu_t=mu_t_flat,
-                sigma2_t=sigma2_t_flat,
-                z_hist=z_hist,
-                ctx=ctx_step,
-                sigma_d2_per_row=sigma_d2_per_row,
-                padding_mask=padding_mask,
-            )
-            total_loss = total_loss + chunk_loss
-
-            # σ_data update at this init t.
-            mu_p_step = self.baseline.mean(z_hist)  # (BS, d)
-            mu_hat = mu_t_flat - mu_p_step
-            sigma_data.update(
-                t_idx=torch.tensor([t_external], device=device),
-                mu_hat_batch=mu_hat,
-                sigma_t2_batch=sigma2_t_flat,
-            )
-
-            # Shift history: drop oldest, append the real z_t sample.
-            z_t = zs[:, :, :, step].reshape(BS, d)
-            if j > 1:
-                z_hist = torch.cat([z_hist[:, :, 1:], z_t.unsqueeze(-1)], dim=-1)
-            else:
-                z_hist = z_t.unsqueeze(-1)
-
-        loss_init = total_loss / float(BS)
-        kl_aux = aux_posterior.kl_against_standard_normal(aux_mu, aux_logvar)
-        return {"loss_init": loss_init, "kl_aux": kl_aux}
+        mu_hat = mu_t_flat - self.baseline.mean(z_hist)
+        sigma_data.update(
+            t_idx=torch.tensor([t_external], device=device),
+            mu_hat_batch=mu_hat,
+            sigma_t2_batch=sigma2_t_flat,
+        )
+        return chunk_loss
 
     # ------------------------------------------------------------------
     # VHP initial-state log-density (model-v2.org § Exact likelihood, Layer 4).

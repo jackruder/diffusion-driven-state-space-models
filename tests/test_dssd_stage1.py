@@ -6,11 +6,9 @@ Verify that:
   (``aux_posterior``, ``baseline``, ``sigma_data``, ``stage1_transition``)
   populated and ``stage_selector="stage_1"`` produces a finite ELBO that
   includes ``R_σp`` in the rate.
-* The mutual-exclusion assertion between ``z_init`` and ``aux_posterior``
-  fires correctly.
-* The legacy path with only ``z_init`` continues to work — added as a
-  defensive check (the dedicated ``tests/test_model.py`` already
-  exercises this).
+* ``aux_posterior`` is mandatory — construction without it raises
+  (ADR-0006: the init term is the transition's own hierarchical walk
+  over the auxiliary latents, which needs ``q_Φ``).
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ import pytest
 from ddssm.dssd import DDSSM_base
 from ddssm.futsum import GRUFutureSummary
 from ddssm.decoder import GaussianDecoder
-from ddssm.encoder import GaussianEncoder, GaussianInitPrior
+from ddssm.encoder import GaussianEncoder
 from ddssm.fusions import ConcatLinearFusion
 from ddssm.diffnets import (
     ContextProducer,
@@ -98,19 +96,6 @@ def _make_decoder() -> GaussianDecoder:
     )
 
 
-def _make_zinit() -> GaussianInitPrior:
-    return GaussianInitPrior(
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS,
-        context=_CTX,
-        aux_context=_CTX,
-        gaussian_head=GaussianHead,
-        aux_posterior_head=GaussianHead,
-    )
-
-
 def _make_gaussian_baseline() -> MLPBaseline:
     return MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
 
@@ -152,15 +137,15 @@ def _make_batch(B: int, T: int) -> dict[str, torch.Tensor]:
 # ---------------------------------------------------------------------------
 
 
-def test_constructor_requires_one_of_z_init_or_aux_posterior() -> None:
-    """Both ``z_init`` and ``aux_posterior`` None raises."""
+def test_constructor_requires_aux_posterior() -> None:
+    """``aux_posterior`` is mandatory — the init term needs q_Φ (ADR-0006)."""
     enc = _make_encoder()
     dec = _make_decoder()
     baseline = _make_gaussian_baseline()
     trans = BaselineGaussianTransition(
         baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="aux_posterior is required"):
         DDSSM_base(
             encoder=enc,
             decoder=dec,
@@ -169,64 +154,8 @@ def test_constructor_requires_one_of_z_init_or_aux_posterior() -> None:
             data_dim=DATA_DIM,
             latent_dim=LATENT_DIM,
             emb_time_dim=EMB_TIME,
-            # neither z_init nor aux_posterior
+            # no aux_posterior
         )
-
-
-def test_constructor_rejects_both_z_init_and_aux_posterior() -> None:
-    """Supplying both ``z_init`` and ``aux_posterior`` raises."""
-    enc = _make_encoder()
-    dec = _make_decoder()
-    baseline = _make_gaussian_baseline()
-    trans = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-    )
-    with pytest.raises(ValueError):
-        DDSSM_base(
-            encoder=enc,
-            decoder=dec,
-            transition=trans,
-            j=J,
-            data_dim=DATA_DIM,
-            latent_dim=LATENT_DIM,
-            emb_time_dim=EMB_TIME,
-            z_init=_make_zinit(),
-            aux_posterior=AuxPosterior(latent_dim=LATENT_DIM, j=J),
-        )
-
-
-def test_legacy_z_init_path_still_works() -> None:
-    """A vanilla legacy ``DDSSM_base(z_init=...)`` build + forward pass."""
-    enc = _make_encoder()
-    dec = _make_decoder()
-    z_init = _make_zinit()
-    baseline = _make_gaussian_baseline()
-    trans = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-    )
-    model = DDSSM_base(
-        encoder=enc,
-        decoder=dec,
-        transition=trans,
-        j=J,
-        data_dim=DATA_DIM,
-        latent_dim=LATENT_DIM,
-        emb_time_dim=EMB_TIME,
-        z_init=z_init,
-    )
-    # The legacy path lives in zinit; aux_posterior is None.
-    assert model.aux_posterior is None
-    batch = _make_batch(B=2, T=5)
-    components, metrics, _ = model(
-        batch["observed_data"],
-        batch["observation_mask"],
-        batch["timepoints"],
-    )
-    assert torch.isfinite(components.total())
-    assert torch.isfinite(components.recon)
-    assert torch.isfinite(components.elbo_reg() - components.recon)
-    # Legacy entropy / vhp keys are populated.
-    assert "loss/rate/init/entropy" in metrics
 
 
 # ---------------------------------------------------------------------------

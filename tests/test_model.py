@@ -8,7 +8,8 @@ import pytest
 from ddssm.dssd import DDSSM_base
 from ddssm.futsum import GRUFutureSummary
 from ddssm.decoder import GaussianDecoder
-from ddssm.encoder import GaussianEncoder, GaussianInitPrior
+from ddssm.aux_posterior import AuxPosterior
+from ddssm.encoder import GaussianEncoder
 from ddssm.fusions import ConcatLinearFusion
 from ddssm.diffnets import (
     CSDIUnet,
@@ -78,12 +79,8 @@ def make_decoder():
     )
 
 
-def make_zinit():
-    return GaussianInitPrior(
-        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS,
-        context=_CTX, aux_context=_CTX, gaussian_head=_GH, aux_posterior_head=_GH,
-    )
+def make_aux():
+    return AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=CHANNELS, n_layers=1)
 
 
 def make_gaussian_transition():
@@ -107,7 +104,7 @@ def make_hyperparams():
 def model():
     return DDSSM_base(
         encoder=make_encoder(), decoder=make_decoder(),
-        z_init=make_zinit(), transition=make_gaussian_transition(),
+        transition=make_gaussian_transition(), aux_posterior=make_aux(),
         j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
     )
 
@@ -275,22 +272,19 @@ def test_ddssm_forward_with_each_aggregator(agg_name):
         dist_head=partial(GaussianDistHead),
         fut_summary=_FS,
     )
-    # Decoder / z_init / transition keep their original ContextProducer.
+    # Decoder / transition keep their original ContextProducer.
     dec = GaussianDecoder(
         latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=j, emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS, context=_CTX, gaussian_head=_GH,
     )
-    zin = GaussianInitPrior(
-        latent_dim=LATENT_DIM, j=j, emb_time_dim=EMB_TIME, hidden_dim=CHANNELS,
-        context=_CTX, aux_context=_CTX, gaussian_head=_GH, aux_posterior_head=_GH,
-    )
+    aux = AuxPosterior(latent_dim=LATENT_DIM, j=j, hidden_dim=CHANNELS, n_layers=1)
     trans = GaussianTransition(
         latent_dim=LATENT_DIM, j=j, emb_time_dim=EMB_TIME, hidden_dim=CHANNELS,
         context=_CTX, gaussian_head=_GH,
     )
 
     model = DDSSM_base(
-        encoder=enc, decoder=dec, z_init=zin, transition=trans,
+        encoder=enc, decoder=dec, transition=trans, aux_posterior=aux,
         j=j, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
     )
 
