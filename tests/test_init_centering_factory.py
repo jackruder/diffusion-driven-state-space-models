@@ -87,35 +87,27 @@ def test_param_free_forms_autoclamp_learnable_to_pinned(form) -> None:
     )
 
 
+# anchor_lambda (stage-2 R_μp strength λ_μp) now lives on the stage-2
+# loss object, not the model (ADR-0004 follow-up). Its default still
+# depends on baseline_mode; the stage builder owns that logic.
+
+
 def test_pinned_default_anchor_lambda_is_zero() -> None:
-    """Default ``anchor_lambda`` is 0.0 under Pinned mode (R_μp inactive)."""
-    model = _build_init_centering_model(
-        baseline_form="mlp",
-        baseline_mode="pinned",
-        tracking_mode="per_t",
-    )
-    assert model.anchor_lambda == 0.0
+    """Default stage-2 ``λ_μp`` is 0.0 under Pinned mode (R_μp inactive)."""
+    stages = _build_init_centering_stages(baseline_mode="pinned")
+    assert stages.stage_2.loss.lambda_mu_p == 0.0
 
 
 def test_learnable_default_anchor_lambda_is_nonzero() -> None:
-    """Under Learnable mode the default anchor_lambda is the doc-recommended 1e-2."""
-    model = _build_init_centering_model(
-        baseline_form="mlp",
-        baseline_mode="learnable",
-        tracking_mode="per_t",
-    )
-    assert model.anchor_lambda == pytest.approx(1e-2)
+    """Under Learnable mode the default stage-2 ``λ_μp`` is the doc-recommended 1e-2."""
+    stages = _build_init_centering_stages(baseline_mode="learnable")
+    assert stages.stage_2.loss.lambda_mu_p == pytest.approx(1e-2)
 
 
 def test_explicit_anchor_lambda_overrides_default() -> None:
     """A user-supplied ``anchor_lambda`` survives even under Pinned mode."""
-    model = _build_init_centering_model(
-        baseline_form="mlp",
-        baseline_mode="pinned",
-        tracking_mode="per_t",
-        anchor_lambda=0.7,
-    )
-    assert model.anchor_lambda == pytest.approx(0.7)
+    stages = _build_init_centering_stages(baseline_mode="pinned", anchor_lambda=0.7)
+    assert stages.stage_2.loss.lambda_mu_p == pytest.approx(0.7)
 
 
 def test_invalid_baseline_form_raises() -> None:

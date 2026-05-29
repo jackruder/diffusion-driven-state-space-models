@@ -58,10 +58,12 @@ _INIT_ABLATION_PARAMS = {
         "tag(log, int(interval(5, 500)))",
     "experiment.training.stages.sigma_pert":
         "tag(log, interval(1e-3, 5e-2))",
-    # Regulariser strengths.
-    "experiment.model.anchor_lambda":
+    # Regulariser strengths. Post-ADR-0004 these live on the per-stage
+    # loss objects, so the sweep targets the stage builder
+    # (``experiment.training.stages.*``), not ``model``/``hparams``.
+    "experiment.training.stages.anchor_lambda":
         "tag(log, interval(1e-4, 1e-1))",
-    "experiment.hparams.lambda_sigma_p":
+    "experiment.training.stages.lambda_sigma_p":
         "tag(log, interval(1e-3, 1e-1))",
     # Base LR + per-group multipliers (replaces 3 independent LRs).
     "experiment.training.stages.base_lr":

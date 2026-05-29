@@ -12,7 +12,6 @@ def test_hyperparams_defaults():
     assert hp.S == 1
     assert hp.enc_lr == pytest.approx(5e-4)
     assert hp.logvar_min == pytest.approx(-7.0)
-    assert hp.lambda_schedule == "none"
 
 
 def test_hyperparams_override():

@@ -218,21 +218,17 @@ class StageOrchestrator:
             )
             # Install the active loss object for this stage. If the
             # preset declared `stage.loss`, use it. Otherwise build a
-            # default `FullELBO` from the stage's `lambda_ramp` and
-            # the model's `anchor_lambda` (the latter is the only
-            # non-loss-object source of λ_μp until anchor_lambda
-            # itself migrates onto the loss object — see ADR-0004
-            # follow-up).
+            # default `FullELBO` from the stage's `lambda_ramp` with no
+            # regulariser weights: post-ADR-0004 λ_σp and λ_μp live on
+            # the per-stage loss objects, so an un-declared stage carries
+            # no regulariser term.
             if stage.loss is not None:
                 self.trainer._active_loss = stage.loss
             else:
-                lambda_mu_p = float(
-                    getattr(self.trainer.model, "anchor_lambda", 0.0) or 0.0
-                )
                 self.trainer._active_loss = FullELBO(
                     rate_lambda=stage_rate_lambda,
                     lambda_sigma_p=0.0,
-                    lambda_mu_p=lambda_mu_p,
+                    lambda_mu_p=0.0,
                 )
 
             # 5. Run the stage's training loop.  ``trainer.fit``'s

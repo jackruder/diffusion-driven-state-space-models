@@ -94,8 +94,7 @@ def make_gaussian_transition():
 def make_hyperparams():
     return SimpleNamespace(
         S=1, ema_decay=0.999, weight_decay=1e-2, batch_size=2, grad_accum_steps=1,
-        t_chunk=4, clip_grad_norm=None, lambda_schedule="none", lambda_start=0.001,
-        lambda_end=1.0, lambda_warmup_steps=1, enc_lr=1e-3, dec_lr=1e-3,
+        t_chunk=4, clip_grad_norm=None, enc_lr=1e-3, dec_lr=1e-3,
         trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
     )
 

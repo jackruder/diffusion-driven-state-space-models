@@ -118,16 +118,11 @@ def _make_hparams() -> SimpleNamespace:
         grad_accum_steps=1,
         t_chunk=4,
         clip_grad_norm=None,
-        lambda_schedule="none",
-        lambda_start=0.001,
-        lambda_end=1.0,
-        lambda_warmup_steps=1,
         enc_lr=1e-3,
         dec_lr=1e-3,
         trans_lr=1e-3,
         logvar_min=-7.0,
         logvar_max=7.0,
-        lambda_sigma_p=0.0,
     )
 
 
@@ -143,7 +138,6 @@ def _make_batch(B: int, T: int) -> dict[str, torch.Tensor]:
 def _make_stage2_model(
     *,
     baseline_mode: str = "pinned",
-    anchor_lambda: float = 0.0,
     snapshot_anchor: bool = False,
 ) -> DDSSM_base:
     baseline = MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
@@ -177,7 +171,6 @@ def _make_stage2_model(
         baseline=baseline,
         baseline_anchor=anchor,
         baseline_mode=baseline_mode,
-        anchor_lambda=anchor_lambda,
         sigma_data=sigma_data,
         stage1_transition=stage1_transition,
     )
@@ -219,7 +212,7 @@ def test_stage2_entropy_term_is_zero() -> None:
 def test_stage2_r_mu_p_zero_after_snapshot() -> None:
     """``R_μp = 0`` immediately after the baseline_anchor snapshot."""
     model = _make_stage2_model(
-        baseline_mode="learnable", anchor_lambda=1.0, snapshot_anchor=True,
+        baseline_mode="learnable", snapshot_anchor=True,
     )
     batch = _make_batch(B=2, T=5)
     _, metrics, _ = model(
@@ -233,7 +226,7 @@ def test_stage2_r_mu_p_zero_after_snapshot() -> None:
 def test_stage2_r_mu_p_positive_after_drift() -> None:
     """After the baseline drifts from the anchor, ``R_μp > 0``."""
     model = _make_stage2_model(
-        baseline_mode="learnable", anchor_lambda=1.0, snapshot_anchor=True,
+        baseline_mode="learnable", snapshot_anchor=True,
     )
     # Drift the baseline.
     with torch.no_grad():
@@ -251,7 +244,7 @@ def test_stage2_r_mu_p_positive_after_drift() -> None:
 def test_stage2_r_mu_p_zero_under_pinned_mode() -> None:
     """Under ``"pinned"`` mode, ``R_μp`` is always 0 regardless of drift."""
     model = _make_stage2_model(
-        baseline_mode="pinned", anchor_lambda=1.0, snapshot_anchor=True,
+        baseline_mode="pinned", snapshot_anchor=True,
     )
     with torch.no_grad():
         for p in model.baseline.parameters():

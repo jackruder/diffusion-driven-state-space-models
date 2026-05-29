@@ -98,10 +98,8 @@ def _make_stage2_model() -> DDSSM_base:
     hparams = SimpleNamespace(
         S=1, ema_decay=0.999, weight_decay=1e-2, batch_size=2,
         grad_accum_steps=1, t_chunk=4, clip_grad_norm=None,
-        lambda_schedule="none", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=1, enc_lr=1e-3, dec_lr=1e-3,
+        enc_lr=1e-3, dec_lr=1e-3,
         trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
-        lambda_sigma_p=0.0,
     )
     model = DDSSM_base(
         encoder=encoder, decoder=decoder, transition=v3,

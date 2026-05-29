@@ -46,10 +46,10 @@ from experiments.init_centering.launch_phase_d import all_phase_d_cells
 # pipeline plumbing, not throughput.
 def _shrink_overrides(steps: int) -> list[str]:
     return [
-        f"experiment.model.stages.n_pretrain={steps}",
-        f"experiment.model.stages.n_stage2={steps}",
-        "experiment.model.stages.log_every=1",
-        "experiment.model.stages.checkpoint_every=100",
+        f"experiment.training.stages.n_pretrain={steps}",
+        f"experiment.training.stages.n_stage2={steps}",
+        "experiment.training.stages.log_every=1",
+        "experiment.training.stages.checkpoint_every=100",
     ]
 
 

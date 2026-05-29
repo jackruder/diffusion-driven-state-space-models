@@ -266,6 +266,52 @@ def test_validation_runs_under_ema_swap(small_model, tmp_path):
     assert entered, "validation did not enter the EMA swap"
 
 
+def test_clip_grad_norm_bounds_global_grad_norm(small_model, tmp_path):
+    """``hparams.clip_grad_norm`` scales gradients so the global L2 norm is bounded."""
+    from ddssm.dssd import DDSSMHyperParamsConf
+
+    clip = 0.5
+    trainer = DDSSMTrainer(
+        model=small_model, device=torch.device("cpu"),
+        hparams=DDSSMHyperParamsConf(clip_grad_norm=clip),
+        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+    )
+    assert trainer.clip_grad_norm == clip
+
+    # Give every trainable parameter a large, known gradient.
+    for p in small_model.parameters():
+        if p.requires_grad:
+            p.grad = torch.ones_like(p)
+
+    def _global_norm() -> torch.Tensor:
+        return torch.norm(torch.stack([
+            p.grad.norm() for p in small_model.parameters() if p.grad is not None
+        ]))
+
+    assert _global_norm() > clip, "precondition: gradients must exceed the clip"
+    scaler = torch.amp.GradScaler("cuda", enabled=False)
+    trainer._optimizer_step(scaler=scaler, amp=False)
+    # In-place clip happened before the optimizer step, so grads are now bounded.
+    assert _global_norm() <= clip + 1e-4
+
+
+def test_clip_grad_norm_none_leaves_grads_untouched(small_model, tmp_path):
+    """The default ``clip_grad_norm=None`` is a no-op (behavior-preserving)."""
+    trainer = DDSSMTrainer(
+        model=small_model, device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+    )
+    assert trainer.clip_grad_norm is None
+    for p in small_model.parameters():
+        if p.requires_grad:
+            p.grad = torch.full_like(p, 3.0)
+    pre = [p.grad.clone() for p in small_model.parameters() if p.grad is not None]
+    scaler = torch.amp.GradScaler("cuda", enabled=False)
+    trainer._optimizer_step(scaler=scaler, amp=False)
+    post = [p.grad for p in small_model.parameters() if p.grad is not None]
+    assert all(torch.equal(a, b) for a, b in zip(pre, post))
+
+
 def test_elbo_plateau_disabled_runs_full_budget(small_model, tmp_path):
     """``early_stop=None`` leaves the loop running until ``total_steps``."""
     trainer = DDSSMTrainer(

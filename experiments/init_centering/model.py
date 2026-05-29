@@ -108,8 +108,6 @@ def _build_init_centering_model(
     encoder_hidden_dim: int | None = None,   # ``None`` ⇒ 16 × latent_dim
     decoder_hidden_dim: int | None = None,   # ``None`` ⇒ 16 × latent_dim
     baseline_n_layers: int = 2,
-    # --- Centering / regulariser scalars ---
-    anchor_lambda: float | None = None,  # None ⇒ 0.0 (pinned) / 1e-2 (learnable)
     # σ_data² tracking-EMA decay (used only by global_ema / per_t tracking
     # modes; ignored when tracking_mode="fixed"). Distinct from the
     # transition-weight EMA in ``hparams.ema_decay``.
@@ -149,12 +147,6 @@ def _build_init_centering_model(
             stacklevel=2,
         )
         baseline_mode = "pinned"
-
-    if anchor_lambda is None:
-        # 0.0 under pinned (the R_μp term is moot when μ_p is frozen).
-        # 1e-2 under learnable matches model-v2.org § Baseline-mode
-        # variants / Learnable's recommended soft-anchor strength.
-        anchor_lambda = 0.0 if baseline_mode == "pinned" else 1e-2
 
     # ---- size-matrix defaults (CONTEXT.md § "Size axis") ----
     if channels is None:
@@ -249,7 +241,6 @@ def _build_init_centering_model(
         baseline=baseline,
         baseline_anchor=None,        # populated by the handoff
         baseline_mode=baseline_mode,
-        anchor_lambda=float(anchor_lambda),
         sigma_data=sigma_data,
         stage1_transition=stage1_transition,
     )

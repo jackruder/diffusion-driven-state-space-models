@@ -64,6 +64,13 @@ def _build_init_centering_stages(
     n_pretrain: int = 200,
     n_stage2: int = 1000,
     sigma_pert: float = 1e-2,
+    # Regulariser strengths (Optuna-swept). ``lambda_sigma_p`` is the
+    # stage-1 log-variance anchor λ_σp; it feeds the stage-1 loss object
+    # directly (ADR-0004 — it is NOT read off Hparams). ``anchor_lambda``
+    # is the stage-2 R_μp strength λ_μp; ``None`` ⇒ 0.0 under Pinned (the
+    # term is moot when μ_p is frozen) / 1e-2 under Learnable.
+    lambda_sigma_p: float = LAMBDA_SIGMA_P,
+    anchor_lambda: float | None = None,
     # LRs are parametrised as ``base_lr`` (encoder LR) with per-group
     # multipliers for decoder + transition. This replaces the prior
     # 3-independent-log-uniforms sweep with a 1-base + 2-multiplier
@@ -99,6 +106,12 @@ def _build_init_centering_stages(
     ``baseline_mode`` so the declarative mask and the
     :func:`perform_centering_handoff` imperative freeze agree.
     """
+    # ``anchor_lambda`` (stage-2 λ_μp) defaults by mode: the R_μp term is
+    # moot when μ_p is frozen (Pinned ⇒ 0.0); Learnable ⇒ the
+    # doc-recommended 1e-2 (model-v2.org § Baseline-mode variants).
+    if anchor_lambda is None:
+        anchor_lambda = 0.0 if baseline_mode == "pinned" else 1e-2
+
     # Derive per-group LRs from (base_lr, multipliers) unless explicit
     # overrides are supplied.
     effective_enc_lr = enc_lr if enc_lr is not None else base_lr
@@ -135,15 +148,16 @@ def _build_init_centering_stages(
         steps=max(1, int(round(stage_2_warmup_frac * n_stage2))),
         delay=0,
     )
-    # Per-stage loss objects (ADR-0004). Stage 1 carries the
-    # log-variance anchor `λ_σp`; stage 2's `λ_μp` is wired from the
-    # model's `anchor_lambda` at training time (the orchestrator's
-    # default-fallback path reads it).
+    # Per-stage loss objects (ADR-0004). Each owns its own λ schedule +
+    # regulariser weights; the model returns the components unweighted.
+    # Stage 1 carries the log-variance anchor λ_σp; stage 2 carries the
+    # R_μp anchor λ_μp (``anchor_lambda``) — both live here on the loss
+    # object, not on the model or Hparams.
     stage1_loss = FullELBO(
         rate_lambda=make_lambda_cosine(
             stage1_lambda, total_steps=int(n_pretrain), default_end=1.0,
         ),
-        lambda_sigma_p=LAMBDA_SIGMA_P,
+        lambda_sigma_p=lambda_sigma_p,
         lambda_mu_p=0.0,
     )
     stage2_loss = FullELBO(
@@ -151,10 +165,7 @@ def _build_init_centering_stages(
             stage2_lambda, total_steps=int(n_stage2), default_end=1.0,
         ),
         lambda_sigma_p=0.0,
-        # Stage 2 reads `anchor_lambda` off the model when learnable;
-        # the orchestrator's fallback path (loss=None) handles that.
-        # Setting an explicit value here would override it.
-        lambda_mu_p=0.0,
+        lambda_mu_p=anchor_lambda,
     )
     return StagesConf(
         stage_1=StageSpecConf(
@@ -177,9 +188,7 @@ def _build_init_centering_stages(
             val_every=0,
             checkpoint_every=checkpoint_every,
             centering_handoff=CenteringHandoff(sigma_pert=float(sigma_pert)),
-            # Stage 2 leaves loss=None so the orchestrator builds a
-            # default FullELBO carrying the model's anchor_lambda as
-            # λ_μp (Learnable cells) or 0 (Pinned cells).
+            loss=stage2_loss,
         ),
         run=["stage_1", "stage_2"],
     )

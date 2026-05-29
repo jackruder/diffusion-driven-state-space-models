@@ -96,7 +96,7 @@ def _overrides_for_job(
     db_path = os.path.join(storage_dir, f"{study_prefix}_{job}.db")
     return [
         "--multirun",
-        "+sweep=init_ablation",
+        "+sweep=init_ablation_moo",
         f"hydra.sweeper.n_trials={n_trials}",
         f"hydra.sweeper.study_name={study_prefix}_{job}",
         f"hydra.sweeper.storage=sqlite:///{db_path}",

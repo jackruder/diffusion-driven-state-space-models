@@ -65,7 +65,6 @@ def test_pinned_baseline_params_frozen_after_handoff() -> None:
     model = make_vhp_model(
         baseline_form="mlp",
         baseline_mode="pinned",
-        anchor_lambda=0.0,
     )
     # Pre-handoff: baseline trainable (stage 1 trains it).
     assert all(p.requires_grad for p in model.baseline.parameters())
@@ -95,7 +94,6 @@ def test_learnable_baseline_params_remain_trainable_after_handoff() -> None:
     model = make_vhp_model(
         baseline_form="mlp",
         baseline_mode="learnable",
-        anchor_lambda=1.0,
     )
     assert all(p.requires_grad for p in model.baseline.parameters())
 
@@ -118,7 +116,6 @@ def test_pinned_baseline_params_unchanged_in_stage2() -> None:
     model = make_vhp_model(
         baseline_form="mlp",
         baseline_mode="pinned",
-        anchor_lambda=0.0,
     )
     # Stage 1: short training so the baseline has actual parameters to
     # move *if* the gradient flowed.
@@ -165,7 +162,6 @@ def test_learnable_baseline_params_drift_in_stage2() -> None:
     model = make_vhp_model(
         baseline_form="mlp",
         baseline_mode="learnable",
-        anchor_lambda=1e-2,  # small anchor so drift can happen
     )
     # Stage 1.
     run_stage(
@@ -188,7 +184,7 @@ def test_learnable_baseline_params_drift_in_stage2() -> None:
     )
 
     pre = _snapshot_baseline_params(model)
-    # Stage 2 — baseline should move.
+    # Stage 2 — baseline should move (small anchor lets it drift).
     run_stage(
         model=model,
         stage="stage_2",
@@ -197,6 +193,7 @@ def test_learnable_baseline_params_drift_in_stage2() -> None:
         ),
         n_steps=30,
         lr=1e-2,
+        lambda_mu_p=1e-2,
     )
     post = _snapshot_baseline_params(model)
     diff = _params_norm_diff(pre, post)
@@ -217,7 +214,6 @@ def test_learnable_anchor_resists_unanchored_drift() -> None:
         model = make_vhp_model(
             baseline_form="mlp",
             baseline_mode="learnable",
-            anchor_lambda=anchor_lambda,
         )
         run_stage(
             model=model,
@@ -244,6 +240,7 @@ def test_learnable_anchor_resists_unanchored_drift() -> None:
             ),
             n_steps=30,
             lr=1e-2,
+            lambda_mu_p=anchor_lambda,
         )
         post = _snapshot_baseline_params(model)
         return _params_norm_diff(pre, post)

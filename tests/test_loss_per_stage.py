@@ -27,7 +27,7 @@ class _DummyTrainer:
     """Stub trainer that records orchestrator-driven loss installation."""
 
     def __init__(self) -> None:
-        self.model = SimpleNamespace(stage_selector="stage_0", anchor_lambda=0.0, config=SimpleNamespace(hyperparams=SimpleNamespace(lambda_sigma_p=0.0)))
+        self.model = SimpleNamespace(stage_selector="stage_0")
         self.global_step: int = 0
         self._active_loss: Loss | None = None
         self._stage_start_step: int = 0

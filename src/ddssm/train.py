@@ -6,7 +6,6 @@ there.
 """
 
 import os
-import math
 from typing import TYPE_CHECKING, Any, Callable, final
 from contextlib import nullcontext, contextmanager
 from collections import deque
@@ -171,6 +170,7 @@ class DDSSMTrainer:
         self.weight_decay = self.hparams.weight_decay
 
         self.grad_accum_steps = self.hparams.grad_accum_steps
+        self.clip_grad_norm = self.hparams.clip_grad_norm
 
         self.ema_decay = self.hparams.ema_decay
         # EMA on the denoiser (used at sampling time)
@@ -274,46 +274,17 @@ class DDSSMTrainer:
         return {"grad_accum_steps": ckpt.grad_accum_steps}
 
     def _build_default_loss(self):
-        """Construct a default ``FullELBO`` from hparams for single-fit runs.
+        """Default loss for single-fit runs: full ELBO with no rate ramp.
 
-        Pre-ADR-0004 the trainer maintained an inline λ-schedule from
-        ``hparams.lambda_schedule`` etc.; that machinery is now
-        encapsulated inside ``FullELBO``. Multi-stage runs receive
-        per-stage loss objects from ``StageOrchestrator`` instead.
+        Multi-stage runs receive per-stage loss objects from
+        ``StageOrchestrator``; a single ``fit()`` with no declared loss
+        falls back here. Post-ADR-0004 all λ-shape config lives on loss
+        objects (not ``Hparams``), so the single-fit default is simply
+        the unramped full ELBO.
         """
         from .losses import FullELBO
 
-        def linear_sched(start, end, warmup_steps, step):
-            if step >= warmup_steps:
-                return end
-            return start + (end - start) * (step / float(warmup_steps))
-
-        def cosine_sched(start, end, warmup_steps, step):
-            if step >= warmup_steps:
-                return end
-            pct = step / float(warmup_steps)
-            cosine_factor = 0.5 * (1.0 - math.cos(math.pi * pct))
-            return start + (end - start) * cosine_factor
-
-        hp = self.hparams
-        kind = getattr(hp, "lambda_schedule", "none")
-        start = float(getattr(hp, "lambda_start", 0.001))
-        end = float(getattr(hp, "lambda_end", 1.0))
-        warmup = int(getattr(hp, "lambda_warmup_steps", 10))
-        if kind == "linear":
-            rate_lambda = lambda step: linear_sched(start, end, warmup, step)
-        elif kind == "cosine":
-            rate_lambda = lambda step: cosine_sched(start, end, warmup, step)
-        else:
-            rate_lambda = lambda step: 1.0
-
-        lambda_sigma_p = float(getattr(hp, "lambda_sigma_p", 0.0))
-        lambda_mu_p = float(getattr(self.model, "anchor_lambda", 0.0) or 0.0)
-        return FullELBO(
-            rate_lambda=rate_lambda,
-            lambda_sigma_p=lambda_sigma_p,
-            lambda_mu_p=lambda_mu_p,
-        )
+        return FullELBO(rate_lambda=lambda _step: 1.0)
 
     def _move_batch_to_device(self, batch: dict, device: torch.device) -> dict:
         return {
@@ -387,6 +358,16 @@ class DDSSMTrainer:
         return accum_metrics
 
     def _optimizer_step(self, scaler, amp: bool):
+        # Optional global grad-norm clip (``hparams.clip_grad_norm``).
+        # Follows the AMP unscale→clip→step order; ``scaler`` is disabled
+        # in this trainer so ``unscale_`` is a no-op but keeps the order
+        # correct if scaling is ever re-enabled.
+        if self.clip_grad_norm is not None:
+            if amp:
+                scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), float(self.clip_grad_norm)
+            )
         if amp:
             scaler.step(self.optimizer)
             scaler.update()

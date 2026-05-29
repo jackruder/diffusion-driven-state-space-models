@@ -109,16 +109,11 @@ def _make_hparams(lambda_sigma_p: float = 0.0) -> SimpleNamespace:
         grad_accum_steps=1,
         t_chunk=4,
         clip_grad_norm=None,
-        lambda_schedule="none",
-        lambda_start=0.001,
-        lambda_end=1.0,
-        lambda_warmup_steps=1,
         enc_lr=1e-3,
         dec_lr=1e-3,
         trans_lr=1e-3,
         logvar_min=-7.0,
         logvar_max=7.0,
-        lambda_sigma_p=lambda_sigma_p,
     )
 
 

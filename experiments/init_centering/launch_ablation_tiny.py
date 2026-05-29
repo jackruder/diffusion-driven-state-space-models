@@ -3,7 +3,7 @@
 The "tiny" ablation grid is the cell ranking phase: every cell of the
 ablation grid runs at the data's true latent dim (size matrix per
 CONTEXT.md § Size axis) on both the 1D and MV synthetic datasets,
-under the 7-dim ``init_ablation`` Optuna sweep with 40 trials each.
+under the multi-objective ``init_ablation_moo`` Optuna sweep with 40 trials each.
 
 Per (cell, dataset) tuple → one sbatch job.
 
@@ -123,7 +123,7 @@ def _overrides_for_job(
     storage_dir: str,
     sweeps_root: str,
     n_jobs: int = 1,
-    sweep_group: str = "init_ablation",
+    sweep_group: str = "init_ablation_moo",
     wallclock_target: float | None = None,
 ) -> list[str]:
     job = _job_name(cell, ds_label)
@@ -180,7 +180,7 @@ def render_tiny_sbatch(
     sweeps_root: str,
     cli_overrides: dict[str, object] | None = None,
     n_jobs: int = 1,
-    sweep_group: str = "init_ablation",
+    sweep_group: str = "init_ablation_moo",
     wallclock_target: float | None = None,
 ) -> str:
     overrides = _overrides_for_job(
@@ -279,7 +279,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--sweep-group", default="init_ablation",
+        "--sweep-group", default="init_ablation_moo",
         choices=["init_ablation", "init_ablation_moo"],
         help=(
             "Which registered sweep config to use. "

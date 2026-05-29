@@ -51,9 +51,7 @@ def _cells():
 def _hparams() -> SimpleNamespace:
     return SimpleNamespace(
         S=1, batch_size=4, grad_accum_steps=1, ema_decay=0.999, weight_decay=1e-2,
-        lambda_schedule="cosine", lambda_start=0.001, lambda_end=1.0,
-        lambda_warmup_steps=10, enc_lr=5e-4, dec_lr=5e-4, trans_lr=5e-4,
-        lambda_sigma_p=1e-2,
+        enc_lr=5e-4, dec_lr=5e-4, trans_lr=5e-4,
     )
 
 

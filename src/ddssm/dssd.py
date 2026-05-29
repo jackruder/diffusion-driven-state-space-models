@@ -93,7 +93,6 @@ class DDSSM_base(nn.Module):
         baseline: BaseBaseline | None = None,
         baseline_anchor: BaseBaseline | None = None,
         baseline_mode: str = "pinned",
-        anchor_lambda: float = 0.0,
         sigma_data: SigmaDataBuffer | None = None,
         stage1_transition: BaseTransition | None = None,
         report_sigma_data_diag: bool = True,
@@ -146,7 +145,6 @@ class DDSSM_base(nn.Module):
         self.baseline: BaseBaseline | None = baseline
         self.baseline_anchor: BaseBaseline | None = baseline_anchor
         self.baseline_mode: str = baseline_mode
-        self.anchor_lambda: float = float(anchor_lambda)
         self.sigma_data: SigmaDataBuffer | None = sigma_data
         self.stage1_transition: BaseTransition | None = stage1_transition
         self._report_sigma_data_diag: bool = bool(report_sigma_data_diag)
@@ -1012,16 +1010,11 @@ def _default_hyperparams():
         grad_accum_steps=4,
         t_chunk=16,
         clip_grad_norm=None,
-        lambda_schedule="none",
-        lambda_start=0.001,
-        lambda_end=1.0,
-        lambda_warmup_steps=10,
         enc_lr=5e-4,
         dec_lr=5e-4,
         trans_lr=5e-4,
         logvar_min=-7.0,
         logvar_max=7.0,
-        lambda_sigma_p=0.0,  # default off; model-v2 stage 1 sets > 0
     )
 
 
@@ -1043,20 +1036,11 @@ class DDSSMHyperParamsConf:
     t_chunk: int = 16
     clip_grad_norm: float | None = None
 
-    lambda_schedule: str = "none"  # "none" | "linear" | "cosine"
-    lambda_start: float = 0.001
-    lambda_end: float = 1.0
-    lambda_warmup_steps: int = 10
-
     enc_lr: float = 5e-4
     dec_lr: float = 5e-4
     trans_lr: float = 5e-4
 
     logvar_min: float = -7.0
     logvar_max: float = 7.0
-
-    # Model-v2 stage-1 log-variance anchor strength λ_σp.  Default 0
-    # keeps the regularizer inactive in legacy / variance-probe runs.
-    lambda_sigma_p: float = 0.0
 
 

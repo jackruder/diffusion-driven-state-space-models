@@ -88,6 +88,33 @@ def test_high_surface_smoke_instantiates() -> None:
     assert exp.model.latent_dim == 4
 
 
+def test_cell_baseline_mode_reaches_the_stage_builder() -> None:
+    """Regression: a cell's ``baseline_mode`` must flow to the *stage*
+    builder, not just the model.
+
+    Pre-fix bug: ``experiments.py`` passed ``stages=StagesB`` with no
+    ``baseline_mode``, so the stage builder always used its ``"pinned"``
+    default. Learnable cells therefore froze stage-2 μ_p
+    (``stage_2.trainable.baseline = False``) and got ``λ_μp = 0``,
+    silently disabling the R_μp anchor the Learnable arm exists to test.
+    A registered learnable preset must train μ_p in stage 2 with a
+    nonzero anchor; a pinned preset must freeze it with λ_μp = 0.
+    """
+    learnable = instantiate(
+        store["experiment"]["experiment", "init_smoke_high_surface"]
+    )
+    s2_learnable = learnable.training.stages.stage_2
+    assert s2_learnable.trainable.baseline is True
+    assert s2_learnable.loss.lambda_mu_p == pytest.approx(1e-2)
+
+    pinned = instantiate(
+        store["experiment"]["experiment", "init_smoke_simple"]
+    )
+    s2_pinned = pinned.training.stages.stage_2
+    assert s2_pinned.trainable.baseline is False
+    assert s2_pinned.loss.lambda_mu_p == 0.0
+
+
 def test_ablation_sweep_composes_via_cli() -> None:
     """``+sweep=init_ablation`` switches the sweeper and populates params."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
@@ -108,8 +135,8 @@ def test_ablation_sweep_composes_via_cli() -> None:
     for key in (
         "experiment.training.stages.n_pretrain",
         "experiment.training.stages.sigma_pert",
-        "experiment.model.anchor_lambda",
-        "experiment.hparams.lambda_sigma_p",
+        "experiment.training.stages.anchor_lambda",
+        "experiment.training.stages.lambda_sigma_p",
         "experiment.training.stages.base_lr",
         "experiment.training.stages.dec_mult",
         "experiment.training.stages.trans_mult",

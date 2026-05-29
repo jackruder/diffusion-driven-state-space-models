@@ -661,19 +661,16 @@ def eval_stage2_elbo_surrogate(
                 train=False,
                 report_scaled=False,
             )
-            # Reconstruct the pre-ADR-0004 "loss/total" the eval used
-            # to read from forward()'s first return value: distortion
-            # + rate (with regularizers at their hparam weights). The
-            # σ_p weight lives on the trainer's hparams (ADR-0004), which
-            # the read-only eval stage has no handle on, so it is omitted.
-            l_sp = 0.0
-            l_mp = float(getattr(model, "anchor_lambda", 0.0) or 0.0)
+            # Reconstruct a "loss/total"-style surrogate from the
+            # unweighted LossComponents: distortion + the ELBO rate
+            # terms. Both regulariser weights (λ_σp, λ_μp) live on the
+            # per-stage loss objects (ADR-0004 follow-up), which this
+            # read-only eval has no handle on, so the regulariser terms
+            # are omitted — the surrogate is the unregularised ELBO sum.
             loss = (
                 components.recon
                 + components.init_kl
                 + components.trans_kl
-                + l_sp * components.r_sigma_p
-                + l_mp * components.r_mu_p
             )
             sums["stage2_elbo_surrogate"] += float(loss.item())
             sums["recon"] += float(metrics.get("loss/distortion/rec", 0.0).item() if hasattr(metrics.get("loss/distortion/rec", 0.0), "item") else metrics.get("loss/distortion/rec", 0.0))

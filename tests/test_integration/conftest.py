@@ -118,16 +118,11 @@ def _make_hparams(lambda_sigma_p: float = 1e-2, batch_size: int = 16) -> SimpleN
         grad_accum_steps=1,
         t_chunk=4,
         clip_grad_norm=None,
-        lambda_schedule="none",
-        lambda_start=1.0,
-        lambda_end=1.0,
-        lambda_warmup_steps=1,
         enc_lr=1e-3,
         dec_lr=1e-3,
         trans_lr=1e-3,
         logvar_min=-7.0,
         logvar_max=7.0,
-        lambda_sigma_p=lambda_sigma_p,
     )
 
 
@@ -148,7 +143,6 @@ def make_vhp_model(
     *,
     baseline_form: str = "mlp",
     baseline_mode: str = "pinned",
-    anchor_lambda: float = 0.0,
     tracking_mode: str = "fixed",
     lambda_sigma_p: float = 1e-2,
     sigma_data_init: float = 1.0,
@@ -196,7 +190,6 @@ def make_vhp_model(
         baseline=baseline,
         baseline_anchor=anchor,
         baseline_mode=baseline_mode,
-        anchor_lambda=anchor_lambda,
         sigma_data=sigma_data,
         stage1_transition=stage1_transition,
     )
@@ -245,8 +238,15 @@ def run_stage(
     data_factory: Callable[[], dict[str, torch.Tensor]],
     n_steps: int,
     lr: float = 1e-3,
+    lambda_mu_p: float = 1.0,
 ) -> list[dict[str, torch.Tensor]]:
-    """Run ``n_steps`` of training in the given stage; return per-step metrics."""
+    """Run ``n_steps`` of training in the given stage; return per-step metrics.
+
+    ``lambda_mu_p`` weights the R_μp anchor term in the backprop loss.
+    Post-ADR-0004 the anchor strength lives on the loss (not the model),
+    so the baseline-drift tests pass it here. The default ``1.0``
+    reproduces ``components.total()``.
+    """
     model.stage_selector = stage
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(params, lr=lr)
@@ -260,7 +260,13 @@ def run_stage(
             batch["observation_mask"],
             batch["timepoints"],
         )
-        loss = components.total()
+        loss = (
+            components.recon
+            + components.init_kl
+            + components.trans_kl
+            + components.r_sigma_p
+            + lambda_mu_p * components.r_mu_p
+        )
         loss.backward()
         optimizer.step()
         metrics_log.append({k: v.detach().clone() for k, v in metrics.items()})

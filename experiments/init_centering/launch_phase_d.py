@@ -78,7 +78,7 @@ def _overrides_for_cell(
 ) -> tuple[list[str], bool]:
     """Build the Hydra overrides + multirun flag for a cell.
 
-    Each cell runs as multirun + ``+sweep=init_pilot`` with a
+    Each cell runs as multirun + ``+sweep=init_ablation_moo`` with a
     cell-scoped ``study_name`` and SQLite path so the sweeps don't
     share state.
 
@@ -91,7 +91,7 @@ def _overrides_for_cell(
     db_path = os.path.join(storage_dir, f"{study_prefix}_{name}.db")
     overrides = [
         "--multirun",
-        "+sweep=init_pilot",
+        "+sweep=init_ablation_moo",
         f"hydra.sweeper.n_trials={n_trials}",
         f"hydra.sweeper.study_name={study_prefix}_{name}",
         f"hydra.sweeper.storage=sqlite:///{db_path}",

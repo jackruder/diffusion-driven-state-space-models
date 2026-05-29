@@ -58,7 +58,9 @@ def test_tiny_sbatch_carries_data_field_overrides(tmp_path) -> None:
     assert "experiment.data.expose_gt_latents=true" in script
     assert "experiment.model.data_dim=8" in script
     assert "experiment.model.latent_dim=4" in script
-    assert "+sweep=init_ablation" in script
+    # Grid cells carry PilotMOObjective, so the launcher must wire the
+    # multi-objective sweep (matching direction=[minimize, minimize]).
+    assert "+sweep=init_ablation_moo" in script
     assert "hydra.sweeper.n_trials=2" in script
     assert f"ablation_test_{cell}__mv" in script
     assert "n_jobs" not in script  # default n_jobs=1

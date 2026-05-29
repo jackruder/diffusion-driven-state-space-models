@@ -58,7 +58,7 @@ init_smoke_simple = experiment(
     ),
     hparams=SmokeHparams,
     training=Training800,
-    stages=StagesB,
+    stages=StagesB(baseline_mode="pinned"),
 )
 experiment_store(init_smoke_simple, name="init_smoke_simple")
 
@@ -87,7 +87,7 @@ init_smoke_high_surface = experiment(
     ),
     hparams=SmokeHparams,
     training=Training800,
-    stages=StagesB,
+    stages=StagesB(baseline_mode="learnable"),
     eval=PilotEval,
     objective=PilotObjective,
 )
@@ -127,7 +127,7 @@ for _form, _mode, _tracking in iter_cells():
         ),
         hparams=SmokeHparams,
         training=Training800,
-        stages=StagesB,
+        stages=StagesB(baseline_mode=_mode),
         eval=PilotEval,
         # Multi-objective: (wallclock_to_target, stage2_elbo_surrogate).
         # Pair with the ``ddssm_optuna_moo`` sweeper preset that sets
