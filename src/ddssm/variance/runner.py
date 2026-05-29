@@ -54,7 +54,7 @@ class ProbeSpec:
     force_per_k: bool = True
     split: str = "train"
     seeds: list[int] = field(default_factory=lambda: [0, 1, 2])
-    freeze: list[str] = field(default_factory=lambda: ["encoder", "decoder", "zinit", "embed_layer"])
+    freeze: list[str] = field(default_factory=lambda: ["encoder", "decoder", "embed_layer"])
     # Same rationale as ``cells`` above.
     metrics: list = field(default_factory=lambda: [
         ProbeMetricSpec("loss_var"),

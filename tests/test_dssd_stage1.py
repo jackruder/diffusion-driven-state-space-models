@@ -115,7 +115,6 @@ def _make_hparams(lambda_sigma_p: float = 0.0) -> SimpleNamespace:
         lambda_warmup_steps=1,
         enc_lr=1e-3,
         dec_lr=1e-3,
-        zinit_lr=1e-3,
         trans_lr=1e-3,
         logvar_min=-7.0,
         logvar_max=7.0,
@@ -133,7 +132,7 @@ def _make_batch(B: int, T: int) -> dict[str, torch.Tensor]:
 
 
 # ---------------------------------------------------------------------------
-# Construction + mutual exclusion
+# Construction
 # ---------------------------------------------------------------------------
 
 

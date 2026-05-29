@@ -72,7 +72,7 @@ def test_pinned_baseline_params_frozen_after_handoff() -> None:
 
     trainer = _build_trainer_stub(model)
     new_lrs = SimpleNamespace(
-        enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3,
+        enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
     )
     perform_centering_handoff(
         trainer=trainer,
@@ -101,7 +101,7 @@ def test_learnable_baseline_params_remain_trainable_after_handoff() -> None:
 
     trainer = _build_trainer_stub(model)
     new_lrs = SimpleNamespace(
-        enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3,
+        enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
     )
     perform_centering_handoff(
         trainer=trainer,
@@ -137,7 +137,7 @@ def test_pinned_baseline_params_unchanged_in_stage2() -> None:
         trainer=trainer,
         spec=CenteringHandoffConf(sigma_pert=0.0),
         new_lrs=SimpleNamespace(
-            enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3,
+            enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
         ),
     )
 
@@ -183,7 +183,7 @@ def test_learnable_baseline_params_drift_in_stage2() -> None:
         trainer=trainer,
         spec=CenteringHandoffConf(sigma_pert=0.0),
         new_lrs=SimpleNamespace(
-            enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3,
+            enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
         ),
     )
 
@@ -232,7 +232,7 @@ def test_learnable_anchor_resists_unanchored_drift() -> None:
             trainer=trainer,
             spec=CenteringHandoffConf(sigma_pert=0.0),
             new_lrs=SimpleNamespace(
-                enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3,
+                enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
             ),
         )
         pre = _snapshot_baseline_params(model)

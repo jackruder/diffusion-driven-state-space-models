@@ -28,7 +28,6 @@ class StageLrsConf:
 
     enc_lr: float = 5e-4
     dec_lr: float = 5e-4
-    zinit_lr: float = 5e-4
     trans_lr: float = 5e-4
 
 
@@ -37,20 +36,17 @@ class StageTrainableConf:
     """Per-module ``requires_grad`` mask for the stage.
 
     Matches the slot names used by :meth:`DDSSMTrainer._set_trainable`
-    (encoder / decoder / zinit / transition / baseline).  Note:
-    ``z_init`` is the legacy InitPrior; under the model-v2 VHP-via-
-    diffusion path the aux posterior is part of the *encoder* family
-    (via DDSSM_base's ``aux_posterior`` slot) and shares the encoder
-    flag.  ``baseline`` controls the optional μ_p head from
-    ``model-v2.org`` § Generative baseline; stage 1 typically trains
-    it and stage 2 freezes it under Pinned mode (the
-    :func:`perform_centering_handoff` call also enforces the freeze
-    independently as a belt-and-suspenders safeguard).
+    (encoder / decoder / transition / baseline).  The aux posterior is
+    part of the *encoder* family (via DDSSM_base's ``aux_posterior``
+    slot) and shares the encoder flag.  ``baseline`` controls the
+    optional μ_p head from ``model-v2.org`` § Generative baseline;
+    stage 1 typically trains it and stage 2 freezes it under Pinned
+    mode (the :func:`perform_centering_handoff` call also enforces the
+    freeze independently as a belt-and-suspenders safeguard).
     """
 
     encoder: bool = True
     decoder: bool = True
-    z_init: bool = True
     transition: bool = True
     baseline: bool = True
 

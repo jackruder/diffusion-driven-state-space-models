@@ -24,7 +24,6 @@ experiment_store = store(group="experiment")
 # Sub-components of a DDSSM model
 encoder_store = store(group="encoder")
 decoder_store = store(group="decoder")
-z_init_store = store(group="z_init")
 transition_store = store(group="transition")
 
 # Sub-components of a transition (CSDI U-Net + noise schedule)
@@ -52,7 +51,7 @@ sweep_store = store(group="sweep", package="_global_")
 
 __all__ = [
     "model_store", "data_store", "experiment_store",
-    "encoder_store", "decoder_store", "z_init_store", "transition_store",
+    "encoder_store", "decoder_store", "transition_store",
     "unet_store", "schedule_store",
     "hparams_store", "training_store",
     "eval_store", "viz_store",

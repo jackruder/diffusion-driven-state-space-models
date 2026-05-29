@@ -161,7 +161,6 @@ class DDSSMTrainer:
                     enc_lr=self.hparams.enc_lr,
                     dec_lr=self.hparams.dec_lr,
                     trans_lr=self.hparams.trans_lr,
-                    zinit_lr=self.hparams.zinit_lr,
                     weight_decay=self.hparams.weight_decay,
                 ),
                 betas=(0.9, 0.999),
@@ -215,7 +214,6 @@ class DDSSMTrainer:
         # Expect these attributes to exist (guard with hasattr)
         maybe_flag(getattr(self.model, "encoder", None), t.encoder)
         maybe_flag(getattr(self.model, "decoder", None), t.decoder)
-        maybe_flag(getattr(self.model, "zinit", None), t.z_init)
         maybe_flag(getattr(self.model, "transition", None), t.transition)
         maybe_flag(getattr(self.model, "static_embeddings", None), t.encoder)
         # aux_posterior is part of the encoder family (q_Φ in the doc).
@@ -237,7 +235,6 @@ class DDSSMTrainer:
             enc_lr=lrs.enc_lr,
             dec_lr=lrs.dec_lr,
             trans_lr=lrs.trans_lr,
-            zinit_lr=lrs.zinit_lr,
             weight_decay=self.weight_decay,
         )
         self.optimizer = torch.optim.AdamW(groups, betas=(0.9, 0.999), eps=1e-8)

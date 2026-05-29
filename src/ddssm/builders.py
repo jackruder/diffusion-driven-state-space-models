@@ -273,7 +273,7 @@ TransformerFutSum = builds(
 
 
 # ---------------------------------------------------------------------------
-# Encoder / Decoder / InitPrior / Transition builders.
+# Encoder / Decoder / Transition builders.
 # Shapes are caller-supplied; the inner Context/Head/etc. default to the
 # builders above so a one-liner like ``Encoder(data_dim=1, latent_dim=4,
 # j=1, emb_time_dim=16, use_mask=False)`` is fully instantiable.

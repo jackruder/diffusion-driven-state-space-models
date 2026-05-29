@@ -46,7 +46,6 @@ SmokeHparams = Hparams(
     ema_decay=0.997,
     enc_lr=LR,
     dec_lr=LR,
-    zinit_lr=LR,
     trans_lr=LR,
 )
 # Stage-1 λ_σp moved to the per-stage loss object in
@@ -68,15 +67,13 @@ def _build_init_centering_stages(
     # LRs are parametrised as ``base_lr`` (encoder LR) with per-group
     # multipliers for decoder + transition. This replaces the prior
     # 3-independent-log-uniforms sweep with a 1-base + 2-multiplier
-    # search, exploiting the correlation between the LRs. ``zinit_lr``
-    # stays separate (not swept by default). Pass ``enc_lr`` etc.
-    # explicitly to override the derived values.
+    # search, exploiting the correlation between the LRs. Pass
+    # ``enc_lr`` etc. explicitly to override the derived values.
     base_lr: float = LR,
     dec_mult: float = 1.0,
     trans_mult: float = 1.0,
     enc_lr: float | None = None,
     dec_lr: float | None = None,
-    zinit_lr: float = LR,
     trans_lr: float | None = None,
     # Per-stage λ-warmup parameters (CONTEXT.md § "lambda_warmup
     # redesign"). Each stage runs a cosine ramp on its OWN stage-local
@@ -110,15 +107,14 @@ def _build_init_centering_stages(
     lrs = StageLrsConf(
         enc_lr=effective_enc_lr,
         dec_lr=effective_dec_lr,
-        zinit_lr=zinit_lr,
         trans_lr=effective_trans_lr,
     )
     stage1_trainable = StageTrainableConf(
-        encoder=True, decoder=True, z_init=False, transition=True, baseline=True,
+        encoder=True, decoder=True, transition=True, baseline=True,
     )
     stage2_baseline_trainable = baseline_mode == "learnable"
     stage2_trainable = StageTrainableConf(
-        encoder=True, decoder=True, z_init=False, transition=True,
+        encoder=True, decoder=True, transition=True,
         baseline=stage2_baseline_trainable,
     )
     es = EarlyStopSpec(

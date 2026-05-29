@@ -11,7 +11,6 @@ def param_groups_for_adamw(
     enc_lr: float,
     dec_lr: float,
     trans_lr: float,
-    zinit_lr: float,
     weight_decay: float = 0.01,
     baseline_lr: float | None = None,
 ):
@@ -26,7 +25,6 @@ def param_groups_for_adamw(
         enc_lr: Learning rate for encoder parameters.
         dec_lr: Learning rate for decoder parameters.
         trans_lr: Learning rate for transition model parameters.
-        zinit_lr: Learning rate for the initialisation prior parameters.
         weight_decay: L2 regularisation coefficient for decay groups.
 
     Returns:
@@ -107,7 +105,6 @@ def param_groups_for_adamw(
     add_module(getattr(model, "encoder", None), enc_lr, "encoder")
     add_module(getattr(model, "decoder", None), dec_lr, "decoder")
     add_module(getattr(model, "transition", None), trans_lr, "transition")
-    add_module(getattr(model, "zinit", None), zinit_lr, "zinit")
 
     # Capture top-level static embeddings (using encoder's LR)
     add_module(getattr(model, "static_embeddings", None), enc_lr, "static_embeddings")

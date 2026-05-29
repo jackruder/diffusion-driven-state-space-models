@@ -12,13 +12,13 @@ from ddssm.stages import StageTrainableConf
 
 def test_trainable_modules_defaults_all_true():
     t = StageTrainableConf()
-    assert t.encoder and t.decoder and t.z_init and t.transition and t.baseline
+    assert t.encoder and t.decoder and t.transition and t.baseline
 
 
 def test_recon_only_freezes_transition():
-    t = StageTrainableConf(encoder=True, decoder=True, z_init=True, transition=False)
+    t = StageTrainableConf(encoder=True, decoder=True, transition=False)
     assert not t.transition
-    assert t.encoder and t.decoder and t.z_init
+    assert t.encoder and t.decoder
 
 
 def test_train_calls_set_trainable_when_specified():
@@ -29,7 +29,7 @@ def test_train_calls_set_trainable_when_specified():
     expt.objective = None
     expt.training = TrainingScalars(
         steps=0, log_every=1,
-        trainable=StageTrainableConf(encoder=True, decoder=True, z_init=True, transition=False),
+        trainable=StageTrainableConf(encoder=True, decoder=True, transition=False),
     )
 
     fake_data = MagicMock()

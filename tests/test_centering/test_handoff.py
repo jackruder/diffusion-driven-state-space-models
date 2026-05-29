@@ -96,7 +96,7 @@ def test_handoff_perturbs_encoder_by_sigma_pert() -> None:
     perform_centering_handoff(
         trainer=trainer,
         spec=spec,
-        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3),
+        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3),
     )
     post = _module_state(model.encoder)
     # Each parameter has moved by roughly σ_pert in elementwise L2 (the
@@ -123,7 +123,7 @@ def test_handoff_leaves_aux_posterior_decoder_baseline_transition_untouched() ->
     perform_centering_handoff(
         trainer=trainer,
         spec=CenteringHandoffConf(sigma_pert=1e-1),
-        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3),
+        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3),
     )
     post_aux = _module_state(model.aux_posterior)
     post_dec = _module_state(model.decoder)
@@ -146,7 +146,7 @@ def test_handoff_snapshots_baseline_anchor() -> None:
     perform_centering_handoff(
         trainer=trainer,
         spec=CenteringHandoffConf(sigma_pert=0.0),
-        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3),
+        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3),
     )
     anchor = model.baseline_anchor
     assert anchor is not None
@@ -165,7 +165,7 @@ def test_handoff_rebuilds_optimizer() -> None:
     model = _make_model()
     trainer = _DummyTrainer(model)
     lrs = SimpleNamespace(
-        enc_lr=2e-3, dec_lr=3e-3, zinit_lr=4e-3, trans_lr=5e-3,
+        enc_lr=2e-3, dec_lr=3e-3, trans_lr=5e-3,
     )
     perform_centering_handoff(
         trainer=trainer,
@@ -193,7 +193,7 @@ def test_handoff_resets_sigma_data_schedule_preserves_values() -> None:
     perform_centering_handoff(
         trainer=trainer,
         spec=CenteringHandoffConf(sigma_pert=0.0),
-        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3),
+        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3),
     )
     # Schedule was reset.
     assert torch.equal(model.sigma_data.ema_step, torch.zeros(T_MAX, dtype=torch.long))
@@ -211,7 +211,7 @@ def test_handoff_zero_sigma_pert_no_encoder_change() -> None:
     perform_centering_handoff(
         trainer=trainer,
         spec=CenteringHandoffConf(sigma_pert=0.0),
-        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3),
+        new_lrs=SimpleNamespace(enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3),
     )
     post = _module_state(model.encoder)
     for a, b in zip(pre, post):
@@ -228,6 +228,6 @@ def test_handoff_raises_without_baseline() -> None:
             trainer=trainer,
             spec=CenteringHandoffConf(sigma_pert=0.0),
             new_lrs=SimpleNamespace(
-                enc_lr=1e-3, dec_lr=1e-3, zinit_lr=1e-3, trans_lr=1e-3,
+                enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
             ),
         )

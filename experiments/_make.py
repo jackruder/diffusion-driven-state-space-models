@@ -16,7 +16,7 @@ them together and curries ``hparams`` onto the trainer)::
         data=NonlinBimodalLift1D,
         model=SmokeModel(baseline_form="zero", latent_dim=1, data_dim=1),
         hparams=Hparams(S=1, batch_size=16,
-                        enc_lr=5e-4, dec_lr=5e-4, zinit_lr=5e-4, trans_lr=5e-4),
+                        enc_lr=5e-4, dec_lr=5e-4, trans_lr=5e-4),
         training=Training(steps=800, log_every=25, checkpoint_every=200),
         eval=Eval(metrics=["stage2_elbo_surrogate"], split="val"),
     )

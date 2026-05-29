@@ -128,7 +128,7 @@ def _make_scalar_stage2_model() -> DDSSM_base:
         grad_accum_steps=1, t_chunk=4, clip_grad_norm=None,
         lambda_schedule="none", lambda_start=0.001, lambda_end=1.0,
         lambda_warmup_steps=1, enc_lr=1e-3, dec_lr=1e-3,
-        zinit_lr=1e-3, trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
+        trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
         lambda_sigma_p=0.0,
     )
     model = DDSSM_base(

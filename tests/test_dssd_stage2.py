@@ -124,7 +124,6 @@ def _make_hparams() -> SimpleNamespace:
         lambda_warmup_steps=1,
         enc_lr=1e-3,
         dec_lr=1e-3,
-        zinit_lr=1e-3,
         trans_lr=1e-3,
         logvar_min=-7.0,
         logvar_max=7.0,

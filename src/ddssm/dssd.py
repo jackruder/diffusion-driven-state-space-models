@@ -1018,7 +1018,6 @@ def _default_hyperparams():
         lambda_warmup_steps=10,
         enc_lr=5e-4,
         dec_lr=5e-4,
-        zinit_lr=5e-4,
         trans_lr=5e-4,
         logvar_min=-7.0,
         logvar_max=7.0,
@@ -1051,7 +1050,6 @@ class DDSSMHyperParamsConf:
 
     enc_lr: float = 5e-4
     dec_lr: float = 5e-4
-    zinit_lr: float = 5e-4
     trans_lr: float = 5e-4
 
     logvar_min: float = -7.0

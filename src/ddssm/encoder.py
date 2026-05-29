@@ -1,9 +1,6 @@
-"""This module implements encoders and initial priors.
+"""This module implements encoders.
 The encoders produce approximate posterior distributions
-q_ϕ(z_{1:T} | x_{1:T}, u_{1:T}), while the initial priors
-p_η(z_{1:j} | ·) provide distributions for the first j latent states.
-
-As these have very similar structure (initprior is like an encoder without future summary), they are defined in the same file.
+q_ϕ(z_{1:T} | x_{1:T}, u_{1:T}).
 """
 
 import abc
