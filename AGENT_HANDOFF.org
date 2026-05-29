@@ -20,10 +20,14 @@ reality after the ADR-0004 follow-up + the Study refactor:
   named =init_<cell>__<dataset>= (e.g. =init_mlp_pinned_per_t__1d=). The
   presets bake the real lift datasets — there is no =Harmonic= placeholder
   and no launch-time =experiment.data.*= override anymore.
-- *One launcher*: =python -m experiments.init_centering.launch_study
-  --mode {tiny,paper}=. The old =launch_phase_d= / =launch_ablation_tiny=
-  / =launch_paper_headline= are thin deprecated shims. =smoke_phase_d= is
-  the local end-to-end runner.
+- *Study is library code* (ADR-0007/0008): =src/ddssm/study.py= (Study/Axis/
+  StudyPoint) + =src/ddssm/launch.py= (PointLaunch / LaunchStrategy /
+  StudyOrchestrator) + =src/ddssm/sbatch.py=.
+- *One generic launcher*: =python -m ddssm.launch <study> [--select k=v]
+  [--size tiny|paper|smoke] [--seeds ...] [--dry-run|--write-dir|--local]
+  [--submit]=. The per-family launchers (=launch_phase_d/ablation_tiny/
+  paper_headline=) and =smoke_phase_d= were *deleted*; =--local= replaces the
+  smoke runner.
 - *Grid enumeration* is =INIT_CENTERING_STUDY.names()= / =.select(...)=
   (the old =all_phase_d_cells()= helper is gone).
 - *Hparams* hold only optimisation knobs; λ_σp / anchor_lambda live on the

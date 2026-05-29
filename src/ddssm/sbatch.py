@@ -1,22 +1,14 @@
-"""Slurm submit-script rendering for named experiments.
+"""Slurm submit-script rendering + submission for named experiments.
 
-``python -m experiments sbatch <name>`` calls :func:`render_sbatch`
-to emit a single-job ``.sbatch`` script that launches ``python -m
-ddssm.app experiment=<name> "$@"`` under the requested resources.
+``render_sbatch`` emits a single-job ``.sbatch`` that launches
+``python -m ddssm.app experiment=<name> "$@"`` under the requested resources;
+``submit_sbatch`` shells out to ``sbatch``. Used by the standalone
+``python -m experiments sbatch <name>`` CLI and by
+:class:`ddssm.launch.StudyOrchestrator`.
 
-Resource resolution (highest precedence wins):
-
-1. ``--partition=``, ``--time=``, ``--gpus=``, ``--cpus=``, ``--mem=``,
-   ``--job-name=``, ``--out=`` flags on the CLI.
-2. ``Experiment.sbatch`` field on the named experiment, if set in
-   ``experiments/<family>/experiments.py``.
-3. The project default :data:`DEFAULT_SBATCH` below, which mirrors
-   :file:`src/ddssm/conf/hydra/launcher/submitit_slurm.yaml`.
-
-The generator stops short of submitting the script — that's
-``sbatch <path>`` and intentionally left to the user. Extra positional
-overrides on the CLI are forwarded to the script's ``"$@"`` so
-``sbatch runs/foo.sbatch experiment.training.steps=200`` works.
+Resource resolution (highest precedence wins): CLI overrides → the experiment's
+``SBatch`` field (or the study point's :class:`ddssm.launch.PointLaunch`
+resources) → :data:`DEFAULT_SBATCH`.
 """
 
 from __future__ import annotations
@@ -63,23 +55,10 @@ def render_sbatch(
 ) -> str:
     """Render an sbatch script for ``experiment=<name>``.
 
-    Parameters
-    ----------
-    name
-        Name of a registered experiment.
-    exp_sbatch
-        The instantiated ``SBatch`` field on the experiment (may be
-        ``None`` — falls back to the project default).
-    hydra_overrides
-        Hydra-style positional overrides to bake into the
-        ``python -m ddssm.app`` invocation
-        (e.g. ``["experiment.training.steps=4000"]``).
-    cli_overrides
-        Per-resource overrides from the CLI (``partition``, ``time``,
-        ``gpus``, ``cpus``, ``mem``, ``nodes``, ``job_name``).
-    output_pattern
-        Slurm ``--output=`` log pattern. Defaults to
-        ``runs/<name>/slurm-%j.out``.
+    ``exp_sbatch`` is the resolved resource spec (an ``SBatch``; may be
+    ``None`` → project default). ``hydra_overrides`` are baked into the
+    ``python -m ddssm.app`` invocation; ``cli_overrides`` are per-resource
+    overrides; ``output_pattern`` defaults to ``runs/<name>/slurm-%j.out``.
     """
     spec = _resolve(name=name, exp_sbatch=exp_sbatch, overrides=cli_overrides or {})
     log_pattern = output_pattern or f"runs/{name}/slurm-%j.out"
@@ -135,19 +114,12 @@ def _shell_quote(s: str) -> str:
 def submit_sbatch(path: str) -> str:
     """Submit a rendered sbatch script via ``sbatch <path>``.
 
-    Shells out to the SLURM ``sbatch`` binary with the script path as a
-    single argv element (list form, no shell) so there is no injection
-    surface. Returns ``sbatch``'s stripped stdout (typically
-    ``"Submitted batch job <id>"``). Propagates ``FileNotFoundError`` when
-    ``sbatch`` is not on ``PATH`` and ``CalledProcessError`` on a non-zero
-    exit so the caller fails loudly rather than silently dropping jobs.
+    Shells out to ``sbatch`` with the path as a single argv element (list form,
+    no shell) so there is no injection surface. Returns ``sbatch``'s stripped
+    stdout. Propagates ``FileNotFoundError`` if ``sbatch`` is missing and
+    ``CalledProcessError`` on non-zero exit so the caller fails loudly.
     """
-    result = subprocess.run(
-        ["sbatch", path],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    result = subprocess.run(["sbatch", path], check=True, capture_output=True, text=True)
     return result.stdout.strip()
 
 

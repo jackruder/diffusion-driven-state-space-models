@@ -26,7 +26,7 @@ was dropped from the ablation — only ``fixed`` (σ_data² = 1) and
 
 from __future__ import annotations
 
-from typing import Iterator
+from typing import Iterator, NamedTuple
 
 BASELINE_FORMS: tuple[str, ...] = ("zero", "identity", "linear", "mlp")
 BASELINE_MODES: tuple[str, ...] = ("pinned", "learnable")
@@ -41,15 +41,32 @@ _PARAM_FREE_FORMS: frozenset[str] = frozenset({"zero", "identity"})
 CANONICAL_CELL: tuple[str, str, str] = ("mlp", "pinned", "per_t")
 
 
-def iter_cells() -> Iterator[tuple[str, str, str]]:
-    """Yield ``(baseline_form, baseline_mode, tracking_mode)`` for every cell."""
+class Cell(NamedTuple):
+    """One point of the grid: ``(baseline_form, baseline_mode, tracking_mode)``.
+
+    A ``NamedTuple`` so it still unpacks like the original triple
+    (``for form, mode, tracking in iter_cells()``) and compares equal to a plain
+    tuple, while carrying a self-describing ``.name``.
+    """
+
+    baseline_form: str
+    baseline_mode: str
+    tracking_mode: str
+
+    @property
+    def name(self) -> str:
+        return cell_name(self.baseline_form, self.baseline_mode, self.tracking_mode)
+
+
+def iter_cells() -> Iterator[Cell]:
+    """Yield a :class:`Cell` for every point of the post-auto-clamp grid."""
     for form in BASELINE_FORMS:
         modes: tuple[str, ...] = (
             ("pinned",) if form in _PARAM_FREE_FORMS else BASELINE_MODES
         )
         for mode in modes:
             for tracking in TRACKING_MODES:
-                yield (form, mode, tracking)
+                yield Cell(form, mode, tracking)
 
 
 def cell_name(form: str, mode: str, tracking: str) -> str:
@@ -61,6 +78,7 @@ __all__ = [
     "BASELINE_FORMS",
     "BASELINE_MODES",
     "CANONICAL_CELL",
+    "Cell",
     "TRACKING_MODES",
     "cell_name",
     "iter_cells",

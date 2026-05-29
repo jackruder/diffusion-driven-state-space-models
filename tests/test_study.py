@@ -1,103 +1,107 @@
-"""Tests for the Study abstraction + the init-centering study instance."""
+"""Tests for the library Study abstraction + the init-centering instance."""
 
 from __future__ import annotations
 
 import torch
 from hydra_zen import instantiate
 
+from ddssm.study import Axis, Study, StudyPoint
 from experiments.init_centering.study import INIT_CENTERING_STUDY
 
 
-def test_study_has_24_unique_points() -> None:
-    names = INIT_CENTERING_STUDY.names()
+# ---------------------------------------------------------------------------
+# Library primitives (a tiny synthetic study)
+# ---------------------------------------------------------------------------
+
+
+def test_from_axes_cross_product_tags_and_select() -> None:
+    s = Study.from_axes(
+        "t",
+        axes=[
+            Axis("x", [1, 2], key=str),
+            Axis("y", ["a", "b"], key=str, tags=lambda v: {"y_upper": v.upper()}),
+        ],
+        build=lambda coords: dict(coords),
+        name_point=lambda tags: f"{tags['x']}_{tags['y']}",
+        launch=lambda p: None,
+    )
+    assert len(s.points) == 4
+    p = s.point("1_a")
+    assert p.coords == {"x": 1, "y": "a"}
+    assert p.config == {"x": 1, "y": "a"}            # build received raw values
+    assert p.tags == {"x": "1", "y": "a", "y_upper": "A"}  # axis.tags merged in
+    assert {pt.name for pt in s.select(x="1")} == {"1_a", "1_b"}
+    assert {pt.name for pt in s.select(y_upper="B")} == {"1_b", "2_b"}
+
+
+def test_from_axes_filter_drops_combos() -> None:
+    s = Study.from_axes(
+        "t",
+        axes=[Axis("x", [1, 2, 3], key=str)],
+        build=lambda c: c,
+        launch=lambda p: None,
+        filter=lambda c: c["x"] != 2,
+    )
+    assert sorted(p.coords["x"] for p in s.points) == [1, 3]
+
+
+def test_from_points_escape_hatch_and_register() -> None:
+    pts = [StudyPoint("a", {"cfg": 1}, {"k": "v"}, {"k": 1})]
+    s = Study.from_points("t", pts, launch=lambda p: None)
+    assert s.names() == ["a"]
+    collected: list = []
+    s.register(lambda config, *, name: collected.append((config, name)))
+    assert collected == [({"cfg": 1}, "a")]
+
+
+# ---------------------------------------------------------------------------
+# The init-centering study instance
+# ---------------------------------------------------------------------------
+
+
+def test_init_study_has_24_points_with_full_tags() -> None:
     assert len(INIT_CENTERING_STUDY.points) == 24
-    assert len(names) == 24
-    assert len(set(names)) == 24
-
-
-def test_point_names_are_cell_then_dataset() -> None:
+    assert len(set(INIT_CENTERING_STUDY.names())) == 24
     for p in INIT_CENTERING_STUDY.points:
         assert p.name == f"{p.tags['cell']}__{p.tags['dataset']}"
-        assert p.tags["dataset"] in {"1d", "mv"}
+        assert {"cell", "baseline_form", "baseline_mode", "tracking_mode", "dataset"} <= set(p.tags)
 
 
-def test_select_filters_by_tags() -> None:
-    mlp = INIT_CENTERING_STUDY.select(baseline_form="mlp")
-    assert mlp and all(p.tags["baseline_form"] == "mlp" for p in mlp)
-
-    mv = INIT_CENTERING_STUDY.select(dataset="mv")
-    assert len(mv) == 12  # 12 cells, one per cell on the mv dataset
-
-    combo = INIT_CENTERING_STUDY.select(baseline_form="mlp", dataset="1d")
-    assert all(
-        p.tags["baseline_form"] == "mlp" and p.tags["dataset"] == "1d"
-        for p in combo
-    )
-
-    # Collection-valued filter (membership).
-    param_free = INIT_CENTERING_STUDY.select(baseline_form={"zero", "identity"})
-    assert param_free and all(
-        p.tags["baseline_form"] in {"zero", "identity"} for p in param_free
-    )
+def test_init_study_select_filters() -> None:
+    assert len(INIT_CENTERING_STUDY.select(baseline_form="mlp")) == 8   # 2 modes × 2 tracking × 2 ds
+    assert len(INIT_CENTERING_STUDY.select(dataset="mv")) == 12
+    assert len(INIT_CENTERING_STUDY.select(baseline_form="zero", dataset="1d")) == 2  # 2 tracking
 
 
-def test_register_calls_store_once_per_point() -> None:
-    collected: list[str] = []
-
-    def fake_store(config, *, name: str) -> None:  # noqa: ANN001
-        collected.append(name)
-
-    INIT_CENTERING_STUDY.register(fake_store)
-    assert sorted(collected) == sorted(INIT_CENTERING_STUDY.names())
-
-
-def test_points_bake_the_real_dataset_and_matching_dims() -> None:
-    """Each point's config carries the real lift dataset (not harmonic) +
-    consistent ``data_dim`` between the data module and the model."""
-    expect = {
-        "1d": ("nonlinear-bimodal-lift", 1, 1),
-        "mv": ("nonlinear-bimodal-lift-mv", 8, 4),
-    }
+def test_init_points_bake_real_dataset_and_dims() -> None:
+    expect = {"1d": ("nonlinear-bimodal-lift", 1, 1), "mv": ("nonlinear-bimodal-lift-mv", 8, 4)}
     for p in INIT_CENTERING_STUDY.points:
         mode, data_dim, latent = expect[p.tags["dataset"]]
-        # Read straight off the hydra-zen config (no instantiation needed).
         assert p.config.data.mode == mode
         assert p.config.data.D == data_dim
         assert p.config.model.data_dim == data_dim
         assert p.config.model.latent_dim == latent
 
 
-def test_paper_size_override_doubles_latent_dim() -> None:
-    for p in INIT_CENTERING_STUDY.points:
-        assert p.size_overrides("tiny") == []
-        paper = p.size_overrides("paper")
-        assert len(paper) == 1
-        assert paper[0].startswith("experiment.model.latent_dim=")
-    # 1d tiny latent 1 -> paper 2; mv tiny latent 4 -> paper 8.
-    assert INIT_CENTERING_STUDY.point("init_mlp_pinned_per_t__1d").size_overrides(
-        "paper"
-    ) == ["experiment.model.latent_dim=2"]
-    assert INIT_CENTERING_STUDY.point("init_mlp_pinned_per_t__mv").size_overrides(
-        "paper"
-    ) == ["experiment.model.latent_dim=8"]
+def test_init_variants() -> None:
+    v = INIT_CENTERING_STUDY.variants
+    assert "tiny" in v and "paper" in v and "smoke" in v
+    p1d = INIT_CENTERING_STUDY.point("init_mlp_pinned_per_t__1d")
+    pmv = INIT_CENTERING_STUDY.point("init_mlp_pinned_per_t__mv")
+    assert v["tiny"](p1d) == []
+    assert v["paper"](p1d) == ["experiment.model.latent_dim=2"]
+    assert v["paper"](pmv) == ["experiment.model.latent_dim=8"]
+    assert any("n_pretrain=5" in o for o in v["smoke"](p1d))
 
 
 def test_one_point_forward_backward_is_finite_with_grads() -> None:
-    """A built point trains for one step without NaN/shape breakage.
-
-    Guards against presets that *build* but produce a broken loss (the
-    catalogue count/instantiate tests only check params > 0).
-    """
-    exp = instantiate(
-        INIT_CENTERING_STUDY.point("init_zero_pinned_fixed__1d").config
-    )
+    exp = instantiate(INIT_CENTERING_STUDY.point("init_zero_pinned_fixed__1d").config)
     model = exp.model
-    model.stage_selector = "stage_1"  # closed-form transition; cheap
+    model.stage_selector = "stage_1"
     B, D, T = 2, model.data_dim, 8
     torch.manual_seed(0)
-    components, _metrics, _ = model(
-        torch.randn(B, D, T),
-        torch.ones(B, D, T),
+    components, _m, _ = model(
+        torch.randn(B, D, T), torch.ones(B, D, T),
         torch.arange(T).expand(B, T).clone().long(),
     )
     loss = components.total()
@@ -105,6 +109,5 @@ def test_one_point_forward_backward_is_finite_with_grads() -> None:
     loss.backward()
     assert any(
         q.grad is not None and torch.isfinite(q.grad).all() and q.grad.abs().sum() > 0
-        for q in model.parameters()
-        if q.requires_grad
+        for q in model.parameters() if q.requires_grad
     )

@@ -58,8 +58,10 @@ The whole ablation as a first-class object
 experiments to run and compare. It crosses the 12 cells with the 2 datasets
 (`datasets.py:ABLATION_DATASETS`) into **24 registered presets** named
 `init_<cell>__<dataset>` (e.g. `init_mlp_pinned_per_t__1d`), each baking the
-real dataset + dims. Registration, the `launch_study --mode {tiny,paper}`
-launcher, and `report.py` all flow through it. _Avoid_: "campaign" (that is the
+real dataset + dims. The `Study` abstraction is library code
+(`src/ddssm/study.py`); it is run by `StudyOrchestrator`
+(`src/ddssm/launch.py`) via `python -m ddssm.launch <study> [--select] [--size]`,
+and `report.py` consumes its points. _Avoid_: "campaign" (that is the
 orchestration/scheduling layer, per the `plan-campaign` skill).
 
 **Canonical cell**:

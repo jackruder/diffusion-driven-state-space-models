@@ -4,16 +4,21 @@
 
 This is the operator's manual for the init-centering ablation grid.
 
-*Status (2026-05-29):* the ablation is now a Study
-(=experiments/init_centering/study.py=) — *12 cells × 2 datasets = 24*
-presets named =init_<cell>__<dataset>= (e.g. =init_mlp_pinned_per_t__1d=),
-each baking the real dataset. Run/launch via the single
-=python -m experiments.init_centering.launch_study --mode {tiny,paper}=
-(the =launch_phase_d/ablation_tiny/paper_headline= commands below are
-deprecated shims that still forward). Grid iteration is
-=INIT_CENTERING_STUDY.names()=/=.select(...)= (not =all_phase_d_cells=).
-The bare =experiment=init_<cell>= commands below now need a =__<dataset>=
-suffix. Some command examples below predate this and are being updated.
+*Status (2026-05-29):* the ablation is now a first-class **Study**, library
+code (=src/ddssm/study.py= + =src/ddssm/launch.py=; ADR-0007/0008) — *12 cells
+× 2 datasets = 24* presets named =init_<cell>__<dataset>= (e.g.
+=init_mlp_pinned_per_t__1d=), each baking the real dataset. Run/launch via the
+single generic launcher:
+
+: python -m ddssm.launch init_centering [--select baseline_form=mlp dataset=mv] \
+:     [--size tiny|paper|smoke] [--seeds 0 1] [--dry-run|--write-dir DIR|--local] [--submit]
+
+The per-family launchers (=launch_phase_d/ablation_tiny/paper_headline=) and
+=smoke_phase_d= were *deleted* — =--local= is the smoke runner; =--size paper=
+is the paper-headline (2× latent) variant. Grid iteration is
+=INIT_CENTERING_STUDY.names()=/=.select(...)=. The bare =experiment=init_<cell>=
+commands below now need a =__<dataset>= suffix; some examples below predate the
+Study refactor.
 
 It covers:
 
