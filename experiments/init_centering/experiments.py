@@ -1,4 +1,4 @@
-"""Named init-centering experiments: two role-specific smokes + ablation grid.
+"""Named init-centering experiments: two role-specific smokes + the ablation study.
 
 The two smoke presets are the canonical entry points (CONTEXT.md § Simple-smoke
 cell / High-surface-smoke cell):
@@ -12,10 +12,11 @@ cell / High-surface-smoke cell):
   regulariser under Learnable, per-t σ_data EMA, multivariate
   observation lift. If this trains end-to-end, every grid cell does.
 
-The legacy ``init_centering_smoke`` and ``init_centering_pilot`` presets
-were dropped per CONTEXT.md (the term "pilot" was overloaded). Use the
-two smokes above + the ablation grid + the ``init_ablation`` sweep
-instead.
+The ablation grid itself is a first-class :class:`~experiments._study.Study`
+(``experiments.init_centering.study.INIT_CENTERING_STUDY``): 12 cells × 2
+datasets = 24 registered presets named ``init_<cell>__<dataset>`` (e.g.
+``init_mlp_pinned_per_t__1d``). Registration, launching, and reporting all
+flow through that Study.
 """
 
 from __future__ import annotations
@@ -23,21 +24,16 @@ from __future__ import annotations
 from conf.registry import experiment_store
 from experiments._make import experiment
 from experiments.init_centering.data import (
-    Harmonic,
     NonlinBimodalLift1D,
     NonlinBimodalLiftMV,
 )
-from experiments.init_centering.cells import (
-    cell_name,
-    iter_cells,
-)
 from experiments.init_centering.evals import (
     PilotEval,
-    PilotMOObjective,
     PilotObjective,
 )
 from experiments.init_centering.model import SmokeModel
 from experiments.init_centering.hparams import StagesB, Training800, SmokeHparams
+from experiments.init_centering.study import INIT_CENTERING_STUDY
 
 # ---------------------------------------------------------------------------
 # Simple-smoke cell: (zero, pinned, fixed) on the 1D ablation dataset.
@@ -95,52 +91,20 @@ experiment_store(init_smoke_high_surface, name="init_smoke_high_surface")
 
 
 # ---------------------------------------------------------------------------
-# Phase D — the full ablation grid.
+# The ablation study — 12 cells × 2 datasets = 24 presets named
+# ``init_<cell>__<dataset>`` (e.g. ``init_mlp_pinned_per_t__1d``). Each bakes
+# the real ablation dataset + dims and wires the Phase-A eval pipeline + the
+# multi-objective (wallclock_to_target, stage2_elbo_surrogate) objective.
 #
-# One named preset per cell, all sharing the canonical-cell training
-# scaffold but with the three cell axes (``baseline_form``,
-# ``baseline_mode``, ``tracking_mode``) varied across the grid.  Each
-# cell wires the Phase-A eval pipeline + the JSON-source
-# ``stage2_elbo_surrogate`` objective so it can plug straight into the
-# pilot Optuna sweep (``+sweep=init_pilot``).
+# Run a single point:
+#   python -m ddssm.app experiment=init_mlp_pinned_per_t__1d
+# Sweep / launch the whole study:
+#   python -m experiments.init_centering.launch_study --mode tiny --write-dir runs/sbatch/tiny
 #
-# Run a single cell:
-#   python -m ddssm.app experiment=init_mlp_pinned_per_t
-#
-# Sweep a single cell (20 trials):
-#   python -m ddssm.app --multirun \
-#       experiment=init_mlp_pinned_per_t +sweep=init_pilot \
-#       hydra.sweeper.n_trials=20 \
-#       hydra.sweeper.study_name=phase_d_mlp_pinned_per_t
-#
-# Submit every cell via SLURM:
-#   python -m experiments.init_centering.launch_phase_d --write-dir runs/sbatch/phase_d
+# NOTE: controls (``init_canonical_ctrl_*``) were removed per
+# docs/adr/0002-drop-canonical-controls.md (σ_pert > 0 is mandatory; n_pretrain=0
+# is meaningless for parametric μ_p). The sweep's σ_pert lower bound covers
+# "operationally indistinguishable from 0" instead.
 # ---------------------------------------------------------------------------
 
-for _form, _mode, _tracking in iter_cells():
-    _cell_exp = experiment(
-        data=Harmonic,
-        model=SmokeModel(
-            baseline_form=_form,
-            baseline_mode=_mode,
-            tracking_mode=_tracking,
-        ),
-        hparams=SmokeHparams,
-        training=Training800,
-        stages=StagesB(baseline_mode=_mode),
-        eval=PilotEval,
-        # Multi-objective: (wallclock_to_target, stage2_elbo_surrogate).
-        # Pair with the ``ddssm_optuna_moo`` sweeper preset that sets
-        # ``direction: [minimize, minimize]``. Override the target
-        # value via Hydra
-        # ``experiment.eval.kwargs.wallclock_to_target.target_value=...``.
-        objective=PilotMOObjective,
-    )
-    experiment_store(_cell_exp, name=cell_name(_form, _mode, _tracking))
-
-
-# NOTE: ``init_canonical_ctrl_sigma0`` and ``init_canonical_ctrl_npretrain0``
-# were removed per docs/adr/0002-drop-canonical-controls.md: σ_pert > 0
-# is mandatory protocol (no σ_pert=0 mode) and n_pretrain=0 is meaningless
-# for parametric μ_p cells. The sweep range on σ_pert covers
-# "operationally indistinguishable from 0" instead.
+INIT_CENTERING_STUDY.register(experiment_store)

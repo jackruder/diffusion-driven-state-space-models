@@ -61,13 +61,13 @@ def _clear_global_hydra():
 
 
 def test_experiments_registered() -> None:
-    """All 14 init-centering presets are reachable through the store.
+    """All 26 init-centering presets are reachable through the store.
 
-    Composition: 12 ablation-grid cell presets (one per cell, post-
-    ``global_ema`` removal) + 2 role-specific smokes (``init_smoke_simple``
-    and ``init_smoke_high_surface``).
+    Composition: 24 ablation-study points (12 cells × 2 datasets, named
+    ``init_<cell>__<dataset>``) + 2 role-specific smokes
+    (``init_smoke_simple`` and ``init_smoke_high_surface``).
     """
-    assert len(EXPERIMENTS) == 14, EXPERIMENTS
+    assert len(EXPERIMENTS) == 26, EXPERIMENTS
     assert all(name.startswith("init_") for name in EXPERIMENTS), EXPERIMENTS
 
 

@@ -20,7 +20,7 @@ Run::
 Just one cell to debug a regression::
 
     python -m experiments.init_centering.smoke_phase_d \\
-        --cell init_zero_pinned_fixed --report
+        --cell init_zero_pinned_fixed__1d --report
 
 Custom step count + report::
 
@@ -37,7 +37,12 @@ from typing import Iterable
 import argparse
 import subprocess
 
-from experiments.init_centering.launch_phase_d import all_phase_d_cells
+from experiments.init_centering.study import INIT_CENTERING_STUDY
+
+
+def all_phase_d_cells() -> list[str]:
+    """Every registered study point (``init_<cell>__<dataset>``)."""
+    return INIT_CENTERING_STUDY.names()
 
 
 # Conservative shrink-set: matches the slow ``test_pilot_end_to_end_...``
@@ -107,7 +112,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--cell", default=None,
-        help="Only run one cell (e.g. 'init_mlp_pinned_per_t').",
+        help="Only run one study point (e.g. 'init_mlp_pinned_per_t__1d').",
     )
     p.add_argument(
         "--steps", type=int, default=5,

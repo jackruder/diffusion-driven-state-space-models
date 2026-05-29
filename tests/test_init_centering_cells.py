@@ -1,4 +1,4 @@
-"""Phase-D tests for the init-centering ablation grid + two control cells.
+"""Tests for the init-centering ablation grid (the study's cell axis).
 
 The grid is enumerated by
 :func:`experiments.init_centering.cells.iter_cells`; every triple it
@@ -94,11 +94,13 @@ def test_canonical_cell_is_in_grid() -> None:
 
 
 def test_all_cells_registered() -> None:
-    """Every cell's preset name is registered in the experiment store."""
+    """Every cell × dataset preset (``init_<cell>__<ds>``) is registered."""
     register_experiments()
     names = {name for _, name in store["experiment"]}
     for form, mode, tracking in iter_cells():
-        assert cell_name(form, mode, tracking) in names
+        cell = cell_name(form, mode, tracking)
+        assert f"{cell}__1d" in names
+        assert f"{cell}__mv" in names
 
 
 def test_control_cells_no_longer_registered() -> None:
@@ -128,8 +130,8 @@ _REPRESENTATIVE_CELLS = [
 
 @pytest.mark.parametrize("form,mode,tracking", _REPRESENTATIVE_CELLS)
 def test_cell_axes_propagate_through_hydra(form, mode, tracking) -> None:
-    """``experiment=<cell-name>`` resolves to a model with the right axes."""
-    name = cell_name(form, mode, tracking)
+    """``experiment=<cell>__1d`` resolves to a model with the right axes."""
+    name = f"{cell_name(form, mode, tracking)}__1d"
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config", overrides=[f"experiment={name}"])
     assert cfg.experiment.model.baseline_form == form
@@ -148,8 +150,9 @@ def test_cell_axes_propagate_through_hydra(form, mode, tracking) -> None:
 )
 def test_cell_instantiates_with_correct_baseline_class(form, expected_baseline_cls) -> None:
     """Instantiating a cell preset materialises the right baseline class."""
-    # Use the (form, pinned, fixed) cell for each form (always valid post-clamp).
-    cfg = store["experiment"]["experiment", cell_name(form, "pinned", "fixed")]
+    # Use the (form, pinned, fixed) cell on the 1d dataset for each form
+    # (always valid post-clamp).
+    cfg = store["experiment"]["experiment", f"{cell_name(form, 'pinned', 'fixed')}__1d"]
     exp = instantiate(cfg)
     assert isinstance(exp.model.baseline, expected_baseline_cls)
 
@@ -157,8 +160,8 @@ def test_cell_instantiates_with_correct_baseline_class(form, expected_baseline_c
 # ``test_canonical_cell_preset_matches_pilot_axes`` was removed when the
 # ``init_centering_pilot`` preset was retired during the smoke
 # restructure (CONTEXT.md § "pilot cell" is deliberately not used).
-# The canonical cell still exists as a triple in ``cells.py`` and as a
-# named preset ``init_mlp_pinned_per_t`` in the 18-cell grid.
+# The canonical cell still exists as a triple in ``cells.py`` and as
+# named presets ``init_mlp_pinned_per_t__{1d,mv}`` in the study grid.
 
 
 # Control-cell tests were removed when the controls themselves were
