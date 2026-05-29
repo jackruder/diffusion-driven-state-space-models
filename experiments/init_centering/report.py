@@ -53,7 +53,7 @@ import logging
 import argparse
 from dataclasses import field, asdict, dataclass
 
-from experiments.init_centering.cells import cell_name as _cell_name, iter_cells
+from experiments.init_centering.study import INIT_CENTERING_STUDY
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ class TrialRecord:
     """
 
     cell_name: str
+    dataset: str
     baseline_form: str
     baseline_mode: str
     tracking_mode: str
@@ -114,6 +115,7 @@ class TrialRecord:
 
 _SCALAR_COLUMNS: tuple[str, ...] = (
     "cell_name",
+    "dataset",
     "baseline_form",
     "baseline_mode",
     "tracking_mode",
@@ -139,16 +141,6 @@ _SCALAR_COLUMNS: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
-
-
-def _cell_axes_map() -> dict[str, tuple[str, str, str]]:
-    """Reverse-lookup table: cell_name → (form, mode, tracking) triple."""
-    return {_cell_name(f, m, t): (f, m, t) for f, m, t in iter_cells()}
-
-
-def _resolve_cell_axes(cell: str) -> tuple[str, str, str] | None:
-    """Return ``(form, mode, tracking)`` for any Phase-D cell name."""
-    return _cell_axes_map().get(cell)
 
 
 def _safe_load_metrics_json(path: str) -> dict[str, Any] | None:
@@ -273,35 +265,33 @@ def iter_trial_records(
     study_prefix: str,
     dataset: str | None = None,
 ) -> Iterator[TrialRecord]:
-    """Walk every Phase-D cell's sweep dir and yield one record per trial.
+    """Walk every study point's sweep dir and yield one record per trial.
 
-    The layout written by :mod:`.launch_phase_d` is::
+    The layout written by ``launch_study`` (and ``smoke_phase_d``) is::
 
-        {sweeps_root}/{study_prefix}_{cell_name}/{trial_number}/metrics.json
-        {optuna_dir}/{study_prefix}_{cell_name}.db
+        {sweeps_root}/{study_prefix}_{cell}__{dataset}/{trial_number}/metrics.json
+        {optuna_dir}/{study_prefix}_{cell}__{dataset}.db
 
-    The tiny / paper_headline launchers add a ``__{ds_label}`` suffix
-    to the cell key (one cell × multiple datasets); pass ``dataset``
-    to look up that variant.
-
-    Missing files / databases degrade gracefully — the trial just
-    shows up in the output with ``None`` for the corresponding scalars.
+    where ``{cell}__{dataset}`` is the registered study-point name. By
+    default every point (all datasets) is walked; pass ``dataset`` to
+    restrict to one. Missing files / databases degrade gracefully — the
+    trial just shows up with ``None`` for the corresponding scalars.
     """
-    cells_axes = _cell_axes_map()
-    targets: list[str] = sorted(cells_axes.keys())
-    ds_suffix = f"__{dataset}" if dataset else ""
+    points = INIT_CENTERING_STUDY.points
+    if dataset is not None:
+        points = tuple(p for p in points if p.tags["dataset"] == dataset)
 
-    for cell in targets:
-        cell_key = f"{cell}{ds_suffix}"
+    for point in points:
+        cell_key = point.name  # e.g. init_mlp_pinned_per_t__1d
         sweep_dir = os.path.join(sweeps_root, f"{study_prefix}_{cell_key}")
         if not os.path.isdir(sweep_dir):
-            log.info("No sweep dir for %s at %s; skipping.", cell, sweep_dir)
+            log.info("No sweep dir for %s at %s; skipping.", point.name, sweep_dir)
             continue
-        axes = _resolve_cell_axes(cell)
-        if axes is None:
-            log.warning("Unknown cell %s; skipping.", cell)
-            continue
-        form, mode, tracking = axes
+        cell = point.tags["cell"]
+        form = point.tags["baseline_form"]
+        mode = point.tags["baseline_mode"]
+        tracking = point.tags["tracking_mode"]
+        ds_label = point.tags["dataset"]
         # ``is_control`` retained on the record as an extension point
         # for future ablation-panel records; the original control
         # presets were dropped per ADR-0002.
@@ -349,9 +339,10 @@ def iter_trial_records(
                 metrics_path = os.path.join(run_dir, "metrics.json")
                 payload = _safe_load_metrics_json(metrics_path) if os.path.isfile(metrics_path) else None
                 record = TrialRecord(
-                    cell_name=cell, baseline_form=form, baseline_mode=mode,
-                    tracking_mode=tracking, trial_number=trial_number,
-                    run_dir=run_dir, is_control=is_control,
+                    cell_name=cell, dataset=ds_label, baseline_form=form,
+                    baseline_mode=mode, tracking_mode=tracking,
+                    trial_number=trial_number, run_dir=run_dir,
+                    is_control=is_control,
                 )
                 if payload is not None:
                     _populate_metrics(record, payload)
@@ -372,9 +363,10 @@ def iter_trial_records(
             metrics_path = os.path.join(run_dir, "metrics.json")
             payload = _safe_load_metrics_json(metrics_path) if os.path.isfile(metrics_path) else None
             record = TrialRecord(
-                cell_name=cell, baseline_form=form, baseline_mode=mode,
-                tracking_mode=tracking, trial_number=trial_number,
-                run_dir=run_dir, is_control=is_control,
+                cell_name=cell, dataset=ds_label, baseline_form=form,
+                baseline_mode=mode, tracking_mode=tracking,
+                trial_number=trial_number, run_dir=run_dir,
+                is_control=is_control,
             )
             if payload is not None:
                 _populate_metrics(record, payload)
@@ -452,9 +444,15 @@ def load_records(records_path: str) -> list[TrialRecord]:
 
 
 def _group_by_cell(records: list[TrialRecord]) -> dict[str, list[TrialRecord]]:
+    """Group trials by their study point (``cell__dataset``).
+
+    Keying on cell × dataset keeps the two datasets in separate rows/lines —
+    1d and mv aren't comparable, so mixing them per cell would mislead.
+    """
     grouped: dict[str, list[TrialRecord]] = {}
     for r in records:
-        grouped.setdefault(r.cell_name, []).append(r)
+        key = f"{r.cell_name}__{r.dataset}" if r.dataset else r.cell_name
+        grouped.setdefault(key, []).append(r)
     return grouped
 
 

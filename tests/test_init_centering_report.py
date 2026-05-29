@@ -42,7 +42,7 @@ from experiments.init_centering.report import (
     plot_tracking_mode_ablation,
 )
 
-# A small representative subset of cells (not all 18, to keep tests fast).
+# A small representative subset of cells (not all 12, to keep tests fast).
 _TEST_CELLS = [
     cell_name("zero", "pinned", "fixed"),
     cell_name("mlp", "pinned", "per_t"),
@@ -97,7 +97,8 @@ def _build_fake_sweep_layout(
     optuna_dir.mkdir(parents=True)
 
     for cell in _TEST_CELLS:
-        sweep_dir = sweeps_root / f"{study_prefix}_{cell}"
+        # The launchers/smoke write per study-point dirs (cell__dataset).
+        sweep_dir = sweeps_root / f"{study_prefix}_{cell}__1d"
         sweep_dir.mkdir(parents=True)
         for k in range(n_trials_per_cell):
             trial_dir = sweep_dir / str(k)
@@ -121,7 +122,7 @@ def _build_optuna_dbs(
     optuna = pytest.importorskip("optuna")
 
     for cell in _TEST_CELLS:
-        study_name = f"{study_prefix}_{cell}"
+        study_name = f"{study_prefix}_{cell}__1d"
         db_path = optuna_dir / f"{study_name}.db"
         study = optuna.create_study(
             study_name=study_name,
@@ -157,8 +158,9 @@ def test_aggregate_returns_one_record_per_trial(tmp_path: Path) -> None:
     records = aggregate(
         str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
     )
-    # 2 cells × 3 trials = 6 records
+    # 2 cells × 3 trials = 6 records, all tagged with the 1d dataset.
     assert len(records) == 2 * 3
+    assert all(r.dataset == "1d" for r in records)
 
 
 def test_aggregate_lifts_headline_scalars_from_metrics_json(tmp_path: Path) -> None:

@@ -47,11 +47,20 @@ _Avoid_: Pipeline, post-processing step.
 ### Init-centering ablation
 
 **Cell**:
-One point of the 18-cell ablation grid, identified by the triple
-`(baseline_form, baseline_mode, tracking_mode)`. Named e.g.
-`init_mlp_pinned_per_t`. Cells are the **experimental factor of
-interest**, not Optuna search dimensions.
+One point of the 12-cell ablation grid, identified by the triple
+`(baseline_form, baseline_mode, tracking_mode)`. Cells are the
+**experimental factor of interest**, not Optuna search dimensions.
 _Avoid_: Configuration, variant.
+
+**Study**:
+The whole ablation as a first-class object
+(`experiments/init_centering/study.py:INIT_CENTERING_STUDY`): the family of
+experiments to run and compare. It crosses the 12 cells with the 2 datasets
+(`datasets.py:ABLATION_DATASETS`) into **24 registered presets** named
+`init_<cell>__<dataset>` (e.g. `init_mlp_pinned_per_t__1d`), each baking the
+real dataset + dims. Registration, the `launch_study --mode {tiny,paper}`
+launcher, and `report.py` all flow through it. _Avoid_: "campaign" (that is the
+orchestration/scheduling layer, per the `plan-campaign` skill).
 
 **Canonical cell**:
 The triple `(mlp, pinned, per_t)`. The reference point for the two
@@ -128,7 +137,7 @@ For each dataset, two architectural sizes are run:
 is the default. The score-net's feature mixer is `conv` (per
 [ADR-0003](./docs/adr/0003-score-net-feature-mixer-conv.md)) — there is no
 `nheads` knob since attention isn't used at these latent dims. The tiny size
-runs the full 18-cell ablation; paper-headline runs only the user-selected
+runs the full 12-cell ablation; paper-headline runs only the user-selected
 top-N cells per dataset (confirmation study).
 
 **Init-experiment datasets** *(forward-looking)*:

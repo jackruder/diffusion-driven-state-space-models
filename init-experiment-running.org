@@ -2,8 +2,20 @@
 #+OPTIONS: toc:3 num:t
 #+STARTUP: overview
 
-This is the operator's manual for the init-centering ablation grid
-(18 cells + 2 controls).  It covers:
+This is the operator's manual for the init-centering ablation grid.
+
+*Status (2026-05-29):* the ablation is now a Study
+(=experiments/init_centering/study.py=) — *12 cells × 2 datasets = 24*
+presets named =init_<cell>__<dataset>= (e.g. =init_mlp_pinned_per_t__1d=),
+each baking the real dataset. Run/launch via the single
+=python -m experiments.init_centering.launch_study --mode {tiny,paper}=
+(the =launch_phase_d/ablation_tiny/paper_headline= commands below are
+deprecated shims that still forward). Grid iteration is
+=INIT_CENTERING_STUDY.names()=/=.select(...)= (not =all_phase_d_cells=).
+The bare =experiment=init_<cell>= commands below now need a =__<dataset>=
+suffix. Some command examples below predate this and are being updated.
+
+It covers:
 
 - the project lineage A → E that landed the grid and its reporter,
 - every model knob exposed at the CLI (the 18-cell axes, sweep
@@ -62,8 +74,8 @@ project root lands on =sys.path= and =conf.registry= / =experiments=
 resolve correctly.
 
 #+begin_src bash
-.venv/bin/python -m pytest tests/ -m "not slow"   # full fast suite
-.venv/bin/python -m pytest tests/test_init_centering_v2_reduction.py -v
+uv run python -m pytest tests/ -m "not slow"   # full fast suite
+uv run python -m pytest tests/test_init_centering_v2_reduction.py -v
 #+end_src
 
 All =python -m experiments.init_centering.*= entry points likewise
@@ -71,7 +83,7 @@ need the project root as cwd:
 
 #+begin_src bash
 cd /home/user/diffusion-driven-state-space-models
-.venv/bin/python -m experiments.init_centering.smoke_phase_d --report
+uv run python -m experiments.init_centering.smoke_phase_d --report
 #+end_src
 
 * Model settings — what each knob does
@@ -203,7 +215,7 @@ consumes them uniformly.
 ** Mode 1 — single local run (one cell, one trial)
 
 #+begin_src bash
-.venv/bin/python -m ddssm.app experiment=init_mlp_pinned_per_t
+uv run python -m ddssm.app experiment=init_mlp_pinned_per_t
 #+end_src
 
 Defaults: 200 stage-1 steps + 600 stage-2 steps + 5 eval metrics.
@@ -212,7 +224,7 @@ The Hydra run dir defaults to =outputs/<date>/<time>/=.
 Override any knob at the CLI:
 
 #+begin_src bash
-.venv/bin/python -m ddssm.app experiment=init_mlp_pinned_per_t \
+uv run python -m ddssm.app experiment=init_mlp_pinned_per_t \
     experiment.model.stages.n_pretrain=50 \
     experiment.model.stages.sigma_pert=5e-3 \
     hydra.run.dir=runs/scratch/quick_run
@@ -221,7 +233,7 @@ Override any knob at the CLI:
 ** Mode 2 — local Optuna sweep on one cell (no SLURM)
 
 #+begin_src bash
-.venv/bin/python -m ddssm.app --multirun \
+uv run python -m ddssm.app --multirun \
     experiment=init_mlp_pinned_per_t \
     +sweep=init_pilot \
     hydra.sweeper.n_trials=20 \
@@ -238,7 +250,7 @@ The Phase-D launcher generates one sbatch script per cell:
 
 #+begin_src bash
 # 1) Render scripts (does NOT submit)
-.venv/bin/python -m experiments.init_centering.launch_phase_d \
+uv run python -m experiments.init_centering.launch_phase_d \
     --write-dir runs/sbatch/phase_d_$(date +%Y%m%d) \
     --study-prefix phase_d_$(date +%Y%m%d) \
     --n-trials 20
@@ -251,7 +263,7 @@ Default resources (per cell): =partition=gpu=, =time=04:00:00=,
 =gpus=1=, =cpus=4=, =mem=32G=.  Override at the CLI:
 
 #+begin_src bash
-.venv/bin/python -m experiments.init_centering.launch_phase_d \
+uv run python -m experiments.init_centering.launch_phase_d \
     --write-dir runs/sbatch/overnight \
     --time 12:00:00 --mem 64G --n-trials 40
 #+end_src
@@ -265,10 +277,10 @@ Sanity-check before submitting:
 
 #+begin_src bash
 # Print all 20 scripts to stdout, never touches disk
-.venv/bin/python -m experiments.init_centering.launch_phase_d --dry-run
+uv run python -m experiments.init_centering.launch_phase_d --dry-run
 
 # Just one cell's script
-.venv/bin/python -m experiments.init_centering.launch_phase_d \
+uv run python -m experiments.init_centering.launch_phase_d \
     --cell init_mlp_pinned_per_t --dry-run
 #+end_src
 
@@ -278,7 +290,7 @@ Run once the sweeps are complete:
 
 #+begin_src bash
 # Aggregate + plot in one go
-.venv/bin/python -m experiments.init_centering.report all \
+uv run python -m experiments.init_centering.report all \
     --sweeps-root runs/sweeps \
     --optuna-dir runs/optuna \
     --study-prefix phase_d_$(date +%Y%m%d) \
@@ -298,7 +310,7 @@ Outputs:
 Iterate on plot code without re-aggregating:
 
 #+begin_src bash
-.venv/bin/python -m experiments.init_centering.report plot \
+uv run python -m experiments.init_centering.report plot \
     --in runs/report/phase_d \
     --out runs/report/phase_d/plots_v2
 #+end_src
@@ -316,7 +328,7 @@ eval → metrics.json → aggregation → plotting) works for every cell
 in the grid.
 
 #+begin_src bash
-.venv/bin/python -m experiments.init_centering.smoke_phase_d --report
+uv run python -m experiments.init_centering.smoke_phase_d --report
 #+end_src
 
 Defaults:
@@ -350,14 +362,14 @@ Expected wall time: ~30 minutes on CPU (each cell ~90s, mostly eval).
 Just one cell to debug a specific regression:
 
 #+begin_src bash
-.venv/bin/python -m experiments.init_centering.smoke_phase_d \
+uv run python -m experiments.init_centering.smoke_phase_d \
     --cell init_zero_pinned_fixed --report
 #+end_src
 
 Continue past failures (default is fail-fast):
 
 #+begin_src bash
-.venv/bin/python -m experiments.init_centering.smoke_phase_d \
+uv run python -m experiments.init_centering.smoke_phase_d \
     --no-stop-on-error --report
 #+end_src
 
@@ -436,7 +448,7 @@ The cell name must match =cell_name(form, mode, tracking)=.  Examples
 of the 20 legal names:
 
 #+begin_src bash
-.venv/bin/python -c "
+uv run python -c "
 from experiments.init_centering.launch_phase_d import all_phase_d_cells
 for n in all_phase_d_cells(): print(n)
 "
@@ -473,31 +485,31 @@ expect ~20s per trial of pure eval overhead on a GPU machine.
 
 #+begin_src bash
 # List every registered preset
-.venv/bin/python -m experiments list
+uv run python -m experiments list
 
 # Inspect a cell's resolved config
-.venv/bin/python -m ddssm.app experiment=init_mlp_pinned_per_t \
+uv run python -m ddssm.app experiment=init_mlp_pinned_per_t \
     --cfg job
 
 # Run the V2-reduction test specifically (the headline correctness anchor)
-.venv/bin/python -m pytest tests/test_init_centering_v2_reduction.py -v
+uv run python -m pytest tests/test_init_centering_v2_reduction.py -v
 
 # Full slow suite (includes the 110s end-to-end pilot test)
-.venv/bin/python -m pytest tests/ -m slow
+uv run python -m pytest tests/ -m slow
 
 # Generate one cell's sbatch (no submit)
-.venv/bin/python -m experiments.init_centering.launch_phase_d \
+uv run python -m experiments.init_centering.launch_phase_d \
     --cell init_canonical_ctrl_sigma0 --dry-run
 
 # End-to-end smoke + plots
-.venv/bin/python -m experiments.init_centering.smoke_phase_d --report
+uv run python -m experiments.init_centering.smoke_phase_d --report
 
 # Aggregate a real sweep
-.venv/bin/python -m experiments.init_centering.report all \
+uv run python -m experiments.init_centering.report all \
     --sweeps-root runs/sweeps --optuna-dir runs/optuna \
     --study-prefix phase_d_20260525 --out runs/report/phase_d_20260525
 
 # Re-plot from saved artifacts (no aggregation)
-.venv/bin/python -m experiments.init_centering.report plot \
+uv run python -m experiments.init_centering.report plot \
     --in runs/report/phase_d_20260525
 #+end_src

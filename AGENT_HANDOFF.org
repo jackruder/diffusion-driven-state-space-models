@@ -7,6 +7,33 @@ ablation project so you can pick up without re-deriving the context.
 Read it top-to-bottom before doing any work — the gotchas section in
 particular will save you wasted tool calls.
 
+* Current status (2026-05-29) — read this first
+
+Parts of the Phase A→E narrative below are historical. The current
+reality after the ADR-0004 follow-up + the Study refactor:
+
+- *Tests run with* =uv run python -m pytest= (NOT =.venv/bin/python=,
+  which lacks the editable install). Full suite is ~469 tests.
+- *The ablation is a first-class Study* —
+  =experiments/init_centering/study.py:INIT_CENTERING_STUDY=. The grid is
+  *12 cells* (auto-degenerate clamp; not 18) × *2 datasets* = *24 presets*
+  named =init_<cell>__<dataset>= (e.g. =init_mlp_pinned_per_t__1d=). The
+  presets bake the real lift datasets — there is no =Harmonic= placeholder
+  and no launch-time =experiment.data.*= override anymore.
+- *One launcher*: =python -m experiments.init_centering.launch_study
+  --mode {tiny,paper}=. The old =launch_phase_d= / =launch_ablation_tiny=
+  / =launch_paper_headline= are thin deprecated shims. =smoke_phase_d= is
+  the local end-to-end runner.
+- *Grid enumeration* is =INIT_CENTERING_STUDY.names()= / =.select(...)=
+  (the old =all_phase_d_cells()= helper is gone).
+- *Hparams* hold only optimisation knobs; λ_σp / anchor_lambda live on the
+  per-stage =FullELBO= objects; the sweep targets
+  =experiment.training.stages.{anchor_lambda,lambda_sigma_p}=.
+- *Removed/renamed files referenced below no longer exist*:
+  =tests/test_init_centering_v2_reduction.py=, =transitions/diffusion_v2.py=,
+  =tests/test_transitions/test_diffusion_v3.py=, the =init_centering_pilot=
+  preset, and the 2 control cells (ADR-0002).
+
 * TL;DR
 
 A 5-phase research stack landed on branch
@@ -75,7 +102,7 @@ isn't on =sys.path= by default, so =from conf.registry import store=
 breaks under plain =pytest=.
 
 #+begin_src bash
-.venv/bin/python -m pytest tests/ -m "not slow"
+uv run python -m pytest tests/ -m "not slow"
 #+end_src
 
 ** Hydra =compose= in tests
@@ -210,13 +237,14 @@ For new run modes (local smoke, prod sweep, etc.) create a sibling
 module (=smoke_phase_d.py= is the precedent).  Resist the urge to
 flag-overload one file.
 
-** Reuse =all_phase_d_cells()=
+** Drive grid iteration from the Study
 
-Every script that iterates the grid (=smoke_phase_d=, =launch_phase_d=,
-the report's defaults) consumes
-=experiments.init_centering.launch_phase_d.all_phase_d_cells=.  If
-you change the cell set (e.g. add new controls), update that one
-function — everything else picks it up.
+Every consumer that iterates the grid (=launch_study=, =smoke_phase_d=,
+=report=) goes through =INIT_CENTERING_STUDY= (=.names()= / =.select(...)= /
+=.points=).  To change the grid, edit the cell enumerator
+(=experiments/init_centering/cells.py:iter_cells=) or the dataset axis
+(=experiments/init_centering/datasets.py:ABLATION_DATASETS=) — the Study,
+registration, launcher, and report all pick it up.
 
 ** Test the V2-reduction anchor
 
@@ -224,8 +252,8 @@ Whenever you touch =DiffusionV3Transition= or =_build_init_centering_model=,
 re-run:
 
 #+begin_src bash
-.venv/bin/python -m pytest tests/test_init_centering_v2_reduction.py -v
-.venv/bin/python -m pytest tests/test_transitions/test_diffusion_v3.py -v
+uv run python -m pytest tests/test_init_centering_v2_reduction.py -v
+uv run python -m pytest tests/test_transitions/test_diffusion_v3.py -v
 #+end_src
 
 The reduction lockdown is the user's headline correctness invariant.
@@ -237,7 +265,7 @@ Breaking it silently is the worst-case regression.
 2. Read =init-experiment-running.org= (operator's manual — most
    useful as a navigation aid).
 3. Read this file.
-4. Run =.venv/bin/python -m pytest tests/ -m "not slow"= and confirm
+4. Run =uv run python -m pytest tests/ -m "not slow"= and confirm
    446 passes.
 5. Ask the user what they want next.  Common asks:
    - Phase F (PF-ODE NLL).
