@@ -16,12 +16,18 @@ Run (dry-run by default, prints to stdout — nothing submitted)::
 
     python -m experiments.init_centering.launch_ablation_tiny --dry-run
 
-Write to disk::
+Write to disk (then submit by hand)::
 
     python -m experiments.init_centering.launch_ablation_tiny \\
         --write-dir runs/sbatch/ablation_$(date +%Y%m%d) \\
         --study-prefix ablation_$(date +%Y%m%d)
     for f in runs/sbatch/ablation_*/*.sbatch; do sbatch "$f"; done
+
+Write *and* submit in one shot (shells out to ``sbatch`` per file)::
+
+    python -m experiments.init_centering.launch_ablation_tiny \\
+        --write-dir runs/sbatch/ablation_$(date +%Y%m%d) \\
+        --study-prefix ablation_$(date +%Y%m%d) --submit
 
 After all jobs complete, aggregate with::
 
@@ -42,7 +48,7 @@ import argparse
 
 from hydra_zen import instantiate
 
-from experiments._sbatch import render_sbatch
+from experiments._sbatch import render_sbatch, submit_sbatch
 from ddssm._experiment_registry import register_experiments
 from experiments.init_centering.cells import (
     BASELINE_FORMS,
@@ -241,6 +247,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write one '<cell>__<ds_label>.sbatch' per job into this directory.",
     )
     p.add_argument(
+        "--submit", action="store_true",
+        help="After writing, submit each script via 'sbatch' (requires --write-dir).",
+    )
+    p.add_argument(
         "--cell", default=None,
         help="Render just one cell (both datasets).",
     )
@@ -335,7 +345,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.submit and args.write_dir is None:
+        parser.error("--submit requires --write-dir (it submits the written scripts).")
     cli_overrides = {
         "partition": args.partition,
         "time": args.time,
@@ -352,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     if write_dir is not None:
         os.makedirs(write_dir, exist_ok=True)
 
+    submitted = 0
     for cell, ds_name, data_dim, latent_dim, ds_label, mode, expose_gt in _iter_targets(
         args.cell,
         datasets=args.datasets,
@@ -384,13 +398,19 @@ def main(argv: list[str] | None = None) -> int:
             with open(path, "w") as f:
                 f.write(script)
             print(path)
+            if args.submit:
+                print(submit_sbatch(path))
+                submitted += 1
 
     if write_dir is not None and args.cell is None:
-        print(
-            f"\n# Submit all with: for f in {write_dir}/*.sbatch; "
-            f'do sbatch "$f"; done',
-            file=sys.stderr,
-        )
+        if args.submit:
+            print(f"\n# Submitted {submitted} job(s).", file=sys.stderr)
+        else:
+            print(
+                f"\n# Submit all with: for f in {write_dir}/*.sbatch; "
+                f'do sbatch "$f"; done',
+                file=sys.stderr,
+            )
 
     return 0
 

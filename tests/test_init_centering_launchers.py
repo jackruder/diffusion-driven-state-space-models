@@ -1,10 +1,12 @@
 """Smoke tests for the tiny-ablation + paper-headline launchers.
 
-The launchers don't submit anything — they only render sbatch text.
-These tests verify that (a) the cross-product of (cell, dataset) jobs
-materialises with the right count, and (b) each rendered sbatch
-script contains the expected Hydra overrides (sweep params + dataset
-+ size).
+By default the launchers only render sbatch text; ``--submit`` (which
+requires ``--write-dir``) additionally shells out to ``sbatch`` per
+written file. These tests verify that (a) the cross-product of (cell,
+dataset) jobs materialises with the right count, (b) each rendered
+sbatch script contains the expected Hydra overrides (sweep params +
+dataset + size), and (c) ``--submit`` wiring submits one job per
+written file and refuses to run without ``--write-dir``.
 """
 
 from __future__ import annotations
@@ -138,3 +140,44 @@ def test_paper_launcher_validates_unknown_cells(tmp_path, monkeypatch) -> None:
             "--top-cells", "init_nonexistent_cell",
             "--dry-run",
         ])
+
+
+def test_submit_requires_write_dir() -> None:
+    """``--submit`` without ``--write-dir`` is rejected (nothing to submit)."""
+    from experiments.init_centering import launch_paper_headline as lph
+
+    with pytest.raises(SystemExit):
+        lph.main([
+            "--top-cells", cell_name("mlp", "pinned", "per_t"),
+            "--submit",
+        ])
+
+
+def test_submit_shells_out_once_per_written_file(tmp_path, monkeypatch) -> None:
+    """``--submit`` calls ``submit_sbatch`` exactly once per written script."""
+    from experiments.init_centering import launch_paper_headline as lph
+
+    calls: list[str] = []
+
+    def _fake_submit(path: str) -> str:
+        calls.append(path)
+        return f"Submitted batch job 999"
+
+    # The launcher binds ``submit_sbatch`` at import; patch that binding so
+    # no real ``sbatch`` runs.
+    monkeypatch.setattr(lph, "submit_sbatch", _fake_submit)
+
+    write_dir = tmp_path / "sbatch"
+    top = [cell_name("mlp", "pinned", "per_t")]
+    rc = lph.main([
+        "--top-cells", *top,
+        "--write-dir", str(write_dir),
+        "--storage-dir", str(tmp_path / "optuna"),
+        "--sweeps-root", str(tmp_path / "sweeps"),
+        "--submit",
+    ])
+
+    assert rc == 0
+    written = sorted(str(p) for p in write_dir.glob("*.sbatch"))
+    assert len(written) == len(top) * len(PAPER_DATASETS)
+    assert sorted(calls) == written

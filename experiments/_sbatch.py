@@ -22,6 +22,7 @@ overrides on the CLI are forwarded to the script's ``"$@"`` so
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 from typing import Iterable
 
 from ddssm.experiment import SBatch
@@ -131,4 +132,23 @@ def _shell_quote(s: str) -> str:
     return s
 
 
-__all__ = ["DEFAULT_SBATCH", "render_sbatch"]
+def submit_sbatch(path: str) -> str:
+    """Submit a rendered sbatch script via ``sbatch <path>``.
+
+    Shells out to the SLURM ``sbatch`` binary with the script path as a
+    single argv element (list form, no shell) so there is no injection
+    surface. Returns ``sbatch``'s stripped stdout (typically
+    ``"Submitted batch job <id>"``). Propagates ``FileNotFoundError`` when
+    ``sbatch`` is not on ``PATH`` and ``CalledProcessError`` on a non-zero
+    exit so the caller fails loudly rather than silently dropping jobs.
+    """
+    result = subprocess.run(
+        ["sbatch", path],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+__all__ = ["DEFAULT_SBATCH", "render_sbatch", "submit_sbatch"]

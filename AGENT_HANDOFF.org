@@ -171,16 +171,17 @@ require:
 - SLURM-launched parallel sweeps via =hydra/launcher=submitit_slurm=
   on the smoke launcher itself (currently sequential).
 
-** Pre-existing technical debt
+** Recently resolved (formerly pre-existing technical debt)
 
-- =experiments/init_centering/data.py= only ships =Harmonic= — the
-  =gt_latent_jsd= metric returns =available=False= on this data
-  (no GT latents).  An LGSSM-backed alternative would unblock that
-  metric for the headline plot.
-- The launcher generates one sbatch per cell but does NOT submit
-  them.  Submit step is manually =for f in …; do sbatch "$f"; done=.
-  If the user asks for autosubmit, add a =--submit= flag that
-  shells out to =sbatch= per file.
+- =gt_latent_jsd= now reports a real number: the ablation runs on
+  =NonlinBimodalLift1D/MV= (=src/ddssm/data/presets.py=), which set
+  =expose_gt_latents=True=.  Harmonic/LGSSM are no longer the ablation
+  data, so the old "only ships Harmonic" gap is moot.
+- The launchers now take =--submit= (requires =--write-dir=): after
+  rendering each =.sbatch= they shell out to =sbatch= via
+  =experiments._sbatch.submit_sbatch=.  Default stays dry-run /
+  write-only.  Wired into =launch_phase_d=, =launch_ablation_tiny=,
+  and =launch_paper_headline=.
 
 * Conventions for your future commits
 
