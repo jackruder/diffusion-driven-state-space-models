@@ -1,5 +1,19 @@
-#+TITLE: Initialization / Centering Experiment — Design
+#+TITLE: Initialization / Centering Experiment — Design (HISTORICAL)
 #+OPTIONS: toc:2 num:t
+
+#+begin_quote
+*Status (2026-05-30): historical / partly obsolete.* This document
+captures the original design narrative. Several decisions have moved on:
+the grid is *12 cells, not 18* (parameter-free forms auto-degenerate;
+ADR-0001), the =global_ema= tracking mode is no longer studied, the two
+=init_canonical_ctrl_*= control presets were removed (ADR-0002), the loss
+config was split off Hparams (ADR-0004), the legacy =InitPrior= / =ZInit=
+/ =DiffusionV2= paths were removed (ADR-0006), and the ablation is now a
+first-class library =Study= launched via =python -m ddssm.launch=
+(ADR-0007/0008). Use =AGENT_HANDOFF.org= + =CONTEXT.md= +
+=init-experiment-running.org= for current state; read this file for
+design intent and motivation only.
+#+end_quote
 
 This document specifies the experimental design for evaluating the
 baseline-centering and pretraining scheme defined in =model-v2.org=. The

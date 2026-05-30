@@ -63,7 +63,7 @@ Two equivalent entry points:
   `sbatch` writes a one-job Slurm submit script (`#SBATCH --partition`,
   `--time`, `--gres=gpu:N`, …) that launches `python -m ddssm.app
   experiment=<name>`. Resources come from the experiment's `SBatch` field if
-  set, falling back to `experiments/_sbatch.py:DEFAULT_SBATCH`. CLI flags
+  set, falling back to `src/ddssm/sbatch.py:DEFAULT_SBATCH`. CLI flags
   (`--partition=...`, `--time=...`, `--mem=...`, `--gpus=...`, etc.) take the
   final say; they must come **before** `<name>`. Hydra-style overrides after
   `<name>` are baked into the generated script.

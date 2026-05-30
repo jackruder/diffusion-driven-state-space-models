@@ -6,6 +6,7 @@ there.
 """
 
 import os
+import signal
 from typing import TYPE_CHECKING, Any, Callable, final
 from contextlib import nullcontext, contextmanager
 from collections import deque
@@ -38,6 +39,22 @@ from .loggers import (
 from .train_utils import (
     param_groups_for_adamw,
 )
+
+
+class PreemptError(RuntimeError):
+    """Raised by :class:`DDSSMTrainer.fit` when a preempt signal was caught.
+
+    Carries the absolute path to the checkpoint written immediately before
+    the raise so a downstream caller (e.g. ``ddssm.app``) can stash it on
+    the Optuna trial's ``user_attrs["resume_from"]`` and the retry can
+    resume mid-trial from that ckpt.
+
+    See ADR-0009 for the full preemption-aware launch design.
+    """
+
+    def __init__(self, resume_from: str):
+        super().__init__(f"training preempted; resume_from={resume_from}")
+        self.resume_from = resume_from
 
 
 class EMA:
@@ -199,6 +216,40 @@ class DDSSMTrainer:
 
         self.checkpoint_dir = checkpoint_dir
 
+        # Preempt-aware signal handling (ADR-0009). The flag is set by the
+        # signal handler and checked from the fit() step loop; on set, fit()
+        # saves a checkpoint and raises PreemptError. signal.signal() must
+        # be called from the main thread, so we wrap in try/except to
+        # tolerate trainer construction in worker threads (e.g. notebooks,
+        # parallel test runners).
+        self._preempt_pending: bool = False
+        for _sig in (signal.SIGUSR1, signal.SIGTERM):
+            try:
+                signal.signal(_sig, self._handle_preempt_signal)
+            except (ValueError, OSError):
+                # Non-main thread, or platform without this signal — silently
+                # skip. The preempt path only activates under the SLURM
+                # launcher which guarantees a main-thread trainer.
+                pass
+        # Under DDSSM_PREEMPTIVE=1 the launcher's bash preamble forwards
+        # SIGINT to the worker too (single-job preempt + Ctrl-C parity for
+        # the --local path). Without the env var, leave SIGINT alone so
+        # Python's default KeyboardInterrupt path stays intact.
+        if os.environ.get("DDSSM_PREEMPTIVE") == "1":
+            try:
+                signal.signal(signal.SIGINT, self._handle_preempt_signal)
+            except (ValueError, OSError):
+                pass
+
+    def _handle_preempt_signal(self, signum, frame):
+        """Async-signal-safe preempt handler: flip a flag and return.
+
+        MUST NOT call into torch, do any logging, or touch CUDA — the
+        actual checkpoint save + raise happens from the fit() loop, where
+        we're between optimizer steps and it's safe to do real work.
+        """
+        self._preempt_pending = True
+
     def get_batch_size(self) -> int:
         return self.hparams.batch_size
 
@@ -242,10 +293,16 @@ class DDSSMTrainer:
     # ------------------------
     # Serialization / Checkpoint  (schema owned by ddssm.checkpoint)
     # ------------------------
-    def save_checkpoint(self, path: str) -> None:
-        """Persist trainer state via :mod:`ddssm.checkpoint`."""
+    def save_checkpoint(
+        self, path: str, *, stage_prefix: str | None = None,
+    ) -> None:
+        """Persist trainer state via :mod:`ddssm.checkpoint`.
+
+        ``stage_prefix`` is forwarded to the payload so multi-stage resume
+        (ADR-0009) can identify the originating stage on retry.
+        """
         from .checkpoint import save as _save
-        _save(self, path)
+        _save(self, path, stage_prefix=stage_prefix)
 
     def restore_from_checkpoint(self, path: str, strict: bool = True) -> dict:
         """Resume: load model weights + optimiser + EMA tracker + step.
@@ -480,7 +537,17 @@ class DDSSMTrainer:
         )
         self.metrics.epoch_end("val", self.global_step)
 
-    def _save_periodic_checkpoint(self, step: int, checkpoint_prefix: str | None):
+    def _save_periodic_checkpoint(
+        self, step: int, checkpoint_prefix: str | None
+    ) -> str:
+        """Persist step-N + latest checkpoints. Returns the latest path.
+
+        The returned path is the absolute path to ``ckpt_<prefix>_latest.pth``
+        (or ``ckpt_latest.pth`` for the unprefixed case), suitable for
+        passing to ``restore_from_checkpoint`` / ``fit(resume_from=...)``.
+        ADR-0009's preempt path relies on this return value as the
+        ``PreemptError.resume_from`` payload.
+        """
         if checkpoint_prefix is None:
             ckpt_name = f"ckpt_step{step}.pth"
             latest_name = "ckpt_latest.pth"
@@ -491,8 +558,12 @@ class DDSSMTrainer:
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         ckpt_name = os.path.join(self.checkpoint_dir, ckpt_name)
         latest_name = os.path.join(self.checkpoint_dir, latest_name)
-        self.save_checkpoint(ckpt_name)
-        self.save_checkpoint(latest_name)
+        # ADR-0009: stamp the originating stage prefix into the payload so a
+        # preempt-retry's StageOrchestrator can identify which stage produced
+        # this ckpt and resume into the right one.
+        self.save_checkpoint(ckpt_name, stage_prefix=checkpoint_prefix)
+        self.save_checkpoint(latest_name, stage_prefix=checkpoint_prefix)
+        return latest_name
 
     def _maybe_save_checkpoint(
         self,
@@ -672,6 +743,18 @@ class DDSSMTrainer:
                         checkpoint_every=checkpoint_every,
                         checkpoint_prefix=checkpoint_prefix,
                     )
+
+                    # ADR-0009: a SIGUSR1/SIGTERM (or SIGINT under
+                    # DDSSM_PREEMPTIVE=1) sets the flag from the signal
+                    # handler; here — between optimizer steps and after
+                    # the periodic save — is the safe point to write a
+                    # fresh ckpt and raise PreemptError out of fit().
+                    if self._preempt_pending:
+                        ckpt_path = self._save_periodic_checkpoint(
+                            step=step,
+                            checkpoint_prefix=checkpoint_prefix,
+                        )
+                        raise PreemptError(resume_from=str(ckpt_path))
 
                     if do_profile:
                         prof.step()

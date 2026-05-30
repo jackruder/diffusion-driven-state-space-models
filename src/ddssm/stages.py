@@ -10,9 +10,11 @@ loop (used at the stage-1 → stage-2 boundary per
 from __future__ import annotations
 
 import math
+import os
 from typing import TYPE_CHECKING, List, Callable
 from dataclasses import field, dataclass
 
+import torch
 from omegaconf import MISSING
 
 from .centering.handoff import CenteringHandoffConf, perform_centering_handoff
@@ -164,24 +166,87 @@ class StageOrchestrator:
         self.trainer = trainer
         self.stages = stages
 
+    def _resolve_resume(
+        self, resume_from: str | None
+    ) -> tuple[list[str], str | None]:
+        """Validate ``resume_from`` and return (ordered stage keys, resume-into key).
+
+        Returns the list of stage keys to iterate (``stages.run`` filtered to
+        those that resolve to a real ``StageSpecConf``) and the key of the
+        stage to resume into (``None`` when ``resume_from is None``).
+
+        Raises:
+            FileNotFoundError: ``resume_from`` does not point at a real file.
+            ValueError: the ckpt's ``stage_prefix`` is not in ``stages.run``.
+        """
+        stages = self.stages
+        ordered = [k for k in stages.run if getattr(stages, k, None) is not None]
+        if resume_from is None:
+            return ordered, None
+        if not os.path.isfile(resume_from):
+            raise FileNotFoundError(
+                f"resume_from path not found: {resume_from!r}"
+            )
+        # Lightweight payload peek — we only need ``stage_prefix``. ``torch.load``
+        # with ``map_location=cpu`` keeps tensors off-device.
+        payload = torch.load(
+            resume_from, map_location=torch.device("cpu"), weights_only=False,
+        )
+        stage_prefix = (
+            payload.get("stage_prefix") if isinstance(payload, dict) else None
+        )
+        if stage_prefix is None:
+            # Legacy back-compat: pretend the ckpt was written by the first
+            # stage so resume_from flows into stage_1's fit and the rest of
+            # the run proceeds normally. This matches the hand-rolled
+            # single-stage resume pattern from before ADR-0009.
+            return ordered, ordered[0] if ordered else None
+        if stage_prefix not in ordered:
+            raise ValueError(
+                f"resume_from ckpt references stage {stage_prefix!r} which is "
+                f"not in stages.run={ordered!r}"
+            )
+        return ordered, stage_prefix
+
     def run(
         self,
         train_loader,
         val_loader=None,
         amp: bool = False,
         batch_transform=None,
+        resume_from: str | None = None,
     ) -> None:
-        """Execute every stage listed in ``stages.run``."""
+        """Execute every stage listed in ``stages.run``.
+
+        When ``resume_from`` points at a checkpoint carrying
+        ``stage_prefix=<key>`` (see ADR-0009), the orchestrator skips every
+        stage iteration whose key precedes ``<key>`` in ``stages.run`` and
+        suppresses ``perform_centering_handoff`` on the resumed stage (the
+        handoff already happened before the ckpt was written; firing it
+        again would re-perturb the encoder and reset σ_data).
+        Downstream stages run normally with no ``resume_from``.
+
+        A ``resume_from`` ckpt without a ``stage_prefix`` field (legacy,
+        hand-rolled single-stage resumes) is treated as "resume into the
+        first stage" — its fit receives ``resume_from`` and the rest of the
+        run proceeds normally.
+        """
         stages = self.stages
         if stages is None:
             raise AttributeError(
                 "StageOrchestrator.run requires a StagesConf"
             )
 
-        for key in stages.run:
-            stage: StageSpecConf | None = getattr(stages, key, None)
-            if stage is None:
-                continue
+        ordered, resume_stage_key = self._resolve_resume(resume_from)
+
+        # Iterate from the resume point onwards (or from the start when
+        # resume_from is None). ``is_resumed_stage`` is True only for the
+        # first iteration of the resumed run; it suppresses the centering
+        # handoff and threads ``resume_from`` into the trainer's fit.
+        start_idx = ordered.index(resume_stage_key) if resume_stage_key is not None else 0
+        for i, key in enumerate(ordered[start_idx:]):
+            stage: StageSpecConf = getattr(stages, key)
+            is_resumed_stage = (i == 0) and (resume_from is not None)
             print(f"\n=== Running {key} for {stage.steps} steps ===")
 
             # 1. Flip stage selector so DDSSM_base's dispatch picks the right
@@ -190,8 +255,10 @@ class StageOrchestrator:
                 self.trainer.model.stage_selector = key
 
             # 2. Optional centering handoff.  When set, the handoff rebuilds
-            # the optimizer itself.
-            if stage.centering_handoff is not None:
+            # the optimizer itself.  Suppress on the resumed stage: the
+            # handoff already fired before the saved ckpt was written; firing
+            # again would re-perturb the encoder and reset σ_data (ADR-0009).
+            if stage.centering_handoff is not None and not is_resumed_stage:
                 perform_centering_handoff(
                     self.trainer, stage.centering_handoff, new_lrs=stage.lrs,
                 )
@@ -235,6 +302,7 @@ class StageOrchestrator:
             # ``total_steps`` is the *cumulative* max step, not per-stage,
             # so we add the global step counter to the stage's budget.
             target = int(self.trainer.global_step) + int(stage.steps)
+            stage_resume = resume_from if is_resumed_stage else None
             self.trainer.fit(
                 train_loader=train_loader,
                 val_loader=val_loader,
@@ -246,4 +314,5 @@ class StageOrchestrator:
                 amp=amp,
                 batch_transform=batch_transform,
                 early_stop=stage.early_stop,
+                resume_from=stage_resume,
             )

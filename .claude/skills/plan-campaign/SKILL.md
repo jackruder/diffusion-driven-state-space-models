@@ -16,7 +16,7 @@ You need three things. Ask only what's missing:
 1. **The campaign** — one of:
    - A multi-cell preset with K-axis grid (`baseline_form: "<ablation across {...}>"` in the spec) → enumerate cells via the family's `iter_cells()` helper or by reading the spec.
    - A list of distinct presets to run together ("`init_smoke_high_surface` plus `kdd_diffusion` with 5 seeds each").
-   - A reference to a launcher script that defines the campaign shape (e.g. `experiments/init_centering/launch_ablation_tiny.py`).
+   - A reference to a `Study` declaration that defines the campaign shape (e.g. `experiments/init_centering/study.py:INIT_CENTERING_STUDY`, launched via `python -m ddssm.launch <study> --size tiny ...`).
 2. **Resource profile(s)** — load from `.claude/resources.yaml` (see `compute-resources` skill). If multiple profiles are usable, ask which to pool, or whether to allocate heterogeneously.
 3. **Goal** — deadline (timestamp or duration), priority hint, partial-results policy:
    - Default: minimise total wallclock.
@@ -161,7 +161,7 @@ Write the campaign plan to `runs/campaigns/<stamp>/plan.yaml` (or wherever the a
 
 Mirror `scripts/run_overnight_mv_ablation.sh`:
 
-- Pre-render per-cell sbatch / shell snippets via the family's launcher (`experiments/<family>/launch_*.py`).
+- Pre-render per-cell sbatch / shell snippets via `python -m ddssm.launch <study> --write-dir ...` (the family's `Study` declares per-point `PointLaunch` intent — ADR-0008).
 - Loop over cells; per cell, launch N_WORKERS independent processes sharing one SQLite DB.
 - Pre-touch SQLite with `PRAGMA journal_mode=WAL;`.
 - Override `hydra.sweep.subdir='w${oc.env:HYDRA_WORKER_ID}_${hydra.job.num}'`.
@@ -256,7 +256,7 @@ Then the **launch entry point** as a concrete command (`bash runs/campaigns/<sta
 
 <conventions>
 
-- **Use the existing launchers** (`experiments/<family>/launch_*.py`) to render per-cell scripts when they exist. Don't reinvent sbatch generation.
+- **Use `python -m ddssm.launch <study>`** to render per-point scripts from the family's `Study` declaration. Don't reinvent sbatch generation; if the resource shape doesn't fit any existing `LaunchStrategy`, extend `src/ddssm/launch.py` rather than writing a per-family script.
 - **Aggregation belongs in the plan.** Every campaign must have an `aggregate.sh` or equivalent — the user shouldn't have to ask how to read the output.
 - **Status surface.** State where the user can see progress without interrupting the campaign — `tail -F <log>`, `sqlite3 <db> 'select count(*) from trials'`, `squeue -u $USER`. Pick the one that fits the strategy.
 - **Recoverable shape.** Per-cell SQLite DBs + per-cell `runs_dir` means a partial campaign can be resumed by re-submitting only the cells that didn't finish. Generate a `resume.sh` template alongside `run.sh` when the campaign is large enough that resume is plausible.

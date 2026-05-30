@@ -65,9 +65,18 @@ class Checkpoint:
     ema_state: dict | None = None
     global_step: int = 0
     grad_accum_steps: int = 1
+    # ADR-0009 multi-stage resume: the stage key (e.g. "stage_1", "stage_2")
+    # the trainer was in when this ckpt was written. ``StageOrchestrator.run``
+    # uses this to skip earlier stages on a preempt-retry and to suppress the
+    # centering handoff on the resumed stage (the handoff already happened
+    # before this ckpt was written). ``None`` for single-stage checkpoints
+    # and for legacy ckpts that pre-date this field.
+    stage_prefix: str | None = None
 
     @classmethod
-    def from_trainer(cls, trainer) -> "Checkpoint":
+    def from_trainer(
+        cls, trainer, *, stage_prefix: str | None = None,
+    ) -> "Checkpoint":
         ema = getattr(trainer, "ema", None)
         return cls(
             model_state=trainer.model.state_dict(),
@@ -80,6 +89,7 @@ class Checkpoint:
             ema_state=getattr(ema, "shadow", None),
             global_step=int(trainer.global_step),
             grad_accum_steps=int(trainer.grad_accum_steps),
+            stage_prefix=stage_prefix,
         )
 
     def to_payload(self) -> dict:
@@ -92,6 +102,7 @@ class Checkpoint:
             "ema_state": self.ema_state,
             "global_step": self.global_step,
             "grad_accum_steps": self.grad_accum_steps,
+            "stage_prefix": self.stage_prefix,
         }
 
     def save(self, path: str) -> None:
@@ -111,12 +122,17 @@ class Checkpoint:
             ema_state=payload.get("ema_state"),
             global_step=int(payload.get("global_step", 0)),
             grad_accum_steps=int(payload.get("grad_accum_steps", 1)),
+            stage_prefix=payload.get("stage_prefix"),
         )
 
 
-def save(trainer, path: str) -> None:
-    """Persist ``trainer`` state to ``path`` (atomic write)."""
-    Checkpoint.from_trainer(trainer).save(path)
+def save(trainer, path: str, *, stage_prefix: str | None = None) -> None:
+    """Persist ``trainer`` state to ``path`` (atomic write).
+
+    ``stage_prefix`` is embedded in the payload so multi-stage resume
+    (ADR-0009) can identify which stage produced the ckpt.
+    """
+    Checkpoint.from_trainer(trainer, stage_prefix=stage_prefix).save(path)
 
 
 def load_into_model(

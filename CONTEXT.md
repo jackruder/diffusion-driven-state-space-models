@@ -82,7 +82,7 @@ _Avoid_: Simplest cell, baseline cell.
 The triple `(mlp, learnable, per_t)`. Job: exercise every code path
 of the cell machinery (parametric `μ_p`, the `r_mu_p` regulariser
 under `learnable`, per-`t` σ_data EMA). If this cell trains end-to-end
-without crashing, every cell in the 18-grid plausibly does.
+without crashing, every cell in the 12-grid plausibly does.
 _Avoid_: Pilot cell, max-coverage cell.
 
 **Note — "pilot cell" is deliberately not used.** It was overloaded

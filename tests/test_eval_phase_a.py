@@ -24,6 +24,7 @@ import pytest
 
 from ddssm.eval import METRIC_REGISTRY, EvalContext
 from ddssm.eval.metrics import (
+    eval_nll,
     eval_sigma_data_drift,
     eval_wallclock_to_target,
     eval_stage2_elbo_surrogate,
@@ -367,6 +368,148 @@ def test_stage2_elbo_surrogate_with_init_smoke_simple(tmp_path) -> None:
     for k in expected - {"stage2_elbo_surrogate_n_batches"}:
         assert math.isfinite(out[k]), f"non-finite {k}: {out[k]}"
     assert out["stage2_elbo_surrogate_n_batches"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# nll — marginal log-likelihood via prob-flow ODE + IWAE
+# ---------------------------------------------------------------------------
+
+
+def test_nll_registered() -> None:
+    """The metric is in the registry under the right name."""
+    assert "nll" in METRIC_REGISTRY
+
+
+def test_nll_returns_nan_when_model_or_loader_missing() -> None:
+    """No model or no loader → ``nll`` is NaN (mirrors other model metrics)."""
+    ctx = EvalContext(model=None, loader=None, device=torch.device("cpu"))
+    out = eval_nll(ctx)
+    assert math.isnan(out["nll"])
+
+
+def test_nll_propagates_knobs_to_log_prob_and_aggregates() -> None:
+    """``eval_nll`` forwards its knobs to ``model.log_prob`` and averages."""
+
+    captured: list[dict] = []
+
+    class _FakeModel:
+        def log_prob(
+            self,
+            observed_data,
+            observation_mask,
+            timepoints,
+            covariates=None,
+            static_covariates=None,
+            *,
+            K=None,
+            rtol=1e-5,
+            atol=1e-5,
+            method="dopri5",
+            divergence_mode="exact",
+            generator=None,
+        ):
+            captured.append(
+                dict(
+                    K=K,
+                    rtol=rtol,
+                    atol=atol,
+                    method=method,
+                    divergence_mode=divergence_mode,
+                    generator_is_set=generator is not None,
+                    batch_size=int(observed_data.shape[0]),
+                )
+            )
+            B = observed_data.shape[0]
+            return torch.full((B,), -3.0)
+
+    def _loader():
+        yield {
+            "observed_data": torch.zeros(2, 1, 4),
+            "observation_mask": torch.ones(2, 1, 4),
+            "timepoints": torch.arange(4, dtype=torch.float32).expand(2, 4),
+        }
+        yield {
+            "observed_data": torch.zeros(3, 1, 4),
+            "observation_mask": torch.ones(3, 1, 4),
+            "timepoints": torch.arange(4, dtype=torch.float32).expand(3, 4),
+        }
+
+    ctx = EvalContext(
+        model=_FakeModel(),
+        loader=_loader(),
+        device=torch.device("cpu"),
+    )
+    out = eval_nll(
+        ctx,
+        num_iwae_samples=7,
+        divergence_mode="hutchinson",
+        num_hutchinson_probes=4,
+        rtol=2e-4,
+        atol=3e-4,
+        method="dopri8",
+        seed=0,
+    )
+
+    # 2 batches × 4 probes per batch = 8 calls.
+    assert len(captured) == 8
+    for call in captured:
+        assert call["K"] == 7
+        assert call["divergence_mode"] == "hutchinson"
+        assert call["rtol"] == 2e-4
+        assert call["atol"] == 3e-4
+        assert call["method"] == "dopri8"
+        assert call["generator_is_set"] is True
+
+    # Per-sequence mean of -log p with constant log p = -3 is exactly 3.
+    assert math.isclose(out["nll"], 3.0, abs_tol=1e-9)
+    assert out["nll_n_batches"] == 2
+    assert out["nll_n_sequences"] == 5
+    assert out["nll_num_iwae_samples"] == 7
+    assert out["nll_num_hutchinson_probes"] == 4
+    assert out["nll_divergence_mode"] == "hutchinson"
+
+
+def test_nll_hutchinson_probes_ignored_under_exact_divergence() -> None:
+    """In exact mode, ``num_hutchinson_probes`` collapses to a single call."""
+
+    call_count = {"n": 0}
+
+    class _FakeModel:
+        def log_prob(self, *args, **kwargs):
+            call_count["n"] += 1
+            return torch.zeros(args[0].shape[0])
+
+    def _loader():
+        yield {
+            "observed_data": torch.zeros(2, 1, 4),
+            "observation_mask": torch.ones(2, 1, 4),
+            "timepoints": torch.arange(4, dtype=torch.float32).expand(2, 4),
+        }
+
+    ctx = EvalContext(
+        model=_FakeModel(), loader=_loader(), device=torch.device("cpu"),
+    )
+    out = eval_nll(ctx, divergence_mode="exact", num_hutchinson_probes=8)
+
+    assert call_count["n"] == 1
+    assert out["nll_num_hutchinson_probes"] == 1
+
+
+def test_nll_rejects_invalid_divergence_mode() -> None:
+    """Mirrors the validation in ``solve_prob_flow_logdensity``."""
+    ctx = EvalContext(
+        model=object(), loader=iter([]), device=torch.device("cpu"),
+    )
+    with pytest.raises(ValueError, match="divergence_mode"):
+        eval_nll(ctx, divergence_mode="quadrature")
+
+
+def test_nll_rejects_non_positive_probe_count() -> None:
+    ctx = EvalContext(
+        model=object(), loader=iter([]), device=torch.device("cpu"),
+    )
+    with pytest.raises(ValueError, match="num_hutchinson_probes"):
+        eval_nll(ctx, num_hutchinson_probes=0)
 
 
 # ---------------------------------------------------------------------------

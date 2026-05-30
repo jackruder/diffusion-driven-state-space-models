@@ -14,7 +14,7 @@ Your goal is to answer in ~30s: *Is this run healthy? Should the user intervene?
 - **Repo layout context** — `runs/` contains:
   - `runs/<study>_<cell>__<dataset>/{0,1,...}/` — Hydra-multirun sweep (init-centering family layout)
   - `runs/headline_YYYYMMDD_HHMM/<cell_name>/` — multi-cell control sweeps
-  - `runs/<single>/` — single-job runs (`gpu_test/`, `smoke_phase_d/`, ad-hoc Hydra outputs)
+  - `runs/<single>/` — single-job runs (`gpu_test/`, `python -m ddssm.launch ... --local` outputs, ad-hoc Hydra outputs)
   - `runs/optuna/<study>_<cell>__<dataset>.db` — per-cell Optuna sqlite DBs
   - `runs/report/` — finished aggregation artifacts (NOT a place to triage)
   - `runs/sbatch/` — SLURM scripts + slurm-*.out logs

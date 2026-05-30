@@ -18,14 +18,20 @@ from __future__ import annotations
 
 import abc
 import argparse
+import math
 import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
 
 from ddssm.experiment import SBatch
-from ddssm.sbatch import render_sbatch, submit_sbatch
+from ddssm.sbatch import PreemptSpec, render_sbatch, submit_sbatch
 from ddssm.study import Study, StudyPoint
+
+# Placeholder emitted by preemptive strategies; the orchestrator substitutes
+# it per-backend (shell ``$N_PER_WORKER`` for sbatch; literal
+# ``ceil(n_trials/n_workers)`` for the local backend).
+_N_PER_WORKER_PLACEHOLDER = "__N_PER_WORKER__"
 
 # A study point's resource ask reuses the per-experiment SBatch dataclass.
 ResourceSpec = SBatch
@@ -40,17 +46,23 @@ ResourceSpec = SBatch
 class PointLaunch:
     """How to run ONE study point (returned by ``Study.launch(point)``).
 
-    ``strategy`` names a registered :class:`LaunchStrategy` (the sbatch shape).
+    ``strategy`` names a registered :class:`LaunchStrategy` (the sweep shape).
     ``resources`` (an ``SBatch``) supersedes the experiment's own ``sbatch`` for
-    study launches; ``None`` falls back to the project default.
+    study launches; ``None`` falls back to the project default. ``n_workers``
+    is the per-point worker count for multi-worker strategies (multi-node sbatch
+    sharing an NFS DB, or local subprocesses sharing a local SQLite DB); ignored
+    by single-worker strategies.
     """
 
     strategy: str = "optuna_single_node"
     sweep: str | None = None
     n_trials: int = 40
     n_jobs: int = 1
+    n_workers: int = 1
     resources: ResourceSpec | None = None
     extra_overrides: tuple[str, ...] = ()
+    preemptive: bool = False
+    preempt_grace_seconds: int = 180
 
 
 @dataclass(frozen=True)
@@ -65,18 +77,66 @@ def _job_name(point: StudyPoint, ctx: LaunchContext) -> str:
     return point.name if ctx.seed is None else f"{point.name}__seed{ctx.seed}"
 
 
+def _preempt_env(pl: PointLaunch, *, worker_idx: int) -> dict[str, str] | None:
+    """Env dict for a preemptive local subprocess (else ``None`` → inherit parent env).
+
+    When ``pl.preemptive`` is set, the trainer's signal handler (and ``ddssm.app``'s
+    trial lookup) require ``DDSSM_PREEMPTIVE=1`` to activate; ``DDSSM_WORKER_ID``
+    identifies the worker for the orchestrator-side bookkeeping. We merge with
+    the parent environment so PATH / LD_LIBRARY_PATH / venv hooks survive.
+    """
+    if not pl.preemptive:
+        return None
+    return {**os.environ, "DDSSM_PREEMPTIVE": "1", "DDSSM_WORKER_ID": str(worker_idx)}
+
+
+def _validate_preempt_compat(pl: PointLaunch, point: StudyPoint) -> None:
+    """Raise ``ValueError`` if ``pl.preemptive=True`` is paired with an incompatible config.
+
+    Only one rejection remains: ``strategy='single_job'`` has no trials concept,
+    so preempt+resume cannot work. Multi-stage experiments ARE supported now
+    that ``StageOrchestrator`` is stage-prefix-aware on resume (ADR-0009).
+    """
+    if not pl.preemptive:
+        return
+    if pl.strategy == "single_job":
+        raise ValueError(
+            "strategy 'single_job' cannot be preemptive "
+            "(no trials concept; preemptive=True requires an Optuna sweep)"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Launch strategies — the sbatch shape per point
 # ---------------------------------------------------------------------------
 
 
 class LaunchStrategy(abc.ABC):
-    """Produces the Hydra overrides for one point's sbatch (the sweep shape)."""
+    """Produces the Hydra overrides for one point's worker (the sweep shape).
+
+    ``supports_sbatch`` / ``supports_local`` gate which orchestrator backend is
+    allowed for this strategy. ``n_workers_per_point`` reports how many parallel
+    workers a multi-worker strategy emits per point (the orchestrator iterates
+    ``range(n_workers_per_point(pl))`` and passes ``worker_idx`` to
+    :meth:`hydra_overrides`).
+    """
 
     name: str
+    supports_sbatch: bool = True
+    supports_local: bool = True
+
+    def n_workers_per_point(self, pl: PointLaunch) -> int:
+        return 1
 
     @abc.abstractmethod
-    def hydra_overrides(self, point: StudyPoint, pl: PointLaunch, ctx: LaunchContext) -> list[str]:
+    def hydra_overrides(
+        self,
+        point: StudyPoint,
+        pl: PointLaunch,
+        ctx: LaunchContext,
+        *,
+        worker_idx: int = 0,
+    ) -> list[str]:
         ...
 
 
@@ -85,7 +145,7 @@ class SingleJob(LaunchStrategy):
 
     name = "single_job"
 
-    def hydra_overrides(self, point, pl, ctx):
+    def hydra_overrides(self, point, pl, ctx, *, worker_idx=0):
         return []
 
 
@@ -94,16 +154,21 @@ class OptunaSingleNode(LaunchStrategy):
 
     name = "optuna_single_node"
 
-    def hydra_overrides(self, point, pl, ctx):
+    def hydra_overrides(self, point, pl, ctx, *, worker_idx=0):
         if not pl.sweep:
             raise ValueError(f"strategy {self.name!r} needs PointLaunch.sweep set")
         job = _job_name(point, ctx)
         sweep_dir = os.path.join(ctx.sweeps_root, f"{ctx.study_prefix}_{job}")
         db_path = os.path.join(ctx.storage_dir, f"{ctx.study_prefix}_{job}.db")
+        # Under preemptive runs, n_trials is computed at sbatch-start time by
+        # ddssm.launch_remaining and bound to $N_PER_WORKER; the orchestrator
+        # substitutes the placeholder per-backend (shell var for sbatch,
+        # literal ceil(n_trials/n_workers) for local).
+        n_trials_value = "__N_PER_WORKER__" if pl.preemptive else str(pl.n_trials)
         overrides = [
             "--multirun",
             f"+sweep={pl.sweep}",
-            f"hydra.sweeper.n_trials={pl.n_trials}",
+            f"hydra.sweeper.n_trials={n_trials_value}",
             f"hydra.sweeper.study_name={ctx.study_prefix}_{job}",
             f"hydra.sweeper.storage=sqlite:///{db_path}",
             f"hydra.sweep.dir={sweep_dir}",
@@ -113,28 +178,108 @@ class OptunaSingleNode(LaunchStrategy):
         return overrides
 
 
+class _MultiWorkerOptunaBase(LaunchStrategy):
+    """Shared shape for ``optuna_multi_node`` + ``local_parallel``.
+
+    Each worker runs an independent ``ddssm.app --multirun`` against the SAME
+    ``study_name`` + ``storage`` + ``hydra.sweep.dir`` parent. Optuna's per-trial
+    locking handles concurrent trial selection; ``hydra.sweep.subdir`` is the
+    per-worker namespace that prevents trial-dir collisions.
+
+    The DB path is just ``storage_dir/<study>_<point>.db``; the caller is
+    responsible for pointing ``storage_dir`` at a *shared* filesystem (NFS)
+    when using the multi-node backend, and at a local filesystem when using the
+    local-parallel backend. The plan-campaign skill table caps NFS-SQLite at
+    ~8 workers per DB; beyond that, shard the points or switch to Postgres.
+    """
+
+    def n_workers_per_point(self, pl):
+        return max(1, pl.n_workers)
+
+    def hydra_overrides(self, point, pl, ctx, *, worker_idx=0):
+        if not pl.sweep:
+            raise ValueError(f"strategy {self.name!r} needs PointLaunch.sweep set")
+        job = _job_name(point, ctx)
+        sweep_dir = os.path.join(ctx.sweeps_root, f"{ctx.study_prefix}_{job}")
+        db_path = os.path.join(ctx.storage_dir, f"{ctx.study_prefix}_{job}.db")
+        # ``hydra.job.num`` resets per multirun invocation (per upstream
+        # ``OptunaSweeperImpl.setup``), so under preemptive runs we add a
+        # ``$DDSSM_INVOC`` stamp (set in the sbatch preamble) to keep retry
+        # trial sub-dirs from colliding across requeues.
+        n_trials_value = "__N_PER_WORKER__" if pl.preemptive else str(pl.n_trials)
+        subdir = (
+            f"hydra.sweep.subdir=w{worker_idx}_${{oc.env:DDSSM_INVOC}}_${{hydra.job.num}}"
+            if pl.preemptive
+            else f"hydra.sweep.subdir=w{worker_idx}_${{hydra.job.num}}"
+        )
+        return [
+            "--multirun",
+            f"+sweep={pl.sweep}",
+            f"hydra.sweeper.n_trials={n_trials_value}",
+            f"hydra.sweeper.study_name={ctx.study_prefix}_{job}",
+            f"hydra.sweeper.storage=sqlite:///{db_path}",
+            f"hydra.sweep.dir={sweep_dir}",
+            subdir,
+        ]
+
+
+class OptunaMultiNode(_MultiWorkerOptunaBase):
+    """Optuna multirun across N SLURM jobs sharing an NFS-hosted SQLite DB.
+
+    Render emits ``pl.n_workers`` independent sbatch scripts per point; each
+    is one ``ddssm.app --multirun`` worker pulling trials from the shared DB.
+    ``storage_dir`` must point at a shared filesystem before submission.
+
+    Local execution is rejected — use :class:`LocalParallel` for the on-machine
+    multi-worker shape (the two strategies share the override layout, but differ
+    in which orchestrator backend may run them).
+    """
+
+    name = "optuna_multi_node"
+    supports_local = False
+
+
+class LocalParallel(_MultiWorkerOptunaBase):
+    """Optuna multirun across ``n_workers`` local subprocesses sharing a SQLite DB.
+
+    The orchestrator's ``run_local`` spawns ``pl.n_workers`` parallel ``Popen``s
+    per point, each running ``ddssm.app --multirun`` against the same local DB.
+    Points run sequentially (one at a time); workers within a point run in
+    parallel.
+
+    sbatch rendering is rejected — use :class:`OptunaMultiNode` for the cluster
+    shape. If you need per-worker GPU binding, set ``CUDA_VISIBLE_DEVICES``
+    yourself before invoking ``python -m ddssm.launch ... --local`` (the
+    orchestrator does not inject device assignments).
+    """
+
+    name = "local_parallel"
+    supports_sbatch = False
+
+
 class _Stub(LaunchStrategy):
-    def hydra_overrides(self, point, pl, ctx):
+    def hydra_overrides(self, point, pl, ctx, *, worker_idx=0):
         raise NotImplementedError(
             f"the {self.name!r} launch strategy is a documented extension point "
             f"(ADR-0008) and is not implemented yet"
         )
 
 
-class OptunaMultiNode(_Stub):
-    """Optuna multirun across N nodes sharing an NFS-hosted DB. (stub)"""
-
-    name = "optuna_multi_node"
-
-
 class SlurmArray(_Stub):
-    """One SLURM array task per point. (stub)"""
+    """One SLURM array task per point or per trial. (stub)"""
 
     name = "slurm_array"
 
 
 _STRATEGIES: dict[str, LaunchStrategy] = {
-    s.name: s for s in (SingleJob(), OptunaSingleNode(), OptunaMultiNode(), SlurmArray())
+    s.name: s
+    for s in (
+        SingleJob(),
+        OptunaSingleNode(),
+        OptunaMultiNode(),
+        LocalParallel(),
+        SlurmArray(),
+    )
 }
 
 
@@ -186,22 +331,84 @@ class StudyOrchestrator:
         return launch_override(point) if launch_override else self.study.launch(point)
 
     def render(self, points, *, size=None, seed=None, launch_override=None):
-        """Return ``[(job_name, sbatch_text), ...]`` for the given points."""
+        """Return ``[(job_name, sbatch_text), ...]`` for the given points.
+
+        Multi-worker strategies (e.g. ``optuna_multi_node``) emit one sbatch per
+        worker per point; the job name carries a ``_w<idx>`` suffix and each
+        worker's overrides include a distinct ``hydra.sweep.subdir`` while
+        ``study_name`` / ``storage`` / ``sweep.dir`` parent are shared.
+
+        Under ``pl.preemptive=True`` the orchestrator builds a
+        :class:`PreemptSpec` per worker — its ``storage_url`` + ``study_name``
+        match the strategy's emitted ``hydra.sweeper.storage`` /
+        ``hydra.sweeper.study_name`` so the preamble's ``launch_remaining``
+        invocation hits the same SQLite DB as the workers — and passes it
+        into ``render_sbatch``.
+        """
         ctx = LaunchContext(self.study_prefix, self.storage_dir, self.sweeps_root, seed=seed)
         out: list[tuple[str, str]] = []
         for point in points:
             pl = self._point_launch(point, launch_override)
             strategy = _STRATEGIES[pl.strategy]
-            overrides = strategy.hydra_overrides(point, pl, ctx)
-            overrides += self._variant_overrides(point, size)
-            overrides += list(pl.extra_overrides)
-            if seed is not None:
-                overrides.append(f"experiment.seed={seed}")
-            script = render_sbatch(
-                point.name, exp_sbatch=pl.resources, hydra_overrides=overrides
-            )
-            out.append((_job_name(point, ctx), script))
+            if not strategy.supports_sbatch:
+                raise ValueError(
+                    f"strategy {pl.strategy!r} does not support sbatch rendering; "
+                    f"use --local (and a local-capable strategy)"
+                )
+            _validate_preempt_compat(pl, point)
+            n_w = strategy.n_workers_per_point(pl)
+            base_name = _job_name(point, ctx)
+            for w_idx in range(n_w):
+                overrides = strategy.hydra_overrides(point, pl, ctx, worker_idx=w_idx)
+                overrides += self._variant_overrides(point, size)
+                overrides += list(pl.extra_overrides)
+                if seed is not None:
+                    overrides.append(f"experiment.seed={seed}")
+                job = base_name if n_w == 1 else f"{base_name}_w{w_idx}"
+                preempt = (
+                    self._make_preempt_spec(pl, ctx, point, n_w, w_idx)
+                    if pl.preemptive else None
+                )
+                # ``experiment=<point.name>`` is the registered preset (never the
+                # job-name suffix); ``job_name`` + ``output_pattern`` carry the
+                # worker/seed suffix so each sbatch is distinguishable in
+                # ``squeue`` and writes to a unique log directory.
+                script = render_sbatch(
+                    point.name,
+                    exp_sbatch=pl.resources,
+                    hydra_overrides=overrides,
+                    cli_overrides={"job_name": f"ddssm-{job}"},
+                    output_pattern=f"runs/{job}/slurm-%j.out",
+                    preempt=preempt,
+                )
+                out.append((job, script))
         return out
+
+    def _make_preempt_spec(
+        self,
+        pl: PointLaunch,
+        ctx: LaunchContext,
+        point: StudyPoint,
+        n_workers: int,
+        worker_idx: int,
+    ) -> PreemptSpec:
+        """Build the per-worker :class:`PreemptSpec`.
+
+        ``storage_url`` + ``study_name`` MUST match what the strategy emits in
+        its ``hydra_overrides`` (see ``OptunaSingleNode.hydra_overrides`` for
+        the canonical paths) — otherwise the preamble's ``launch_remaining``
+        invocation talks to a different DB than the worker.
+        """
+        job = _job_name(point, ctx)
+        db_path = os.path.join(ctx.storage_dir, f"{ctx.study_prefix}_{job}.db")
+        return PreemptSpec(
+            grace_seconds=pl.preempt_grace_seconds,
+            storage_url=f"sqlite:///{db_path}",
+            study_name=f"{ctx.study_prefix}_{job}",
+            target=pl.n_trials,
+            n_workers=n_workers,
+            worker_idx=worker_idx,
+        )
 
     def launch(self, points, *, size=None, seeds=(None,), write_dir=None,
                submit=False, launch_override=None) -> int:
@@ -233,27 +440,88 @@ class StudyOrchestrator:
             print(f"\n{tail}", file=sys.stderr)
         return 0
 
-    def run_local(self, points, *, size=None, seeds=(None,), out_dir="runs/local") -> int:
-        """Run each (point × seed) as a single local subprocess (smoke/debug)."""
+    def run_local(self, points, *, size=None, seeds=(None,), out_dir="runs/local",
+                  launch_override=None) -> int:
+        """Run each (point × seed) locally.
+
+        Single-worker strategies (``single_job``, ``optuna_single_node``) run as
+        one subprocess per point (no multirun — preserves the existing smoke
+        flow). The ``local_parallel`` strategy spawns ``pl.n_workers`` parallel
+        subprocesses per point, all sharing a local SQLite DB. Points run
+        sequentially regardless. Strategies that don't support local execution
+        (e.g. ``optuna_multi_node``) raise immediately.
+        """
         failures: list[tuple[str, int]] = []
         for seed in seeds:
             ctx = LaunchContext(self.study_prefix, self.storage_dir, self.sweeps_root, seed=seed)
             for point in points:
-                job = _job_name(point, ctx)
-                run_dir = os.path.join(out_dir, f"{self.study_prefix}_{job}")
-                os.makedirs(run_dir, exist_ok=True)
-                cmd = [
-                    sys.executable, "-m", "ddssm.app",
-                    f"experiment={point.name}",
-                    f"hydra.run.dir={run_dir}",
-                    *self._variant_overrides(point, size),
-                ]
-                if seed is not None:
-                    cmd.append(f"experiment.seed={seed}")
-                print(f"[local] {job} ...", flush=True)
-                rc = subprocess.run(cmd, check=False).returncode
-                if rc != 0:
-                    failures.append((job, rc))
+                pl = self._point_launch(point, launch_override)
+                strategy = _STRATEGIES[pl.strategy]
+                if not strategy.supports_local:
+                    raise ValueError(
+                        f"strategy {pl.strategy!r} does not support --local; "
+                        f"use --write-dir, or switch the point's strategy to "
+                        f"local_parallel for on-machine multi-worker"
+                    )
+                _validate_preempt_compat(pl, point)
+                n_w = strategy.n_workers_per_point(pl)
+                base_name = _job_name(point, ctx)
+
+                if n_w == 1:
+                    run_dir = os.path.join(out_dir, f"{self.study_prefix}_{base_name}")
+                    os.makedirs(run_dir, exist_ok=True)
+                    cmd = [
+                        sys.executable, "-m", "ddssm.app",
+                        f"experiment={point.name}",
+                        f"hydra.run.dir={run_dir}",
+                        *self._variant_overrides(point, size),
+                    ]
+                    if seed is not None:
+                        cmd.append(f"experiment.seed={seed}")
+                    # Single-worker preemptive on the local backend is a smoke
+                    # convenience: the trainer's signal handler is still active
+                    # via DDSSM_PREEMPTIVE=1, but there's no multirun so no
+                    # n_trials substitution is needed.
+                    print(f"[local] {base_name} ...", flush=True)
+                    rc = subprocess.run(
+                        cmd, check=False, env=_preempt_env(pl, worker_idx=0),
+                    ).returncode
+                    if rc != 0:
+                        failures.append((base_name, rc))
+                else:
+                    # Multi-worker preempt: substitute __N_PER_WORKER__ with the
+                    # literal ceil(n_trials / n_workers) (the sbatch path uses
+                    # a shell var; --local has no shell layer between us and
+                    # ddssm.app).
+                    n_per_worker_literal = (
+                        str(math.ceil(pl.n_trials / n_w)) if pl.preemptive else None
+                    )
+                    procs: list[tuple[str, subprocess.Popen]] = []
+                    for w_idx in range(n_w):
+                        overrides = strategy.hydra_overrides(point, pl, ctx, worker_idx=w_idx)
+                        overrides += self._variant_overrides(point, size)
+                        overrides += list(pl.extra_overrides)
+                        if seed is not None:
+                            overrides.append(f"experiment.seed={seed}")
+                        if n_per_worker_literal is not None:
+                            overrides = [
+                                o.replace(_N_PER_WORKER_PLACEHOLDER, n_per_worker_literal)
+                                for o in overrides
+                            ]
+                        cmd = [
+                            sys.executable, "-m", "ddssm.app",
+                            f"experiment={point.name}",
+                            *overrides,
+                        ]
+                        job = f"{base_name}_w{w_idx}"
+                        print(f"[local] {job} ...", flush=True)
+                        procs.append(
+                            (job, subprocess.Popen(cmd, env=_preempt_env(pl, worker_idx=w_idx)))
+                        )
+                    for job, proc in procs:
+                        rc = proc.wait()
+                        if rc != 0:
+                            failures.append((job, rc))
         if failures:
             for job, rc in failures:
                 print(f"  FAIL {job} (rc={rc})", file=sys.stderr)
@@ -335,5 +603,6 @@ if __name__ == "__main__":
 
 __all__ = [
     "ResourceSpec", "PointLaunch", "LaunchStrategy", "StudyOrchestrator",
+    "SingleJob", "OptunaSingleNode", "OptunaMultiNode", "LocalParallel",
     "register_study", "STUDY_REGISTRY",
 ]

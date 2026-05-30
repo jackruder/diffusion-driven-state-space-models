@@ -254,12 +254,16 @@ class Objectives:
 class SBatch:
     """Slurm resource request attached to an experiment.
 
-    Read by ``experiments._sbatch.render_sbatch`` when emitting a
-    submit script via ``python -m experiments sbatch <name>``. Ignored
-    at training time. Most experiments leave this ``None`` on the
-    :class:`Experiment` and inherit the project-default ``SBatch``
-    from ``experiments._sbatch``; override here for runs that need
-    e.g. ``time="12:00:00"`` or a different partition.
+    Read by ``ddssm.sbatch.render_sbatch`` when emitting a submit script
+    via ``python -m experiments sbatch <name>``. Ignored at training time.
+    Most experiments leave this ``None`` on the :class:`Experiment` and
+    inherit the project-default ``SBatch`` from ``ddssm.sbatch``; override
+    here for runs that need e.g. ``time="12:00:00"`` or a different
+    partition.
+
+    For Study launches the resource shape is read from each point's
+    ``PointLaunch.resources`` instead (ADR-0008); this field is only the
+    single-job ``python -m experiments sbatch`` path.
     """
 
     partition: str = "gpu"
@@ -386,6 +390,11 @@ class Experiment:
                 val_loader=val_loader,
                 amp=self.training.amp,
                 batch_transform=self.data.batch_transform,
+                # ADR-0009 multi-stage resume: forward the training scalar's
+                # resume_from so a preempt-retry can hand the orchestrator the
+                # saved ckpt; the orchestrator reads its ``stage_prefix`` and
+                # resumes into the right stage without re-firing the handoff.
+                resume_from=self.training.resume_from,
             )
         else:
             log.info(

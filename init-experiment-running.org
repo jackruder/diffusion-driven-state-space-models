@@ -4,31 +4,31 @@
 
 This is the operator's manual for the init-centering ablation grid.
 
-*Status (2026-05-29):* the ablation is now a first-class **Study**, library
-code (=src/ddssm/study.py= + =src/ddssm/launch.py=; ADR-0007/0008) — *12 cells
-× 2 datasets = 24* presets named =init_<cell>__<dataset>= (e.g.
-=init_mlp_pinned_per_t__1d=), each baking the real dataset. Run/launch via the
-single generic launcher:
+*Status (2026-05-30):* the ablation is a first-class library *Study*
+(=src/ddssm/study.py= + =src/ddssm/launch.py=; ADR-0007/0008). *12 cells ×
+2 datasets = 24* registered presets named =init_<cell>__<dataset>= (e.g.
+=init_mlp_pinned_per_t__1d=), each baking the real dataset. Run / launch
+via the single generic CLI:
 
 : python -m ddssm.launch init_centering [--select baseline_form=mlp dataset=mv] \
-:     [--size tiny|paper|smoke] [--seeds 0 1] [--dry-run|--write-dir DIR|--local] [--submit]
+:     [--size tiny|paper|smoke] [--seeds 0 1] \
+:     [--dry-run|--write-dir DIR|--local] [--submit]
 
 The per-family launchers (=launch_phase_d/ablation_tiny/paper_headline=) and
 =smoke_phase_d= were *deleted* — =--local= is the smoke runner; =--size paper=
 is the paper-headline (2× latent) variant. Grid iteration is
-=INIT_CENTERING_STUDY.names()=/=.select(...)=. The bare =experiment=init_<cell>=
-commands below now need a =__<dataset>= suffix; some examples below predate the
-Study refactor.
+=INIT_CENTERING_STUDY.names()= / =.select(...)=.
 
 It covers:
 
 - the project lineage A → E that landed the grid and its reporter,
-- every model knob exposed at the CLI (the 18-cell axes, sweep
+- every model knob exposed at the CLI (the 12-cell axes, sweep
   knobs, NN shape, schedule, training scalars),
-- four ways to run the experiments (single local, local sweep, SLURM
-  sweep, report-only), and
-- a one-command =smoke_phase_d= recipe that runs every cell on tiny
-  data with ~5 training steps each, all the way through to a plot.
+- four ways to run the experiments (single local, local sweep,
+  generic launcher dry-run / write-dir / submit, generic launcher
+  --local), and
+- a one-command =--size smoke --local= recipe that runs every cell on
+  tiny data with ~5 training steps each, all the way through to a plot.
 
 If you just want to verify the pipeline end-to-end, jump straight to
 [[#sec-smoke][§5 The end-to-end smoke pass]].
@@ -38,21 +38,15 @@ If you just want to verify the pipeline end-to-end, jump straight to
 :CUSTOM_ID: sec-lineage
 :END:
 
-Five phases shipped on branch =claude/update-documents-redo-plan-JzSxw=
-(PR #27).  Each phase is one commit.
+Five phases landed the grid and its reporter; subsequent refactors
+collapsed the per-phase launchers onto one library Study (see
+=AGENT_HANDOFF.org= § Historical narrative for the full table and ADR
+cross-references). Touchpoints today:
 
-| Phase | Commit  | What landed                                                                 |
-|-------+---------+-----------------------------------------------------------------------------|
-| A     | b7fc9a7 | 5 headline metric primitives in =src/ddssm/eval/metrics.py=                |
-| B     | d7f14c4 | Parametric factory: =_build_init_centering_model= over the 3 grid axes      |
-| C     | efdb1b6 | Pilot Optuna sweep on the canonical cell + JSON-source =ObjectiveSpec=     |
-| D     | 0132870 | 18 cell presets + 2 controls + sbatch launcher + V2-reduction test          |
-| E     | 2d6579a | Reporting layer: aggregate → JSONL/CSV → plots, decoupled from eval         |
-
-References:
-- design — =init-experiment.org=
-- implementation plan — =init-experiment-implementation.org=
+- design — =init-experiment.org= (historical)
+- implementation plan — =init-experiment-implementation.org= (historical)
 - model derivation — =model-v2.org=
+- handoff / current ground truth — =AGENT_HANDOFF.org=
 
 * Setup
 :PROPERTIES:
@@ -61,34 +55,33 @@ References:
 
 ** Environment
 
-Python 3.13, PyTorch ≥ 2.9 (managed by =uv=, see =uv.lock=).  The
-project ships its own venv at =./.venv/=:
+Python 3.13, PyTorch ≥ 2.9 (managed by =uv=, see =uv.lock=). The project
+ships its own venv at =./.venv/=:
 
 #+begin_src bash
 # One-time install
-pip install -e .
-
-# Or with W&B extras
-pip install -e .[wandb]
+uv sync                # or `pip install -e .` if not using uv
 #+end_src
+
+If you see =ImportError: libz.so.1: cannot open shared object file= when
+running =uv run python ...=, your shell lost the =nix develop= env (each
+new shell drops zlib off =LD_LIBRARY_PATH=). Prefix the command:
+
+#+begin_src bash
+export LD_LIBRARY_PATH="$(echo /nix/store/*-zlib-*/lib | tr ' ' ':'):$LD_LIBRARY_PATH"
+#+end_src
+
+or re-enter =nix develop= / re-=direnv allow=.
 
 ** Running tests / scripts
 
-*Critical:* always use =python -m pytest …= (not bare =pytest=) so the
-project root lands on =sys.path= and =conf.registry= / =experiments=
-resolve correctly.
+*Critical:* always use =uv run python -m pytest …= (not bare =pytest=, not
+=.venv/bin/python -m pytest=) so the project root lands on =sys.path= and
+the editable =ddssm= install is fresh.
 
 #+begin_src bash
-uv run python -m pytest tests/ -m "not slow"   # full fast suite
-uv run python -m pytest tests/test_init_centering_v2_reduction.py -v
-#+end_src
-
-All =python -m experiments.init_centering.*= entry points likewise
-need the project root as cwd:
-
-#+begin_src bash
-cd /home/user/diffusion-driven-state-space-models
-uv run python -m experiments.init_centering.smoke_phase_d --report
+uv run python -m pytest tests/ -m "not slow"   # fast suite (~447)
+uv run python -m pytest tests/                  # full suite (~472)
 #+end_src
 
 * Model settings — what each knob does
@@ -96,74 +89,75 @@ uv run python -m experiments.init_centering.smoke_phase_d --report
 :CUSTOM_ID: sec-model-settings
 :END:
 
-The ablation grid lives in =experiments/init_centering/=.  The shape
-of a single run is determined by three nested config objects.
+The ablation grid lives in =experiments/init_centering/=. The shape of a
+single run is determined by three nested config objects.
 
-** The 18-cell grid (3 axes)
+** The 12-cell grid (3 axes)
 
 Source of truth: =experiments/init_centering/cells.py:iter_cells=.
 
-| Axis            | Values                                | Default ("canonical") |
-|-----------------+---------------------------------------+-----------------------|
-| =baseline_form= | =zero=, =identity=, =linear=, =mlp=   | =mlp=                 |
-| =baseline_mode= | =pinned=, =learnable=                 | =pinned=              |
-| =tracking_mode= | =fixed=, =global_ema=, =per_t=        | =per_t=               |
+| Axis            | Values                              | Default ("canonical") |
+|-----------------+-------------------------------------+-----------------------|
+| =baseline_form= | =zero=, =identity=, =linear=, =mlp= | =mlp=                 |
+| =baseline_mode= | =pinned=, =learnable=               | =pinned=              |
+| =tracking_mode= | =fixed=, =per_t=                    | =per_t=               |
 
-Total = 4 × 2 × 3 = 24 raw triples, but =zero= and =identity= are
+Total = 4 × 2 × 2 = 16 raw triples, but =zero= and =identity= are
 parameter-free so they auto-clamp =learnable → pinned= (see
-=experiments/init_centering/model.py:_PARAM_FREE_FORMS=).  Net = *18
+=experiments/init_centering/model.py:_PARAM_FREE_FORMS=). Net = *12
 distinct cells*.
 
-Each cell has its own named experiment preset.  Naming:
-=init_<form>_<mode>_<tracking>=, e.g. =init_zero_pinned_fixed=,
-=init_mlp_learnable_per_t=.
+=global_ema= is a valid mode of the underlying =SigmaDataBuffer= but is
+not in the ablation grid (only =fixed= and =per_t= are studied).
 
-The "simplest cell" =init_zero_pinned_fixed= is mathematically
-equivalent to plain =DiffusionV2= (no centering, no σ_data
-tracking).  This is locked down in
-=tests/test_init_centering_v2_reduction.py= via a numerical
-=_vp_precondition= match to ~1e-4.
+Each cell × dataset combination has its own named experiment preset.
+Naming: =init_<form>_<mode>_<tracking>__<dataset>=, e.g.
+=init_zero_pinned_fixed__1d=, =init_mlp_learnable_per_t__mv=.
 
-** The 2 control cells
+The =init_smoke_simple= preset =(zero, pinned, fixed)= on the 1D
+ablation dataset is the minimum-surface anchor; if it trains end-to-end
+the whole pipeline plausibly does. The =init_smoke_high_surface= preset
+=(mlp, learnable, per_t)= on MV exercises every code path.
 
-Both pin the *canonical* cell and zero one sweep knob — values
-Optuna's log-uniform cannot sample.
+** Dataset axis
 
-| Preset name                       | What it pins                                     |
-|-----------------------------------+--------------------------------------------------|
-| =init_canonical_ctrl_sigma0=      | =sigma_pert=0= on the canonical cell             |
-| =init_canonical_ctrl_npretrain0=  | =n_pretrain=0= (no stage-1 pretrain)             |
+Source of truth: =experiments/init_centering/datasets.py:ABLATION_DATASETS=.
 
-These are run as single jobs, not Optuna sweeps.
+| Label | Dataset                       | Notes                                  |
+|-------+-------------------------------+----------------------------------------|
+| =1d=  | =NonlinBimodalLift1D=         | latent d=1, observation tanh-lifted    |
+| =mv=  | =NonlinBimodalLiftMV=         | latent d=4, observation lifted to D=8  |
+
+The presets bake the real dataset + dims — there is no =Harmonic=
+placeholder anymore.
 
 ** Per-cell model knobs
 
 Set by =_build_init_centering_model= (=experiments/init_centering/model.py=).
-All are overridable at the CLI via =experiment.model.<name>=.
+Overridable at the CLI via =experiment.model.<name>=.
 
 | Knob                    | Default | Meaning                                                    |
 |-------------------------+---------+------------------------------------------------------------|
 | =j=                     | 1       | Latent history window (transition input is =z_{t-j:t-1}=)  |
 | =T_max=                 | 32      | Max latent timestep (sigma_data buffer length)             |
-| =data_dim=              | 1       | Observation dim                                            |
-| =latent_dim=            | 4       | Latent state dim =d=                                       |
+| =data_dim=              | 1 / 8   | Observation dim (baked per dataset)                        |
+| =latent_dim=            | 1 / 4   | Latent state dim =d= (baked per dataset; 2× on =paper=)    |
 | =emb_time_dim=          | 16      | Time-embedding feature dim                                 |
 | =channels=              | 32      | CSDIUnet channel width                                     |
-| =nheads=                | 4       | Attention heads (must divide =channels=)                   |
 | =baseline_hidden_dim=   | 32      | μ_p MLP hidden width                                       |
 | =baseline_n_layers=     | 2       | μ_p MLP depth                                              |
-| =anchor_lambda=         | =None=  | R_μp strength.  =None= → 0 (pinned) / 1e-2 (learnable)     |
 | =diffusion_S_k=         | 1       | MC samples for ESM target                                  |
 | =diffusion_k_chunk=     | 1       | k-grouping for the EDM loss                                |
-| =diffusion_num_steps=   | 50      | Discrete VP-SDE timesteps                                  |
+| =diffusion_num_steps=   | 128     | Discrete VP-SDE timesteps                                  |
 | =diffusion_layers=      | 2       | CSDIUnet residual layers                                   |
+| =feature_mixer=         | =conv=  | Score-net feature mixer (ADR-0003)                         |
 
-** Per-cell stage knobs (the Optuna sweep targets)
+** Per-stage knobs (the Optuna sweep targets)
 
 Set by =_build_init_centering_stages= (=experiments/init_centering/hparams.py=).
-Override path is =experiment.model.stages.<name>=.
+Override path is =experiment.training.stages.<name>=.
 
-| Knob                  | Default | Sweep range (Phase C/D)                |
+| Knob                  | Default | Sweep range (current)                  |
 |-----------------------+---------+----------------------------------------|
 | =n_pretrain=          | 200     | =tag(log, int(interval(50, 2000)))=    |
 | =n_stage2=            | 600     | not swept                              |
@@ -171,157 +165,268 @@ Override path is =experiment.model.stages.<name>=.
 | =enc_lr=              | 5e-4    | =tag(log, interval(1e-5, 1e-3))=       |
 | =dec_lr=              | 5e-4    | =tag(log, interval(1e-5, 1e-3))=       |
 | =trans_lr=            | 5e-4    | =tag(log, interval(1e-5, 1e-3))=       |
+| =anchor_lambda=       | =None=  | swept under =learnable= (R_μp strength); see ADR-0004 |
+| =lambda_sigma_p=      | 1e-2    | swept; stage-1 log-variance anchor strength           |
 | =log_every=           | 25      | not swept                              |
 | =checkpoint_every=    | 200     | not swept                              |
 | =early_stop_enabled=  | False   | not swept                              |
 
 The sweep search space lives at
-=experiments/init_centering/sweeps.py:InitPilot= (registered as
-=+sweep=init_pilot=).
+=experiments/init_centering/sweeps.py:InitAblationMOO= (registered as
+=+sweep=init_ablation_moo=; alias =init_pilot=).
 
-** Hparams (lr / batch / λ schedule)
+** Hparams (=DDSSMHyperParamsConf=)
 
-=experiments/init_centering/hparams.py:SmokeHparams= sets defaults
-applied to *every* cell.  Most useful overrides:
-
-| Knob                          | Default      | Notes                                           |
-|-------------------------------+--------------+-------------------------------------------------|
-| =hparams.S=                   | 1            | MC samples for the encoder posterior            |
-| =hparams.batch_size=          | 16           |                                                 |
-| =hparams.lambda_warmup_steps= | 50           | Linear-up steps for the rate-distortion λ       |
-| =hparams.lambda_sigma_p=      | 1e-2         | Stage-1 log-variance anchor strength            |
+Per ADR-0004, =Hparams= holds only optimisation knobs (=S=, =batch_size=,
+λ-warmup schedule for the rate-distortion λ). The =anchor_lambda= and
+=lambda_sigma_p= fields moved off Hparams onto per-stage =FullELBO=
+objects.
 
 ** Eval + objective
 
 | Object             | Where it lives                                                                    |
 |--------------------+-----------------------------------------------------------------------------------|
-| =PilotEval=        | =experiments/init_centering/evals.py= — the five Phase-A headline metrics         |
-| =PilotObjective=   | =experiments/init_centering/evals.py= — reads =stage2_elbo_surrogate= from JSON   |
+| =PilotEval=        | =experiments/init_centering/evals.py= — the Phase-A headline metrics              |
+| =PilotObjective=   | =experiments/init_centering/evals.py= — MOO reading JSON keys                     |
 
-Eval metrics:
+Headline metrics:
 
-1. =stage2_elbo_surrogate= — the Optuna objective (minimised).
-2. =sigma_data_drift= — full σ_data²(t) trajectory + 2-component
-   decomposition; per-cell line in the Phase-E plot.
+1. =stage2_elbo_surrogate= — the Optuna objective (minimised). Not
+   cell-invariant; see ADR-0001 for caveats.
+2. =sigma_data_drift= — full σ_data²(t) trajectory + decomposition.
 3. =wallclock_to_target= — first step that reached a threshold loss.
 4. =crps_sum_latent= — sample-vs-GT CRPS on the latent path.
-5. =gt_latent_jsd= — JSD vs GT latent kernel (LGSSM datasets only;
-   Harmonic data sets =available=False=).
+5. =gt_latent_jsd= — JSD vs GT latent kernel (available on the lift
+   datasets; both ablation datasets expose GT latents).
 
 * Run modes
 :PROPERTIES:
 :CUSTOM_ID: sec-run-modes
 :END:
 
-Four ways to run.  All produce =metrics.json= + the standard Phase-A
-artifacts; the reporter (=python -m experiments.init_centering.report=)
-consumes them uniformly.
+Four ways to run. All produce =metrics.json= + the standard Phase-A
+artifacts; =python -m experiments.init_centering.report= consumes them
+uniformly.
 
-** Mode 1 — single local run (one cell, one trial)
+** Mode 1 — single local run (one point, one trial)
 
 #+begin_src bash
-uv run python -m ddssm.app experiment=init_mlp_pinned_per_t
+uv run python -m ddssm.app experiment=init_mlp_pinned_per_t__1d
 #+end_src
-
-Defaults: 200 stage-1 steps + 600 stage-2 steps + 5 eval metrics.
-The Hydra run dir defaults to =outputs/<date>/<time>/=.
 
 Override any knob at the CLI:
 
 #+begin_src bash
-uv run python -m ddssm.app experiment=init_mlp_pinned_per_t \
-    experiment.model.stages.n_pretrain=50 \
-    experiment.model.stages.sigma_pert=5e-3 \
+uv run python -m ddssm.app experiment=init_mlp_pinned_per_t__1d \
+    experiment.training.stages.n_pretrain=50 \
+    experiment.training.stages.sigma_pert=5e-3 \
     hydra.run.dir=runs/scratch/quick_run
 #+end_src
 
-** Mode 2 — local Optuna sweep on one cell (no SLURM)
+** Mode 2 — local Optuna sweep on one point (no SLURM)
 
 #+begin_src bash
 uv run python -m ddssm.app --multirun \
-    experiment=init_mlp_pinned_per_t \
-    +sweep=init_pilot \
+    experiment=init_mlp_pinned_per_t__1d \
+    +sweep=init_ablation_moo \
     hydra.sweeper.n_trials=20 \
     hydra.sweeper.study_name=local_$(date +%s) \
-    hydra.sweep.dir=runs/sweeps/local_mlp_pinned_per_t
+    hydra.sweep.dir=runs/sweeps/local_mlp_pinned_per_t__1d
 #+end_src
 
-Runs sequentially (=n_jobs=1=).  Each trial lands at
-=runs/sweeps/local_mlp_pinned_per_t/<trial>/=.
+Runs sequentially (=n_jobs=1=). Each trial lands at
+=runs/sweeps/local_mlp_pinned_per_t__1d/<trial>/=.
 
-** Mode 3 — SLURM sweep over all 18 cells + 2 controls
+** Mode 3 — render or submit sbatch via the generic launcher
 
-The Phase-D launcher generates one sbatch script per cell:
+The =StudyOrchestrator= renders one sbatch script per study point from
+that point's =PointLaunch= intent. Dry-run, write, or submit:
 
 #+begin_src bash
-# 1) Render scripts (does NOT submit)
-uv run python -m experiments.init_centering.launch_phase_d \
-    --write-dir runs/sbatch/phase_d_$(date +%Y%m%d) \
-    --study-prefix phase_d_$(date +%Y%m%d) \
-    --n-trials 20
+# Dry-run: print every script to stdout (does not touch disk)
+uv run python -m ddssm.launch init_centering --size tiny --dry-run
 
-# 2) Submit them
-for f in runs/sbatch/phase_d_*/*.sbatch; do sbatch "$f"; done
+# Restrict to a slice (any tag works)
+uv run python -m ddssm.launch init_centering --select dataset=1d --dry-run
+
+# Write per-point sbatch files
+uv run python -m ddssm.launch init_centering --size tiny \
+    --write-dir runs/sbatch/$(date +%Y%m%d)_tiny
+
+# Write AND submit
+uv run python -m ddssm.launch init_centering --size paper \
+    --write-dir runs/sbatch/$(date +%Y%m%d)_paper --submit
 #+end_src
 
-Default resources (per cell): =partition=gpu=, =time=04:00:00=,
-=gpus=1=, =cpus=4=, =mem=32G=.  Override at the CLI:
-
-#+begin_src bash
-uv run python -m experiments.init_centering.launch_phase_d \
-    --write-dir runs/sbatch/overnight \
-    --time 12:00:00 --mem 64G --n-trials 40
-#+end_src
-
-The launcher pins =hydra.sweep.dir= per cell to
-=runs/sweeps/{study_prefix}_{cell}/= so the reporter can pick the
-runs up unchanged.  Controls (=init_canonical_ctrl_*=) submit as
-single (non-multirun) jobs.
+The launcher pins =hydra.sweep.dir= per point to
+=runs/sweeps/{study_prefix}_{point_name}/= so the reporter can pick the
+runs up unchanged. Resources come from each point's
+=PointLaunch.resources= (a =SBatch=); =--size paper= switches in the
+paper-headline (2× latent) variant via the Study's =variants= map.
 
 Sanity-check before submitting:
 
 #+begin_src bash
-# Print all 20 scripts to stdout, never touches disk
-uv run python -m experiments.init_centering.launch_phase_d --dry-run
-
-# Just one cell's script
-uv run python -m experiments.init_centering.launch_phase_d \
-    --cell init_mlp_pinned_per_t --dry-run
+# One point's script only
+uv run python -m ddssm.launch init_centering \
+    --select cell=mlp_pinned_per_t dataset=1d --dry-run
 #+end_src
 
-** Mode 4 — report (no training; just aggregate + plot)
+** Mode 4 — local subprocess execution (=--local=)
+
+Replaces the old =smoke_phase_d= module: every selected point runs as a
+direct =python -m ddssm.app= subprocess on the current machine, no
+sbatch involved.
+
+#+begin_src bash
+# Run every point at smoke size in series
+uv run python -m ddssm.launch init_centering --size smoke --local
+
+# Run a slice with multiple seeds
+uv run python -m ddssm.launch init_centering --select dataset=1d \
+    --size tiny --seeds 0 1 2 --local
+#+end_src
+
+The =--seeds= knob replicates each selected point K times with =seed=
+overrides into separate dirs.
+
+** Mode 5 — report (no training; just aggregate + plot)
 
 Run once the sweeps are complete:
 
 #+begin_src bash
-# Aggregate + plot in one go
 uv run python -m experiments.init_centering.report all \
     --sweeps-root runs/sweeps \
     --optuna-dir runs/optuna \
-    --study-prefix phase_d_$(date +%Y%m%d) \
-    --out runs/report/phase_d
+    --study-prefix $(date +%Y%m%d) \
+    --out runs/report/$(date +%Y%m%d)
 #+end_src
 
 Outputs:
 
-| Artifact                                  | Format | Contents                                              |
-|-------------------------------------------+--------+-------------------------------------------------------|
-| =runs/report/.../summary.csv=             | CSV    | One row / (cell, trial); 17 scalar columns           |
-| =runs/report/.../records.jsonl=           | JSONL  | Full records incl. σ_data²(t) + per-t trajectories   |
-| =runs/report/.../plots/sigma_data_drift.png= | PNG | One line per cell, σ_data²(t) avg across trials      |
-| =runs/report/.../plots/wallclock_to_target.png= | PNG | Bar chart, mean ± std across trials                  |
-| =runs/report/.../plots/headline_table.md=   | MD   | 5 metrics × N cells, best trial per cell             |
+| Artifact                                       | Format | Contents                                       |
+|------------------------------------------------+--------+------------------------------------------------|
+| =runs/report/.../summary.csv=                  | CSV    | One row / (point, trial); scalar columns       |
+| =runs/report/.../records.jsonl=                | JSONL  | Full records incl. σ_data²(t) trajectories     |
+| =runs/report/.../plots/sigma_data_drift.png=   | PNG    | One line per cell, σ_data²(t) avg across trials|
+| =runs/report/.../plots/wallclock_to_target.png=| PNG    | Bar chart, mean ± std across trials            |
+| =runs/report/.../plots/headline_table.md=      | MD     | Headline metrics × N cells, best trial per cell|
 
 Iterate on plot code without re-aggregating:
 
 #+begin_src bash
 uv run python -m experiments.init_centering.report plot \
-    --in runs/report/phase_d \
-    --out runs/report/phase_d/plots_v2
+    --in runs/report/<stamp> \
+    --out runs/report/<stamp>/plots_v2
 #+end_src
 
-The =plot= subcommand reads only =records.jsonl= — no model loaded,
-no Optuna DB touched, no sweep dirs walked.
+The =plot= subcommand reads only =records.jsonl= — no model loaded, no
+Optuna DB touched, no sweep dirs walked.
+
+* Preemptible runs
+:PROPERTIES:
+:CUSTOM_ID: sec-preemptible
+:END:
+
+Long Optuna sweeps on preemptible SLURM partitions need (a) auto-requeue
+on preempt, (b) per-trial resume across preempt cycles, and (c) a
+study-budget stop rather than additive =n_trials=N= per invocation. Opt
+in by setting =preemptive=True= on the point's =PointLaunch= (ADR-0009);
+no CLI flag — preemptibility is tied to which partition the point
+targets, declared on the Study.
+
+** When to use it
+
+- Multi-hour single-trial wallclock budgets (e.g. the paper-headline
+  =init_mlp_*__mv= points) on a 4-hour-preempt partition.
+- Any sweep whose target trial count you want to *hit*, not exceed,
+  across requeue cycles.
+
+Not for =single_job= points (no trials concept): the orchestrator
+raises =ValueError= if you combine =strategy="single_job"= with
+=preemptive=True=. =local_parallel= accepts it for smoke convenience
+but skips the DB-cleanup preamble.
+
+** What it injects
+
+=preemptive=True= prepends three SBATCH directives ahead of any
+=extra_flags=:
+
+#+begin_example
+#SBATCH --requeue
+#SBATCH --signal=B:USR1@{preempt_grace_seconds}
+#SBATCH --open-mode=append
+#+end_example
+
+and replaces the plain =exec python -m ddssm.app= line with a preamble
+that:
+
+1. Calls =python -m ddssm.launch_remaining ... --cleanup-running-older-than 60=
+   to compute =N_REMAINING= (= =target − (COMPLETE + PRUNED)=, with
+   stale =RUNNING= rows reaped and their retries enqueued).
+2. Exits 0 if =N_REMAINING ≤ 0=.
+3. Sets =N_PER_WORKER = ceil(N_REMAINING / n_workers)=.
+4. Exports =DDSSM_PREEMPTIVE=1= and =DDSSM_WORKER_ID=<idx>=.
+5. Installs =trap '...' USR1 TERM= and runs the trainer with
+   =hydra.sweeper.n_trials=$N_PER_WORKER &= followed by =wait=.
+
+** Trial-resume behaviour
+
+On =SIGUSR1= or =SIGTERM= the trainer flips a flag, writes
+=ckpt_<prefix>_latest.pth=, and raises =PreemptError(resume_from=<path>)=.
+=ddssm.app= catches this, calls =study.add_trial(...)= to enqueue a new
+WAITING trial with the same hparams plus =user_attrs={"resume_from":
+<path>, "retried_from": <original_trial_number>}=, then re-raises so
+the sweeper marks the current trial FAILED. On dequeue (this invocation
+or a subsequent requeue), =app.py= reads =user_attrs["resume_from"]=
+and injects =experiment.training.resume_from= before training resumes.
+The chain walks forward indefinitely: each retry's own checkpoint
+becomes the next retry's =resume_from=. Budget counts
+=COMPLETE + PRUNED= only — FAILED slots do not consume budget.
+
+Note: an earlier design used Optuna's =RetryFailedTrialCallback=, but
+empirical testing showed the callback does not fire on
+=study.tell(trial, FAILED)= from the sweeper's exception-catch path
+(only from the heartbeat-reaper inside =study.optimize=). Explicit
+=study.add_trial= in =app.py= covers the graceful-preempt case.
+
+** Operator constraint
+
+*Single-trial wallclock must be ≤ =--time= − =preempt_grace_seconds=.*
+If a trial's expected runtime exceeds the SLURM time budget minus the
+grace window, the trainer never reaches a clean step boundary before
+the partition kills it; it will keep saving partial checkpoints and
+chaining retries without ever marking COMPLETE. Default
+=preempt_grace_seconds=180=; bump it (e.g. to 600s) for big-checkpoint
+points.
+
+** Example
+
+A four-hour-preempt partition, six-hour single-trial budget, two
+workers per point:
+
+#+begin_src python
+PointLaunch(
+    strategy="optuna_multi_node",
+    n_trials=40,
+    n_workers=2,
+    preemptive=True,
+    preempt_grace_seconds=300,
+    resources=SBatch(time="04:00:00", ...),
+)
+#+end_src
+
+Submit with the standard launcher:
+
+#+begin_src bash
+uv run python -m ddssm.launch init_centering --size paper --submit
+#+end_src
+
+On preempt SLURM requeues the job; the new invocation re-runs the
+preamble, reaps the stale =RUNNING= row, the retry callback enqueues
+its replacement carrying =resume_from=, and trials chain forward until
+the study reaches 40 =COMPLETE= regardless of how many preempt cycles
+it took.
 
 * The end-to-end smoke pass
 :PROPERTIES:
@@ -329,68 +434,56 @@ no Optuna DB touched, no sweep dirs walked.
 :END:
 
 Goal: in one command, prove the full pipeline (factory → training →
-eval → metrics.json → aggregation → plotting) works for every cell
-in the grid.
+eval → metrics.json → aggregation → plotting) works for every point in
+the grid.
 
 #+begin_src bash
-uv run python -m experiments.init_centering.smoke_phase_d --report
+uv run python -m ddssm.launch init_centering --size smoke --local
 #+end_src
 
-Defaults:
+Defaults (per the =smoke= variant in =experiments/init_centering/study.py=):
 
-- Steps per stage: =5= (stage 1 + stage 2 each).
-- All 20 cells (18 grid + 2 controls), run sequentially on CPU.
-- Output dir: =runs/smoke_phase_d/=.
-- Hooked to the Phase-E reporter so you get the plots at the end.
+- Steps per stage: ~5 each (stage 1 + stage 2).
+- All 24 points (12 cells × 2 datasets), run sequentially on CPU.
+- Output dir: =runs/sweeps/smoke_<point_name>/= (per the orchestrator's
+  default layout).
 
-Expected wall time: ~30 minutes on CPU (each cell ~90s, mostly eval).
+Expected wall time on CPU: ~30–60 minutes (each point ~90s, mostly eval).
 
 ** What it does
 
-1. Iterates every cell of =all_phase_d_cells()= (the same list the
-   sbatch launcher uses).
-2. Runs each as a single =python -m ddssm.app experiment=<cell>=
-   call with shrunk stage budgets:
-   =experiment.model.stages.n_pretrain=5=,
-   =experiment.model.stages.n_stage2=5=,
-   =experiment.model.stages.log_every=1=,
-   =experiment.model.stages.checkpoint_every=100=.
-3. Pins =hydra.run.dir= to
-   =runs/smoke_phase_d/sweeps/smoke_phase_d_{cell}/= so the reporter
-   can locate the runs.
-4. (=--report=) calls
-   =python -m experiments.init_centering.report all= against the
-   smoke outputs and writes =runs/smoke_phase_d/report/=.
+1. =StudyOrchestrator.run_local= iterates =INIT_CENTERING_STUDY.points=
+   (or the =--select=-filtered subset) and applies the =smoke= variant's
+   step-shrink overrides on top of each point's base config.
+2. Each point runs as one =python -m ddssm.app experiment=<preset>=
+   subprocess.
+3. The reporter (=python -m experiments.init_centering.report all=)
+   consumes the smoke outputs once the run finishes.
 
 ** Targeted smoke
 
-Just one cell to debug a specific regression:
+Just one point to debug a specific regression:
 
 #+begin_src bash
-uv run python -m experiments.init_centering.smoke_phase_d \
-    --cell init_zero_pinned_fixed --report
-#+end_src
-
-Continue past failures (default is fail-fast):
-
-#+begin_src bash
-uv run python -m experiments.init_centering.smoke_phase_d \
-    --no-stop-on-error --report
+uv run python -m ddssm.launch init_centering \
+    --select cell=zero_pinned_fixed dataset=1d --size smoke --local
 #+end_src
 
 ** Verifying the smoke succeeded
 
-After the script finishes, the three things to inspect:
+After the run finishes:
 
 #+begin_src bash
-# 1) Did every cell produce a metrics.json?
-ls runs/smoke_phase_d/sweeps/smoke_phase_d_*/metrics.json | wc -l   # expect 20
+# 1) Did every point produce a metrics.json?
+ls runs/sweeps/smoke_init_*__*/0/metrics.json | wc -l   # expect 24
 
-# 2) Does the headline table parse?
-cat runs/smoke_phase_d/report/plots/headline_table.md
+# 2) Aggregate + plot
+uv run python -m experiments.init_centering.report all \
+    --sweeps-root runs/sweeps --optuna-dir runs/optuna \
+    --study-prefix smoke --out runs/report/smoke
 
 # 3) Eyeball the σ_data drift plot
-xdg-open runs/smoke_phase_d/report/plots/sigma_data_drift.png
+xdg-open runs/report/smoke/plots/sigma_data_drift.png
 #+end_src
 
 * Output layout cheat-sheet
@@ -406,7 +499,7 @@ Each =python -m ddssm.app= invocation produces this layout in its
 ├── .hydra/                         # Hydra-saved config + overrides
 ├── resolved_config.yaml            # Fully-resolved config (incl. defaults)
 ├── metrics.csv                     # Per-step training metrics (loss, λ, σ_data² per-t, ...)
-├── metrics.json                    # Phase-A eval results (5 headline metrics)
+├── metrics.json                    # Phase-A eval results (headline metrics)
 ├── checkpoints/
 │   ├── ckpt_step_<N>.pth           # Periodic (every checkpoint_every steps)
 │   └── ckpt_final.pth              # Saved at end of training; what the eval loads
@@ -414,11 +507,10 @@ Each =python -m ddssm.app= invocation produces this layout in its
 └── ddssm_app.log                   # Hydra logger output
 #+end_example
 
-For a *multirun*, the per-trial directories sit under
-=hydra.sweep.dir=:
+For a *multirun*, the per-trial directories sit under =hydra.sweep.dir=:
 
 #+begin_example
-runs/sweeps/phase_d_init_mlp_pinned_per_t/
+runs/sweeps/<study_prefix>_init_mlp_pinned_per_t__1d/
 ├── 0/                              # trial 0 (full <run_dir> contents above)
 ├── 1/                              # trial 1
 ├── …
@@ -427,8 +519,8 @@ runs/sweeps/phase_d_init_mlp_pinned_per_t/
 #+end_example
 
 The corresponding Optuna DB at
-=runs/optuna/phase_d_init_mlp_pinned_per_t.db= holds trial values +
-sampled params (joined into the report by =trial.number=).
+=runs/optuna/<study_prefix>_init_mlp_pinned_per_t__1d.db= holds trial
+values + sampled params (joined into the report by =trial.number=).
 
 * Troubleshooting
 :PROPERTIES:
@@ -437,51 +529,53 @@ sampled params (joined into the report by =trial.number=).
 
 ** =ModuleNotFoundError: No module named 'conf'=
 
-You ran =pytest …= directly instead of =python -m pytest …=.  Use
-the latter — it puts the project root on =sys.path= so
-=conf.registry= resolves.
+You ran =pytest …= directly instead of =python -m pytest …=. Use
+=uv run python -m pytest …=.
+
+** =ImportError: libz.so.1: cannot open shared object file=
+
+Shell lost the =nix develop= env; see § Setup for the
+=LD_LIBRARY_PATH= prefix.
 
 ** =ConfigAttributeError: Key 'hydra' not in 'Config'=
 
-You called =hydra.compose(…)= without =return_hydra_config=True=.
-See =tests/test_init_centering_pilot.py:test_pilot_sweep_composes_via_cli=
+You called =hydra.compose(…)= without =return_hydra_config=True=. See
+=tests/test_init_centering_pilot.py:test_pilot_sweep_composes_via_cli=
 for the right pattern.
 
-** =Unknown cell '…'= from the launcher
+** =Unknown study '…'= or =Unknown point '…'= from the launcher
 
-The cell name must match =cell_name(form, mode, tracking)=.  Examples
-of the 20 legal names:
+The study name must match a registered =Study= (currently only
+=init_centering=). Point names match =Study.names()=:
 
 #+begin_src bash
 uv run python -c "
-from experiments.init_centering.launch_phase_d import all_phase_d_cells
-for n in all_phase_d_cells(): print(n)
+from experiments.init_centering.study import INIT_CENTERING_STUDY
+for n in INIT_CENTERING_STUDY.names(): print(n)
 "
 #+end_src
 
+Or filter by tags via =--select baseline_form=mlp dataset=1d=.
+
 ** Optuna DB collisions
 
-If two CLI invocations share =hydra.sweeper.study_name=, Optuna
-treats them as one study (the new trials append to the existing
-DB).  This is desirable for resuming a sweep but surprising
-otherwise — use a timestamped =--study-prefix= (e.g.
-=phase_d_$(date +%Y%m%d)=) for fresh runs.
+If two CLI invocations share =hydra.sweeper.study_name=, Optuna treats
+them as one study (the new trials append to the existing DB). Desirable
+for resuming a sweep but surprising otherwise — use a timestamped
+=--study-prefix= (e.g. =$(date +%Y%m%d)=) for fresh runs.
 
 ** =auto-degenerate= warning
 
-Setting =baseline_form=zero baseline_mode=learnable= triggers a
-warning + clamps =baseline_mode → pinned=.  That's the intended
-behaviour (=zero= has no learnable parameters); the warning is the
-UX cue.  The launcher's preset list skips the degenerate cells
-entirely.
+Setting =baseline_form=zero baseline_mode=learnable= triggers a warning
++ clamps =baseline_mode → pinned=. That's the intended behaviour
+(=zero= has no learnable parameters); the warning is the UX cue. The
+Study's point list already skips the degenerate cells entirely.
 
-** Eval is slow (~90s for 5 steps of training)
+** Eval is slow
 
-Phase-A's =stage2_elbo_surrogate= dominates eval time on CPU.
-That's the cost of computing the full multi-term ELBO over the val
-loader, not a smoke-specific issue.  Eval cost is roughly constant
-per cell regardless of training step count — for sweep planning,
-expect ~20s per trial of pure eval overhead on a GPU machine.
+Phase-A's =stage2_elbo_surrogate= dominates eval time on CPU. That's
+the cost of computing the full multi-term ELBO over the val loader,
+not a smoke-specific issue.
 
 * Useful commands at a glance
 :PROPERTIES:
@@ -489,32 +583,34 @@ expect ~20s per trial of pure eval overhead on a GPU machine.
 :END:
 
 #+begin_src bash
-# List every registered preset
-uv run python -m experiments list
+# List every registered Study point
+uv run python -c "
+from experiments.init_centering.study import INIT_CENTERING_STUDY
+for n in INIT_CENTERING_STUDY.names(): print(n)
+"
 
-# Inspect a cell's resolved config
-uv run python -m ddssm.app experiment=init_mlp_pinned_per_t \
-    --cfg job
+# Inspect a point's resolved config
+uv run python -m ddssm.app experiment=init_mlp_pinned_per_t__1d --cfg job
 
-# Run the V2-reduction test specifically (the headline correctness anchor)
-uv run python -m pytest tests/test_init_centering_v2_reduction.py -v
-
-# Full slow suite (includes the 110s end-to-end pilot test)
+# Full slow suite (includes the long E2E pilot test)
 uv run python -m pytest tests/ -m slow
 
-# Generate one cell's sbatch (no submit)
-uv run python -m experiments.init_centering.launch_phase_d \
-    --cell init_canonical_ctrl_sigma0 --dry-run
+# Generate one point's sbatch (no submit)
+uv run python -m ddssm.launch init_centering \
+    --select cell=mlp_pinned_per_t dataset=1d --dry-run
 
 # End-to-end smoke + plots
-uv run python -m experiments.init_centering.smoke_phase_d --report
+uv run python -m ddssm.launch init_centering --size smoke --local
+uv run python -m experiments.init_centering.report all \
+    --sweeps-root runs/sweeps --optuna-dir runs/optuna \
+    --study-prefix smoke --out runs/report/smoke
 
 # Aggregate a real sweep
 uv run python -m experiments.init_centering.report all \
     --sweeps-root runs/sweeps --optuna-dir runs/optuna \
-    --study-prefix phase_d_20260525 --out runs/report/phase_d_20260525
+    --study-prefix 20260530 --out runs/report/20260530
 
 # Re-plot from saved artifacts (no aggregation)
 uv run python -m experiments.init_centering.report plot \
-    --in runs/report/phase_d_20260525
+    --in runs/report/20260530
 #+end_src

@@ -1,5 +1,19 @@
-#+TITLE: Initialization / Centering Experiment — Implementation Plan
+#+TITLE: Initialization / Centering Experiment — Implementation Plan (HISTORICAL)
 #+OPTIONS: toc:2 num:t
+
+#+begin_quote
+*Status (2026-05-30): historical.* All five phases (A → E) shipped, then
+the project absorbed several refactors that obsoleted parts of this plan:
+ADR-0002 dropped the control cells, ADR-0004 split loss config off
+Hparams, ADR-0006 removed the legacy transition paths, and ADR-0007/0008
+promoted the ablation to a first-class library =Study= with a generic
+=python -m ddssm.launch= CLI (the per-family =launch_phase_d= /
+=launch_ablation_tiny= / =launch_paper_headline= / =smoke_phase_d=
+launchers referenced below were deleted). The grid is *12 cells, not 18*
+(parameter-free forms auto-clamp). Use =AGENT_HANDOFF.org= +
+=init-experiment-running.org= for current operating instructions; read
+this file for build-out chronology and design rationale only.
+#+end_quote
 
 This document describes the *implementation plan* for the experimental
 design in =init-experiment.org=, building on the model-v2 core machinery

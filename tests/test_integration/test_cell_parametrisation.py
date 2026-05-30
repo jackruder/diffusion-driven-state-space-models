@@ -1,4 +1,4 @@
-"""Phase-B integration tests: every cell of the 18-cell grid round-trips.
+"""Phase-B integration tests: every cell of the 12-cell grid round-trips.
 
 For each ``(baseline_form, baseline_mode, tracking_mode)`` cell from
 ``init-experiment.org`` § Composition with the ablation grid we:

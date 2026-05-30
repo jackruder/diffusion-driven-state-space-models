@@ -39,7 +39,8 @@ Iterate on a plot only::
 Aggregation discovers cells by walking the Optuna DBs at
 ``{optuna_dir}/{study_prefix}_*.db``; trial run_dirs are read from the
 matching ``{sweeps_root}/{study_prefix}_{cell_name}/{trial_number}/``
-layout produced by :mod:`.launch_phase_d`.
+layout produced by ``python -m ddssm.launch init_centering`` (see
+:mod:`ddssm.launch`).
 """
 
 from __future__ import annotations
@@ -267,7 +268,7 @@ def iter_trial_records(
 ) -> Iterator[TrialRecord]:
     """Walk every study point's sweep dir and yield one record per trial.
 
-    The layout written by ``launch_study`` (and ``smoke_phase_d``) is::
+    The layout written by ``python -m ddssm.launch init_centering`` is::
 
         {sweeps_root}/{study_prefix}_{cell}__{dataset}/{trial_number}/metrics.json
         {optuna_dir}/{study_prefix}_{cell}__{dataset}.db
@@ -1048,8 +1049,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dataset", default=None,
         help=(
             "Dataset label appended as '__{dataset}' to each cell key "
-            "by launch_ablation_tiny / launch_paper_headline (e.g. 'mv', "
-            "'1d'). Omit when reporting on a single-dataset layout."
+            "by `python -m ddssm.launch init_centering` (e.g. 'mv', '1d'). "
+            "Omit to walk every dataset."
         ),
     )
     agg_common.add_argument(

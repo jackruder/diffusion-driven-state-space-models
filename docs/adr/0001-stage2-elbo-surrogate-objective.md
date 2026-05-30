@@ -1,6 +1,6 @@
 # Use stage2_elbo_surrogate as the cell-ranking objective, with caveats
 
-The 18-cell ablation grid (Phases C/D) optimises and ranks cells by
+The 12-cell ablation grid (Phases C/D) optimises and ranks cells by
 `stage2_elbo_surrogate` — the V3 model's total loss on a held-out
 split. This metric is **not cell-invariant**: EDM preconditioning
 scale depends on `σ_data²(t)` (which differs per `tracking_mode`),

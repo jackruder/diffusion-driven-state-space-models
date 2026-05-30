@@ -72,7 +72,8 @@ def experiment(
     ``sbatch`` is purely metadata at training time; it is read by
     ``python -m experiments sbatch <name>`` when emitting a Slurm
     submit script. Leave ``None`` to inherit the project default in
-    :mod:`experiments._sbatch`.
+    :mod:`ddssm.sbatch`. (Study launches read resources from each
+    point's ``PointLaunch.resources`` instead — see ADR-0008.)
     """
     if stages is not None:
         training = dataclasses.replace(training, stages=stages)

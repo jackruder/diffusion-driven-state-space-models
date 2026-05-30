@@ -1,9 +1,10 @@
 """Single source of truth for the init-centering ablation grid.
 
-Phase D registers one named experiment per cell.  Both the experiment-
-registration loop in :mod:`.experiments` and the parametric factory
-test in :mod:`tests.test_init_centering_factory` consume
-:func:`iter_cells` so the grid definition lives in exactly one place.
+The library Study (:mod:`.study`) registers one preset per
+``(cell, dataset)`` combination via :func:`iter_cells`; the parametric
+factory test in :mod:`tests.test_init_centering_factory` and the
+Phase-B per-cell integration test consume the same enumerator, so the
+grid definition lives in exactly one place.
 
 The grid is the product
 

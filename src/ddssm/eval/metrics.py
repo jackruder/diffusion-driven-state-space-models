@@ -426,9 +426,9 @@ def eval_loss_tail(ctx: EvalContext, *, column: str = "loss/total", tail_frac: f
 # ---------------------------------------------------------------------------
 # Model-v2 headline metrics (init-experiment.org § Headline metrics).
 #
-# Five metrics that the init-centering ablation grid uses to score each
-# cell.  PF-ODE NLL (the doc's headline metric #1) is gated and deferred;
-# the others are below.
+# The metrics that the init-centering ablation grid uses to score each cell.
+# The marginal log-likelihood ``nll`` (the doc's headline metric #1, the
+# cell-fair ranking objective) is registered alongside the ELBO surrogate.
 # ---------------------------------------------------------------------------
 
 
@@ -620,9 +620,9 @@ def eval_stage2_elbo_surrogate(
     accumulates the rate + distortion sub-components, and returns the
     seven scalar pieces of the surrogate plus the total.
 
-    Per ``init-experiment.org`` § Headline metrics, metric 2.  Until
-    PF-ODE NLL (metric 1) lands, this is the comparison objective for
-    the ablation grid.
+    Per ``init-experiment.org`` § Headline metrics, metric 2. The
+    cell-fair ranking alternative is ``nll`` (metric 1, registered
+    below); this surrogate is faster but not cell-invariant.
     """
     if ctx.model is None or ctx.loader is None:
         return {"stage2_elbo_surrogate": float("nan")}
@@ -689,6 +689,122 @@ def eval_stage2_elbo_surrogate(
     out["stage2_elbo_surrogate"] = out.pop("stage2_elbo_surrogate_stage2_elbo_surrogate")
     out["stage2_elbo_surrogate_n_batches"] = int(n_batches)
     return out
+
+
+@register_metric("nll")
+def eval_nll(
+    ctx: EvalContext,
+    *,
+    num_iwae_samples: int | None = None,
+    divergence_mode: str = "exact",
+    num_hutchinson_probes: int = 1,
+    rtol: float = 1e-5,
+    atol: float = 1e-5,
+    method: str = "dopri5",
+    seed: int | None = None,
+    max_batches: int | None = None,
+) -> Dict[str, Any]:
+    """Marginal NLL ``-log p_ψ(x_{1:T})`` via the prob-flow ODE + IWAE.
+
+    Walks ``ctx.loader`` and calls :meth:`DDSSM_base.log_prob` on each
+    batch. The result is the cell-fair ranking objective (model-v2.org §
+    "Exact likelihood evaluation"): unlike ``stage2_elbo_surrogate``, it
+    does not depend on the EDM preconditioning scale or the per-cell
+    regulariser shape.
+
+    Args:
+        num_iwae_samples: trajectory samples ``K`` for the IWAE
+            estimator. ``None`` (default) falls back to ``model.S``.
+        divergence_mode: ``"exact"`` (D reverse-mode passes per ODE
+            evaluation, zero variance) or ``"hutchinson"`` (one
+            reverse-mode pass against a Rademacher probe vector ``v``
+            held fixed over the ODE solve, unbiased on the log-density
+            scale).
+        num_hutchinson_probes: number of independent Hutchinson runs to
+            average over (variance ÷ N). Each call uses a fresh probe
+            vector. Ignored when ``divergence_mode == "exact"``.
+        rtol, atol, method: torchdiffeq solver tolerances and method.
+        seed: optional seed for reproducible Hutchinson draws.
+        max_batches: cap on the number of batches walked from
+            ``ctx.loader``. ``None`` walks the full loader.
+
+    Returns:
+        Dict with ``nll`` (mean over sequences of ``-log p_ψ(x_{1:T})``),
+        bookkeeping (``nll_n_batches``, ``nll_n_sequences``), and the
+        knob values used (``nll_num_iwae_samples``,
+        ``nll_num_hutchinson_probes``, ``nll_divergence_mode``).
+    """
+    if ctx.model is None or ctx.loader is None:
+        return {"nll": float("nan")}
+
+    if divergence_mode not in {"exact", "hutchinson"}:
+        raise ValueError(
+            f"divergence_mode must be 'exact' or 'hutchinson'; got {divergence_mode!r}"
+        )
+    if num_hutchinson_probes < 1:
+        raise ValueError(
+            f"num_hutchinson_probes must be >= 1; got {num_hutchinson_probes}"
+        )
+
+    n_probes = num_hutchinson_probes if divergence_mode == "hutchinson" else 1
+    generator = (
+        torch.Generator(device=ctx.device).manual_seed(int(seed))
+        if seed is not None
+        else None
+    )
+
+    model = ctx.model
+    device = ctx.device
+    transform = ctx.batch_transform
+
+    total_neg_logp = 0.0
+    n_sequences = 0
+    n_batches = 0
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(ctx.loader):
+            if max_batches is not None and batch_idx >= int(max_batches):
+                break
+            if transform is not None:
+                batch = transform(batch, device)
+            else:
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+            probes = torch.zeros(
+                batch["observed_data"].shape[0], device=device, dtype=torch.float64
+            )
+            for _ in range(n_probes):
+                log_p = model.log_prob(
+                    batch["observed_data"],
+                    batch["observation_mask"],
+                    batch["timepoints"],
+                    covariates=batch.get("covariates", None),
+                    static_covariates=batch.get("static_covariates", None),
+                    K=num_iwae_samples,
+                    rtol=rtol,
+                    atol=atol,
+                    method=method,
+                    divergence_mode=divergence_mode,
+                    generator=generator,
+                )
+                probes = probes + log_p.to(dtype=torch.float64)
+            mean_log_p = probes / float(n_probes)
+            total_neg_logp += float((-mean_log_p).sum().item())
+            n_sequences += int(mean_log_p.shape[0])
+            n_batches += 1
+
+    if n_sequences == 0:
+        return {"nll": float("nan")}
+
+    return {
+        "nll": total_neg_logp / n_sequences,
+        "nll_n_batches": n_batches,
+        "nll_n_sequences": n_sequences,
+        "nll_num_iwae_samples": num_iwae_samples,
+        "nll_num_hutchinson_probes": int(n_probes),
+        "nll_divergence_mode": divergence_mode,
+    }
 
 
 @register_metric("sigma_data_drift")

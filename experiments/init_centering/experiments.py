@@ -12,10 +12,11 @@ cell / High-surface-smoke cell):
   regulariser under Learnable, per-t σ_data EMA, multivariate
   observation lift. If this trains end-to-end, every grid cell does.
 
-The ablation grid itself is a first-class :class:`~experiments._study.Study`
+The ablation grid itself is a first-class :class:`~ddssm.study.Study`
 (``experiments.init_centering.study.INIT_CENTERING_STUDY``): 12 cells × 2
 datasets = 24 registered presets named ``init_<cell>__<dataset>`` (e.g.
-``init_mlp_pinned_per_t__1d``). Registration, launching, and reporting all
+``init_mlp_pinned_per_t__1d``). Registration, launching (via
+``python -m ddssm.launch init_centering`` — ADR-0007/0008), and reporting all
 flow through that Study.
 """
 
@@ -99,7 +100,7 @@ experiment_store(init_smoke_high_surface, name="init_smoke_high_surface")
 # Run a single point:
 #   python -m ddssm.app experiment=init_mlp_pinned_per_t__1d
 # Sweep / launch the whole study:
-#   python -m experiments.init_centering.launch_study --mode tiny --write-dir runs/sbatch/tiny
+#   python -m ddssm.launch init_centering --size tiny --write-dir runs/sbatch/tiny
 #
 # NOTE: controls (``init_canonical_ctrl_*``) were removed per
 # docs/adr/0002-drop-canonical-controls.md (σ_pert > 0 is mandatory; n_pretrain=0

@@ -19,20 +19,22 @@ term, :class:`SigmaDataBuffer` in the requested tracking mode, and a
 :class:`StagesConf` running ``stage_1`` → ``stage_2`` with a
 :class:`CenteringHandoffConf` between them.
 
-Phase D registers the full ablation grid (one named preset per cell,
-see :mod:`.cells` for the enumerator). The Optuna sweep
-``+sweep=init_ablation`` (back-compat alias ``init_pilot``) defines
-the 7-dim search space the grilling settled on. The two
-``init_canonical_ctrl_*`` presets that originally pinned the sweep
-knobs at zero were removed per
-``docs/adr/0002-drop-canonical-controls.md``: σ_pert > 0 is mandatory
-protocol and n_pretrain = 0 is meaningless for parametric μ_p cells.
-The legacy ``init_centering_smoke`` / ``init_centering_pilot`` presets
-were replaced by the two role-specific smokes above (CONTEXT.md drops
-the "pilot" terminology).  See :mod:`.launch_phase_d` for the SLURM
-sbatch helper that emits one job per cell.
+The full ablation grid is a first-class library :class:`~ddssm.study.Study`
+(:mod:`.study`); see :mod:`.cells` for the cell enumerator and
+:mod:`.datasets` for the dataset axis. 12 cells × 2 datasets = 24 registered
+presets named ``init_<cell>__<dataset>``. The Optuna sweep
+``+sweep=init_ablation_moo`` defines the multi-objective search space; the
+two ``init_canonical_ctrl_*`` presets were removed per
+``docs/adr/0002-drop-canonical-controls.md`` (σ_pert > 0 is mandatory
+protocol; n_pretrain = 0 is meaningless for parametric μ_p cells). The
+legacy ``init_centering_smoke`` / ``init_centering_pilot`` presets are
+replaced by the two role-specific smokes above (CONTEXT.md drops the "pilot"
+terminology). Launching is via the generic
+``python -m ddssm.launch init_centering`` CLI (ADR-0007/0008); the per-family
+launchers ``launch_phase_d`` / ``launch_ablation_tiny`` /
+``launch_paper_headline`` / ``smoke_phase_d`` were deleted.
 
-Phase E (:mod:`.report`) is the reporting layer.  It scans every cell's
+:mod:`.report` is the reporting layer.  It scans every study point's
 sweep dir + matching Optuna DB, serialises the result to
 ``summary.csv`` + ``records.jsonl``, and renders the three headline
 artifacts (σ_data drift trajectory plot, wallclock-to-target bar
