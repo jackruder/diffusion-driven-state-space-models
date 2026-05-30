@@ -1,0 +1,3 @@
+# Per-experiment display profiles are local cache, not shared state.
+profiles/
+__pycache__/
