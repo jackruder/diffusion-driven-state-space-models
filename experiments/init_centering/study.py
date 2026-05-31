@@ -11,15 +11,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ddssm.launch import PointLaunch, ResourceSpec, register_study
 from ddssm.study import Axis, Study, StudyPoint
-
+from ddssm.launch import PointLaunch, ResourceSpec, register_study
 from experiments._make import experiment
 from experiments.init_centering.cells import Cell, iter_cells
-from experiments.init_centering.datasets import ABLATION_DATASETS, paper_latent
 from experiments.init_centering.evals import PilotEval, PilotMOObjective
-from experiments.init_centering.hparams import SmokeHparams, StagesB, Training800
 from experiments.init_centering.model import SmokeModel
+from experiments.init_centering.hparams import StagesB, Training800, SmokeHparams
+from experiments.init_centering.datasets import ABLATION_DATASETS, paper_latent
 
 
 def _build(coords: Mapping[str, Any]):
@@ -44,6 +43,17 @@ def _build(coords: Mapping[str, Any]):
     )
 
 
+# Compute-node environment bring-up (Tempest). Emitted after ``cd
+# "$SLURM_SUBMIT_DIR"`` and before any ``python`` call so the interpreter +
+# CUDA resolve on the allocated node. ``source .venv/bin/activate`` is relative
+# to the submit dir (the repo root), so it is user/path agnostic.
+_TEMPEST_SETUP = (
+    "module purge",
+    "module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22",
+    "source .venv/bin/activate",
+)
+
+
 def _launch(point: StudyPoint) -> PointLaunch:
     """Round-2 launch intent: GPU-packed Optuna MOO, one GPU per cell.
 
@@ -66,30 +76,57 @@ def _launch(point: StudyPoint) -> PointLaunch:
     # Headline cell -> the A100 (2x memory -> 2x the pack). 64 / 16 = 4 trials/worker.
     if cell.name == "init_mlp_pinned_per_t":
         return PointLaunch(
-            strategy="optuna_packed_node", sweep=sweep,
-            n_trials=64, n_workers=16, workers_per_gpu=16, preemptive=False,
+            strategy="optuna_packed_node",
+            sweep=sweep,
+            n_trials=64,
+            n_workers=16,
+            workers_per_gpu=16,
+            preemptive=False,
             resources=ResourceSpec(
-                partition="gpupriority", gpus=1, cpus=64, mem="96G", time="24:00:00",
+                partition="gpupriority",
+                gpus=1,
+                cpus=64,
+                mem="96G",
+                time="24:00:00",
                 extra_flags=("--gres=gpu:a100:1",),  # confirm Tempest's A100 gres name
+                setup=_TEMPEST_SETUP,
             ),
         )
     # Second non-preempt cell -> the gpupriority A40 (swap this name to re-pick).
     if cell.name == "init_mlp_learnable_per_t":
         return PointLaunch(
-            strategy="optuna_packed_node", sweep=sweep,
-            n_trials=64, n_workers=8, workers_per_gpu=8, preemptive=False,
+            strategy="optuna_packed_node",
+            sweep=sweep,
+            n_trials=64,
+            n_workers=8,
+            workers_per_gpu=8,
+            preemptive=False,
             resources=ResourceSpec(
-                partition="gpupriority", gpus=1, cpus=32, mem="48G", time="24:00:00",
+                partition="gpupriority",
+                gpus=1,
+                cpus=32,
+                mem="48G",
+                time="24:00:00",
                 extra_flags=("--gres=gpu:a40:1",),  # confirm Tempest's A40 gres name
+                setup=_TEMPEST_SETUP,
             ),
         )
 
     # --- gpuunsafe (preemptible): every other cell, 8 packed workers on an A40 ---
     return PointLaunch(
-        strategy="optuna_packed_node", sweep=sweep,
-        n_trials=64, n_workers=8, workers_per_gpu=8, preemptive=True,
+        strategy="optuna_packed_node",
+        sweep=sweep,
+        n_trials=64,
+        n_workers=8,
+        workers_per_gpu=8,
+        preemptive=True,
         resources=ResourceSpec(
-            partition="gpuunsafe", gpus=1, cpus=32, mem="48G", time="24:00:00",
+            partition="gpuunsafe",
+            gpus=1,
+            cpus=32,
+            mem="48G",
+            time="24:00:00",
+            setup=_TEMPEST_SETUP,
         ),
     )
 
@@ -126,7 +163,11 @@ INIT_CENTERING_STUDY = register_study(
         build=_build,
         name_point=lambda tags: f"{tags['cell']}__{tags['dataset']}",
         launch=_launch,
-        variants={"tiny": lambda p: [], "paper": _paper_overrides, "smoke": _smoke_overrides},
+        variants={
+            "tiny": lambda p: [],
+            "paper": _paper_overrides,
+            "smoke": _smoke_overrides,
+        },
     )
 )
 

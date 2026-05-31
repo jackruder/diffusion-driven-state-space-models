@@ -24,13 +24,12 @@ all the way through to the in-flight trial).
 
 from __future__ import annotations
 
-import dataclasses
-import subprocess
-from dataclasses import dataclass
 from typing import Iterable
+import subprocess
+import dataclasses
+from dataclasses import dataclass
 
 from ddssm.experiment import SBatch
-
 
 # Project default — mirrors `submitit_slurm.yaml`.
 DEFAULT_SBATCH = SBatch(
@@ -78,7 +77,9 @@ def _resolve(
 ) -> SBatch:
     """Merge project default → experiment-level spec → CLI overrides."""
     base = exp_sbatch if exp_sbatch is not None else DEFAULT_SBATCH
-    merged = dataclasses.replace(base, **{k: v for k, v in overrides.items() if v is not None})
+    merged = dataclasses.replace(
+        base, **{k: v for k, v in overrides.items() if v is not None}
+    )
     if merged.job_name is None:
         merged = dataclasses.replace(merged, job_name=f"ddssm-{name}")
     return merged
@@ -137,6 +138,7 @@ def render_sbatch(
         "set -euo pipefail",
         'cd "$SLURM_SUBMIT_DIR"',
     ]
+    lines += list(spec.setup)
 
     # Hydra's argparse expects ``--``-prefixed flags (e.g. ``--multirun``)
     # BEFORE positional overrides. Splitting + reordering avoids the
@@ -261,6 +263,7 @@ def render_packed_sbatch(
         "set -uo pipefail",
         'cd "$SLURM_SUBMIT_DIR"',
     ]
+    lines += list(spec.setup)
     if preempt is not None:
         lines += _render_packed_preempt_preamble(preempt)
 
@@ -269,7 +272,7 @@ def render_packed_sbatch(
         # Fan the preempt signal out to every packed worker so each trainer's
         # handler checkpoints its in-flight trial and raises PreemptError.
         lines.append(
-            "trap 'for _p in \"${PIDS[@]}\"; do kill -USR1 \"$_p\" 2>/dev/null; done; wait' USR1 TERM"
+            'trap \'for _p in "${PIDS[@]}"; do kill -USR1 "$_p" 2>/dev/null; done; wait\' USR1 TERM'
         )
 
     for worker_idx, overrides in worker_overrides:
@@ -343,11 +346,16 @@ def submit_sbatch(path: str) -> str:
     stdout. Propagates ``FileNotFoundError`` if ``sbatch`` is missing and
     ``CalledProcessError`` on non-zero exit so the caller fails loudly.
     """
-    result = subprocess.run(["sbatch", path], check=True, capture_output=True, text=True)
+    result = subprocess.run(
+        ["sbatch", path], check=True, capture_output=True, text=True
+    )
     return result.stdout.strip()
 
 
 __all__ = [
-    "DEFAULT_SBATCH", "PreemptSpec",
-    "render_sbatch", "render_packed_sbatch", "submit_sbatch",
+    "DEFAULT_SBATCH",
+    "PreemptSpec",
+    "render_packed_sbatch",
+    "render_sbatch",
+    "submit_sbatch",
 ]

@@ -140,7 +140,8 @@ class ObjectiveSpec:
             return float("inf")
         csv_path = (
             os.path.join(run_dir_or_csv, "metrics.csv")
-            if os.path.isdir(run_dir_or_csv) else run_dir_or_csv
+            if os.path.isdir(run_dir_or_csv)
+            else run_dir_or_csv
         )
         if not os.path.isfile(csv_path):
             return float("inf")
@@ -174,8 +175,10 @@ class ObjectiveSpec:
             with open(csv_path, "r", newline="") as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames or []
-                col = self.metric if self.metric in fieldnames else next(
-                    (h for h in fieldnames if "loss" in h.lower()), ""
+                col = (
+                    self.metric
+                    if self.metric in fieldnames
+                    else next((h for h in fieldnames if "loss" in h.lower()), "")
                 )
                 if not col:
                     return float("inf")
@@ -203,7 +206,8 @@ class ObjectiveSpec:
         if not run_dir:
             return float("inf")
         json_path = (
-            run_dir if os.path.isfile(run_dir)
+            run_dir
+            if os.path.isfile(run_dir)
             else os.path.join(run_dir, "metrics.json")
         )
         if not os.path.isfile(json_path):
@@ -288,6 +292,10 @@ class SBatch:
     nodes: int = 1
     job_name: str | None = None
     extra_flags: tuple[str, ...] = ()
+    # Shell lines emitted after ``cd "$SLURM_SUBMIT_DIR"`` and before the python
+    # invocation — e.g. cluster ``module load`` + venv ``activate`` so ``python``
+    # resolves on the compute node. Empty by default (inherit the submit env).
+    setup: tuple[str, ...] = ()
 
 
 def _seed_everything(seed: int | None) -> None:
@@ -315,7 +323,9 @@ class Experiment:
     build_trainer: Callable[..., DDSSMTrainer]
     training: TrainingScalars = field(default_factory=TrainingScalars)
     objective: ObjectiveSpec | Objectives | None = None
-    eval: Any = None  # ddssm.eval.EvalSpec | None -- typed lazily to avoid circular import
+    eval: Any = (
+        None  # ddssm.eval.EvalSpec | None -- typed lazily to avoid circular import
+    )
     viz: Any = None  # ddssm.viz.VizSpec | None -- typed lazily to avoid circular import
     variance: Any = None  # ddssm.variance.ProbeSpec | None -- typed lazily
     seed: int | None = 0
@@ -354,7 +364,9 @@ class Experiment:
         # next to the invocation CWD rather than the run.
         checkpoint_dir = os.path.join(run_dir, "checkpoints")
 
-        log.info("Model: %d parameters", sum(p.numel() for p in self.model.parameters()))
+        log.info(
+            "Model: %d parameters", sum(p.numel() for p in self.model.parameters())
+        )
         wandb_kwargs = self._wandb_kwargs(run_dir)
         # Per ADR-0004: caller-supplied ``exp.hparams`` is the single
         # source of truth at training time. Pass it through to the
@@ -387,7 +399,9 @@ class Experiment:
             log.info("No data attached. Skipping fit().")
             return
 
-        val_loader = self.data.val_loader() if self.training.validate_every > 0 else None
+        val_loader = (
+            self.data.val_loader() if self.training.validate_every > 0 else None
+        )
 
         stages_cfg = self.training.stages
         if stages_cfg is not None and getattr(stages_cfg, "run", None):
@@ -426,7 +440,10 @@ class Experiment:
             )
 
     def objective_value(
-        self, *, device: torch.device, run_dir: str,
+        self,
+        *,
+        device: torch.device,
+        run_dir: str,
     ) -> float | list[float] | None:
         """Resolve ``self.objective`` against the artefacts produced by :meth:`train`.
 
@@ -454,16 +471,12 @@ class Experiment:
         is_multi = isinstance(self.objective, Objectives)
         objectives: list[ObjectiveSpec] = [
             _as_objective_spec(o)
-            for o in (
-                list(self.objective.specs) if is_multi else [self.objective]
-            )
+            for o in (list(self.objective.specs) if is_multi else [self.objective])
         ]
 
         # If any objective reads from metrics.json we need to evaluate
         # before reading. Do it once and reuse for all json-source specs.
-        needs_eval = any(
-            getattr(o, "source", "csv") == "json" for o in objectives
-        )
+        needs_eval = any(getattr(o, "source", "csv") == "json" for o in objectives)
         if needs_eval:
             if self.eval is None:
                 log.warning(
@@ -481,13 +494,17 @@ class Experiment:
                     "self.trainer."
                 )
             final_ckpt = os.path.join(
-                run_dir, "checkpoints", "ckpt_final.pth",
+                run_dir,
+                "checkpoints",
+                "ckpt_final.pth",
             )
             trainer.save_checkpoint(final_ckpt)
             log.info("Saved final checkpoint to %s", final_ckpt)
             self.evaluate(
-                device=device, run_dir=run_dir,
-                checkpoint_path=final_ckpt, csv_path=csv_log_path,
+                device=device,
+                run_dir=run_dir,
+                checkpoint_path=final_ckpt,
+                csv_path=csv_log_path,
             )
 
         values: list[float] = []
@@ -499,7 +516,10 @@ class Experiment:
                 v = o.read(csv_log_path)
                 log.info(
                     "Objective[%s/%s tail=%.2f] = %.6g",
-                    o.split, o.metric, o.tail_frac, v,
+                    o.split,
+                    o.metric,
+                    o.tail_frac,
+                    v,
                 )
             values.append(v)
 

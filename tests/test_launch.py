@@ -2,26 +2,25 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from ddssm import launch as L
-from ddssm.experiment import SBatch
+from ddssm.study import Study as _Study, StudyPoint, StudyPoint as _StudyPoint
 from ddssm.launch import (
+    SingleJob,
+    SlurmArray,
+    PointLaunch,
     LaunchContext,
     LocalParallel,
     OptunaMultiNode,
     OptunaPackedNode,
     OptunaSingleNode,
-    PointLaunch,
-    SingleJob,
-    SlurmArray,
     StudyOrchestrator,
 )
-from ddssm.study import StudyPoint
+from ddssm.experiment import SBatch
 from experiments.init_centering.study import INIT_CENTERING_STUDY
-
-from types import SimpleNamespace
-from ddssm.study import Study as _Study, StudyPoint as _StudyPoint
 
 
 def _single_stage_preempt_study(n_workers: int = 3) -> _Study:
@@ -62,13 +61,20 @@ def _orch(**kw) -> StudyOrchestrator:
 
 def test_single_job_emits_no_sweep() -> None:
     ctx = LaunchContext("pre", "s", "w")
-    assert SingleJob().hydra_overrides(StudyPoint("p", {}, {}, {}), PointLaunch(strategy="single_job"), ctx) == []
+    assert (
+        SingleJob().hydra_overrides(
+            StudyPoint("p", {}, {}, {}), PointLaunch(strategy="single_job"), ctx
+        )
+        == []
+    )
 
 
 def test_optuna_single_node_wires_study_and_storage() -> None:
     ctx = LaunchContext("pre", "store", "sweeps")
     ov = OptunaSingleNode().hydra_overrides(
-        StudyPoint("p", {}, {}, {}), PointLaunch(strategy="optuna_single_node", sweep="sw", n_trials=7), ctx
+        StudyPoint("p", {}, {}, {}),
+        PointLaunch(strategy="optuna_single_node", sweep="sw", n_trials=7),
+        ctx,
     )
     assert "--multirun" in ov and "+sweep=sw" in ov
     assert "hydra.sweeper.n_trials=7" in ov
@@ -93,7 +99,10 @@ def test_point_launch_preemptive_defaults_false_with_180s_grace() -> None:
 def test_optuna_single_node_emits_n_per_worker_placeholder_when_preemptive() -> None:
     ctx = LaunchContext("pre", "store", "sweeps")
     pl = PointLaunch(
-        strategy="optuna_single_node", sweep="sw", n_trials=7, preemptive=True,
+        strategy="optuna_single_node",
+        sweep="sw",
+        n_trials=7,
+        preemptive=True,
     )
     ov = OptunaSingleNode().hydra_overrides(StudyPoint("p", {}, {}, {}), pl, ctx)
     assert "hydra.sweeper.n_trials=__N_PER_WORKER__" in ov
@@ -103,7 +112,10 @@ def test_optuna_single_node_emits_n_per_worker_placeholder_when_preemptive() -> 
 def test_optuna_multi_node_emits_n_per_worker_placeholder_when_preemptive() -> None:
     ctx = LaunchContext("pre", "store", "sweeps")
     pl = PointLaunch(
-        strategy="optuna_multi_node", sweep="sw", n_trials=12, n_workers=3,
+        strategy="optuna_multi_node",
+        sweep="sw",
+        n_trials=12,
+        n_workers=3,
         preemptive=True,
     )
     ov = OptunaMultiNode().hydra_overrides(StudyPoint("p", {}, {}, {}), pl, ctx)
@@ -114,7 +126,10 @@ def test_optuna_multi_node_emits_n_per_worker_placeholder_when_preemptive() -> N
 def test_local_parallel_emits_n_per_worker_placeholder_when_preemptive() -> None:
     ctx = LaunchContext("pre", "store", "sweeps")
     pl = PointLaunch(
-        strategy="local_parallel", sweep="sw", n_trials=12, n_workers=2,
+        strategy="local_parallel",
+        sweep="sw",
+        n_trials=12,
+        n_workers=2,
         preemptive=True,
     )
     ov = LocalParallel().hydra_overrides(StudyPoint("p", {}, {}, {}), pl, ctx)
@@ -137,7 +152,10 @@ def test_strategies_emit_literal_n_trials_when_not_preemptive() -> None:
     assert "__N_PER_WORKER__" not in " ".join(ov_single)
 
     pl_multi = PointLaunch(
-        strategy="optuna_multi_node", sweep="sw", n_trials=12, n_workers=3,
+        strategy="optuna_multi_node",
+        sweep="sw",
+        n_trials=12,
+        n_workers=3,
     )
     ov_multi = OptunaMultiNode().hydra_overrides(sp, pl_multi, ctx)
     # 12 total / 3 workers = 4 each (NOT 12 per worker).
@@ -151,12 +169,28 @@ def test_multi_worker_total_n_trials_split_across_workers() -> None:
     sp = StudyPoint("p", {}, {}, {})
     # 64 total across 8 packed workers -> 8 each; across 16 -> 4 each.
     ov8 = OptunaPackedNode().hydra_overrides(
-        sp, PointLaunch(strategy="optuna_packed_node", sweep="sw",
-                        n_trials=64, n_workers=8, workers_per_gpu=8), ctx)
+        sp,
+        PointLaunch(
+            strategy="optuna_packed_node",
+            sweep="sw",
+            n_trials=64,
+            n_workers=8,
+            workers_per_gpu=8,
+        ),
+        ctx,
+    )
     assert "hydra.sweeper.n_trials=8" in ov8
     ov16 = OptunaPackedNode().hydra_overrides(
-        sp, PointLaunch(strategy="optuna_packed_node", sweep="sw",
-                        n_trials=64, n_workers=16, workers_per_gpu=16), ctx)
+        sp,
+        PointLaunch(
+            strategy="optuna_packed_node",
+            sweep="sw",
+            n_trials=64,
+            n_workers=16,
+            workers_per_gpu=16,
+        ),
+        ctx,
+    )
     assert "hydra.sweeper.n_trials=4" in ov16
 
 
@@ -182,7 +216,9 @@ def test_optuna_multi_node_shared_study_per_worker_subdir() -> None:
         assert "hydra.sweeper.storage=sqlite:///store/pre_p.db" in ov
         assert "hydra.sweep.dir=sweeps/pre_p" in ov
     # Subdir namespace is per-worker (`hydra.job.num` left for Hydra to expand).
-    subdirs = [next(o for o in ov if o.startswith("hydra.sweep.subdir=")) for ov in sigs]
+    subdirs = [
+        next(o for o in ov if o.startswith("hydra.sweep.subdir=")) for ov in sigs
+    ]
     assert subdirs == [
         "hydra.sweep.subdir=w0_${hydra.job.num}",
         "hydra.sweep.subdir=w1_${hydra.job.num}",
@@ -222,17 +258,23 @@ def test_strategy_support_gates() -> None:
 
 def test_render_bakes_data_and_wires_sweep() -> None:
     jobs = _orch().render(INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t"))
-    assert [j for j, _ in jobs] == ["init_mlp_pinned_per_t__1d", "init_mlp_pinned_per_t__mv"]
+    assert [j for j, _ in jobs] == [
+        "init_mlp_pinned_per_t__1d",
+        "init_mlp_pinned_per_t__mv",
+    ]
     text = "\n".join(s for _, s in jobs)
     assert "experiment=init_mlp_pinned_per_t__1d" in text
     assert "+sweep=init_ablation_moo" in text
-    assert "experiment.data.mode=" not in text          # data baked into the preset
-    assert "experiment.model.latent_dim=" not in text    # tiny size: no override
+    assert "experiment.data.mode=" not in text  # data baked into the preset
+    assert "experiment.model.latent_dim=" not in text  # tiny size: no override
 
 
 def test_render_paper_size_doubles_latent() -> None:
     text = "\n".join(
-        s for _, s in _orch().render(INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t"), size="paper")
+        s
+        for _, s in _orch().render(
+            INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t"), size="paper"
+        )
     )
     assert "experiment.model.latent_dim=2" in text
     assert "experiment.model.latent_dim=8" in text
@@ -291,7 +333,9 @@ def test_render_optuna_multi_node_emits_one_sbatch_per_worker() -> None:
         assert f"runs/init_mlp_pinned_per_t__1d_w{i}/slurm-" in script
 
 
-def test_render_optuna_multi_node_keeps_single_worker_name_when_n_workers_is_1() -> None:
+def test_render_optuna_multi_node_keeps_single_worker_name_when_n_workers_is_1() -> (
+    None
+):
     """``n_workers=1`` (the degenerate case) keeps the base job name — no ``_w0`` suffix."""
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
     jobs = _orch().render(pts, launch_override=_force_multi_node(1))
@@ -356,7 +400,12 @@ def _preempt_render(
         worker_idx=worker_idx,
     )
     exp_sbatch = SBatch(
-        partition="gpu", time="04:00:00", gpus=1, cpus=4, mem="32G", nodes=1,
+        partition="gpu",
+        time="04:00:00",
+        gpus=1,
+        cpus=4,
+        mem="32G",
+        nodes=1,
         extra_flags=extra_flags,
     )
     return render_sbatch(
@@ -439,7 +488,9 @@ def test_render_non_preemptive_unchanged_regression() -> None:
     """
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
     override = lambda p: PointLaunch(
-        strategy="optuna_single_node", sweep="init_ablation_moo", n_trials=7,
+        strategy="optuna_single_node",
+        sweep="init_ablation_moo",
+        n_trials=7,
     )
     jobs = _orch().render(pts, launch_override=override)
     assert jobs, "expected at least one job"
@@ -468,13 +519,17 @@ def test_render_preemptive_extra_flags_appear_after_signal() -> None:
 def test_run_local_rejects_optuna_multi_node(tmp_path) -> None:
     """``optuna_multi_node`` is sbatch-only; local execution must fail loudly."""
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
-    override = lambda p: PointLaunch(strategy="optuna_multi_node", sweep="x", n_workers=2)
+    override = lambda p: PointLaunch(
+        strategy="optuna_multi_node", sweep="x", n_workers=2
+    )
     orch = _orch(storage_dir=str(tmp_path / "o"), sweeps_root=str(tmp_path / "s"))
     with pytest.raises(ValueError, match="--local"):
         orch.run_local(pts, out_dir=str(tmp_path / "out"), launch_override=override)
 
 
-def test_run_local_local_parallel_spawns_one_popen_per_worker(monkeypatch, tmp_path) -> None:
+def test_run_local_local_parallel_spawns_one_popen_per_worker(
+    monkeypatch, tmp_path
+) -> None:
     """``local_parallel`` spawns ``n_workers`` Popens per point and waits for all."""
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
     override = lambda p: PointLaunch(
@@ -495,7 +550,9 @@ def test_run_local_local_parallel_spawns_one_popen_per_worker(monkeypatch, tmp_p
     # subprocess.run should never be called on the multi-worker path.
     monkeypatch.setattr(
         "ddssm.launch.subprocess.run",
-        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("subprocess.run called on multi-worker path")),
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("subprocess.run called on multi-worker path")
+        ),
     )
 
     rc = orch.run_local(pts, out_dir=str(tmp_path / "out"), launch_override=override)
@@ -515,7 +572,9 @@ def test_run_local_local_parallel_spawns_one_popen_per_worker(monkeypatch, tmp_p
         assert any(a.startswith("hydra.sweeper.study_name=") for a in cmd)
 
 
-def test_run_local_local_parallel_propagates_worker_failure(monkeypatch, tmp_path) -> None:
+def test_run_local_local_parallel_propagates_worker_failure(
+    monkeypatch, tmp_path
+) -> None:
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
     override = lambda p: PointLaunch(
         strategy="local_parallel", sweep="init_ablation_moo", n_workers=2
@@ -534,7 +593,9 @@ def test_run_local_local_parallel_propagates_worker_failure(monkeypatch, tmp_pat
 
     monkeypatch.setattr("ddssm.launch.subprocess.Popen", _FailingSecondPopen)
     rc = orch.run_local(
-        pts, out_dir=str(tmp_path / "out"), launch_override=override,
+        pts,
+        out_dir=str(tmp_path / "out"),
+        launch_override=override,
     )
     assert rc == 1
 
@@ -595,7 +656,10 @@ def test_orchestrator_render_sets_worker_idx_into_preemptspec() -> None:
 def test_orchestrator_render_threads_storage_and_study_into_preemptspec() -> None:
     study = _single_stage_preempt_study(n_workers=2)
     orch = StudyOrchestrator(
-        study, storage_dir="STORE", sweeps_root="SWEEPS", study_prefix="abl",
+        study,
+        storage_dir="STORE",
+        sweeps_root="SWEEPS",
+        study_prefix="abl",
     )
     jobs = orch.render(study.points)
     # The single mock point's name is ``mock_preempt_point``; study_prefix=abl.
@@ -657,7 +721,8 @@ def test_orchestrator_render_preemptive_accepts_single_stage() -> None:
 
 
 def test_orchestrator_run_local_preemptive_sets_env_and_literal_n_trials(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     """Local path: substitute placeholder with literal ceil(n/w) + set env per Popen."""
     # Use the single-stage mock study and switch its launch to local_parallel.
@@ -674,8 +739,10 @@ def test_orchestrator_run_local_preemptive_sets_env_and_literal_n_trials(
         ),
     )
     orch = StudyOrchestrator(
-        study, study_prefix="abl",
-        storage_dir=str(tmp_path / "o"), sweeps_root=str(tmp_path / "s"),
+        study,
+        study_prefix="abl",
+        storage_dir=str(tmp_path / "o"),
+        sweeps_root=str(tmp_path / "s"),
     )
 
     spawned: list[tuple[list[str], dict | None]] = []
@@ -690,7 +757,9 @@ def test_orchestrator_run_local_preemptive_sets_env_and_literal_n_trials(
     monkeypatch.setattr("ddssm.launch.subprocess.Popen", _FakePopen)
     monkeypatch.setattr(
         "ddssm.launch.subprocess.run",
-        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("subprocess.run called on multi-worker path")),
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("subprocess.run called on multi-worker path")
+        ),
     )
 
     rc = orch.run_local(study.points, out_dir=str(tmp_path / "out"))
@@ -710,10 +779,14 @@ def test_orchestrator_run_local_preemptive_sets_env_and_literal_n_trials(
 
 def test_orchestrator_run_local_non_preemptive_unchanged(monkeypatch, tmp_path) -> None:
     """Without preemptive=True: no env mutation, and n_trials is the (already
-    divided) literal — no ``__N_PER_WORKER__`` placeholder to substitute."""
+    divided) literal — no ``__N_PER_WORKER__`` placeholder to substitute.
+    """
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
     override = lambda p: PointLaunch(
-        strategy="local_parallel", sweep="init_ablation_moo", n_trials=6, n_workers=2,
+        strategy="local_parallel",
+        sweep="init_ablation_moo",
+        n_trials=6,
+        n_workers=2,
     )
     orch = _orch(storage_dir=str(tmp_path / "o"), sweeps_root=str(tmp_path / "s"))
 
@@ -729,7 +802,9 @@ def test_orchestrator_run_local_non_preemptive_unchanged(monkeypatch, tmp_path) 
     monkeypatch.setattr("ddssm.launch.subprocess.Popen", _FakePopen)
     monkeypatch.setattr(
         "ddssm.launch.subprocess.run",
-        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("subprocess.run called on multi-worker path")),
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("subprocess.run called on multi-worker path")
+        ),
     )
 
     rc = orch.run_local(pts, out_dir=str(tmp_path / "out"), launch_override=override)
@@ -755,8 +830,14 @@ def test_launch_submit_requires_write_dir() -> None:
 
 
 def test_cli_dry_run(capsys) -> None:
-    rc = L.main(["init_centering", "--select", "cell=init_mlp_pinned_per_t",
-                 "--study-prefix", "abl", "--dry-run"])
+    rc = L.main([
+        "init_centering",
+        "--select",
+        "cell=init_mlp_pinned_per_t",
+        "--study-prefix",
+        "abl",
+        "--dry-run",
+    ])
     assert rc == 0
     out = capsys.readouterr().out
     assert "experiment=init_mlp_pinned_per_t__1d" in out
@@ -788,8 +869,9 @@ def test_submit_shells_out_once_per_file(tmp_path, monkeypatch) -> None:
 # --- Packed-node strategy (K workers per GPU) -------------------------------
 
 
-def _force_packed(*, n_workers: int, workers_per_gpu: int, cpus: int = 32,
-                  preemptive: bool = False):
+def _force_packed(
+    *, n_workers: int, workers_per_gpu: int, cpus: int = 32, preemptive: bool = False
+):
     """Launch override: rewrite every point to the optuna_packed_node strategy."""
 
     def _o(point):
@@ -818,7 +900,9 @@ def test_packed_node_reports_workers_per_job() -> None:
 def test_render_packed_single_group_one_sbatch_k_workers() -> None:
     """8 workers, workers_per_gpu=8 → ONE sbatch (base name) running 8 packed procs."""
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
-    jobs = _orch().render(pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8))
+    jobs = _orch().render(
+        pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8)
+    )
     # A single group → no _g suffix.
     assert [j for j, _ in jobs] == ["init_mlp_pinned_per_t__1d"]
     _, script = jobs[0]
@@ -827,7 +911,10 @@ def test_render_packed_single_group_one_sbatch_k_workers() -> None:
     assert "--gres=gpu:1" in script
     # 8 distinct workers, each thread-pinned and carrying its own worker id + subdir.
     for w in range(8):
-        assert f"DDSSM_WORKER_ID={w} OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 python -m ddssm.app" in script
+        assert (
+            f"DDSSM_WORKER_ID={w} OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 python -m ddssm.app"
+            in script
+        )
         assert f"hydra.sweep.subdir=w{w}_" in script
     assert script.count("PIDS+=($!)") == 8
     # All share one study + DB.
@@ -837,8 +924,9 @@ def test_render_packed_single_group_one_sbatch_k_workers() -> None:
 def test_render_packed_multi_group_splits_into_g_suffixed_jobs() -> None:
     """4 workers, workers_per_gpu=2 → 2 sbatch jobs (_g0, _g1) of 2 workers each."""
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
-    jobs = _orch().render(pts, launch_override=_force_packed(
-        n_workers=4, workers_per_gpu=2, cpus=8))
+    jobs = _orch().render(
+        pts, launch_override=_force_packed(n_workers=4, workers_per_gpu=2, cpus=8)
+    )
     assert [j for j, _ in jobs] == [
         "init_mlp_pinned_per_t__1d_g0",
         "init_mlp_pinned_per_t__1d_g1",
@@ -855,10 +943,13 @@ def test_render_packed_multi_group_splits_into_g_suffixed_jobs() -> None:
 
 def test_render_packed_preemptive_shares_preamble_and_fans_out_trap() -> None:
     """Preemptive packed job: one launch_remaining preamble, N_PER_WORKER over the
-    cell total, and a trap that fans the signal out to every packed PID."""
+    cell total, and a trap that fans the signal out to every packed PID.
+    """
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
-    jobs = _orch().render(pts, launch_override=_force_packed(
-        n_workers=8, workers_per_gpu=8, preemptive=True))
+    jobs = _orch().render(
+        pts,
+        launch_override=_force_packed(n_workers=8, workers_per_gpu=8, preemptive=True),
+    )
     _, script = jobs[0]
     assert "#SBATCH --requeue" in script
     # One shared preamble; per-worker trials bound to the shared budget.
@@ -872,7 +963,31 @@ def test_render_packed_preemptive_shares_preamble_and_fans_out_trap() -> None:
     assert "DDSSM_WORKER_ID=0 OMP_NUM_THREADS=4" in script
 
 
+def test_real_launch_emits_env_setup_before_python() -> None:
+    """Real ``_launch`` injects compute-node env bring-up before any python call.
+
+    The module load + venv activate must land after ``cd`` and before any
+    ``python`` call — otherwise ``python`` is not on the node PATH and the job
+    dies with exit 127.
+    """
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="mv")
+    jobs = _orch().render(pts)  # real _launch, no override
+    _, script = jobs[0]
+    lines = script.splitlines()
+    cd_idx = next(
+        i for i, ln in enumerate(lines) if ln.startswith('cd "$SLURM_SUBMIT_DIR"')
+    )
+    activate_idx = next(
+        i for i, ln in enumerate(lines) if "source .venv/bin/activate" in ln
+    )
+    py_idx = next(i for i, ln in enumerate(lines) if "python -m ddssm" in ln)
+    assert any("module load" in ln for ln in lines)
+    assert cd_idx < activate_idx < py_idx
+
+
 def test_packed_node_rejects_local() -> None:
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
     with pytest.raises(ValueError, match="local"):
-        _orch().run_local(pts, launch_override=_force_packed(n_workers=2, workers_per_gpu=2))
+        _orch().run_local(
+            pts, launch_override=_force_packed(n_workers=2, workers_per_gpu=2)
+        )
