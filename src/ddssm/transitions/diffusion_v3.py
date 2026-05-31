@@ -776,10 +776,15 @@ class DiffusionV3Transition(BaseTransition):
                 * sd2_flat
                 / (st2_flat + sd2_flat).clamp_min(eps_dtype)
             )
-            # IS correction divides by K · p_k.
+            # Importance-sampling correction. ``wtilde_base`` already bakes in
+            # the (½·dτ) Riemann measure, so this is the standard estimator of
+            # the sum ∫ ≈ Σ_k (½·dτ·w_k)·X_k  by drawing  k ~ p_k:  divide the
+            # baked weight by the sampling mass p_k (one-over-density × weight,
+            # per model-v2.org § Importance Sampling). Do NOT also divide by K —
+            # that double-counts the τ-measure (dτ ≈ 1/K already in wtilde_base)
+            # and shrinks the per-t ESM loss by a factor of K.
             weights = (
-                wtilde_full
-                / (self.num_steps * self.p_k[k_flat].clamp_min(eps_dtype))
+                wtilde_full / self.p_k[k_flat].clamp_min(eps_dtype)
             ).detach()
 
             F_pred = self.diffmodel(latent_w, side_w, c_noise_flat)  # (N*kc, d, 1)

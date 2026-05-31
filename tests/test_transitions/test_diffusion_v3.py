@@ -152,6 +152,50 @@ def test_transition_kl_runs_and_returns_finite() -> None:
     assert torch.isfinite(out["kl"])
 
 
+@pytest.mark.slow
+def test_transition_kl_is_invariant_to_num_steps() -> None:
+    """The ESM loss estimates an integral over τ — it must be ~invariant to the
+    grid size, not scale as 1/num_steps.
+
+    Regression guard for the IS-normalization bug: the per-draw weight baked in
+    the (½·dτ) Riemann measure AND divided by num_steps, double-counting the
+    τ-measure and shrinking the loss by a factor of K. Doubling num_steps then
+    halved the loss; the correct estimator is grid-invariant (up to MC +
+    discretisation noise).
+    """
+    def _sched(num_steps: int) -> DiffusionV3ScheduleConfig:
+        return DiffusionV3ScheduleConfig(
+            S_k=2048, k_chunk=256, num_steps=num_steps,
+            beta_min=0.1, beta_max=20.0, tau_min=1e-3, k_sampling_mode="uniform",
+        )
+
+    baseline = ZeroBaseline(latent_dim=D, j=J)  # no params → only the net to sync
+    t_coarse = _make_v3(baseline, schedule=_sched(10))
+    t_fine = _make_v3(baseline, schedule=_sched(20))
+    # Share F_ψ weights so the two estimate the SAME integrand.
+    t_fine.diffmodel.load_state_dict(t_coarse.diffmodel.state_dict())
+    t_fine.embed_layer.load_state_dict(t_coarse.embed_layer.state_dict())
+
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+
+    def _kl(tr) -> float:
+        torch.manual_seed(1)
+        sd = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+        return float(
+            tr.transition_kl(
+                enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
+                time_embed=time_embed, sigma_data=sd,
+            )["kl"].detach()
+        )
+
+    kl_coarse = _kl(t_coarse)
+    kl_fine = _kl(t_fine)
+    assert kl_coarse > 0 and kl_fine > 0
+    # Grid-invariant: ratio ≈ 1. (The 1/K bug gave kl_coarse/kl_fine ≈ 20/10 = 2.)
+    rel = abs(kl_coarse - kl_fine) / kl_fine
+    assert rel < 0.5, f"ESM loss scales with num_steps: {kl_coarse=} {kl_fine=}"
+
+
 def test_transition_kl_rejects_mc_only_encoder() -> None:
     """No silent MC fallback — Gaussian (mus, logvars) required."""
     baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
