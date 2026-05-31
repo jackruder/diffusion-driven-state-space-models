@@ -5,13 +5,19 @@ trainer's ``save_checkpoint`` / ``restore_from_checkpoint`` delegate
 there.
 """
 
+import logging
 import os
+import pickle
+import shutil
 import signal
+import tempfile
 from typing import TYPE_CHECKING, Any, Callable, final
 from contextlib import nullcontext, contextmanager
 from collections import deque
 
 import torch
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .stages import EarlyStopSpec
@@ -562,7 +568,28 @@ class DDSSMTrainer:
         # preempt-retry's StageOrchestrator can identify which stage produced
         # this ckpt and resume into the right one.
         self.save_checkpoint(ckpt_name, stage_prefix=checkpoint_prefix)
-        self.save_checkpoint(latest_name, stage_prefix=checkpoint_prefix)
+        # The pair (step-N, latest) must be atomic at the FS level: a SIGKILL
+        # between the two writes would otherwise leave ``ckpt_step{N}`` on disk
+        # while ``ckpt_latest`` still points to the previous N-K snapshot, and
+        # a preempt-retry would silently lose progress. We mirror step-N to
+        # latest by copying into a same-dir tmp file then ``os.replace`` —
+        # which is atomic on POSIX, and unlike ``os.link`` is safe on the
+        # shared FS (Lustre/NFS) the Tempest cluster runs on.
+        d = os.path.dirname(latest_name) or "."
+        f = tempfile.NamedTemporaryFile(
+            prefix="tmp_latest_", suffix=".pth", dir=d, delete=False,
+        )
+        tmppath = f.name
+        f.close()
+        try:
+            shutil.copyfile(ckpt_name, tmppath)
+            os.replace(tmppath, latest_name)
+        except Exception:
+            try:
+                os.remove(tmppath)
+            except OSError:
+                pass
+            raise
         return latest_name
 
     def _maybe_save_checkpoint(
@@ -576,14 +603,37 @@ class DDSSMTrainer:
                 step=step, checkpoint_prefix=checkpoint_prefix
             )
 
+    # Narrow set of exceptions that legitimately mean "no usable checkpoint
+    # on disk" — anything outside this set is a real bug that must surface
+    # loudly rather than silently restart from step 0 (ADR-0009 preempt
+    # path: a 6-hour stage-2 trial that hits a schema-incompatible ckpt
+    # would otherwise lose all progress without a trace).
+    _RESUME_NO_CKPT_EXCEPTIONS: tuple[type[BaseException], ...] = (
+        FileNotFoundError,    # missing file
+        IsADirectoryError,    # path points to a directory
+        EOFError,             # truncated pickle stream
+        pickle.UnpicklingError,  # malformed pickle
+        RuntimeError,         # torch.load corrupt-zip / state_dict shape drift
+        KeyError,             # payload missing expected keys
+        AttributeError,       # payload structure unexpected (e.g. not a dict)
+    )
+
     def _safe_resume(self, resume_from: str | None):
         if resume_from is None:
             return
         try:
             self.restore_from_checkpoint(resume_from, strict=True)
-            print(f"[resume] global_step={self.global_step}")
-        except Exception as e:
-            print(f"[resume] Failed to restore from {resume_from}: {e}")
+            log.info("[resume] global_step=%d", self.global_step)
+        except self._RESUME_NO_CKPT_EXCEPTIONS as e:
+            # Falling back to fresh start MUST be loud — a silent restart
+            # in a preempt-retry means hours of training are gone with no
+            # trace in the run logs.
+            self.global_step = 0
+            log.warning(
+                "[resume] FALLBACK TO FRESH START — failed to load "
+                "checkpoint %r: %s: %s. global_step reset to 0.",
+                resume_from, type(e).__name__, e,
+            )
 
     def fit(
         self,

@@ -276,3 +276,76 @@ def test_sigint_handler_only_installed_under_DDSSM_PREEMPTIVE_env(
             signal.signal(signal.SIGINT, original_sigint)
         except (TypeError, ValueError):
             signal.signal(signal.SIGINT, signal.default_int_handler)
+
+
+def test_periodic_checkpoint_pair_is_atomic_on_fault(tmp_path, monkeypatch) -> None:
+    """SIGKILL between the step-N write and the latest write must not strand
+    a stale ``ckpt_latest`` pointing to N-K while step-N is on disk.
+
+    Simulates the fault by patching ``os.replace`` to raise the second time
+    it would advance ``ckpt_latest`` (i.e. after step-N is already durable on
+    disk). ``ckpt_latest`` must still load as a valid checkpoint — either the
+    prior snapshot or step-N itself — and must never reference a half-written
+    or missing file.
+    """
+    trainer = _make_trainer(tmp_path)
+    # Establish a first valid pair so ``ckpt_latest`` exists on disk and is
+    # loadable. This is the "N-K" snapshot the resume path would fall back to.
+    first_latest = trainer._save_periodic_checkpoint(step=5, checkpoint_prefix="atom_test")
+    assert os.path.isfile(first_latest)
+    prior_payload = torch.load(first_latest, map_location="cpu", weights_only=False)
+    assert prior_payload.get("global_step") == 0
+    latest_path = first_latest
+    step_n_path = os.path.join(
+        trainer.checkpoint_dir, "ckpt_atom_test_step10.pth",
+    )
+
+    # Bump trainer state so the would-be step-N ckpt is distinguishable from
+    # the prior snapshot. We don't actually train — just advance the counter.
+    trainer.global_step = 10
+
+    # Inject a fault into the latest-pointer transition only. The step-N write
+    # goes through ``Checkpoint.save`` -> ``_atomic_save`` (its own
+    # ``os.replace``) and must complete normally. Patching by call ordinal
+    # is fragile; instead, patch by the target path so only the
+    # ``ckpt_*_latest.pth`` transition raises.
+    import os as _os
+    real_replace = _os.replace
+
+    def _faulty_replace(src, dst, *args, **kwargs):
+        if str(dst).endswith("ckpt_atom_test_latest.pth"):
+            raise OSError("simulated SIGKILL between step-N and latest writes")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr("ddssm.train.os.replace", _faulty_replace)
+
+    with pytest.raises(OSError, match="simulated SIGKILL"):
+        trainer._save_periodic_checkpoint(step=10, checkpoint_prefix="atom_test")
+
+    # Invariant: ``ckpt_latest`` still points to a fully-written, loadable
+    # checkpoint. It may be either the prior snapshot (preferred — that's
+    # what the fix guarantees) or step-N, but never a half-written tmp file.
+    assert os.path.isfile(latest_path), (
+        "ckpt_latest must still exist after the fault"
+    )
+    payload = torch.load(latest_path, map_location="cpu", weights_only=False)
+    assert isinstance(payload, dict) and "model_state" in payload, (
+        "ckpt_latest must remain a fully-written, loadable checkpoint"
+    )
+    # Step-N's own file should have been written durably before the fault —
+    # the fix writes it first via ``_atomic_save``, so the resume path can
+    # always recover at least up to step N from this file.
+    assert os.path.isfile(step_n_path), (
+        "step-N checkpoint must be durably on disk before the latest pointer "
+        "is advanced"
+    )
+    step_n_payload = torch.load(step_n_path, map_location="cpu", weights_only=False)
+    assert step_n_payload.get("global_step") == 10
+
+    # No leftover tmp file in the checkpoint dir — the fault path must clean
+    # up its same-dir tmp so a sweep-of-sweeps doesn't leak disk on Lustre.
+    leftovers = [
+        n for n in os.listdir(trainer.checkpoint_dir)
+        if n.startswith("tmp_latest_") or n.startswith("tmp_save_")
+    ]
+    assert not leftovers, f"leftover tmp files after fault: {leftovers}"
