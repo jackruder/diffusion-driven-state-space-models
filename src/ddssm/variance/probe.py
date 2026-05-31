@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import random
 import time
 from collections import defaultdict
@@ -176,6 +175,10 @@ def run_probe(
                     cell_key = (cell.objective, cell.k_sampling_mode)
                     cell_grads[cell_key].append(g.cpu().numpy())
                     per_sample = out["L_p_per_sample"].detach().cpu().numpy()
+                    # Mean-per-batch loss: out["L_p"] (== lp) is summed over the
+                    # B·S batch samples, so divide by the sample count to get a
+                    # per-sample-mean scale for the loss_var estimator.
+                    l_p_scalar = float(np.mean(per_sample))
                     for i, v in enumerate(per_sample):
                         rows.append({
                             "seed": int(seed),
@@ -187,7 +190,7 @@ def run_probe(
                             "k_idx": -1,
                             "sample_idx": int(i),
                             "L_p": float(v),
-                            "L_p_scalar": float(lp.item()),
+                            "L_p_scalar": l_p_scalar,
                             "grad_norm": g_norm,
                         })
 
@@ -225,6 +228,9 @@ def run_probe(
                             g.cpu().numpy()
                         )
                         per_sample = out["L_p_per_sample"].detach().cpu().numpy()
+                        # Mean-per-batch loss (see the replica branch above):
+                        # out["L_p"] is summed over the B·S batch samples.
+                        l_p_mean = float(np.mean(per_sample))
                         rows.append({
                             "seed": int(seed),
                             "batch_idx": int(batch_idx),
@@ -234,8 +240,8 @@ def run_probe(
                             "kind": "forced_k",
                             "k_idx": int(k),
                             "sample_idx": -1,
-                            "L_p": float(np.mean(per_sample)),
-                            "L_p_scalar": float(out["L_p"].item()),
+                            "L_p": l_p_mean,
+                            "L_p_scalar": l_p_mean,
                             "grad_norm": g_norm,
                         })
 

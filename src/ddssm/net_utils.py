@@ -128,15 +128,18 @@ def hist_abs_time_tokens(
     prepend_fut: bool = False,  # do we add t at the beginning?
     plus_one: bool = False,  # if true, [t-j + 1 ... t]
 ) -> torch.Tensor:
-    """Return absolute time embeddings.
-    Default behavior is to return [t-j, ..., t], where t is given
-    by t_idx.
+    """Gather absolute time embeddings for a history window ending at ``t_idx``.
 
-    Args:
-    for the j+1 history slots
-    [t, t-j, t-(j-1), ..., t-1], clamping indices to [0, T-1].
+    With both flags ``False`` (the default, used by the encoder), returns the
+    ``j`` slots strictly BEFORE ``t``: indices ``[t-j, ..., t-1]``, shape
+    ``(B, j, E_t)`` — the current step ``t`` is excluded (no leakage).
 
-    Shape: (B, j+1, E_t) or (B, j+1, E_t)
+    Flags (mutually exclusive) optionally include ``t``:
+      - ``prepend_fut=True``: prepend ``t`` → ``[t, t-j, ..., t-1]``, ``(B, j+1, E_t)``.
+      - ``plus_one=True``:    shift the window forward by one →
+        ``[t-j+1, ..., t]``, ``(B, j, E_t)``.
+
+    All indices are clamped to ``[0, T-1]``.
     """
     assert not (prepend_fut and plus_one)  # mutually exclusive
     assert j > 0  # not implemented otherwise
@@ -151,8 +154,8 @@ def hist_abs_time_tokens(
     if plus_one:
         offs = offs.add(1)
 
-    idx = t_idx.unsqueeze(1) + offs  # (B, j+1)
+    idx = t_idx.unsqueeze(1) + offs  # (B, j) or (B, j+1) if prepend_fut
     idx = idx.clamp(min=0, max=T - 1)
 
-    b = torch.arange(B, device=device).unsqueeze(1).expand(B, idx.shape[1])  # (B, j+1)
-    return time_embed[b, idx, :]  # (B, j+1, E_t)
+    b = torch.arange(B, device=device).unsqueeze(1).expand(B, idx.shape[1])
+    return time_embed[b, idx, :]  # (B, j[+1], E_t)

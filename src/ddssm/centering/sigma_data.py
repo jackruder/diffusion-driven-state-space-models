@@ -161,7 +161,7 @@ class SigmaDataBuffer(nn.Module):
         mu_hat_batch: torch.Tensor,
         sigma_t2_batch: torch.Tensor,
     ) -> torch.Tensor:
-        """``bar_σ_data²(t) = (1/D) (E‖σ_t²‖ + tr Var[μ̂_t])`` per t.
+        """``bar_σ_data²(t) = (1/D) (E[‖σ_t‖²] + tr Var[μ̂_t])`` per t.
 
         Per ``model-v2.org`` § Data-variance tracking, the per-batch
         estimator decomposes into average posterior variance plus the
@@ -193,7 +193,7 @@ class SigmaDataBuffer(nn.Module):
         mu_blocks = mu_hat_batch.view(n, per_t, d)
         s2_blocks = sigma_t2_batch.view(n, per_t, d)
 
-        avg_post_var = s2_blocks.mean(dim=1).sum(dim=1)  # (n,) = E[‖σ_t²‖]
+        avg_post_var = s2_blocks.mean(dim=1).sum(dim=1)  # (n,) = E[‖σ_t‖²] = E[Σ_d σ²_d]
         # tr Var[μ̂_t] = sum_d Var_b[μ̂_{t,b,d}], using sample variance.
         if per_t > 1:
             mu_var = mu_blocks.var(dim=1, unbiased=False).sum(dim=1)  # (n,)

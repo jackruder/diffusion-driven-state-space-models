@@ -35,8 +35,12 @@ import torch.nn as nn
 
 # Default clamp bounds for raw ``log σ_p²`` outputs from baseline heads.
 # Without these guards a single Linear layer can emit logvar≈±20, producing
-# var≈exp(±20) which NaNs the downstream KL / log-prob.  The encoder's
-# ``GaussianHead`` uses the same (-9, 6) convention.
+# var≈exp(±20) which NaNs the downstream KL / log-prob.  The clamp RANGE matches
+# the encoder's ``GaussianHead`` (-9, 6); note the parameterization differs —
+# these heads emit logvar as a raw Linear output, whereas ``GaussianHead`` uses
+# softplus + an ``init_logvar`` bias so it starts anchored near var≈1.  Here the
+# init variance is just whatever default Linear init produces (the R_σp
+# regularizer pulls it toward 0 during stage 1).
 _LOGVAR_MIN: float = -9.0
 _LOGVAR_MAX: float = 6.0
 

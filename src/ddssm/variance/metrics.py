@@ -47,10 +47,11 @@ def metric_loss_var(ctx: ProbeContext) -> dict[str, Any]:
     Replica rows are emitted one-per-MC-sample, so pooling their per-sample
     ``L_p`` and taking ``np.var`` would report within-batch sample spread, not
     the variance of the loss estimator across independent replicas. The right
-    quantity is ``L_p_scalar`` — the per-replica batch-mean loss, identical
-    across a replica's sample rows — varied over replicas. This mirrors the
-    sibling ``grad_var`` (estimator variance of the gradient) and is what makes
-    the ESM/DSM ratio in :func:`metric_ratio_esm_dsm` meaningful.
+    quantity is ``L_p_scalar`` — the per-replica mean-per-batch loss (mean over
+    the B·S batch samples, identical across a replica's sample rows) — varied
+    over replicas. This mirrors the sibling ``grad_var`` (across-replica
+    estimator variance of the gradient) and is what makes the ESM/DSM ratio in
+    :func:`metric_ratio_esm_dsm` meaningful.
     """
     rows = _replica_rows(ctx)
     by_cell: dict[str, dict[tuple, float]] = {}

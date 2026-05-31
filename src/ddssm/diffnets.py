@@ -328,8 +328,8 @@ class DiffResidualBlock(nn.Module):
     """Residual block with:
       - diffusion-step conditioning
       - side-info conditioning
-      - Mamba over time L (per feature)
-      - Transformer over features d (per time)
+      - a time mixer over L (per feature): conv / gru / identity
+      - a feature mixer over d (per time): transformer / conv / identity
       - gated conv-style update with residual + skip
 
     Shapes:
@@ -687,8 +687,8 @@ class ResidualBlock(nn.Module):
 class ContextProducer(nn.Module):
     """This forms an input to a residual block stack,
     by building a tensor with [h_t | z_{t-j:t-1} ].
-    That way, causality in mamba allows the h_t future summary to attend to
-    latent history z_{t-j:t-1}, to produce the parameters for z_t.
+    That way the residual-block time/feature mixers let the h_t future summary
+    combine with the latent history z_{t-j:t-1} to produce the parameters for z_t.
     """
 
     def __init__(

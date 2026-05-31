@@ -120,7 +120,6 @@ class IdentityAggregator(BaseHistoryAggregator):
         static_context: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         # z_hist: (B, d, 1); time: (B, 1, E_t); mask: (B, 1)
-        B = z_hist.shape[0]
         z = z_hist.squeeze(-1)  # (B, d)
         out = self.z_proj(z)  # (B, H)
         if self.time_proj is not None:
@@ -218,6 +217,12 @@ class GRUAggregator(BaseHistoryAggregator):
         static_context: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         x = self.per_step(z_hist=z_hist, hist_time_emb=hist_time_emb, pad_mask=pad_mask)
+        # TODO(masking): unlike AttentionAggregator (which hard-masks padded
+        # history via src_key_padding_mask + masked mean), this only flags
+        # padding via the mask-as-feature channel in ``per_step``. Padded
+        # left-context for early t<j (and GluonTS past_is_pad) still propagates
+        # through the GRU recurrence. Harmless at the shipped j=1; revisit if an
+        # AttentionAggregator-grade hard mask is wanted for j>1 ablations.
         out, _ = self.rnn(x)  # (B, j, H)
         return out[:, -1, :]  # newest-step output
 
@@ -280,6 +285,11 @@ class MLPAggregator(BaseHistoryAggregator):
         static_context: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         x = self.per_step(z_hist=z_hist, hist_time_emb=hist_time_emb, pad_mask=pad_mask)
+        # TODO(masking): like GRUAggregator, padded history is only flagged via
+        # the mask-as-feature channel — the flattened MLP input still includes
+        # padded slots (the net can learn to down-weight them, but they aren't
+        # guaranteed-zero like AttentionAggregator's masked mean). Harmless at
+        # j=1; revisit for j>1 ablations.
         B = x.shape[0]
         return self.mlp(x.reshape(B, -1))
 
