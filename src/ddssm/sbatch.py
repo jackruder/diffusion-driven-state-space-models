@@ -264,7 +264,7 @@ def render_packed_sbatch(
         lines.append(f"#SBATCH {flag}")
 
     lines += [
-        "set -uo pipefail",
+        "set -euo pipefail",
         'cd "$SLURM_SUBMIT_DIR"',
     ]
     lines += list(spec.setup)

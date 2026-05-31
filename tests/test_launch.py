@@ -998,3 +998,36 @@ def test_packed_node_rejects_local() -> None:
         _orch().run_local(
             pts, launch_override=_force_packed(n_workers=2, workers_per_gpu=2)
         )
+
+
+# --- Shell-strictness invariant ---------------------------------------------
+#
+# Both renderers MUST emit ``set -euo pipefail``. The ``-e`` flag is what stops
+# the preempt preamble from silently launching workers with an empty
+# ``$N_PER_WORKER`` when ``ddssm.launch_remaining`` errors (DB lock, NFS hiccup,
+# import failure) — without it, ``N_REMAINING=""`` propagates and Hydra parses
+# ``n_trials=`` as empty, crashing cryptically (or worse, leaving zombie workers).
+
+
+@pytest.mark.parametrize("renderer", ["render_sbatch", "render_packed_sbatch"])
+def test_renderers_emit_strict_bash_pipefail(renderer: str) -> None:
+    from ddssm.sbatch import render_packed_sbatch, render_sbatch
+
+    exp_sbatch = SBatch(
+        partition="gpu",
+        time="04:00:00",
+        gpus=1,
+        cpus=4,
+        mem="32G",
+        nodes=1,
+    )
+    if renderer == "render_sbatch":
+        script = render_sbatch("mock", exp_sbatch=exp_sbatch)
+    else:
+        script = render_packed_sbatch(
+            "mock",
+            exp_sbatch=exp_sbatch,
+            worker_overrides=[(0, [])],
+        )
+    assert "set -euo pipefail" in script
+    assert "set -uo pipefail\n" not in script
