@@ -123,15 +123,17 @@ sweep_store(InitAblationMOO, name="init_ablation_moo")
 #   * lambda_sigma_p / sigma_pert / stage_*_warmup upper tails are rarely
 #     good -> mild upper trims.
 #   * n_pretrain is ~irrelevant (importance ~0.03); drop the dead upper tail.
-#   * anchor_lambda is DROPPED here. It is a no-op for pinned mu_p anyway; for
-#     the learnable cells this means anchor_lambda is NOT swept and falls back to
-#     the StagesB default (~1e-2). Re-add it (wide) if learnable cells should tune
-#     their R_mu_p regulariser — the wide ``init_ablation_moo`` above still has it.
+#   * anchor_lambda is kept WIDE (``interval(1e-4, 1e-1)``). There's no round-1
+#     data to narrow it (it was never swept), and it's a no-op flat axis for the
+#     pinned cells (μ_p frozen → R_μp zeros out), but the learnable cells tune
+#     their R_μp regulariser through it.
 _INIT_ABLATION_R2_PARAMS = {
     "experiment.training.stages.n_pretrain":
         "tag(log, int(interval(5, 300)))",
     "experiment.training.stages.sigma_pert":
         "tag(log, interval(1e-3, 3e-2))",
+    "experiment.training.stages.anchor_lambda":
+        "tag(log, interval(1e-4, 1e-1))",
     "experiment.training.stages.lambda_sigma_p":
         "tag(log, interval(1e-3, 5e-2))",
     "experiment.training.stages.base_lr":
