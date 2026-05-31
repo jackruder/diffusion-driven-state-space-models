@@ -2,11 +2,39 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 from hydra_zen import instantiate
 
 from ddssm.study import Axis, Study, StudyPoint
+from ddssm.launch import register_study, STUDY_REGISTRY
 from experiments.init_centering.study import INIT_CENTERING_STUDY
+
+
+def test_study_rejects_duplicate_point_names() -> None:
+    """A name_point/axis-key collision raises instead of silently overwriting."""
+    with pytest.raises(ValueError, match="duplicate point names"):
+        Study.from_axes(
+            "collide",
+            axes=[Axis("x", ["a", "b"], key=lambda v: v)],
+            build=lambda c: {"cfg": c["x"]},
+            name_point=lambda tags: "same",  # both coords -> same name
+            launch=lambda p: None,
+        )
+
+
+def test_register_study_into_publishes_points() -> None:
+    """register_study(study, into=store) publishes every point in one call."""
+    published: dict[str, object] = {}
+    study = Study.from_axes(
+        "study_into_test",
+        axes=[Axis("x", ["a", "b"], key=lambda v: v)],
+        build=lambda c: {"cfg": c["x"]},
+        launch=lambda p: None,
+    )
+    register_study(study, into=lambda config, name: published.__setitem__(name, config))
+    assert set(published) == {"a", "b"}
+    assert STUDY_REGISTRY["study_into_test"] is study
 
 
 # ---------------------------------------------------------------------------

@@ -53,10 +53,12 @@ PilotMOObjective = Objectives(specs=[
 ])
 
 
-# Default ELBO target for the wallclock objective. Round-1 sweeps use
-# -30 (identity-class hparams reach easily, zero/mlp are competitive).
-# Override via Hydra: ``experiment.eval.kwargs.wallclock_to_target.target_value=...``.
-PILOT_WALLCLOCK_TARGET: float = -30.0
+# Default ELBO target for the wallclock objective. Set to 0 (the ELBO
+# ceiling) for the 5k-step retune: the old -30 was unreachable at 1k steps
+# (every trial under-trained, obj0 saturated), so we raise both the step
+# budget and the target. Override via Hydra:
+# ``experiment.eval.kwargs.wallclock_to_target.target_value=...``.
+PILOT_WALLCLOCK_TARGET: float = 0.0
 
 
 # The five Phase-A headline metrics + two diagnostic secondary metrics

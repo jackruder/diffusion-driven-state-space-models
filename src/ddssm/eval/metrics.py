@@ -685,7 +685,7 @@ def eval_stage2_elbo_surrogate(
     if n_batches == 0:
         return {"stage2_elbo_surrogate": float("nan")}
     out = {f"stage2_elbo_surrogate_{k}": v / n_batches for k, v in sums.items()}
-    # The total surrogate (loss/total under V3) is also the headline value.
+    # The total surrogate (loss/total under diffusion) is also the headline value.
     out["stage2_elbo_surrogate"] = out.pop("stage2_elbo_surrogate_stage2_elbo_surrogate")
     out["stage2_elbo_surrogate_n_batches"] = int(n_batches)
     return out

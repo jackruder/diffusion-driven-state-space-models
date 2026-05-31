@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`ddssm.transitions.diffusion_v3`."""
+"""Unit tests for :mod:`ddssm.transitions.diffusion`."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ from ddssm.diffnets import (
 from ddssm.aux_posterior import AuxPosterior
 from ddssm.centering.baselines import MLPBaseline, ZeroBaseline
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3Transition,
-    DiffusionV3ScheduleConfig,
+from ddssm.transitions.diffusion import (
+    DiffusionTransition,
+    DiffusionScheduleConfig,
 )
 
 B = 2
@@ -44,17 +44,17 @@ def _tiny_unet():
     )
 
 
-def _make_v3(
+def _make_diffusion(
     baseline,
     j: int = J,
-    schedule: DiffusionV3ScheduleConfig | None = None,
-) -> DiffusionV3Transition:
+    schedule: DiffusionScheduleConfig | None = None,
+) -> DiffusionTransition:
     if schedule is None:
-        schedule = DiffusionV3ScheduleConfig(
+        schedule = DiffusionScheduleConfig(
             S_k=1, k_chunk=1, num_steps=20, beta_min=0.1, beta_max=20.0,
             tau_min=1e-3, k_sampling_mode="uniform",
         )
-    return DiffusionV3Transition(
+    return DiffusionTransition(
         baseline=baseline,
         latent_dim=D,
         j=j,
@@ -84,12 +84,12 @@ def _make_batch(j: int = J, T: int = T):
 def test_constructor_rejects_baseline_with_wrong_dim() -> None:
     """The baseline's latent_dim must match."""
     with pytest.raises(ValueError):
-        _make_v3(MLPBaseline(latent_dim=D + 1, j=J))
+        _make_diffusion(MLPBaseline(latent_dim=D + 1, j=J))
 
 
 def test_constructor_zero_inits_final_layer() -> None:
-    """V3 builds its CSDIUnet with ``zero_init_output=True``."""
-    transition = _make_v3(MLPBaseline(latent_dim=D, j=J))
+    """diffusion builds its CSDIUnet with ``zero_init_output=True``."""
+    transition = _make_diffusion(MLPBaseline(latent_dim=D, j=J))
     # CSDIUnet's final layer is ``output_projection2``.
     w = transition.diffmodel.output_projection2.weight.detach()
     assert torch.equal(w, torch.zeros_like(w))
@@ -97,7 +97,7 @@ def test_constructor_zero_inits_final_layer() -> None:
 
 def test_constructor_side_dim_bumps_by_one() -> None:
     """The side-info dim accommodates the padding-mask channel."""
-    transition = _make_v3(MLPBaseline(latent_dim=D, j=J))
+    transition = _make_diffusion(MLPBaseline(latent_dim=D, j=J))
     # E_t + E_f + cond_mask + padding_mask = EMB_TIME + EMB_TIME + 1 + 1
     expected = EMB_TIME + EMB_TIME + 1 + 1
     assert transition.side_dim == expected
@@ -111,7 +111,7 @@ def test_constructor_side_dim_bumps_by_one() -> None:
 def test_edm_constants_reduce_to_v2_at_sigma_data_unit() -> None:
     """At σ_data² ≡ 1, the per-call EDM constants match V2's hardcoded values."""
     baseline = ZeroBaseline(latent_dim=D, j=J)
-    transition = _make_v3(baseline)
+    transition = _make_diffusion(baseline)
     K = transition.num_steps
     k_idx = torch.arange(K).view(K, 1)  # (K, 1) — one per step
 
@@ -120,14 +120,14 @@ def test_edm_constants_reduce_to_v2_at_sigma_data_unit() -> None:
     # σ_data² ≡ 1.
     sd2 = torch.ones(K)
     denom = sigma_tilde2 + sd2
-    c_skip_v3 = sd2 / denom
-    c_out_v3 = transition.sigma_tilde * sd2.sqrt() / denom.sqrt()
-    c_in_v3 = 1.0 / denom.sqrt()
+    c_skip = sd2 / denom
+    c_out = transition.sigma_tilde * sd2.sqrt() / denom.sqrt()
+    c_in = 1.0 / denom.sqrt()
 
     # Verify the V2 form.
-    assert torch.allclose(c_skip_v3, transition.alpha2, atol=1e-6)
-    assert torch.allclose(c_out_v3, transition.one_minus_alpha2.sqrt(), atol=1e-6)
-    assert torch.allclose(c_in_v3, transition.alpha, atol=1e-6)
+    assert torch.allclose(c_skip, transition.alpha2, atol=1e-6)
+    assert torch.allclose(c_out, transition.one_minus_alpha2.sqrt(), atol=1e-6)
+    assert torch.allclose(c_in, transition.alpha, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ def test_edm_constants_reduce_to_v2_at_sigma_data_unit() -> None:
 def test_transition_kl_runs_and_returns_finite() -> None:
     """``transition_kl`` produces a finite scalar loss."""
     baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
-    transition = _make_v3(baseline)
+    transition = _make_diffusion(baseline)
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
     out = transition.transition_kl(
@@ -152,10 +152,54 @@ def test_transition_kl_runs_and_returns_finite() -> None:
     assert torch.isfinite(out["kl"])
 
 
+@pytest.mark.slow
+def test_transition_kl_is_invariant_to_num_steps() -> None:
+    """The ESM loss estimates an integral over τ — it must be ~invariant to the
+    grid size, not scale as 1/num_steps.
+
+    Regression guard for the IS-normalization bug: the per-draw weight baked in
+    the (½·dτ) Riemann measure AND divided by num_steps, double-counting the
+    τ-measure and shrinking the loss by a factor of K. Doubling num_steps then
+    halved the loss; the correct estimator is grid-invariant (up to MC +
+    discretisation noise).
+    """
+    def _sched(num_steps: int) -> DiffusionScheduleConfig:
+        return DiffusionScheduleConfig(
+            S_k=2048, k_chunk=256, num_steps=num_steps,
+            beta_min=0.1, beta_max=20.0, tau_min=1e-3, k_sampling_mode="uniform",
+        )
+
+    baseline = ZeroBaseline(latent_dim=D, j=J)  # no params → only the net to sync
+    t_coarse = _make_diffusion(baseline, schedule=_sched(10))
+    t_fine = _make_diffusion(baseline, schedule=_sched(20))
+    # Share F_ψ weights so the two estimate the SAME integrand.
+    t_fine.diffmodel.load_state_dict(t_coarse.diffmodel.state_dict())
+    t_fine.embed_layer.load_state_dict(t_coarse.embed_layer.state_dict())
+
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+
+    def _kl(tr) -> float:
+        torch.manual_seed(1)
+        sd = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+        return float(
+            tr.transition_kl(
+                enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
+                time_embed=time_embed, sigma_data=sd,
+            )["kl"].detach()
+        )
+
+    kl_coarse = _kl(t_coarse)
+    kl_fine = _kl(t_fine)
+    assert kl_coarse > 0 and kl_fine > 0
+    # Grid-invariant: ratio ≈ 1. (The 1/K bug gave kl_coarse/kl_fine ≈ 20/10 = 2.)
+    rel = abs(kl_coarse - kl_fine) / kl_fine
+    assert rel < 0.5, f"ESM loss scales with num_steps: {kl_coarse=} {kl_fine=}"
+
+
 def test_transition_kl_rejects_mc_only_encoder() -> None:
     """No silent MC fallback — Gaussian (mus, logvars) required."""
     baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
-    transition = _make_v3(baseline)
+    transition = _make_diffusion(baseline)
     zs, _, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
     with pytest.raises(ValueError):
@@ -176,7 +220,7 @@ def test_transition_kl_rejects_mc_only_encoder() -> None:
 def test_score_matches_closed_form_under_zero_init_diffmodel() -> None:
     """Score collapses to ``-ẑ / (α · (σ̃² + σ_d²))`` when F_ψ ≡ 0.
 
-    With V3's default zero-init final projection both ``weight`` and
+    With diffusion's default zero-init final projection both ``weight`` and
     ``bias`` of ``output_projection2`` are zero, so ``F_ψ`` outputs zero
     exactly and the EDM denoiser reduces to ``D_ψ = c_skip · ẑ``.
     Substituting into the native-coord score
@@ -192,7 +236,7 @@ def test_score_matches_closed_form_under_zero_init_diffmodel() -> None:
     """
     torch.manual_seed(42)
     baseline = MLPBaseline(latent_dim=D, j=J)
-    transition = _make_v3(baseline)
+    transition = _make_diffusion(baseline)
     transition.eval()
 
     out_w = transition.diffmodel.output_projection2.weight
@@ -252,12 +296,12 @@ def test_log_prob_matches_analytic_gaussian_when_score_is_marginal() -> None:
     """
     torch.manual_seed(0)
     baseline = ZeroBaseline(latent_dim=D, j=J)
-    schedule = DiffusionV3ScheduleConfig(
+    schedule = DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=20,
         beta_min=0.1, beta_max=50.0, tau_min=1e-3,
         k_sampling_mode="uniform",
     )
-    transition = _make_v3(baseline, schedule=schedule)
+    transition = _make_diffusion(baseline, schedule=schedule)
     transition.eval()
 
     mu_t = torch.tensor([[0.3, -0.4], [0.5, 0.2]])
@@ -317,12 +361,12 @@ def test_log_prob_hutchinson_matches_exact_for_diagonal_jacobian() -> None:
     """
     torch.manual_seed(0)
     baseline = ZeroBaseline(latent_dim=D, j=J)
-    schedule = DiffusionV3ScheduleConfig(
+    schedule = DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=20,
         beta_min=0.1, beta_max=50.0, tau_min=1e-3,
         k_sampling_mode="uniform",
     )
-    transition = _make_v3(baseline, schedule=schedule)
+    transition = _make_diffusion(baseline, schedule=schedule)
     transition.eval()
 
     mu_t = torch.tensor([[0.3, -0.4], [0.5, 0.2]])
@@ -368,7 +412,7 @@ def test_transition_kl_updates_sigma_data_per_t() -> None:
     """``transition_kl`` updates buffer slots for every visited t."""
     j = J
     baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
-    transition = _make_v3(baseline)
+    transition = _make_diffusion(baseline)
     zs, enc_stats, time_embed, logq_paths = _make_batch(j=j)
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t", ema_decay=0.0)
     pre_step = sigma_data.ema_step.clone()
@@ -395,7 +439,7 @@ def test_transition_kl_updates_sigma_data_per_t() -> None:
 def test_transition_kl_init_shape_and_finite(j: int) -> None:
     """Init term returns finite ``loss_init`` and ``kl_aux``."""
     baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
-    transition = _make_v3(baseline, j=j)
+    transition = _make_diffusion(baseline, j=j)
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
     zs, enc_stats, time_embed, _ = _make_batch(j=j)
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
@@ -409,7 +453,7 @@ def test_transition_kl_init_shape_and_finite(j: int) -> None:
     assert set(out.keys()) == {"loss", "entropy", "vhp", "kl_aux", "loss_init"}
     for k in ("loss", "entropy", "vhp", "kl_aux", "loss_init"):
         assert torch.isfinite(out[k])
-    # V3 cancels the encoder entropy in stage 2: entropy == 0, loss == vhp.
+    # diffusion cancels the encoder entropy in stage 2: entropy == 0, loss == vhp.
     assert out["entropy"].item() == 0.0
     assert torch.allclose(out["loss"], out["vhp"])
     assert torch.allclose(out["vhp"], out["loss_init"] + out["kl_aux"])
@@ -419,7 +463,7 @@ def test_transition_kl_init_updates_sigma_data_at_init_slots() -> None:
     """Init walks update buffer slots t = 1 … j."""
     j = 2
     baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
-    transition = _make_v3(baseline, j=j)
+    transition = _make_diffusion(baseline, j=j)
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
     zs, enc_stats, time_embed, _ = _make_batch(j=j)
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t", ema_decay=0.0)
@@ -442,7 +486,7 @@ def test_transition_kl_init_grad_flows_to_aux_posterior() -> None:
     """Gradient propagates through the aux posterior at init."""
     j = 1
     baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
-    transition = _make_v3(baseline, j=j)
+    transition = _make_diffusion(baseline, j=j)
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
     zs, enc_stats, time_embed, _ = _make_batch(j=j)
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed", init_value=1.0)
@@ -467,7 +511,7 @@ def test_transition_kl_init_grad_flows_to_aux_posterior() -> None:
 def test_log_prob_init_shape_and_finite(j: int) -> None:
     """``log_prob_init`` returns a finite ``(B, S)`` per-trajectory log-density."""
     baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
-    transition = _make_v3(baseline, j=j)
+    transition = _make_diffusion(baseline, j=j)
     transition.eval()
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
     zs, _, time_embed, _ = _make_batch(j=j)
@@ -486,7 +530,7 @@ def test_log_prob_init_does_not_update_sigma_data() -> None:
     """Unlike ``transition_kl_init``, log-density eval must not touch the buffer."""
     j = 2
     baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
-    transition = _make_v3(baseline, j=j)
+    transition = _make_diffusion(baseline, j=j)
     transition.eval()
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
     zs, _, time_embed, _ = _make_batch(j=j)
@@ -511,7 +555,7 @@ def test_log_prob_init_does_not_update_sigma_data() -> None:
 def test_sample_shape_and_baseline_shift() -> None:
     """``sample`` returns ``(B, 1, d)`` and adds μ_p back to the centered draw."""
     baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
-    transition = _make_v3(baseline)
+    transition = _make_diffusion(baseline)
     z_hist = torch.randn(B, D, J)
     ctx = {
         "hist_time_emb": torch.zeros(B, J, EMB_TIME),

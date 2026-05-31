@@ -50,9 +50,9 @@ from ddssm.fusions import ConcatLinearFusion
 from ddssm.futsum import GRUFutureSummary
 from ddssm.gaussians import GaussianHead
 from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
-from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3ScheduleConfig,
-    DiffusionV3Transition,
+from ddssm.transitions.diffusion import (
+    DiffusionScheduleConfig,
+    DiffusionTransition,
 )
 
 from tests.test_likelihood.test_lgssm_integration import (
@@ -75,7 +75,7 @@ T_MAX = 10
 
 
 def _make_scalar_stage2_model() -> DDSSM_base:
-    """Tiny d=1, j=1 stage-2 V3 model.  Leaf modules are placeholders —
+    """Tiny d=1, j=1 stage-2 diffusion model.  Leaf modules are placeholders —
     the test monkey-patches encoder/decoder/score/init to ground truth."""
     d, data, j = 1, 1, 1
     ctx = partial(
@@ -110,14 +110,14 @@ def _make_scalar_stage2_model() -> DDSSM_base:
         hidden_dim=CHANNELS, context=ctx, gaussian_head=GaussianHead,
     )
     baseline = MLPBaseline(latent_dim=d, j=j, hidden_dim=8, n_layers=2)
-    schedule = DiffusionV3ScheduleConfig(
+    schedule = DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=20, beta_min=BETA_MIN, beta_max=BETA_MAX,
         tau_min=1e-3, k_sampling_mode="uniform",
     )
     stage1 = BaselineGaussianTransition(
         baseline=baseline, latent_dim=d, j=j, emb_time_dim=EMB_TIME,
     )
-    v3 = DiffusionV3Transition(
+    transition = DiffusionTransition(
         baseline=baseline, latent_dim=d, j=j, emb_time_dim=EMB_TIME,
         T_max=T_MAX, unet=tiny_unet, schedule=schedule,
     )
@@ -130,7 +130,7 @@ def _make_scalar_stage2_model() -> DDSSM_base:
         trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
     )
     model = DDSSM_base(
-        encoder=encoder, decoder=decoder, transition=v3,
+        encoder=encoder, decoder=decoder, transition=transition,
         j=j, data_dim=data, latent_dim=d, emb_time_dim=EMB_TIME,
         aux_posterior=aux, baseline=baseline,
         sigma_data=sigma_data, stage1_transition=stage1,

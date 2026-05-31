@@ -428,8 +428,11 @@ def test_render_preemptive_emits_three_sbatch_directives() -> None:
 def test_render_preemptive_injects_launch_remaining_invocation() -> None:
     script = _preempt_render(n_trials=12)
     assert "N_REMAINING=$(python -m ddssm.launch_remaining" in script
-    assert "--cleanup-running-older-than 60" in script
     assert "--target 12" in script
+    # The preamble must NOT auto-reap: --cleanup-running-older-than would fail
+    # the live in-flight trials of any other workers sharing the study (joining
+    # groups / requeues). launch_remaining is budget-count only here.
+    assert "--cleanup-running-older-than" not in script
 
 
 def test_render_preemptive_exits_early_if_remaining_is_zero() -> None:
@@ -922,6 +925,59 @@ def test_render_packed_single_group_one_sbatch_k_workers() -> None:
     assert script.count("PIDS+=($!)") == 8
     # All share one study + DB.
     assert script.count("hydra.sweeper.study_name=abl_init_mlp_pinned_per_t__1d") == 8
+
+
+def test_precreate_storage_creates_schema_before_submit(tmp_path) -> None:
+    """``_precreate_storage`` must create each cell's Optuna schema once, so the
+    fan-out of multi-GPU group-jobs can't race on CREATE TABLE.
+    """
+    import sqlite3
+
+    orch = StudyOrchestrator(
+        INIT_CENTERING_STUDY, study_prefix="t", storage_dir=str(tmp_path),
+        sweeps_root=str(tmp_path),
+    )
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="mv")
+    orch._precreate_storage(pts, (None,))
+    db = tmp_path / "t_init_mlp_pinned_per_t__mv.db"
+    assert db.exists()
+    tables = {
+        r[0]
+        for r in sqlite3.connect(str(db))
+        .execute("SELECT name FROM sqlite_master WHERE type='table'")
+        .fetchall()
+    }
+    assert "studies" in tables and "trials" in tables
+
+
+def test_render_packed_nonpreempt_inits_schema_before_workers() -> None:
+    """Non-preempt packed jobs must pre-create the Optuna schema once before the
+    K workers spawn, else they race on CREATE TABLE and all-but-one die with
+    "table studies already exists". The init must precede the worker loop.
+    """
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    jobs = _orch().render(pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8))
+    _, script = jobs[0]
+    lines = script.splitlines()
+    init_idx = next(i for i, ln in enumerate(lines) if "RDBStorage(" in ln)
+    pids_idx = next(i for i, ln in enumerate(lines) if ln == "PIDS=()")
+    first_worker = next(i for i, ln in enumerate(lines) if "python -m ddssm.app" in ln)
+    assert init_idx < pids_idx < first_worker
+    # It is the non-preempt path — no launch_remaining (that does the init for preempt).
+    assert "ddssm.launch_remaining" not in script
+
+
+def test_render_packed_preempt_skips_redundant_schema_init() -> None:
+    """Preempt packed jobs init the schema via launch_remaining, so they must NOT
+    also emit the RDBStorage pre-init (it would be redundant).
+    """
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    jobs = _orch().render(
+        pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8, preemptive=True)
+    )
+    _, script = jobs[0]
+    assert "RDBStorage(" not in script
+    assert "ddssm.launch_remaining" in script
 
 
 def test_render_packed_multi_group_splits_into_g_suffixed_jobs() -> None:

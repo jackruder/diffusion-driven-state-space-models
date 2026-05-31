@@ -5,11 +5,9 @@ args, draws to a Matplotlib ``Figure``, and saves to ``save_path``.
 The viz runner walks the names listed in :class:`VizSpec.plots` and
 calls each one in turn.
 
-The plotting logic was originally bundled into a single monolithic
-``visualize_results`` in :mod:`ddssm.eval_utils`. It is split here
-into composable pieces so a paper figure that needs (say) only the
-1-D forecast panel can be produced without also drawing the 2-D
-spatial path.
+The plotting logic is split into composable pieces so a paper figure
+that needs (say) only the 1-D forecast panel can be produced without
+also drawing the 2-D spatial path.
 """
 
 from __future__ import annotations

@@ -18,23 +18,31 @@ states. An ELBO objective jointly trains:
 
 ```
 src/ddssm/
-  conf/              # hydra-zen ConfigStore: Confs, config groups, presets
+  conf/              # small library of reusable Hydra defaults (config.yaml, hydra/sweeper/, wandb/)
+  builders.py        # convenience hydra-zen builds() for ad-hoc Experiment assembly
   dssd.py            # Core model: DDSSM_base (ELBO forward pass)
   experiment.py      # Experiment composition root (data + model + trainer)
   train.py           # DDSSMTrainer (fit / checkpoint helpers)
-  stages.py          # Multi-stage training orchestration
+  stages.py          # Multi-stage training orchestration (StageOrchestrator)
+  centering/         # Baseline (μ_p) heads + stage-1 → stage-2 centering handoff
   encoder.py         # Variational encoder networks
   decoder.py         # Decoder networks
-  transitions/       # Transition models (Gaussian + diffusion)
+  transitions/       # Transition models (Gaussian, baseline-Gaussian, diffusion_v3)
   diffnets.py        # CSDIUnet and related networks
   net_utils.py       # Shared utilities (time embeddings, side info)
   loggers.py         # CSV + TensorBoard + W&B logging helpers
-  eval_utils.py      # Visualisation utilities
   eval_metrics.py    # MAE / CRPS-sum metrics + recon-divergence detection
-  eval/              # Hydra evaluation stage (runner + metric registry)
-  viz/               # Hydra visualisation stage (runner + plot registry)
-  variance/          # Hydra variance probe stage (runner + metric/plot registries)
-  data/              # Dataset loaders (GluonTS, PM2.5, KDD, synthetic)
+  eval/              # evaluation stage (runner + metric registry); CLI: python -m ddssm.evaluate
+  viz/               # visualisation stage (runner + plot registry); CLI: python -m ddssm.visualize
+  variance/          # variance probe stage (runner + metric/plot registries); CLI: python -m ddssm.variance
+  data/              # Dataset loaders (GluonTS, KDD, synthetic)
+  launch.py          # Study orchestrator; CLI: python -m ddssm.launch <study>
+
+experiments/         # named presets defined in Python (registered at import time)
+  _make.py           # experiment(...) factory + run()/override() helpers
+  _cli.py            # backs `python -m experiments list|run|sbatch`
+  datasets.py        # library dataset presets registered into data_store
+  init_centering/    # the shipped experiment family (baseline-centering ablation)
 ```
 
 ## Installation
@@ -68,100 +76,84 @@ Two equivalent entry points:
   final say; they must come **before** `<name>`. Hydra-style overrides after
   `<name>` are baked into the generated script.
 
-### Per-family config layout
+### Per-family layout
 
-Each family under `experiments/<family>/` is exactly five Python files:
+Presets are defined in Python under `experiments/<family>/` and registered
+with the hydra-zen `ConfigStore` at import time. The shipped family is
+`experiments/init_centering/`:
 
 | File | Contents |
 |------|----------|
-| `model.py` | Family-shared arch primitives (mixers, residual blocks, context, head, futsum, U-Net flavours, schedule) and one **shape-namespace class** per shape (`Small1D`, `Robot2D`, `KDD`, …). Each shape class declares its `data_dim/latent_dim/j/...` constants at the top, then builds encoder/decoder/z_init/transition/model below — tweak a constant once and every subconfig inherits the change. Submodules are registered at the bottom of the file. |
-| `data.py` | `SyntheticDataModule` / `KDDDataModule` configs. |
-| `hparams.py` | `Hparams` + training-scalar (`Training`) presets. |
-| `evals.py` | `Eval` + `Viz` specs (variance-probe substitutes `Objective` + `Probe`). |
-| `experiments.py` | Named `experiment(...)` compositions + Optuna sweep presets at the bottom. |
+| `model.py` | `SmokeModel(...)` factory — composes encoder/decoder/baseline (μ_p)/transitions from runtime classes, parametric over the three ablation axes. |
+| `datasets.py` / `data.py` | The dataset axis (`1d`, `mv`) and library data-module re-exports. |
+| `hparams.py` | Hyperparameters + the multi-stage (`StagesConf`) builder. |
+| `cells.py` / `study.py` | The ablation-grid cell enumeration and the registered study. |
+| `evals.py` | `Eval`, `Objective`, and multi-objective specs. |
+| `experiments.py` | The two smoke presets + `study.register(...)` for the grid cells. |
+| `sweeps.py` | Optuna search-space presets registered into the `sweep` group. |
 
-The Hydra-zen `ConfigStore` is populated at import time as the family
-subpackages are loaded.
+To add a new experiment, add a Python file under `experiments/<family>/` and
+register it — don't add YAML.
 
-### Hydra experiment presets
+### Experiment presets
 
-Reusable experiment presets are registered in `src/ddssm/conf/experiments/`.
-Each preset selects a transition (`gaussian`/`diffusion`), a dataset,
-root-level dimensions, hyperparameters, and training scalars. Activate one
-with `experiment=NAME`:
-
-| Preset                          | Dataset    | Transition | Notes                                              |
-| ------------------------------- | ---------- | ---------- | -------------------------------------------------- |
-| `synthetic_gauss`               | synthetic  | gaussian   | LGSSM, runs end-to-end via `ddssm.app`             |
-| `synthetic_diffusion`           | synthetic  | diffusion  | LGSSM, runs end-to-end via `ddssm.app`             |
-| `kdd_gauss`                     | kdd        | gaussian   | KDD Cup 2018 air-quality, gaussian transition      |
-| `kdd_diffusion`                 | kdd        | diffusion  | KDD Cup 2018 air-quality, diffusion transition     |
+List everything registered:
 
 ```bash
-# Single end-to-end run on synthetic data
-python -m ddssm.app experiment=synthetic_gauss
-
-# Override anything the experiment sets
-python -m ddssm.app experiment=synthetic_diffusion \
-    experiment.training.steps=2000 experiment.hyperparams.batch_size=64
+python -m experiments list
 ```
 
-### Architecture config groups
+The shipped presets are the `init_centering` family: two smoke configs
+(`init_smoke_simple`, `init_smoke_high_surface`) plus an ablation grid named
+`init_<form>_<mode>_<tracking>__<dataset>`, where
 
-Top-level config groups select pluggable sub-architectures and propagate
-into encoder, decoder, init-prior and transition wherever they appear. They
-can be set per-preset or overridden on the CLI:
+- **form** ∈ `zero`, `identity`, `linear`, `mlp` (the baseline μ_p head)
+- **mode** ∈ `pinned`, `learnable` (auto-pinned for the param-free `zero`/`identity` forms)
+- **tracking** ∈ `fixed`, `per_t`
+- **dataset** ∈ `1d` (nonlinear-bimodal-lift, D=1), `mv` (D=8)
 
-| Group           | Choices                                  | Effect |
-| --------------- | ---------------------------------------- | ------ |
-| `transition`    | `gaussian`, `diffusion`, `diffusion_v2`  | Transition prior `p_ψ(z_t \| z_{t-j:t-1})`. |
-| `encoder`       | `gaussian`                               | Variational encoder `q_ϕ`. |
-| `decoder`       | `gaussian`                               | Observation decoder `p_θ`. |
-| `z_init`        | `gaussian`                               | Initial-state prior `p_η(z_{1:j})`. |
-| `context`       | `csdi` (default), `mlp`                  | Context producer used by encoder/decoder/z_init/Gaussian-transition. `csdi` uses the residual stack with selectable mixers; `mlp` is a feed-forward ablation. |
-| `unet`          | `csdi` (default), `mlp`                  | Denoiser used by `diffusion` / `diffusion_v2` transitions. `csdi` uses the residual stack with selectable mixers; `mlp` is a feed-forward ablation. |
-| `time_mixer`    | `conv` (default), `gru`, `identity`      | Per-channel mixer over the time axis inside CSDI residual blocks. |
-| `feature_mixer` | `transformer` (default), `conv`, `identity` | Per-channel mixer over the feature axis inside CSDI residual blocks. |
+e.g. `init_mlp_pinned_per_t__1d`, `init_zero_pinned_fixed__mv`.
 
 ```bash
-# Swap the CSDI context producer & U-Net for their MLP ablations
-python -m ddssm.app experiment=harmonic transition=diffusion \
-    context=mlp unet=mlp
+# Default smoke run
+python -m ddssm.app
 
-# Try a GRU time mixer with an identity feature mixer everywhere
-python -m ddssm.app experiment=harmonic transition=diffusion \
-    time_mixer=gru feature_mixer=identity
+# Pick a preset and override anything it sets. The shipped presets are
+# multi-stage, so the step budget is training.stages.n_pretrain / n_stage2
+# (training.steps is only read by the single-fit path); batch size is on hparams.
+python -m ddssm.app experiment=init_mlp_pinned_per_t__1d \
+    experiment.training.stages.n_stage2=2000 experiment.hparams.batch_size=64
 ```
 
-#### Variance probe workflow (train, then probe)
+### Architecture selection
 
-Variance probe presets are optimized for quick diagnostics and write checkpoints
-to stable per-preset directories under `runs/variance_probe/...`.
+DDSSM has pluggable sub-architectures — the CSDI residual stack composes
+per-channel **time mixers** (`conv`/`gru`/`identity`) and **feature mixers**
+(`transformer`/`conv`/`identity`), with MLP context/U-Net variants as
+ablations. These are chosen **in Python** when the model is built (see
+`experiments/init_centering/model.py` and the `builds(...)` configs in
+`src/ddssm/builders.py`) rather than via CLI config groups: `conf/registry.py`
+declares `encoder`/`decoder`/`transition`/`unet`/… stores, but only the
+`experiment`, `data`, and `sweep` groups ship populated, so `experiment=…` and
+`+sweep=…` are the live CLI selectors.
 
-| Preset                                 | Purpose |
-| -------------------------------------- | ------- |
-| `variance_probe_lgssm`                 | Baseline linear-Gaussian case for sanity-checking variance trends. |
-| `variance_probe_bimodal_clean`         | Multimodal target without observation noise; tests mode handling only. |
-| `variance_probe_bimodal_noisy`         | Same multimodal structure with added noise; tests robustness. |
-| `variance_probe_nonlinear_bimodal_lift`| Higher-dimensional nonlinear stress case for the probe metrics. |
+#### Standalone post-training stages
+
+The eval / viz / variance stages each load a checkpoint and read `metrics.csv`
+from the run dir; they don't train:
 
 ```bash
-# 1) Train one preset and produce a stable checkpoint
-python -m ddssm.app experiment=variance_probe_lgssm +sweep=variance_probe
-
-# 2) Run offline variance analysis from the trained checkpoint
-python -m ddssm.variance \
-    experiment=variance_probe_lgssm \
-    checkpoint='${experiment.checkpoint_dir}/ckpt_latest.pth' \
-    +sweep=variance_probe
+python -m ddssm.evaluate  experiment=<name> checkpoint='${experiment.checkpoint_dir}/ckpt_latest.pth'
+python -m ddssm.visualize experiment=<name> checkpoint=...
+python -m ddssm.variance  experiment=<name> checkpoint=...
 ```
 
-The variance stage writes:
-
-- `variance_raw.csv`: per-replica/per-seed probe rows
-- `variance_summary.json`: aggregate metrics and metadata
-- plot files (defaults): `var_grad_vs_tau.png`, `var_loss_vs_tau.png`,
-  `ratio_vs_tau.png`, `summary_table.png`
+The variance stage writes `variance_raw.csv` (per-replica/per-seed probe rows),
+`variance_summary.json` (aggregate metrics), and plot files
+(`var_grad_vs_tau.png`, `var_loss_vs_tau.png`, `ratio_vs_tau.png`,
+`summary_table.png`). Note that `Experiment.viz` and `Experiment.variance` are
+`None` for every shipped preset (only `eval` is wired), so the viz/variance
+CLIs are only useful against a preset you've added a spec to.
 
 When `cfg.experiment.data` is a `NullDataModule`, `ddssm.app` builds the model and
 trainer but skips `trainer.fit(...)`. Use this for smoke tests.
@@ -171,24 +163,28 @@ trainer but skips `trainer.fit(...)`. Use this for smoke tests.
 Hydra-based sweeps use Optuna through the `hydra-optuna-sweeper` plugin pinned
 in `pyproject.toml`. This intentionally tracks the requested `dahlem/hydra`
 fork branch until an equivalent tagged or official release is available.
-The repo provides a reusable sweeper preset at
-`src/ddssm/conf/hydra/sweeper/ddssm_optuna.yaml` plus pre-defined
-search-space presets in `src/ddssm/conf/sweep/`:
+The repo provides two reusable sweeper presets under
+`src/ddssm/conf/hydra/sweeper/` — `ddssm_optuna.yaml` (single-objective) and
+`ddssm_optuna_moo.yaml` (multi-objective NSGA-II). Search-space presets are
+defined **in Python** (`experiments/init_centering/sweeps.py`) and registered
+into the `sweep` group:
 
-| Sweep preset      | Pairs with               | Search space                                        |
-| ----------------- | ------------------------ | --------------------------------------------------- |
-| `synthetic_lr`    | `synthetic_*` experiments | enc/dec/zinit/trans LR, λ-warmup, λ-end, batch size |
-| `kdd_phase1`      | `kdd_*` experiments       | LRs (capped), λ schedule, weight decay, batch size  |
+| Sweep preset           | Sweeper          | Search space                                              |
+| ---------------------- | ---------------- | -------------------------------------------------------- |
+| `init_ablation`        | single-objective | baseline LRs, λ schedule, anchor strengths, batch size   |
+| `init_ablation_moo`    | NSGA-II MOO      | same space, multi-objective                               |
+| `init_ablation_moo_r2` | NSGA-II MOO      | narrowed round-2 space                                    |
+| `init_pilot`           | single-objective | back-compat alias for `init_ablation`                    |
 
 Each sweep preset re-activates the Optuna sweeper, so a multirun is just:
 
 ```bash
 python -m ddssm.app --multirun \
-    experiment=synthetic_gauss \
-    +sweep=synthetic_lr \
+    experiment=init_smoke_high_surface \
+    +sweep=init_ablation \
     hydra.sweeper.n_trials=20 \
-    hydra.sweeper.study_name=ddssm_synth_lr \
-    hydra.sweeper.storage=sqlite:///ddssm_synth_lr.db
+    hydra.sweeper.study_name=init_ablation \
+    hydra.sweeper.storage=sqlite:///init_ablation.db
 ```
 
 `ddssm.app` returns the mean tail of `loss/total` from the run's `metrics.csv`
@@ -202,7 +198,7 @@ preset:
 ```bash
 python -m ddssm.app --multirun \
     hydra/sweeper=ddssm_optuna \
-    experiment=synthetic_gauss \
+    experiment=init_smoke_high_surface \
     hydra.sweeper.n_trials=50 \
     hydra.sweeper.study_name=ddssm_example \
     hydra.sweeper.storage=sqlite:///ddssm_example.db \
@@ -214,9 +210,9 @@ Relative SQLite storage URLs are resolved from Hydra's runtime working
 directory. Use an absolute `sqlite:///...` path for shared studies or CI.
 
 The checked-in `src/ddssm/conf/` tree is intentionally a small library of
-reusable Hydra defaults; large or experiment-specific search spaces should
-live either as additional `src/ddssm/conf/sweep/*` presets or as external
-assets / CLI overrides.
+reusable Hydra defaults; experiment-specific search spaces live in Python under
+`experiments/<family>/sweeps.py` (registered into the `sweep` group) or as
+CLI overrides.
 
 ## Logging
 
@@ -226,26 +222,25 @@ Metrics are written to TensorBoard and CSV by default; **W&B is opt-in**.
 pip install -e .[wandb]
 ```
 
-Pass a ``wandb_config`` dict to ``DDSSMTrainer`` to activate it, or use the
-``--wandb_project`` flag on the argparse-based ``verifications.py`` script:
+W&B is off by default (`wandb=disabled`). Turn it on with the `wandb=enabled`
+config group and override fields on the CLI:
 
 ```bash
 # Cloud W&B
-python scripts/experiments/verifications.py \
-    --config configs/synthetic_gauss.yaml \
-    --mode lgssm \
-    --wandb_project ddssm
+python -m ddssm.app experiment=init_smoke_high_surface wandb=enabled \
+    experiment.wandb_config.project=ddssm
 
 # Self-hosted W&B server
-python scripts/experiments/verifications.py \
-    --config configs/synthetic_gauss.yaml \
-    --mode bimodal \
-    --wandb_project ddssm \
-    --wandb_base_url https://wandb.example.com
+python -m ddssm.app experiment=init_smoke_high_surface wandb=enabled \
+    experiment.wandb_config.project=ddssm \
+    experiment.wandb_config.base_url=https://wandb.example.com
 ```
 
-W&B is a *soft dependency*: if the ``wandb`` package isn't installed the
-logger silently no-ops and training continues with TensorBoard + CSV.
+The `conf/wandb/{disabled,enabled}.yaml` files carry
+`# @package experiment.wandb_config`, so the chosen group always populates
+`experiment.wandb_config`. W&B is a *soft dependency*: if the ``wandb`` package
+isn't installed the logger silently no-ops and training continues with
+TensorBoard + CSV.
 
 ## SLURM
 
@@ -259,38 +254,35 @@ on the CLI:
 ```bash
 # emit the script (writes to stdout if --out is omitted)
 python -m experiments sbatch --partition=gpu --time=12:00:00 --mem=64G \
-    --out=runs/kdd_diffusion.sbatch kdd_diffusion
+    --out=runs/init_mlp.sbatch init_mlp_pinned_per_t__mv
 
 # submit it
-sbatch runs/kdd_diffusion.sbatch
+sbatch runs/init_mlp.sbatch
 # or pass extra Hydra overrides at submit time:
-sbatch runs/kdd_diffusion.sbatch experiment.training.steps=12000
+sbatch runs/init_mlp.sbatch experiment.training.stages.n_stage2=12000
 ```
 
-**Sweep — Hydra `--multirun` over the submitit launcher.** Recommended for
-Optuna search:
+**Study / sweep — orchestrate a whole registered study.** Recommended for
+multi-cell ablations and Optuna search; `ddssm.launch` renders (and optionally
+submits) one job per study point:
 
 ```bash
-python -m ddssm.app --multirun \
-    hydra/launcher=submitit_slurm \
-    experiment=synthetic_diffusion \
-    +sweep=synthetic_lr \
-    hydra.sweeper.n_trials=64 \
-    hydra.sweeper.study_name=ddssm_synth_diff \
-    hydra.sweeper.storage=sqlite:///$PWD/ddssm_synth_diff.db
-```
+# print the sbatch scripts for every point in the study (dry-run is the default)
+python -m ddssm.launch init_centering
 
-The launcher config lives at
-`src/ddssm/conf/hydra/launcher/submitit_slurm.yaml`. Resource overrides
-(`partition`, `gpus_per_node`, `timeout_min`, …) are plain CLI flags, e.g.
-`hydra.launcher.timeout_min=240`.
+# write one .sbatch per job and submit them
+python -m ddssm.launch init_centering --write-dir runs/jobs --submit
+
+# select a subset / variant and run locally for a smoke check
+python -m ddssm.launch init_centering --select dataset=1d --size smoke --local
+```
 
 ## Development
 
-Run tests:
+Run tests (inside the uv environment):
 
 ```bash
-pytest tests/
+uv run pytest tests/
 ```
 
 Format and lint (requires [pre-commit](https://pre-commit.com/)):

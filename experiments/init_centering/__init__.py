@@ -13,7 +13,7 @@ Two role-specific smoke presets are the canonical entry points
 Both smokes wire the parametric factory introduced in Phase B
 (``_build_init_centering_model``): a shared :class:`BaseBaseline`
 (zero / identity / linear / MLP) between the stage-1
-``BaselineGaussian`` transition and the stage-2 ``DiffusionV3``
+``BaselineGaussian`` transition and the stage-2 ``DiffusionTransition``
 transition, plus :class:`AuxPosterior` for the VHP-via-diffusion init
 term, :class:`SigmaDataBuffer` in the requested tracking mode, and a
 :class:`StagesConf` running ``stage_1`` → ``stage_2`` with a
@@ -42,13 +42,14 @@ chart, markdown headline table) from the JSONL records alone — so
 plot iterations never touch the model or re-scan disk.
 """
 
-from . import data, cells, evals, model, sweeps, hparams, experiments
+from . import data, cells, evals, model, sweeps, hparams, study, experiments
 
 __all__ = [
     "cells",
     "data",
     "evals",
     "experiments",
+    "study",
     "hparams",
     "model",
     "sweeps",

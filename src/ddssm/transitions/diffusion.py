@@ -1,6 +1,6 @@
 """Stage-2 diffusion transition for the model-v2 baseline-centering scheme.
 
-``DiffusionV3Transition`` extends :class:`DiffusionV2Transition` along
+``DiffusionTransition`` implements the model-v2 stage-2 transition along
 three coupled axes from ``model-v2.org``:
 
 1. **Centered ESM target.**  The score is matched in centered
@@ -17,7 +17,7 @@ three coupled axes from ``model-v2.org``:
    current ``σ_data²(t)`` value stored in a :class:`SigmaDataBuffer`
    that lives on :class:`DDSSM_base`.  ``c_noise`` is σ_data-
    independent and stays cached.  When ``σ_data ≡ 1`` the constants
-   reduce to V2's hardcoded values (a unit test exercises this).
+   reduce to the canonical EDM values (a unit test exercises this).
 
 3. **VHP-via-diffusion at t = 1 … j.**  The *same* score network and
    schedule are reused at the initial j steps with auxiliary latents
@@ -54,12 +54,12 @@ from .transitions import BaseTransition
 
 
 @dataclass
-class DiffusionV3ScheduleConfig:
-    """VP-SDE schedule configuration for :class:`DiffusionV3Transition`.
+class DiffusionScheduleConfig:
+    """VP-SDE schedule configuration for :class:`DiffusionTransition`.
 
-    Mirrors :class:`DiffusionV2ScheduleConfig`; the (σ_data-dependent)
-    EDM constants are computed per call rather than precomputed because
-    they vary with the current ``σ_data²(t)`` buffer value.
+    The (σ_data-dependent) EDM constants are computed per call rather than
+    precomputed because they vary with the current ``σ_data²(t)`` buffer
+    value.
     """
 
     S_k: int = 1
@@ -74,7 +74,7 @@ class DiffusionV3ScheduleConfig:
 
 
 @final
-class DiffusionV3Transition(BaseTransition):
+class DiffusionTransition(BaseTransition):
     """Centered ESM/EDM transition with σ_data(t) tracking and VHP at t = 1 … j.
 
     Args:
@@ -103,7 +103,7 @@ class DiffusionV3Transition(BaseTransition):
         T_max: int,
         covariate_dim: int = 0,
         unet: Callable[..., CSDIUnet] | None = None,
-        schedule: DiffusionV3ScheduleConfig | None = None,
+        schedule: DiffusionScheduleConfig | None = None,
     ) -> None:
         super().__init__()
         if int(baseline.latent_dim) != int(latent_dim):
@@ -123,7 +123,7 @@ class DiffusionV3Transition(BaseTransition):
         self.T_max = int(T_max)
 
         if schedule is None:
-            schedule = DiffusionV3ScheduleConfig()
+            schedule = DiffusionScheduleConfig()
         self.schedule = schedule
         self.S_k = schedule.S_k
         self.num_steps = schedule.num_steps
@@ -246,7 +246,7 @@ class DiffusionV3Transition(BaseTransition):
                 ``target_time_emb``.
             mc_override: ignored (kept for ``BaseTransition`` parity).
             sigma_d2: ``(B,)`` ``σ_data²(t)`` per row.  Defaults to ones
-                (matches the V3 sampler's ``sigma_data ≡ 1`` fallback).
+                (matches the diffusion sampler's ``sigma_data ≡ 1`` fallback).
             padding_mask: ``(B, j+1)`` padding-mask channel; defaults
                 to zeros (no padding).
             rtol, atol, method: torchdiffeq adaptive-solver controls.
@@ -260,7 +260,7 @@ class DiffusionV3Transition(BaseTransition):
         from ..likelihood import solve_prob_flow_logdensity
 
         if ctx is None:
-            raise ValueError("DiffusionV3Transition.log_prob requires ctx")
+            raise ValueError("DiffusionTransition.log_prob requires ctx")
         B, d = z.shape
         if sigma_d2 is None:
             sigma_d2 = torch.ones(B, device=z.device, dtype=z.dtype)
@@ -306,7 +306,7 @@ class DiffusionV3Transition(BaseTransition):
         """Centered ESM/EDM loss over ``t = j+1 … T``.
 
         Returns ``{"kl": ...}``.  ``R_μp`` is added at the
-        :class:`DDSSM_base.forward` level via the free function — V3
+        :class:`DDSSM_base.forward` level via the free function — diffusion
         is a pure loss-computer per the plan's ownership decisions.
 
         With ``return_per_sample`` (the variance-probe path) also returns
@@ -323,7 +323,7 @@ class DiffusionV3Transition(BaseTransition):
             or enc_stats["logvars"] is None
         ):
             raise ValueError(
-                "DiffusionV3Transition.transition_kl requires Gaussian (mus, logvars)."
+                "DiffusionTransition.transition_kl requires Gaussian (mus, logvars)."
             )
 
         B, S, d, T = zs.shape
@@ -676,7 +676,7 @@ class DiffusionV3Transition(BaseTransition):
         # Side-info window — j+1 slots (j history + 1 target).
         if "hist_time_emb" not in ctx or "target_time_emb" not in ctx:
             raise ValueError(
-                "DiffusionV3Transition requires hist_time_emb and target_time_emb in ctx"
+                "DiffusionTransition requires hist_time_emb and target_time_emb in ctx"
             )
         hist_time = ctx["hist_time_emb"]
         tgt_time = ctx["target_time_emb"]
@@ -780,10 +780,15 @@ class DiffusionV3Transition(BaseTransition):
                 * sd2_flat
                 / (st2_flat + sd2_flat).clamp_min(eps_dtype)
             )
-            # IS correction divides by K · p_k.
+            # Importance-sampling correction. ``wtilde_base`` already bakes in
+            # the (½·dτ) Riemann measure, so this is the standard estimator of
+            # the sum ∫ ≈ Σ_k (½·dτ·w_k)·X_k  by drawing  k ~ p_k:  divide the
+            # baked weight by the sampling mass p_k (one-over-density × weight,
+            # per model-v2.org § Importance Sampling). Do NOT also divide by K —
+            # that double-counts the τ-measure (dτ ≈ 1/K already in wtilde_base)
+            # and shrinks the per-t ESM loss by a factor of K.
             weights = (
-                wtilde_full
-                / (self.num_steps * self.p_k[k_flat].clamp_min(eps_dtype))
+                wtilde_full / self.p_k[k_flat].clamp_min(eps_dtype)
             ).detach()
 
             F_pred = self.diffmodel(latent_w, side_w, c_noise_flat)  # (N*kc, d, 1)
@@ -920,7 +925,7 @@ class DiffusionV3Transition(BaseTransition):
 
         if "hist_time_emb" not in ctx or "target_time_emb" not in ctx:
             raise ValueError(
-                "DiffusionV3Transition.score requires hist/target time embeddings in ctx"
+                "DiffusionTransition.score requires hist/target time embeddings in ctx"
             )
         hist_time = ctx["hist_time_emb"]
         tgt_time = ctx["target_time_emb"]
@@ -971,10 +976,10 @@ class DiffusionV3Transition(BaseTransition):
         """
         del S
         if ctx is None:
-            raise ValueError("DiffusionV3Transition.sample requires ctx")
+            raise ValueError("DiffusionTransition.sample requires ctx")
         if "hist_time_emb" not in ctx or "target_time_emb" not in ctx:
             raise ValueError(
-                "DiffusionV3Transition.sample requires hist/target time embeddings"
+                "DiffusionTransition.sample requires hist/target time embeddings"
             )
         B, d, j_in = z_hist.shape
         if j_in != self.j:
@@ -1033,11 +1038,17 @@ class DiffusionV3Transition(BaseTransition):
         dtype = z_hist.dtype
         eps_dtype = torch.finfo(dtype).eps
 
-        # Prior at τ=1 in centered coords is N(0, σ_d² · I) under VP
-        # (the marginal variance at τ=1 is σ_data²-scaled).  Conservative
-        # initialisation: sample N(0, max(σ_d², 1) · I) — keeps the V2
-        # behaviour at σ_data ≡ 1.
-        x = math.sqrt(max(sigma_d2, 1.0)) * torch.randn(B, d, device=device, dtype=dtype)
+        # Prior at the top step (τ=1) in centered coords. The unit-diffusion
+        # VP forward marginal is N(0, α²·σ_d² + (1−α²)): the OU process drives
+        # any data variance toward the stationary variance 1 at τ=1, so the
+        # terminal is ≈ N(0, I) regardless of σ_data. Initialise at that exact
+        # marginal (reduces to N(0, I) at σ_data ≡ 1 and matches the prob-flow
+        # likelihood's N(0, I) terminal prior). The previous
+        # N(0, max(σ_d², 1)) over-dispersed forecast samples when σ_data² > 1.
+        a2_top = float(self.alpha2[-1].item())
+        om_a2_top = float(self.one_minus_alpha2[-1].item())
+        var_init = max(a2_top * sigma_d2 + om_a2_top, eps_dtype)
+        x = math.sqrt(var_init) * torch.randn(B, d, device=device, dtype=dtype)
 
         K = self.num_steps
         for i in range(K - 1, 0, -1):

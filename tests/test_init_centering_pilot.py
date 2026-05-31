@@ -3,7 +3,7 @@
 Verifies:
 
 * The high-surface smoke preset and ``init_ablation`` sweep both
-  register into the appropriate ``conf.registry`` stores. The
+  register into the appropriate ``ddssm.stores`` stores. The
   back-compat alias ``init_pilot`` still resolves.
 * The high-surface smoke's ``objective`` is ``stage2_elbo_surrogate``
   read from JSON.
@@ -27,7 +27,7 @@ import pytest
 from hydra_zen import instantiate
 from hydra.core.global_hydra import GlobalHydra
 
-from conf.registry import store
+from ddssm.stores import store
 from ddssm.experiment import Experiment, ObjectiveSpec
 from ddssm._experiment_registry import register_experiments
 

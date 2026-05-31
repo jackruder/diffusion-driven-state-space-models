@@ -6,6 +6,7 @@ there.
 """
 
 import logging
+import math
 import os
 import pickle
 import shutil
@@ -170,6 +171,14 @@ class DDSSMTrainer:
         # default ``FullELBO``.
         self._stage_lambda_fn: Callable[[int], float] | None = None
         self._stage_start_step: int = 0
+        # 1-based index of the stage currently running (set by
+        # StageOrchestrator); 0 for single-fit runs with no stages. Logged as
+        # ``stage/idx`` so multi-stage curves are interpretable from the CSV.
+        self._current_stage_idx: int = 0
+        # Opt-in fail-fast: when True, a non-finite optimized loss raises
+        # instead of silently NaN-poisoning the weights. Off by default so
+        # existing runs are unchanged; the logger always counts it regardless.
+        self.abort_on_nonfinite_loss: bool = False
         # ADR-0004: active loss object (installed by orchestrator per
         # stage; constructed lazily at fit() start otherwise).
         from .losses import Loss
@@ -227,7 +236,19 @@ class DDSSMTrainer:
                 MetricSpec("time/*", "last"),
                 MetricSpec("optim/*", "last"),
                 MetricSpec("mem/*", "last"),
+                MetricSpec("stage/*", "last"),
             ],
+            # Validation accumulates over the whole val set within one
+            # ``epoch_end`` flush, so losses are mean-reduced (weighted by
+            # batch size) rather than reported from the last batch.
+            split_spec={
+                "val": [
+                    MetricSpec("loss/*", "mean"),
+                    MetricSpec("optim/*", "last"),
+                    MetricSpec("stage/*", "last"),
+                    MetricSpec("*", "mean"),
+                ],
+            },
             loggers=loggers,
         )
 
@@ -266,9 +287,6 @@ class DDSSMTrainer:
         we're between optimizer steps and it's safe to do real work.
         """
         self._preempt_pending = True
-
-    def get_batch_size(self) -> int:
-        return self.hparams.batch_size
 
     def _set_trainable(self, t):
         """t: StageTrainable"""
@@ -450,13 +468,11 @@ class DDSSMTrainer:
             "Trainer.fit must install a default loss object before training"
         )
         loss = self._active_loss(components, step_within_stage)
-        # Surface the rate-λ for logging (the loss object knows its own
-        # schedule shape — read it back for the metrics dict).
-        from .losses import FullELBO
-        if isinstance(self._active_loss, FullELBO):
-            metrics["optim/lambda"] = torch.tensor(
-                self._active_loss.rate_lambda(step_within_stage)
-            )
+        # Surface the rate-λ for logging for ANY loss with a schedule (not
+        # just FullELBO) — the loss reports its own λ via ``lambda_at``.
+        lam = self._active_loss.lambda_at(step_within_stage)
+        if lam is not None:
+            metrics["optim/lambda"] = torch.tensor(lam)
 
         return loss, metrics, observed.size(0)
 
@@ -516,19 +532,34 @@ class DDSSMTrainer:
         import time as _time
 
         self.global_step += 1
-        log_values = {
-            "loss/total": torch.tensor(
-                accum_loss / self.grad_accum_steps, device=device
-            ),
-            # Wall-clock elapsed since the metric store was created
-            # (typically equals trainer-start time).  Surfaces ``time/elapsed_s``
-            # as a CSV column so the eval ``wallclock_to_target`` metric can
-            # find the time at which a metric first crossed a threshold.
-            "time/elapsed_s": torch.tensor(
-                _time.time() - self.metrics._t0, device=device
-            ),
-            **accum_metrics,
-        }
+        # ``accum_metrics`` carries the model's *unweighted* ELBO under
+        # "loss/total" (distortion + rate). Spread it first, then override
+        # "loss/total" with the actually-optimized objective
+        # (distortion + λ·rate) — the value the early-stop window tracks, so
+        # the logged curve and the stop criterion agree. The unweighted ELBO
+        # is preserved under "loss/total_unweighted".
+        log_values = dict(accum_metrics)
+        if "loss/total" in log_values:
+            log_values["loss/total_unweighted"] = log_values["loss/total"]
+        log_values["loss/total"] = torch.tensor(
+            accum_loss / self.grad_accum_steps, device=device
+        )
+        # Wall-clock elapsed since the metric store was created
+        # (typically equals trainer-start time).  Surfaces ``time/elapsed_s``
+        # as a CSV column so the eval ``wallclock_to_target`` metric can
+        # find the time at which a metric first crossed a threshold.
+        log_values["time/elapsed_s"] = torch.tensor(
+            _time.time() - self.metrics._t0, device=device
+        )
+        # Stage markers so a multi-stage curve is interpretable from the CSV
+        # alone: which stage a row belongs to, and the stage-relative step
+        # (where the λ-ramp reset / centering handoff fired). 0 for single-fit.
+        log_values["stage/idx"] = torch.tensor(
+            float(self._current_stage_idx), device=device
+        )
+        log_values["stage/step_within"] = torch.tensor(
+            float(self.global_step - self._stage_start_step), device=device
+        )
         self.metrics.update(split="train", values=log_values, weight=accum_weight)
         if log_every and (step % log_every == 0):
             self.metrics.step_end("train", self.global_step)
@@ -573,11 +604,14 @@ class DDSSMTrainer:
                 vstep = self.global_step - self._stage_start_step + 1
                 assert self._active_loss is not None
                 vloss = self._active_loss(vcomponents, vstep)
-                self.metrics.update(
-                    "val",
-                    values={"loss/total": vloss, **vmetrics},
-                    weight=vwin.size(0),
-                )
+                # Mirror _log_train_step: report the optimized objective as
+                # loss/total and keep the model's unweighted ELBO under
+                # loss/total_unweighted (vmetrics carries the latter).
+                vlog = dict(vmetrics)
+                if "loss/total" in vlog:
+                    vlog["loss/total_unweighted"] = vlog["loss/total"]
+                vlog["loss/total"] = vloss
+                self.metrics.update("val", values=vlog, weight=vwin.size(0))
 
     def _maybe_run_validation(
         self,
@@ -799,6 +833,11 @@ class DDSSMTrainer:
                         accum_metrics = self._accumulate_metrics(accum_metrics, metrics)
                         accum_weight += weight
 
+                    if self.abort_on_nonfinite_loss and not math.isfinite(accum_loss):
+                        raise FloatingPointError(
+                            f"Non-finite training loss ({accum_loss}) at step "
+                            f"{step}; aborting (abort_on_nonfinite_loss=True)."
+                        )
                     self._optimizer_step(scaler=scaler, amp=amp)
                     accum_metrics = self._finalize_accum_metrics(accum_metrics)
 

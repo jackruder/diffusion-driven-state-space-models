@@ -29,6 +29,18 @@ from .data.datamodule import DDSSMDataModule
 
 log = logging.getLogger(__name__)
 
+# Dedup objective-misconfiguration warnings: an Optuna sweep calls
+# ObjectiveSpec.read once per trial, so a misconfigured metric/split would
+# otherwise warn on every trial. Keyed by message text (module-level so it
+# persists across trials in one process).
+_OBJECTIVE_WARNED: set[str] = set()
+
+
+def _warn_once(msg: str) -> None:
+    if msg not in _OBJECTIVE_WARNED:
+        _OBJECTIVE_WARNED.add(msg)
+        log.warning(msg)
+
 
 @dataclass
 class TrainingScalars:
@@ -175,13 +187,33 @@ class ObjectiveSpec:
             with open(csv_path, "r", newline="") as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames or []
-                col = (
-                    self.metric
-                    if self.metric in fieldnames
-                    else next((h for h in fieldnames if "loss" in h.lower()), "")
-                )
+                if self.metric in fieldnames:
+                    col = self.metric
+                else:
+                    col = next(
+                        (h for h in fieldnames if "loss" in h.lower()), ""
+                    )
+                    if col:
+                        _warn_once(
+                            f"ObjectiveSpec metric {self.metric!r} not in "
+                            f"{csv_path} columns; falling back to {col!r}."
+                        )
+                    else:
+                        _warn_once(
+                            f"ObjectiveSpec metric {self.metric!r} not in "
+                            f"{csv_path} and no 'loss' column found; "
+                            f"returning +inf."
+                        )
                 if not col:
                     return float("inf")
+                # If a split filter is configured but the CSV has no split
+                # column, the filter silently passes every row — surface it.
+                if self.split and "split" not in fieldnames:
+                    _warn_once(
+                        f"ObjectiveSpec split={self.split!r} requested but "
+                        f"{csv_path} has no 'split' column; not filtering by "
+                        f"split."
+                    )
                 values: list[float] = []
                 for row in reader:
                     if self.split and row.get("split", self.split) != self.split:
@@ -219,6 +251,10 @@ class ObjectiveSpec:
             return float("inf")
         value = data.get(self.metric)
         if value is None:
+            _warn_once(
+                f"ObjectiveSpec metric {self.metric!r} not in {json_path}; "
+                f"applying penalty {self.penalty!r}."
+            )
             return self._apply_penalty(run_dir)
         try:
             v = float(value)
@@ -394,6 +430,22 @@ class Experiment:
             log.info("Applying trainable mask: %s", self.training.trainable)
             trainer._set_trainable(self.training.trainable)
 
+        # hparams.batch_size is the single source of truth for the loader
+        # batch size (ADR-0004: hparams owns runtime knobs). Reconcile it
+        # onto the data module before building loaders so a CLI override of
+        # experiment.hparams.batch_size actually takes effect — the data
+        # preset's own batch_size is otherwise what the DataLoader would use.
+        hp_bs = getattr(self.hparams, "batch_size", None)
+        if hp_bs is not None and hasattr(self.data, "batch_size"):
+            if self.data.batch_size != hp_bs:
+                log.info(
+                    "DataLoader batch_size := hparams.batch_size (%d); data "
+                    "module configured %s, overridden.",
+                    hp_bs,
+                    self.data.batch_size,
+                )
+            self.data.batch_size = hp_bs
+
         train_loader = self.data.train_loader()
         if train_loader is None:
             log.info("No data attached. Skipping fit().")
@@ -408,9 +460,23 @@ class Experiment:
             # Multi-stage path: drive StageOrchestrator instead of a single fit.
             from .stages import StageOrchestrator
 
+            # Under stages, each StageSpecConf.steps drives the budget;
+            # training.steps / log_every / checkpoint_every are NOT read here
+            # (they apply only to the single-fit branch below). Surface the
+            # effective budget so it isn't a silent shadow of training.steps.
+            stage_steps = {
+                key: int(getattr(getattr(stages_cfg, key), "steps", 0))
+                for key in stages_cfg.run
+                if getattr(stages_cfg, key, None) is not None
+            }
             log.info(
-                "Starting multi-stage run via StageOrchestrator (stages=%s)",
+                "Starting multi-stage run via StageOrchestrator: stages=%s, "
+                "per-stage steps=%s, total budget=%d. training.steps/log_every "
+                "are ignored under stages — the budget comes from "
+                "training.stages.",
                 stages_cfg.run,
+                stage_steps,
+                sum(stage_steps.values()),
             )
             orchestrator = StageOrchestrator(trainer, stages_cfg)
             orchestrator.run(
@@ -438,6 +504,15 @@ class Experiment:
                 batch_transform=self.data.batch_transform,
                 **self.training.fit_kwargs(),
             )
+
+        # Emit run_summary.json so the run is self-describing (final loss,
+        # λ-warmup state, σ_data² drift, val loss, non-finite count, stages).
+        try:
+            from .report import write_run_summary
+
+            write_run_summary(run_dir)
+        except Exception as e:  # never let summary-writing fail a finished run
+            log.warning("Could not write run_summary.json: %s", e)
 
     def objective_value(
         self,

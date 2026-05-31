@@ -10,7 +10,7 @@ handoff.
 These pieces are pure leaves: they do not import any DDSSM transition
 or model module, and are unit-testable in isolation.  The
 transitions (:mod:`ddssm.transitions.baseline_gaussian`,
-:mod:`ddssm.transitions.diffusion_v3`) and :class:`ddssm.dssd.DDSSM_base`
+:mod:`ddssm.transitions.diffusion`) and :class:`ddssm.dssd.DDSSM_base`
 consume them by reference.
 """
 

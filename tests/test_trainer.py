@@ -153,6 +153,81 @@ def test_trainer_logs_time_elapsed_s_to_csv(small_model, tmp_path):
     assert all(b >= a - 1e-6 for a, b in zip(elapsed_values, elapsed_values[1:]))
 
 
+def test_fit_writes_validation_rows_to_csv(small_model, tmp_path):
+    """Validation metrics reach metrics.csv (not just TensorBoard).
+
+    Regression guard: CSVLogger.on_epoch used to be a no-op, so val/* was
+    invisible to the CSV that the objective reader and triage tools read.
+    """
+    import csv as _csv
+
+    csv_path = tmp_path / "metrics.csv"
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        csv_log_path=str(csv_path),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+    trainer.fit(
+        train_loader=loader,
+        val_loader=loader,
+        total_steps=2,
+        validate_every=1,
+        log_every=1,
+        checkpoint_every=None,
+        amp=False,
+    )
+    with open(csv_path, newline="") as f:
+        rows = list(_csv.DictReader(f))
+    val_rows = [r for r in rows if r["split"] == "val"]
+    assert val_rows, "no val rows written to metrics.csv"
+    assert all(r["loss/total"] not in ("", None) for r in val_rows)
+
+
+def test_log_train_step_records_optimized_loss_not_unweighted_elbo(
+    small_model, tmp_path
+):
+    """``loss/total`` in the log is the optimized objective, not the raw ELBO.
+
+    Regression guard: ``_log_train_step`` built ``log_values`` with the
+    weighted ``accum_loss`` first and then ``**accum_metrics``, whose own
+    (unweighted) ``loss/total`` silently overwrote it. The logged curve then
+    disagreed with the early-stop window (which uses ``accum_loss``). The
+    unweighted ELBO must survive under ``loss/total_unweighted``.
+    """
+    import csv as _csv
+
+    csv_path = tmp_path / "metrics.csv"
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        csv_log_path=str(csv_path),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    trainer.global_step = 0
+    # accum_metrics carries the model's unweighted ELBO under loss/total;
+    # accum_loss is the (different) optimized objective the trainer minimizes.
+    accum_metrics = {
+        "loss/total": torch.tensor(99.0),
+        "loss/distortion/rec": torch.tensor(5.0),
+    }
+    trainer._log_train_step(
+        step=1,
+        log_every=1,
+        accum_loss=10.0,
+        accum_metrics=accum_metrics,
+        accum_weight=1,
+        device=torch.device("cpu"),
+    )
+    with open(csv_path, newline="") as f:
+        row = next(_csv.DictReader(f))
+    assert float(row["loss/total"]) == pytest.approx(10.0 / trainer.grad_accum_steps)
+    assert float(row["loss/total_unweighted"]) == pytest.approx(99.0)
+
+
 # ---------------------------------------------------------------------------
 # Phase B: ``StageTrainableConf.baseline`` + ELBO-plateau early-stop.
 # ---------------------------------------------------------------------------

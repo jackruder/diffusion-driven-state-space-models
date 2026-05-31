@@ -1,11 +1,10 @@
-"""Compute how many trials a preemptive sweep still owes its target.
+r"""Compute how many trials a preemptive sweep still owes its target.
 
 Invoked from the bash preamble that ``ddssm.sbatch`` emits under
 ``PointLaunch.preemptive=True`` (ADR-0009):
 
     N_REMAINING=$(python -m ddssm.launch_remaining \\
-        --storage <storage> --study <name> --target <target> \\
-        --cleanup-running-older-than 60)
+        --storage <storage> --study <name> --target <target>)
 
 The CLI prints a single integer to stdout (the count of COMPLETE+PRUNED
 trials subtracted from ``--target``, clamped at zero); FAILED trials do NOT
@@ -28,12 +27,11 @@ grace_period=..., failed_trial_callback=...)``.
 
 from __future__ import annotations
 
-import argparse
 import sys
+import argparse
 
 import optuna
 from optuna.trial import TrialState
-
 
 # Budget states (per locked decision #3): COMPLETE + PRUNED count toward target.
 _BUDGET_STATES = (TrialState.COMPLETE, TrialState.PRUNED)

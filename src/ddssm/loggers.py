@@ -5,12 +5,16 @@ from __future__ import annotations
 import os
 import csv
 import time
+import math
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Callable, Optional
 import fnmatch
 from dataclasses import dataclass
 
 import torch
+
+log = logging.getLogger(__name__)
 
 
 # ---------- meters ----------
@@ -142,6 +146,11 @@ class CSVLogger(Logger):
     with the empty string.  Rows missing a known key likewise get an empty
     cell.  The rewrite only happens on first-seen keys (rare — stage
     transitions and λ-warmup edges), so steady-state cost is one append.
+
+    Both ``on_step`` (per-step, e.g. train) and ``on_epoch`` (per-epoch,
+    e.g. val) rows are written so the file carries every split a run logs.
+    The second column is always ``step`` — for ``on_epoch`` callers we
+    treat the epoch index as the row's step.
     """
 
     # First two columns are always split + the step/epoch index name.
@@ -228,8 +237,8 @@ class CSVLogger(Logger):
         self._write(split, "step", step, row)
 
     def on_epoch(self, split, epoch, row):
-        # Intentionally no-op: this logger currently captures per-step metrics only.
-        pass
+        # Per-epoch rows (val) share the "step" column with on_step rows.
+        self._write(split, "step", epoch, row)
 
 
 # ---------- spec & store ----------
@@ -284,15 +293,27 @@ class MetricStore:
         self,
         spec: Optional[list[MetricSpec]] = None,
         loggers: Optional[list[Logger]] = None,
+        split_spec: Optional[Dict[str, list[MetricSpec]]] = None,
     ):
         self.spec = spec or [MetricSpec("loss/*", "mean")]
+        # Per-split spec overrides. Validation, for instance, accumulates
+        # over the whole val set within one ``epoch_end`` and wants mean
+        # meters (weighted by batch size), whereas train samples the last
+        # step before each flush.
+        self.split_spec = split_spec or {}
         self.loggers = loggers or [ConsoleLogger()]
         self.splits: Dict[str, SplitStore] = {}
         self._t0 = time.time()
+        # Running count of non-finite (NaN/Inf) metric values seen, surfaced as
+        # the ``nonfinite/total`` column so a diverged run is visible in the CSV
+        # instead of silently persisting ``nan``. ``_nonfinite_warned`` dedups
+        # the per-key warning.
+        self._nonfinite_total: int = 0
+        self._nonfinite_warned: set[str] = set()
 
     def _split(self, split: str) -> SplitStore:
         if split not in self.splits:
-            self.splits[split] = SplitStore(self.spec)
+            self.splits[split] = SplitStore(self.split_spec.get(split, self.spec))
         return self.splits[split]
 
     @staticmethod
@@ -319,19 +340,32 @@ class MetricStore:
         ss = self._split(split)
         for k, v in values.items():
             w = weights.get(k, weight) if weights else weight
-            ss.add(k, self._tofloat(v), float(w))
+            f = self._tofloat(v)
+            if not math.isfinite(f):
+                self._nonfinite_total += 1
+                if k not in self._nonfinite_warned:
+                    self._nonfinite_warned.add(k)
+                    log.warning(
+                        "Non-finite metric %r=%s in split %r; recorded but "
+                        "surfaced via nonfinite/total.", k, f, split,
+                    )
+            ss.add(k, f, float(w))
+
+    def _with_health(self, row: Dict[str, float]) -> Dict[str, float]:
+        """Attach the run-health counter to a flushed row."""
+        row = dict(row)
+        row["nonfinite/total"] = float(self._nonfinite_total)
+        return row
 
     def step_end(self, split: str, step: int, also_log: bool = True):
-        row = self._split(split).values()
-        # include wall time (seconds per step EMA via meter? keep simple: last delta)
-        row = dict(row)  # copy
+        row = self._with_health(self._split(split).values())
         if also_log:
             for lg in self.loggers:
                 lg.on_step(split, step, row)
         return row
 
     def epoch_end(self, split: str, epoch: int, reset: bool = True):
-        row = self._split(split).values()
+        row = self._with_health(self._split(split).values())
         for lg in self.loggers:
             lg.on_epoch(split, epoch, row)
         if reset:

@@ -297,3 +297,31 @@ def test_ddssm_forward_with_each_aggregator(agg_name):
     loss = components.total()
     assert loss.ndim == 0
     assert torch.isfinite(loss).item()
+
+
+# ---------------------------------------------------------------------------
+# eval metrics that run a real model (regression guard for forward's arity)
+# ---------------------------------------------------------------------------
+
+def test_recon_mse_metric_runs_on_real_model(model):
+    """recon_mse must unpack model.forward's 3-tuple, not a 5-tuple.
+
+    Regression guard: ``eval_recon_mse`` previously did
+    ``_l, _r, _d, _m, stats = model(...)`` which raised ``ValueError`` on
+    every call because ``DDSSM_base.forward`` returns ``(components,
+    metrics, stats)``.
+    """
+    from ddssm.eval.metrics import EvalContext, eval_recon_mse
+
+    B, T = 2, 6
+    batch = {
+        "observed_data": torch.randn(B, DATA_DIM, T),
+        "observation_mask": torch.ones(B, DATA_DIM, T),
+        "timepoints": torch.arange(T).unsqueeze(0).expand(B, -1),
+    }
+    ctx = EvalContext(
+        model=model, loader=[batch], device=torch.device("cpu"),
+    )
+    out = eval_recon_mse(ctx)
+    assert "recon_mse" in out
+    assert out["recon_mse"] >= 0.0

@@ -2,22 +2,28 @@
 
 Usage::
 
-    # Default experiment (harmonic + Gaussian transition).
+    # Default experiment (init_smoke_simple).
     python -m ddssm.app
 
-    # Pick a different experiment.
-    python -m ddssm.app experiment=harmonic_diffusion
-    python -m ddssm.app experiment=kdd_gauss
+    # Pick a different registered preset (see ``python -m experiments list``).
+    python -m ddssm.app experiment=init_smoke_high_surface
 
-    # Override any field at any depth via dot-notation.
-    python -m ddssm.app experiment=harmonic_gauss \\
-        experiment.training.steps=200 \\
-        experiment.model.transition.hidden_dim=128
+    # Override any field at any depth via dot-notation. The shipped presets
+    # are multi-stage, so the step budget lives under ``training.stages.*``
+    # (here the factory args n_pretrain / n_stage2) — ``training.steps`` is
+    # only read by the single-fit (no-stages) path.
+    python -m ddssm.app experiment=init_smoke_simple \\
+        experiment.training.stages.n_pretrain=200 \\
+        experiment.training.stages.n_stage2=400
+
+    # Swap the dataset baked into a preset (data store is packaged at
+    # experiment.data; use +data= to append).
+    python -m ddssm.app experiment=init_smoke_simple +data=harmonic
 
     # Optuna sweep using a pre-defined search space.
     python -m ddssm.app --multirun \\
-        experiment=synthetic_gauss \\
-        +sweep=synthetic_lr \\
+        experiment=init_smoke_high_surface \\
+        +sweep=init_ablation \\
         hydra.sweeper.n_trials=20
 
 Experiments are discovered from ``experiments/*.py`` in the repo root;

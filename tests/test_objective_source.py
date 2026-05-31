@@ -61,6 +61,54 @@ def test_csv_source_returns_inf_on_missing_file(tmp_path: Path) -> None:
     assert math.isinf(spec.read(str(tmp_path / "nonexistent.csv")))
 
 
+def test_csv_metric_fallback_warns(tmp_path: Path, caplog) -> None:
+    """Missing configured metric → falls back to a 'loss' column AND warns."""
+    import logging
+
+    csv_path = tmp_path / "metrics.csv"
+    _write_csv(csv_path, [
+        {"step": "1", "split": "train", "loss/total": "2.0"},
+        {"step": "2", "split": "train", "loss/total": "4.0"},
+    ])
+    spec = ObjectiveSpec(metric="not_a_real_metric", split="train", tail_frac=1.0)
+    with caplog.at_level(logging.WARNING, logger="ddssm.experiment"):
+        val = spec.read(str(csv_path))
+    # Behaviour unchanged: still falls back to loss/total (mean 3.0).
+    assert val == pytest.approx(3.0)
+    assert "not_a_real_metric" in caplog.text
+    assert "falling back" in caplog.text
+
+
+def test_csv_split_missing_column_warns(tmp_path: Path, caplog) -> None:
+    """split set but no split column → no-op filter, surfaced as a warning."""
+    import logging
+
+    csv_path = tmp_path / "metrics.csv"
+    _write_csv(csv_path, [
+        {"step": "1", "loss/total": "1.0"},
+        {"step": "2", "loss/total": "3.0"},
+    ])
+    spec = ObjectiveSpec(metric="loss/total", split="train", tail_frac=1.0)
+    with caplog.at_level(logging.WARNING, logger="ddssm.experiment"):
+        val = spec.read(str(csv_path))
+    # No filtering happened — mean over all rows.
+    assert val == pytest.approx(2.0)
+    assert "no 'split' column" in caplog.text
+
+
+def test_json_missing_key_warns(tmp_path: Path, caplog) -> None:
+    """Missing JSON metric key → penalty applied AND warns."""
+    import logging
+
+    json_path = tmp_path / "metrics.json"
+    json_path.write_text(json.dumps({"some_other_metric": 1.0}))
+    spec = ObjectiveSpec(metric="mae", source="json", penalty="inf")
+    with caplog.at_level(logging.WARNING, logger="ddssm.experiment"):
+        val = spec.read(str(tmp_path))
+    assert math.isinf(val)
+    assert "mae" in caplog.text
+
+
 def test_csv_source_accepts_run_dir(tmp_path: Path) -> None:
     """Passing a run_dir (not a file) reads ``metrics.csv`` inside it."""
     csv_path = tmp_path / "metrics.csv"

@@ -33,7 +33,9 @@ BASELINE_FORMS: tuple[str, ...] = ("zero", "identity", "linear", "mlp")
 BASELINE_MODES: tuple[str, ...] = ("pinned", "learnable")
 TRACKING_MODES: tuple[str, ...] = ("fixed", "per_t")
 
-# Mirrors ``experiments/init_centering/model.py:_PARAM_FREE_FORMS``.
+# Forms with no learnable μ_p parameters — they drop the ``learnable`` mode
+# both here (cell enumeration) and in ``model.py`` (the auto-clamp), which
+# imports this single definition rather than mirroring it.
 _PARAM_FREE_FORMS: frozenset[str] = frozenset({"zero", "identity"})
 
 # The Phase-C pilot cell — also the default in

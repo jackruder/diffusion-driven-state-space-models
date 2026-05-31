@@ -26,7 +26,7 @@ import pytest
 from hydra_zen import instantiate
 from hydra.core.global_hydra import GlobalHydra
 
-from conf.registry import store
+from ddssm.stores import store
 from ddssm.centering.baselines import (
     MLPBaseline,
     ZeroBaseline,

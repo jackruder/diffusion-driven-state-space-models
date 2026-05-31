@@ -5,10 +5,10 @@ in a notebook, org src block, or Python script. Each name here is a
 ``builds(...)`` config — call it like a function with keyword
 overrides::
 
-    from ddssm.builders import DiffV3Transition, ScheduleV3, Unet
-    t = DiffV3Transition(
+    from ddssm.builders import DiffTransition, DiffSchedule, Unet
+    t = DiffTransition(
         unet=Unet(channels=64, n_layers=4),
-        schedule=ScheduleV3(S_k=20),
+        schedule=DiffSchedule(S_k=20),
     )
 
 Shape kwargs (``data_dim``, ``latent_dim``, ``j``, ``emb_time_dim``,
@@ -54,7 +54,7 @@ from .diffnets import (
     ResidualBlockConfig,
     TimeMixerConfig,
 )
-from .dist_heads import GaussianDistHead, MixtureGaussianDistHead
+from .dist_heads import GaussianDistHead
 from .dssd import DDSSM_base, DDSSMHyperParamsConf  # dataclasses
 from .encoder import GaussianEncoder
 from .eval.runner import EvalSpec
@@ -71,9 +71,9 @@ from .futsum import GRUFutureSummary, TransformerFutureSummary
 from .gaussians import GaussianHead
 from .train import DDSSMTrainer
 from .transitions.baseline_gaussian import BaselineGaussianTransition
-from .transitions.diffusion_v3 import (
-    DiffusionV3ScheduleConfig,
-    DiffusionV3Transition,
+from .transitions.diffusion import (
+    DiffusionScheduleConfig,
+    DiffusionTransition,
 )
 from .transitions.transitions import GaussianTransition
 from .variance.runner import ProbeCell, ProbeMetricSpec, ProbePlotSpec, ProbeSpec
@@ -112,7 +112,7 @@ DiffResidualBlock = builds(
 # Schedules (plain dataclasses already; re-export under short names).
 # ---------------------------------------------------------------------------
 
-ScheduleV3 = DiffusionV3ScheduleConfig
+DiffSchedule = DiffusionScheduleConfig
 
 # ---------------------------------------------------------------------------
 # Head, context, U-Net, future-summary builders.
@@ -146,7 +146,7 @@ MLPContext = builds(
 #
 # An encoder is built from three slots:
 #   combiner = CompoundCombiner(aggregator=..., fusion=...)
-#   dist_head = GaussianDistHead | MoGDistHead (stub)
+#   dist_head = GaussianDistHead
 # Each builder is ``zen_partial=True`` so the encoder (or another module)
 # supplies shape kwargs at construction time.
 # ---------------------------------------------------------------------------
@@ -224,13 +224,6 @@ def Combiner(*, aggregator, fusion=None):
 
 GaussianDistHeadB = builds(
     GaussianDistHead,
-    populate_full_signature=True,
-    zen_partial=True,
-)
-
-MoGDistHeadB = builds(
-    MixtureGaussianDistHead,
-    K=4,
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -361,14 +354,14 @@ BaselineGaussTransition = builds(
     latent_dim=MISSING, j=MISSING,
 )
 
-DiffV3Transition = builds(
-    DiffusionV3Transition,
+DiffTransition = builds(
+    DiffusionTransition,
     populate_full_signature=True,
     baseline=MISSING,
     latent_dim=MISSING, j=MISSING,
     emb_time_dim=MISSING, T_max=MISSING,
     unet=Unet(),
-    schedule=ScheduleV3(),
+    schedule=DiffSchedule(),
 )
 
 CenteringHandoff = builds(CenteringHandoffConf, populate_full_signature=True)
@@ -438,7 +431,7 @@ __all__ = [
     # Mixer / residual-block builders (instantiate to runtime dataclasses)
     "TimeMixer", "FeatureMixer", "ResidualBlock", "DiffResidualBlock",
     # Schedules
-    "ScheduleV3",
+    "DiffSchedule",
     # Architectural builders
     "Head", "Context", "MLPContext", "Unet", "MLPUnet",
     "GRUFutSum", "TransformerFutSum",
@@ -447,14 +440,14 @@ __all__ = [
     "AttentionAggregatorB", "ContextAggregatorB",
     "ConcatLinearFusionB", "DKSFusionB", "GatedFusionB",
     "Combiner",
-    "GaussianDistHeadB", "MoGDistHeadB",
+    "GaussianDistHeadB",
     # Module-slot builders
     "Encoder", "Decoder",
     "GaussTransition",
     # Model-v2 baseline-centering builders
     "ZeroBaselineB", "IdentityBaselineB", "LinearBaselineB", "MLPBaselineB",
     "AuxPosteriorB", "SigmaDataBufferB",
-    "BaselineGaussTransition", "DiffV3Transition", "CenteringHandoff",
+    "BaselineGaussTransition", "DiffTransition", "CenteringHandoff",
     # Data modules
     "Synthetic", "KDD", "Null",
     # Model + training

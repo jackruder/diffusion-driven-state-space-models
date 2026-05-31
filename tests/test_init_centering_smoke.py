@@ -35,7 +35,7 @@ def _get_experiment_cfg(name: str):
     from ddssm._experiment_registry import register_experiments
 
     register_experiments()  # puts repo root on sys.path + imports experiments
-    from conf.registry import store
+    from ddssm.stores import store
 
     for entry in store:
         if entry["group"] == "experiment" and entry["name"] == name:
@@ -57,10 +57,24 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     exp.training.stages.stage_1.checkpoint_every = 100
     exp.training.stages.stage_2.checkpoint_every = 100
 
+    # hparams.batch_size is the source of truth: a distinct value (≠ the
+    # dataset preset's 32, ≠ the SmokeHparams 16) must reach the loader.
+    exp.hparams.batch_size = 8
+
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cpu")
     exp.train(device=device, run_dir=str(run_dir))
+
+    # Reconciliation: the data module's batch_size was overridden from hparams.
+    assert exp.data.batch_size == 8
+
+    # run_summary.json is emitted at train exit (task #22).
+    summary_path = run_dir / "run_summary.json"
+    assert summary_path.exists(), "run_summary.json missing"
+    import json as _json
+    summ = _json.loads(summary_path.read_text())
+    assert summ["available"] is True and summ["stages_run"] == [1, 2]
 
     csv_path = run_dir / "metrics.csv"
     assert csv_path.exists(), "metrics.csv missing"
@@ -86,6 +100,15 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     stage2_rows = [r for r in rows if 6 <= int(r["step"]) <= 10]
     assert stage1_rows, "no stage-1 rows logged"
     assert stage2_rows, "no stage-2 rows logged"
+
+    # Stage markers (task #20): stage/idx flips 1→2 at the boundary, the
+    # stage-relative counter resets, and optim/lambda is logged every step.
+    assert {"stage/idx", "stage/step_within", "optim/lambda"} <= set(fieldnames)
+    assert all(int(float(r["stage/idx"])) == 1 for r in stage1_rows)
+    assert all(int(float(r["stage/idx"])) == 2 for r in stage2_rows)
+    # step_within resets at the boundary: stage-2's first row is < its global step.
+    assert int(float(stage2_rows[0]["stage/step_within"])) < int(stage2_rows[0]["step"])
+    assert all(r["optim/lambda"] not in ("", None) for r in stage1_rows + stage2_rows)
 
     # Entropy-cancellation invariant: stage-2 entropy column is exactly 0.
     for r in stage2_rows:

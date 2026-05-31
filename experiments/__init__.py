@@ -1,5 +1,5 @@
 """Experiments package — imports the dataset presets + experiment families
-to populate every hydra-zen store in :mod:`conf.registry`.
+to populate every hydra-zen store in :mod:`ddssm.stores`.
 
 ``datasets`` registers the library dataset configs (``data=NAME``) and
 is imported first; ``init_centering`` is the live model-v2 family.

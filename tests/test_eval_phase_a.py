@@ -263,7 +263,7 @@ def test_sigma_data_drift_snapshot_with_init_smoke_simple(tmp_path) -> None:
     from ddssm._experiment_registry import register_experiments
 
     register_experiments()
-    from conf.registry import store
+    from ddssm.stores import store
 
     cfg = None
     for entry in store:
@@ -323,7 +323,7 @@ def test_stage2_elbo_surrogate_with_init_smoke_simple(tmp_path) -> None:
     from ddssm._experiment_registry import register_experiments
 
     register_experiments()
-    from conf.registry import store
+    from ddssm.stores import store
 
     cfg = None
     for entry in store:

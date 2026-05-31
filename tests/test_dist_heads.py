@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import torch
-import pytest
 
-from ddssm.dist_heads import GaussianDistHead, MixtureGaussianDistHead
+from ddssm.dist_heads import GaussianDistHead
 
 B = 3
 D = 4
@@ -53,13 +52,3 @@ def test_gaussian_dist_head_entropy():
     assert torch.isfinite(e_init) and torch.isfinite(e_trans)
 
 
-def test_mog_dist_head_builds_and_raises():
-    head = MixtureGaussianDistHead(in_features=IN, latent_dim=D, K=3)
-    assert not head.is_gaussian_family
-    # has parameters, builds happily under hydra-zen
-    assert sum(p.numel() for p in head.parameters()) > 0
-    x = torch.randn(B, IN)
-    with pytest.raises(NotImplementedError):
-        head(x)
-    with pytest.raises(NotImplementedError):
-        head.stack_stats([])

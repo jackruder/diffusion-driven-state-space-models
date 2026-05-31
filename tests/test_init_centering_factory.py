@@ -16,8 +16,8 @@ must produce a baseline-trainable mask consistent with the chosen
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
-import warnings
 
 import pytest
 
@@ -72,18 +72,19 @@ def test_baseline_form_dispatch(form, expected_cls) -> None:
 
 
 @pytest.mark.parametrize("form", ["zero", "identity"])
-def test_param_free_forms_autoclamp_learnable_to_pinned(form) -> None:
+def test_param_free_forms_autoclamp_learnable_to_pinned(form, caplog) -> None:
     """``zero`` and ``identity`` clamp ``baseline_mode='learnable'`` to ``'pinned'``."""
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with caplog.at_level(
+        logging.WARNING, logger="experiments.init_centering.model"
+    ):
         model = _build_init_centering_model(
             baseline_form=form,
             baseline_mode="learnable",
             tracking_mode="per_t",
         )
     assert model.baseline_mode == "pinned"
-    assert any("auto-degenerate" in str(w.message) for w in caught), (
-        f"expected an auto-degenerate warning; got {[str(w.message) for w in caught]}"
+    assert "auto-degenerate" in caplog.text, (
+        f"expected an auto-degenerate clamp log; got {caplog.text!r}"
     )
 
 

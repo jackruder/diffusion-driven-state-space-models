@@ -5,12 +5,8 @@ A :class:`BaseDistHead` consumes the combiner's feature vector and produces
 the encoder ``q``, and the per-step distribution parameters that downstream
 losses can stack along the time axis (via :meth:`stack_stats`).
 
-Two heads are provided:
-
-* :class:`GaussianDistHead` — wraps :class:`~ddssm.gaussians.GaussianHead`;
-  reparameterized Gaussian sampling. Supports closed-form entropy.
-* :class:`MixtureGaussianDistHead` — STUB. Builds via hydra-zen but raises
-  ``NotImplementedError`` on use; full MoG implementation is a follow-up.
+:class:`GaussianDistHead` wraps :class:`~ddssm.gaussians.GaussianHead` for
+reparameterized Gaussian sampling and supports closed-form entropy.
 """
 
 from __future__ import annotations
@@ -146,45 +142,3 @@ class GaussianDistHead(BaseDistHead):
             return torch.zeros((), device=logvars.device, dtype=logvars.dtype)
         lv = logvars[..., j:]
         return gaussian_entropy(lv).mean()
-
-
-class MixtureGaussianDistHead(BaseDistHead):
-    """Mixture-of-Gaussians head — STUB.
-
-    Wires through hydra-zen so experiments can declare a MoG encoder, but
-    the math (sampling, log-prob, MC entropy) is a follow-up. Calling
-    :meth:`forward` or :meth:`stack_stats` raises ``NotImplementedError``.
-    """
-
-    def __init__(
-        self,
-        *,
-        in_features: int,
-        latent_dim: int,
-        K: int = 4,
-    ) -> None:
-        super().__init__(in_features=in_features, latent_dim=latent_dim)
-        self.K = int(K)
-        # Parameter placeholders so the module builds and reports a sensible
-        # parameter count; the actual forward pass is not implemented yet.
-        self.mu_head = nn.Linear(in_features, K * latent_dim)
-        self.logvar_head = nn.Linear(in_features, K * latent_dim)
-        self.logits_head = nn.Linear(in_features, K)
-
-    @property
-    def is_gaussian_family(self) -> bool:
-        return False
-
-    def forward(
-        self,
-        x: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
-        raise NotImplementedError(
-            "MixtureGaussianDistHead.forward not yet implemented — "
-            "MoG encoder is a follow-up. Use GaussianDistHead for now."
-        )
-
-    def stack_stats(self, step_params_list: list[dict]) -> dict:
-        raise NotImplementedError(
-            "MixtureGaussianDistHead.stack_stats not yet implemented."
-        )

@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 from ddssm.experiment import SBatch
 
-# Project default — mirrors `submitit_slurm.yaml`.
+# Project default Slurm resources for a single-job render.
 DEFAULT_SBATCH = SBatch(
     partition="gpu",
     time="04:00:00",
@@ -55,8 +55,9 @@ class PreemptSpec:
     saves a checkpoint and raises ``PreemptError`` when it sees the signal.
     ``storage_url`` + ``study_name`` + ``target`` drive the preamble's
     ``ddssm.launch_remaining`` invocation (which computes the still-pending
-    budget and reaps stale ``RUNNING`` trials). ``n_workers`` divides the
-    remaining budget across siblings (ceiling division). ``worker_idx`` is
+    budget; it does NOT reap RUNNING trials — see the preamble for why).
+    ``n_workers`` divides the remaining budget across siblings (ceiling
+    division). ``worker_idx`` is
     baked into the ``DDSSM_WORKER_ID`` env export so each worker subprocess
     knows its slot.
     """
@@ -200,9 +201,16 @@ def _render_preempt_preamble(ps: PreemptSpec) -> list[str]:
     trainer's signal handler sees the preempt signal.
     """
     return [
+        # Budget count ONLY — no ``--cleanup-running-older-than``. The age-based
+        # reap can't tell a live sibling's in-flight trial from a dead worker's
+        # orphan, so it would fail the live trials of any other workers sharing
+        # this study (catastrophic when groups join staggered or requeue). The
+        # real resume path is independent: a SIGUSR1 worker checkpoints, raises
+        # PreemptError, and app.py enqueues the retry. Hard-killed orphans just
+        # linger as RUNNING (inert — they don't count against the budget).
         "N_REMAINING=$(python -m ddssm.launch_remaining \\",
         f"    --storage {ps.storage_url} --study {ps.study_name} \\",
-        f"    --target {ps.target} --cleanup-running-older-than 60)",
+        f"    --target {ps.target})",
         'if [ "$N_REMAINING" -le 0 ]; then',
         '    echo "[preempt] target reached, exiting cleanly"',
         "    exit 0",
@@ -270,6 +278,16 @@ def render_packed_sbatch(
     lines += list(spec.setup)
     if preempt is not None:
         lines += _render_packed_preempt_preamble(preempt)
+    else:
+        # Non-preempt packed runs have no ``launch_remaining`` preamble, so the
+        # Optuna schema is never initialized before the K workers spawn. Without
+        # this, all K race on ``CREATE TABLE`` against the fresh SQLite file and
+        # all-but-one die with ``sqlite3.OperationalError: table studies already
+        # exists`` (observed: 15/16 A100 workers lost). Touch the storage once
+        # here to create the tables — workers then only contend on the study-row
+        # INSERT, which ``create_study(load_if_exists=True)`` handles. Mirrors
+        # the schema init that ``launch_remaining`` performs for the preempt path.
+        lines += _render_packed_storage_init(worker_overrides)
 
     lines.append("PIDS=()")
     if preempt is not None:
@@ -323,9 +341,10 @@ def _render_packed_preempt_preamble(ps: PreemptSpec) -> list[str]:
     :func:`render_packed_sbatch` (they are per-process / fan-out, not global).
     """
     return [
+        # Budget count ONLY (no orphan reap) — see _render_preempt_preamble.
         "N_REMAINING=$(python -m ddssm.launch_remaining \\",
         f"    --storage {ps.storage_url} --study {ps.study_name} \\",
-        f"    --target {ps.target} --cleanup-running-older-than 60)",
+        f"    --target {ps.target})",
         'if [ "$N_REMAINING" -le 0 ]; then',
         '    echo "[preempt] target reached, exiting cleanly"',
         "    exit 0",
@@ -334,6 +353,31 @@ def _render_packed_preempt_preamble(ps: PreemptSpec) -> list[str]:
         "export DDSSM_INVOC=$(date +%s)",
         "export DDSSM_PREEMPTIVE=1",
     ]
+
+
+def _render_packed_storage_init(
+    worker_overrides: list[tuple[int, list[str]]],
+) -> list[str]:
+    """One-time Optuna schema init for the non-preempt packed shape.
+
+    Extracts the shared ``hydra.sweeper.storage`` URL from the workers' override
+    lists (they all carry the same value) and emits a single ``RDBStorage(url)``
+    construction, which runs Optuna's ``_init_tables`` and creates the schema
+    before the K workers start. Returns ``[]`` if no storage override is found
+    (e.g. an in-memory sweeper), in which case there is no DDL race to avoid.
+    """
+    storage = None
+    for _, overrides in worker_overrides:
+        for o in overrides:
+            if o.startswith("hydra.sweeper.storage="):
+                storage = o.split("=", 1)[1]
+                break
+        if storage is not None:
+            break
+    if not storage:
+        return []
+    code = f'from optuna.storages import RDBStorage; RDBStorage("{storage}")'
+    return [f"python -c {_shell_quote(code)}"]
 
 
 def _shell_quote(s: str) -> str:
