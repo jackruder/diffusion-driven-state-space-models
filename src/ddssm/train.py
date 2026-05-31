@@ -164,6 +164,10 @@ class DDSSMTrainer:
         # default ``FullELBO``.
         self._stage_lambda_fn: Callable[[int], float] | None = None
         self._stage_start_step: int = 0
+        # 1-based index of the stage currently running (set by
+        # StageOrchestrator); 0 for single-fit runs with no stages. Logged as
+        # ``stage/idx`` so multi-stage curves are interpretable from the CSV.
+        self._current_stage_idx: int = 0
         # ADR-0004: active loss object (installed by orchestrator per
         # stage; constructed lazily at fit() start otherwise).
         from .losses import Loss
@@ -210,6 +214,7 @@ class DDSSMTrainer:
                 MetricSpec("time/*", "last"),
                 MetricSpec("optim/*", "last"),
                 MetricSpec("mem/*", "last"),
+                MetricSpec("stage/*", "last"),
             ],
             # Validation accumulates over the whole val set within one
             # ``epoch_end`` flush, so losses are mean-reduced (weighted by
@@ -218,6 +223,7 @@ class DDSSMTrainer:
                 "val": [
                     MetricSpec("loss/*", "mean"),
                     MetricSpec("optim/*", "last"),
+                    MetricSpec("stage/*", "last"),
                     MetricSpec("*", "mean"),
                 ],
             },
@@ -398,13 +404,11 @@ class DDSSMTrainer:
             "Trainer.fit must install a default loss object before training"
         )
         loss = self._active_loss(components, step_within_stage)
-        # Surface the rate-λ for logging (the loss object knows its own
-        # schedule shape — read it back for the metrics dict).
-        from .losses import FullELBO
-        if isinstance(self._active_loss, FullELBO):
-            metrics["optim/lambda"] = torch.tensor(
-                self._active_loss.rate_lambda(step_within_stage)
-            )
+        # Surface the rate-λ for logging for ANY loss with a schedule (not
+        # just FullELBO) — the loss reports its own λ via ``lambda_at``.
+        lam = self._active_loss.lambda_at(step_within_stage)
+        if lam is not None:
+            metrics["optim/lambda"] = torch.tensor(lam)
 
         return loss, metrics, observed.size(0)
 
@@ -482,6 +486,15 @@ class DDSSMTrainer:
         # find the time at which a metric first crossed a threshold.
         log_values["time/elapsed_s"] = torch.tensor(
             _time.time() - self.metrics._t0, device=device
+        )
+        # Stage markers so a multi-stage curve is interpretable from the CSV
+        # alone: which stage a row belongs to, and the stage-relative step
+        # (where the λ-ramp reset / centering handoff fired). 0 for single-fit.
+        log_values["stage/idx"] = torch.tensor(
+            float(self._current_stage_idx), device=device
+        )
+        log_values["stage/step_within"] = torch.tensor(
+            float(self.global_step - self._stage_start_step), device=device
         )
         self.metrics.update(split="train", values=log_values, weight=accum_weight)
         if log_every and (step % log_every == 0):

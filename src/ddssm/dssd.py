@@ -95,7 +95,6 @@ class DDSSM_base(nn.Module):
         baseline_mode: str = "pinned",
         sigma_data: SigmaDataBuffer | None = None,
         stage1_transition: BaseTransition | None = None,
-        report_sigma_data_diag: bool = True,
     ) -> None:
         super().__init__()
 
@@ -147,7 +146,6 @@ class DDSSM_base(nn.Module):
         self.baseline_mode: str = baseline_mode
         self.sigma_data: SigmaDataBuffer | None = sigma_data
         self.stage1_transition: BaseTransition | None = stage1_transition
-        self._report_sigma_data_diag: bool = bool(report_sigma_data_diag)
 
         # Orchestrator flips this between stages.
         self.stage_selector: str = "stage_2"
@@ -740,11 +738,11 @@ class DDSSM_base(nn.Module):
                 metrics["loss/rate/init/kl_aux"] = init_terms["kl_aux"].detach()
             if "loss_init" in init_terms:
                 metrics["loss/rate/init/loss_init"] = init_terms["loss_init"].detach()
-        # Surface per-t σ_data²[t] buffer values when configured.  These
-        # feed the post-hoc ``sigma_data_drift`` metric's trajectory plot
-        # (init-experiment.org § Headline metrics, metric 6).  Logged once
+        # Surface per-t σ_data²[t] buffer values whenever a buffer exists.
+        # These feed the post-hoc ``sigma_data_drift`` metric's trajectory
+        # plot (init-experiment.org § Headline metrics, metric 6); logged once
         # per step so the trajectory is recoverable from metrics.csv alone.
-        if self.sigma_data is not None and self._report_sigma_data_diag:
+        if self.sigma_data is not None:
             buf = self.sigma_data.sigma_data2.detach()
             for slot, value in enumerate(buf):
                 metrics[f"diag/sigma_data2/t={slot + 1}"] = value

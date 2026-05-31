@@ -94,6 +94,15 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     assert stage1_rows, "no stage-1 rows logged"
     assert stage2_rows, "no stage-2 rows logged"
 
+    # Stage markers (task #20): stage/idx flips 1→2 at the boundary, the
+    # stage-relative counter resets, and optim/lambda is logged every step.
+    assert {"stage/idx", "stage/step_within", "optim/lambda"} <= set(fieldnames)
+    assert all(int(float(r["stage/idx"])) == 1 for r in stage1_rows)
+    assert all(int(float(r["stage/idx"])) == 2 for r in stage2_rows)
+    # step_within resets at the boundary: stage-2's first row is < its global step.
+    assert int(float(stage2_rows[0]["stage/step_within"])) < int(stage2_rows[0]["step"])
+    assert all(r["optim/lambda"] not in ("", None) for r in stage1_rows + stage2_rows)
+
     # Entropy-cancellation invariant: stage-2 entropy column is exactly 0.
     for r in stage2_rows:
         assert float(r["loss/rate/init/entropy"]) == 0.0, (
