@@ -142,6 +142,14 @@ def variance(
 
     log.info("Stage 3/3: generating %d plot(s)", len(spec.plots))
     plot_ctx = ProbePlotContext(rows=rows, summary=summary, metrics=metric_out)
+
+    # Cross-stage W&B reconnect — same shape as ``viz.runner.visualize``.
+    from ..loggers import resume_run_from_dir
+
+    wandb_mod = resume_run_from_dir(
+        run_dir, getattr(experiment, "wandb_config", None),
+    )
+
     for plot in spec.plots:
         if plot.name not in PROBE_PLOT_REGISTRY:
             raise KeyError(f"Unknown probe plot {plot.name!r}")
@@ -149,5 +157,17 @@ def variance(
         out_path = os.path.join(run_dir, out_name)
         PROBE_PLOT_REGISTRY[plot.name](plot_ctx, out_path, **dict(plot.kwargs or {}))
         log.info("  saved %s", out_path)
+        if wandb_mod is not None:
+            try:
+                wandb_mod.log(
+                    {f"variance/{plot.name}": wandb_mod.Image(out_path)}
+                )
+            except Exception as e:  # noqa: BLE001 — best-effort
+                log.warning("wandb image log failed for %s: %s", plot.name, e)
+    if wandb_mod is not None:
+        try:
+            wandb_mod.finish()
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
     log.info("Variance probe complete.")
     return summary_out

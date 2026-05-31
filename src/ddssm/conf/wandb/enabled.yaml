@@ -21,3 +21,8 @@ group: ${oc.select:hydra.sweeper.study_name,${hydra:job.name}}
 tags: []
 config: {}
 base_url: null
+# ``wandb.watch`` is opt-in — set to ``"gradients"``, ``"parameters"``,
+# or ``"all"`` to log per-tensor histograms alongside scalars. Costs
+# extra bandwidth, hence off by default.
+watch_log: null
+watch_log_freq: 100
