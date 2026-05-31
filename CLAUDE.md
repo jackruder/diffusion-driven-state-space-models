@@ -17,11 +17,14 @@ pip install -e .                 # or: pip install -e .[wandb]
 # Run the unified entry point (default experiment: init_smoke_simple)
 python -m ddssm.app                                       # default smoke
 python -m ddssm.app experiment=init_smoke_high_surface    # any registered preset
-python -m ddssm.app experiment=init_mlp_pinned_per_t__1d experiment.training.steps=2000
+python -m ddssm.app experiment=init_mlp_pinned_per_t__1d experiment.training.stages.n_stage2=2000
+
+# (Shipped presets are multi-stage: the step budget is training.stages.n_pretrain
+#  / n_stage2, NOT training.steps — that's only read by the single-fit path.)
 
 # List / run / render-sbatch for any registered preset
 python -m experiments list                                # enumerate preset names
-python -m experiments run  init_smoke_simple training.steps=200
+python -m experiments run  init_smoke_simple training.stages.n_pretrain=200
 python -m experiments sbatch --out=job.sh init_mlp_pinned_per_t__mv
 
 # Launch a whole registered study (renders/submits all its points)

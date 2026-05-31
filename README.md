@@ -118,9 +118,11 @@ e.g. `init_mlp_pinned_per_t__1d`, `init_zero_pinned_fixed__mv`.
 # Default smoke run
 python -m ddssm.app
 
-# Pick a preset and override anything it sets
+# Pick a preset and override anything it sets. The shipped presets are
+# multi-stage, so the step budget is training.stages.n_pretrain / n_stage2
+# (training.steps is only read by the single-fit path); batch size is on hparams.
 python -m ddssm.app experiment=init_mlp_pinned_per_t__1d \
-    experiment.training.steps=2000 experiment.hyperparams.batch_size=64
+    experiment.training.stages.n_stage2=2000 experiment.hparams.batch_size=64
 ```
 
 ### Architecture selection
@@ -257,7 +259,7 @@ python -m experiments sbatch --partition=gpu --time=12:00:00 --mem=64G \
 # submit it
 sbatch runs/init_mlp.sbatch
 # or pass extra Hydra overrides at submit time:
-sbatch runs/init_mlp.sbatch experiment.training.steps=12000
+sbatch runs/init_mlp.sbatch experiment.training.stages.n_stage2=12000
 ```
 
 **Study / sweep — orchestrate a whole registered study.** Recommended for

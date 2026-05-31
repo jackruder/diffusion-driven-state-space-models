@@ -408,9 +408,23 @@ class Experiment:
             # Multi-stage path: drive StageOrchestrator instead of a single fit.
             from .stages import StageOrchestrator
 
+            # Under stages, each StageSpecConf.steps drives the budget;
+            # training.steps / log_every / checkpoint_every are NOT read here
+            # (they apply only to the single-fit branch below). Surface the
+            # effective budget so it isn't a silent shadow of training.steps.
+            stage_steps = {
+                key: int(getattr(getattr(stages_cfg, key), "steps", 0))
+                for key in stages_cfg.run
+                if getattr(stages_cfg, key, None) is not None
+            }
             log.info(
-                "Starting multi-stage run via StageOrchestrator (stages=%s)",
+                "Starting multi-stage run via StageOrchestrator: stages=%s, "
+                "per-stage steps=%s, total budget=%d. training.steps/log_every "
+                "are ignored under stages — the budget comes from "
+                "training.stages.",
                 stages_cfg.run,
+                stage_steps,
+                sum(stage_steps.values()),
             )
             orchestrator = StageOrchestrator(trainer, stages_cfg)
             orchestrator.run(
