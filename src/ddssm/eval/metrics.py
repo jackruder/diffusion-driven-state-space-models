@@ -187,7 +187,7 @@ def eval_recon_mse(ctx: EvalContext) -> Dict[str, Any]:
             x = batch["observed_data"]
             mask = batch["observation_mask"]
             t = batch["timepoints"]
-            _l, _r, _d, _m, stats = model(x, mask, t, train=False)
+            _components, _metrics, stats = model(x, mask, t, train=False)
             zs = stats["zs"][:, 0]  # (B, d, T)
 
             from ..net_utils import time_embedding

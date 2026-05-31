@@ -412,7 +412,11 @@ class DiffusionV3Transition(BaseTransition):
                 t_start_external=t_start + 1,
             )
 
-        denom = float(B * S * n_target_steps)
+        # Match the BaselineGaussian convention: sum over target timesteps,
+        # mean over (B, S).  Dividing additionally by n_target_steps would
+        # silently shrink stage-2's KL by factor (T-j) relative to stage-1,
+        # biasing the ELBO toward reconstruction across the centering handoff.
+        denom = float(B * S)
         kl = kl_sum / denom
         if return_per_sample:
             return {

@@ -633,6 +633,8 @@ class DDSSM_base(nn.Module):
         logvars = enc_stats.get("logvars", None)
         if logvars is not None:
             logvars = logvars.clamp(min=self.logvar_min, max=self.logvar_max)
+            # Mutate enc_stats so downstream loss/KL terms see the clamped values.
+            enc_stats["logvars"] = logvars
 
         # --- ELBO pieces ---
 

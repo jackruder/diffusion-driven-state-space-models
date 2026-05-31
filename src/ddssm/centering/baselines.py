@@ -33,6 +33,18 @@ import torch
 import torch.nn as nn
 
 
+# Default clamp bounds for raw ``log σ_p²`` outputs from baseline heads.
+# Without these guards a single Linear layer can emit logvar≈±20, producing
+# var≈exp(±20) which NaNs the downstream KL / log-prob.  The encoder's
+# ``GaussianHead`` uses the same (-9, 6) convention.
+_LOGVAR_MIN: float = -9.0
+_LOGVAR_MAX: float = 6.0
+
+
+def _clamp_logvar(logvar: torch.Tensor) -> torch.Tensor:
+    return logvar.clamp(min=_LOGVAR_MIN, max=_LOGVAR_MAX)
+
+
 class BaseBaseline(nn.Module, metaclass=abc.ABCMeta):
     """Abstract μ_p / σ_p head.
 
@@ -117,7 +129,7 @@ class _StateConditionalSigmaHead(nn.Module):
 
     def forward(self, z_hist: torch.Tensor) -> torch.Tensor:
         B = z_hist.shape[0]
-        return self.body(z_hist.reshape(B, -1))
+        return _clamp_logvar(self.body(z_hist.reshape(B, -1)))
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +233,7 @@ class LinearBaseline(BaseBaseline):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         flat = self._flatten(z_hist)
-        return self.mu_head(flat), self.logvar_head(flat)
+        return self.mu_head(flat), _clamp_logvar(self.logvar_head(flat))
 
 
 class MLPBaseline(BaseBaseline):
@@ -268,4 +280,4 @@ class MLPBaseline(BaseBaseline):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         h = self._hidden(z_hist)
-        return self.mu_head(h), self.logvar_head(h)
+        return self.mu_head(h), _clamp_logvar(self.logvar_head(h))

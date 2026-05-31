@@ -90,7 +90,16 @@ def test_clamps_at_zero(tmp_path) -> None:
     assert compute_remaining(url, "s", target=5) == 0
 
 
-def test_cleanup_running_older_than_marks_failed(tmp_path) -> None:
+def test_cleanup_is_noop_without_heartbeats(tmp_path) -> None:
+    """An aged RUNNING trial must NOT be reaped without heartbeat config.
+
+    Reaping by ``datetime_start`` (the prior implementation) falsely killed
+    healthy workers that were still running their trial. The corrected
+    implementation delegates to ``optuna.storages.fail_stale_trials``,
+    which uses heartbeat metadata; without a heartbeat-configured storage
+    it is a safe no-op. Orphan RUNNING rows persist in that mode but do
+    not affect the budget count (only COMPLETE + PRUNED count).
+    """
     url, db = _storage_url(tmp_path)
     study = optuna.create_study(study_name="s", storage=url, direction="minimize")
     t = study.ask()
@@ -99,24 +108,45 @@ def test_cleanup_running_older_than_marks_failed(tmp_path) -> None:
 
     compute_remaining(url, "s", target=10, cleanup_older_than=60)
 
-    # Reload to bypass any in-process cache.
     reloaded = optuna.load_study(study_name="s", storage=url)
     ft = reloaded._storage.get_trial(trial_id)
-    assert ft.state == TrialState.FAIL
+    assert ft.state == TrialState.RUNNING
 
 
 def test_cleanup_does_not_touch_fresh_running(tmp_path) -> None:
+    """Sanity check that fresh RUNNING trials are also safe (same no-op path)."""
     url, db = _storage_url(tmp_path)
     study = optuna.create_study(study_name="s", storage=url, direction="minimize")
     t = study.ask()
     trial_id = t._trial_id
-    _age_trial(db, trial_id, seconds_ago=5)  # 5 seconds ago, threshold is 60
+    _age_trial(db, trial_id, seconds_ago=5)
 
     compute_remaining(url, "s", target=10, cleanup_older_than=60)
 
     reloaded = optuna.load_study(study_name="s", storage=url)
     ft = reloaded._storage.get_trial(trial_id)
     assert ft.state == TrialState.RUNNING
+
+
+def test_orphan_running_trials_do_not_affect_budget(tmp_path) -> None:
+    """RUNNING orphans must NOT subtract from the remaining target.
+
+    Without heartbeats the reaper is a no-op, so orphan RUNNING rows
+    persist. The budget invariant — only COMPLETE + PRUNED count — must
+    hold regardless of how many orphans accumulate.
+    """
+    url, db = _storage_url(tmp_path)
+    study = optuna.create_study(study_name="s", storage=url, direction="minimize")
+    # 3 COMPLETE; should leave target - 3 = 7 remaining.
+    for v in (0.1, 0.2, 0.3):
+        t = study.ask()
+        study.tell(t, v)
+    # 4 RUNNING orphans aged out: must not reduce remaining.
+    for _ in range(4):
+        t = study.ask()
+        _age_trial(db, t._trial_id, seconds_ago=900)
+
+    assert compute_remaining(url, "s", target=10, cleanup_older_than=60) == 7
 
 
 # ---------------------------------------------------------------------------

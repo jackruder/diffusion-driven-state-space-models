@@ -124,7 +124,8 @@ class _StubReconForecastModel(torch.nn.Module):
     def __call__(self, observed, mask, timepoints, train: bool = False):
         B, D, T = observed.shape
         zs = torch.zeros(B, 1, 2, T)  # (B, S=1, d=2, T)
-        return None, None, None, None, {"zs": zs}
+        # Matches DDSSM_base.forward's (components, metrics, stats) 3-tuple.
+        return None, {}, {"zs": zs}
 
     def forecast(self, *, x_hist, x_mask, past_time, future_time, num_samples, **_):
         B = x_hist.shape[0]

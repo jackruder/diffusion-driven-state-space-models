@@ -13,6 +13,7 @@ _target_: hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper
 
 defaults:
   - sampler: tpe
+  - _self_
 
 direction: minimize
 storage: sqlite:///${oc.env:PWD,.}/runs/optuna/${hydra:sweeper.study_name}.db
@@ -26,3 +27,7 @@ max_failure_rate: 0.0
 search_space: null
 params: {}
 custom_search_space: null
+# Seed the sampler so reruns of the same CLI explore the same hp points.
+# Override per-study via ``hydra.sweeper.sampler.seed=N``.
+sampler:
+  seed: 42

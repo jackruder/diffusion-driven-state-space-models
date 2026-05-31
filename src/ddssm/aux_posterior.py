@@ -34,6 +34,13 @@ import torch
 import torch.nn as nn
 
 
+# Clamp bounds for the raw ``logvar`` output of the q_Φ head. Matches the
+# encoder ``GaussianHead`` and ``centering.baselines`` convention; without
+# the guard a single Linear layer can emit logvar≈±20 and NaN the KL.
+_LOGVAR_MIN: float = -9.0
+_LOGVAR_MAX: float = 6.0
+
+
 class AuxPosterior(nn.Module):
     """Diagonal-Gaussian amortised posterior ``q_Φ(z_{-j+1:0} | z_{1:j})``.
 
@@ -89,7 +96,7 @@ class AuxPosterior(nn.Module):
         h = self.body(z_init.reshape(B, d * j))  # (B, 2*d*j)
         aux_mu, aux_logvar = h.chunk(2, dim=-1)
         aux_mu = aux_mu.view(B, d, j)
-        aux_logvar = aux_logvar.view(B, d, j)
+        aux_logvar = aux_logvar.view(B, d, j).clamp(min=_LOGVAR_MIN, max=_LOGVAR_MAX)
         return aux_mu, aux_logvar
 
     def sample(

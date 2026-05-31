@@ -13,17 +13,22 @@ count against the budget so retries are free. If the study does not yet
 exist, prints ``--target`` *without* creating a stub — first-run config is
 left to ``ddssm.app``'s sweeper so the right sampler / directions stick.
 
-``--cleanup-running-older-than N`` reaps RUNNING trials whose
-``datetime_start`` is older than ``N`` seconds (orphans from a previous
-preempt cycle), flipping them to FAILED. With ``DDSSM_PREEMPTIVE=1`` set
-on the cleanup invocation, the storage's installed
-``failed_trial_callback`` fires for each and enqueues a retry.
+``--cleanup-running-older-than`` is now an advisory flag (kept for back-
+compat with sbatch preambles emitted before this change): orphaned
+RUNNING trials are reaped via ``optuna.storages.fail_stale_trials``,
+which uses Optuna's heartbeat mechanism — a healthy trial still updates
+its heartbeat and is therefore safe from reaping no matter how long it
+has been running.  When the storage is NOT heartbeat-configured (the
+current default), ``fail_stale_trials`` is a no-op; in that mode
+orphaned RUNNING rows persist in the DB but do not affect the budget
+count (only COMPLETE + PRUNED count toward target).  Enable heartbeats
+by configuring the storage with ``RDBStorage(..., heartbeat_interval=...,
+grace_period=..., failed_trial_callback=...)``.
 """
 
 from __future__ import annotations
 
 import argparse
-import datetime
 import sys
 
 import optuna
@@ -48,10 +53,12 @@ def compute_remaining(
     side-effecting a stub into the storage. The sweeper's first invocation
     is what should create the study with the right sampler/directions.
 
-    If ``cleanup_older_than`` is set, RUNNING trials whose ``datetime_start``
-    is older than ``cleanup_older_than`` seconds are flipped to FAILED first
-    (so the next worker doesn't deadlock waiting for orphaned slots and so
-    the retry callback — if installed via ``DDSSM_PREEMPTIVE=1`` — fires).
+    If ``cleanup_older_than`` is non-None, attempts a heartbeat-based
+    reap of orphaned RUNNING trials via ``optuna.storages.fail_stale_trials``.
+    The actual stale-detection window is governed by Optuna's storage-side
+    ``heartbeat_interval`` + ``grace_period`` (not by ``cleanup_older_than``,
+    which is now advisory); a healthy trial whose worker is updating its
+    heartbeat is never reaped, no matter how long it has been running.
 
     Returns ``max(0, target - count(COMPLETE+PRUNED))``.
     """
@@ -64,25 +71,31 @@ def compute_remaining(
         return target
 
     if cleanup_older_than is not None:
-        _reap_stale_running(study, older_than_seconds=cleanup_older_than)
+        _reap_stale_running(study)
 
     count = len(study.get_trials(states=_BUDGET_STATES, deepcopy=False))
     return max(0, target - count)
 
 
-def _reap_stale_running(study: optuna.Study, *, older_than_seconds: float) -> None:
-    """Flip RUNNING trials older than ``older_than_seconds`` to FAILED.
+def _reap_stale_running(study: optuna.Study) -> None:
+    """Flip orphaned RUNNING trials to FAILED via Optuna's heartbeat reaper.
 
-    ``study.get_trials`` returns ``FrozenTrial`` snapshots (not live ``Trial``
-    objects), so ``study.tell(frozen, ...)`` rejects them with
-    ``TypeError: Trial must be a trial object or trial number``. We pass
-    ``.number`` instead — same FAILED transition, and any installed
-    ``failed_trial_callback`` fires identically.
+    Delegates to ``optuna.storages.fail_stale_trials`` which uses the
+    storage's heartbeat mechanism to identify trials whose worker has
+    stopped sending heartbeats.  Crucially, a healthy worker still
+    sending heartbeats is NEVER reaped regardless of how long the trial
+    has been running — fixing the prior ``datetime_start``-based reaper
+    that flipped healthy trials older than 60 s to FAILED, burning their
+    compute and double-spending budget slots.
+
+    When the storage is not heartbeat-configured (no
+    ``heartbeat_interval`` on ``RDBStorage``) this is a no-op; the
+    failure mode in that case is that genuinely orphaned RUNNING rows
+    persist in the DB, which is benign (they do not affect the budget
+    count). To enable real reaping, configure the storage with
+    ``RDBStorage(..., heartbeat_interval=N, grace_period=M)``.
     """
-    cutoff = datetime.datetime.now() - datetime.timedelta(seconds=older_than_seconds)
-    for trial in study.get_trials(states=[TrialState.RUNNING], deepcopy=False):
-        if trial.datetime_start is not None and trial.datetime_start < cutoff:
-            study.tell(trial.number, state=TrialState.FAIL)
+    optuna.storages.fail_stale_trials(study)
 
 
 def main(argv: list[str] | None = None) -> int:

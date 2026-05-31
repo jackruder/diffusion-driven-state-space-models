@@ -84,7 +84,7 @@ def _run_recon_and_forecast(ctx: PlotContext, batch: dict, T_split: int, num_sam
     timepoints = batch["timepoints"]
 
     with torch.no_grad():
-        _l, _r, _d, _m, stats = model(observed, mask, timepoints, train=False)
+        _components, _metrics, stats = model(observed, mask, timepoints, train=False)
         zs = stats["zs"]
         z_sample = zs[:, 0, :, :]
 
