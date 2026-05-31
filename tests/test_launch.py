@@ -258,6 +258,7 @@ def test_strategy_support_gates() -> None:
 
 def test_render_bakes_data_and_wires_sweep() -> None:
     jobs = _orch().render(INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t"))
+    # Headline mlp_pinned_per_t is a single A100 (16-pack) -> one job per dataset.
     assert [j for j, _ in jobs] == [
         "init_mlp_pinned_per_t__1d",
         "init_mlp_pinned_per_t__mv",
@@ -868,6 +869,7 @@ def test_submit_shells_out_once_per_file(tmp_path, monkeypatch) -> None:
     write_dir = tmp_path / "sbatch"
     orch.launch(pts, write_dir=str(write_dir), submit=True)
     written = sorted(str(p) for p in write_dir.glob("*.sbatch"))
+    # mlp_pinned_per_t (single A100) x 2 datasets = 2 sbatch files.
     assert len(written) == 2
     assert sorted(calls) == written
 
@@ -1067,7 +1069,7 @@ def test_packed_node_rejects_local() -> None:
 
 @pytest.mark.parametrize("renderer", ["render_sbatch", "render_packed_sbatch"])
 def test_renderers_emit_strict_bash_pipefail(renderer: str) -> None:
-    from ddssm.sbatch import render_packed_sbatch, render_sbatch
+    from ddssm.sbatch import render_sbatch, render_packed_sbatch
 
     exp_sbatch = SBatch(
         partition="gpu",

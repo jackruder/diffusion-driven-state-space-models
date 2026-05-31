@@ -66,14 +66,13 @@ _PRIORITY_ACCOUNT = "--account=priority-michaelwojnowicz"
 _UNSAFE_ACCOUNT = "--account=group-michaelwojnowicz"
 
 
-# Cells routed to the idle b6000 (Blackwell, 96 GB) GPUs; the rest go to A40.
-# Each cell takes 2 GPUs, so 3 b6000 cells use all 6 idle b6000s. The mlp cells
-# (heaviest model) + one learnable get the faster b6000; A40 covers the rest.
+# Non-headline cells routed to the idle b6000 (Blackwell, 96 GB) GPUs; the
+# rest go to A40. Each takes 2 GPUs, so 3 b6000 cells use all 6 idle b6000s.
 _B6000_CELLS = frozenset(
     {
-        "init_mlp_pinned_per_t",
         "init_mlp_learnable_per_t",
         "init_linear_learnable_per_t",
+        "init_linear_pinned_per_t",
     }
 )
 
@@ -81,23 +80,47 @@ _B6000_CELLS = frozenset(
 def _launch(point: StudyPoint) -> PointLaunch:
     """Round-1 (trans-KL-fix rerun) launch intent: GPU-packed Optuna MOO.
 
-    Every cell uses the WIDE ``init_ablation_moo`` search space. Each cell gets
-    **2 GPUs** (``n_workers=32`` = 2 × 16-pack, sharing the cell's Optuna DB) at
-    **2 CPUs/worker** (32 CPUs/GPU → 16 workers/GPU), so the 96-trial budget
-    splits 3/worker. The packed strategy splits a cell's budget across
-    SAME-gres GPUs, so each cell uses 2 of ONE type: 3 cells on b6000 (the 6
-    idle Blackwells) and 3 on A40 — both fast, both ``gpuunsafe``/preemptible.
-    Preemption is safe now: the reaper is liveness-based (``fail_stale_trials``)
-    and the preamble no longer age-reaps, so requeues/joins never fail live
-    trials.
+    Every cell uses the WIDE ``init_ablation_moo`` search space, **2 CPUs/worker**
+    (16 workers/GPU on the 32-CPU per-GPU half-node share), 96-trial budget.
+
+    - Headline ``mlp_pinned_per_t`` → 1 guaranteed **A100** on ``gpupriority``
+      (non-preempt), 16-pack (6 trials/worker).
+    - 3 cells → 2 × **b6000** each (uses all 6 idle Blackwells), 32 workers
+      (3/worker), ``gpuunsafe``.
+    - 2 cells → 2 × **A40** each, 32 workers, ``gpuunsafe``.
+
+    The packed strategy splits a cell's budget across SAME-gres GPUs, so each
+    cell uses 2 of one type. Preemption is safe now: the reaper is
+    liveness-based (``fail_stale_trials``) and the preamble no longer age-reaps,
+    so requeues/joins never fail live trials.
     """
     cell = point.coords["cell"]
-    gres = (
-        "--gres=gpu:b6000:1" if cell.name in _B6000_CELLS else "--gres=gpu:a40:1"
-    )
+
+    # Headline cell -> the guaranteed A100 (gpupriority, non-preempt). 96/16 = 6.
+    if cell.name == "init_mlp_pinned_per_t":
+        return PointLaunch(
+            strategy="optuna_packed_node",
+            sweep="init_ablation_moo",
+            n_trials=96,
+            n_workers=16,
+            workers_per_gpu=16,
+            preemptive=False,
+            resources=ResourceSpec(
+                partition="gpupriority",
+                gpus=1,
+                cpus=32,  # 16 workers x 2 CPUs
+                mem="80G",
+                time="48:00:00",
+                extra_flags=("--gres=gpu:a100:1", _PRIORITY_ACCOUNT),
+                setup=_TEMPEST_SETUP,
+            ),
+        )
+
+    # Other cells -> 2 GPUs each (b6000 or A40), gpuunsafe/preemptible. 96/32 = 3.
+    gres = "--gres=gpu:b6000:1" if cell.name in _B6000_CELLS else "--gres=gpu:a40:1"
     return PointLaunch(
         strategy="optuna_packed_node",
-        sweep="init_ablation_moo",  # WIDE round-1 priors for every cell
+        sweep="init_ablation_moo",
         n_trials=96,
         n_workers=32,
         workers_per_gpu=16,
