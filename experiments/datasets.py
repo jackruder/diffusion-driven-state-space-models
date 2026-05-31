@@ -3,7 +3,7 @@
 The dataset configs themselves are library code in
 :mod:`ddssm.data.presets`; this module only publishes them to the
 ``data`` config group. The store is packaged at ``experiment.data``
-(see :mod:`conf.registry`), so ``+data=NAME`` overrides the dataset baked
+(see :mod:`ddssm.stores`), so ``+data=NAME`` overrides the dataset baked
 into the chosen experiment preset, e.g.::
 
     python -m ddssm.app experiment=init_smoke_simple +data=harmonic
@@ -25,7 +25,7 @@ from ddssm.data.presets import (
     NonlinBimodalLiftMV,
 )
 
-from conf.registry import data_store
+from ddssm.stores import data_store
 
 data_store(LGSSM, name="lgssm")
 data_store(Harmonic, name="harmonic")

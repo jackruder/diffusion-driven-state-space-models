@@ -7,7 +7,7 @@ import a model factory + a dataset and call :func:`experiment` (it ties
 them together and curries ``hparams`` onto the trainer)::
 
     from ddssm.builders import Eval, Hparams, Training
-    from conf.registry import experiment_store
+    from ddssm.stores import experiment_store
     from experiments._make import experiment, run
     from experiments.init_centering.model import SmokeModel
     from ddssm.data.presets import NonlinBimodalLift1D

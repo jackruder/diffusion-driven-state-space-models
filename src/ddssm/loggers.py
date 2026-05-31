@@ -5,12 +5,16 @@ from __future__ import annotations
 import os
 import csv
 import time
+import math
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Callable, Optional
 import fnmatch
 from dataclasses import dataclass
 
 import torch
+
+log = logging.getLogger(__name__)
 
 
 # ---------- meters ----------
@@ -255,6 +259,12 @@ class MetricStore:
         self.loggers = loggers or [ConsoleLogger()]
         self.splits: Dict[str, SplitStore] = {}
         self._t0 = time.time()
+        # Running count of non-finite (NaN/Inf) metric values seen, surfaced as
+        # the ``nonfinite/total`` column so a diverged run is visible in the CSV
+        # instead of silently persisting ``nan``. ``_nonfinite_warned`` dedups
+        # the per-key warning.
+        self._nonfinite_total: int = 0
+        self._nonfinite_warned: set[str] = set()
 
     def _split(self, split: str) -> SplitStore:
         if split not in self.splits:
@@ -285,19 +295,32 @@ class MetricStore:
         ss = self._split(split)
         for k, v in values.items():
             w = weights.get(k, weight) if weights else weight
-            ss.add(k, self._tofloat(v), float(w))
+            f = self._tofloat(v)
+            if not math.isfinite(f):
+                self._nonfinite_total += 1
+                if k not in self._nonfinite_warned:
+                    self._nonfinite_warned.add(k)
+                    log.warning(
+                        "Non-finite metric %r=%s in split %r; recorded but "
+                        "surfaced via nonfinite/total.", k, f, split,
+                    )
+            ss.add(k, f, float(w))
+
+    def _with_health(self, row: Dict[str, float]) -> Dict[str, float]:
+        """Attach the run-health counter to a flushed row."""
+        row = dict(row)
+        row["nonfinite/total"] = float(self._nonfinite_total)
+        return row
 
     def step_end(self, split: str, step: int, also_log: bool = True):
-        row = self._split(split).values()
-        # include wall time (seconds per step EMA via meter? keep simple: last delta)
-        row = dict(row)  # copy
+        row = self._with_health(self._split(split).values())
         if also_log:
             for lg in self.loggers:
                 lg.on_step(split, step, row)
         return row
 
     def epoch_end(self, split: str, epoch: int, reset: bool = True):
-        row = self._split(split).values()
+        row = self._with_health(self._split(split).values())
         for lg in self.loggers:
             lg.on_epoch(split, epoch, row)
         if reset:

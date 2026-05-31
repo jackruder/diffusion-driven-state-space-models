@@ -29,7 +29,7 @@ from hydra_zen import builds
 from omegaconf import MISSING
 
 from ddssm.dssd import DDSSM_base
-from conf.registry import model_store
+from ddssm.stores import model_store
 from ddssm.decoder import GaussianDecoder
 from ddssm.encoder import GaussianEncoder
 from ddssm.diffnets import (
@@ -52,11 +52,13 @@ from ddssm.transitions.diffusion import (
 )
 from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
 
-log = logging.getLogger(__name__)
+# Forms that have no learnable μ_p parameters and therefore degenerate to
+# ``baseline_mode="pinned"`` regardless of user input. Single source of truth
+# lives in ``cells.py`` (the grid module) so the auto-clamp here and the
+# cell-enumeration there can't drift.
+from experiments.init_centering.cells import _PARAM_FREE_FORMS
 
-# Forms that have no learnable μ_p parameters and therefore degenerate
-# to ``baseline_mode="pinned"`` regardless of user input.
-_PARAM_FREE_FORMS: frozenset[str] = frozenset({"zero", "identity"})
+log = logging.getLogger(__name__)
 
 
 def _build_baseline(

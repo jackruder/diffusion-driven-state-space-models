@@ -428,8 +428,11 @@ def test_render_preemptive_emits_three_sbatch_directives() -> None:
 def test_render_preemptive_injects_launch_remaining_invocation() -> None:
     script = _preempt_render(n_trials=12)
     assert "N_REMAINING=$(python -m ddssm.launch_remaining" in script
-    assert "--cleanup-running-older-than 60" in script
     assert "--target 12" in script
+    # The preamble must NOT auto-reap: --cleanup-running-older-than would fail
+    # the live in-flight trials of any other workers sharing the study (joining
+    # groups / requeues). launch_remaining is budget-count only here.
+    assert "--cleanup-running-older-than" not in script
 
 
 def test_render_preemptive_exits_early_if_remaining_is_zero() -> None:

@@ -1,11 +1,10 @@
-"""Compute how many trials a preemptive sweep still owes its target.
+r"""Compute how many trials a preemptive sweep still owes its target.
 
 Invoked from the bash preamble that ``ddssm.sbatch`` emits under
 ``PointLaunch.preemptive=True`` (ADR-0009):
 
     N_REMAINING=$(python -m ddssm.launch_remaining \\
-        --storage <storage> --study <name> --target <target> \\
-        --cleanup-running-older-than 60)
+        --storage <storage> --study <name> --target <target>)
 
 The CLI prints a single integer to stdout (the count of COMPLETE+PRUNED
 trials subtracted from ``--target``, clamped at zero); FAILED trials do NOT
@@ -13,22 +12,26 @@ count against the budget so retries are free. If the study does not yet
 exist, prints ``--target`` *without* creating a stub — first-run config is
 left to ``ddssm.app``'s sweeper so the right sampler / directions stick.
 
-``--cleanup-running-older-than N`` reaps RUNNING trials whose
-``datetime_start`` is older than ``N`` seconds (orphans from a previous
-preempt cycle), flipping them to FAILED. With ``DDSSM_PREEMPTIVE=1`` set
-on the cleanup invocation, the storage's installed
-``failed_trial_callback`` fires for each and enqueues a retry.
+``--cleanup-running-older-than N`` (OPTIONAL, no longer emitted by the
+preamble) flips RUNNING trials whose ``datetime_start`` is older than ``N``
+seconds to FAILED. It is **age-based, not liveness-based**, so it cannot
+tell a dead worker's orphan from a live sibling's in-flight trial — running
+it against a study that still has live workers (joining groups, requeues)
+fails their real trials. Kept only as a MANUAL between-runs orphan-sweep
+(run it when no workers are live). NOTE: there is no ``failed_trial_callback``
+wired on this CLI's storage, so reaping does NOT enqueue retries; the resume
+path is the SIGUSR1 → ``PreemptError`` → ``app.py`` enqueue, independent of
+this flag.
 """
 
 from __future__ import annotations
 
+import sys
 import argparse
 import datetime
-import sys
 
 import optuna
 from optuna.trial import TrialState
-
 
 # Budget states (per locked decision #3): COMPLETE + PRUNED count toward target.
 _BUDGET_STATES = (TrialState.COMPLETE, TrialState.PRUNED)

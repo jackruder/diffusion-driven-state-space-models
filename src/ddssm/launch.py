@@ -342,9 +342,19 @@ _STRATEGIES: dict[str, LaunchStrategy] = {
 STUDY_REGISTRY: dict[str, Study] = {}
 
 
-def register_study(study: Study) -> Study:
-    """Register a study so ``python -m ddssm.launch <name>`` can find it."""
+def register_study(
+    study: Study, into: Callable[..., Any] | None = None
+) -> Study:
+    """Register a study so ``python -m ddssm.launch <name>`` can find it.
+
+    Pass ``into=<store>`` (e.g. ``ddssm.stores.experiment_store``) to also
+    publish every point's config so ``experiment=<point_name>`` resolves — one
+    call keeps the launcher registry and the experiment store in sync instead
+    of requiring a separate ``study.register(store)``.
+    """
     STUDY_REGISTRY[study.name] = study
+    if into is not None:
+        study.register(into)
     return study
 
 

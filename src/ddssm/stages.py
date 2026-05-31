@@ -256,6 +256,9 @@ class StageOrchestrator:
             # transition + correctly handles entropy / regularizers per stage.
             if hasattr(self.trainer.model, "stage_selector"):
                 self.trainer.model.stage_selector = key
+            # 1-based stage index, logged per row as ``stage/idx`` so the CSV
+            # marks each stage and its boundary.
+            self.trainer._current_stage_idx = start_idx + i + 1
 
             # 2. Optional centering handoff.  When set, the handoff rebuilds
             # the optimizer itself.  Suppress on the resumed stage: the

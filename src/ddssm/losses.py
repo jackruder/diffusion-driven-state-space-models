@@ -55,6 +55,14 @@ class Loss(abc.ABC):
         self, components: LossComponents, step: int
     ) -> torch.Tensor: ...
 
+    def lambda_at(self, step: int) -> float | None:
+        """Rate-λ in effect at ``step``, for logging. ``None`` if not applicable.
+
+        Lets the trainer surface ``optim/lambda`` for any loss with a rate
+        schedule, not just :class:`FullELBO`.
+        """
+        return None
+
 
 @dataclass
 class FullELBO(Loss):
@@ -73,6 +81,9 @@ class FullELBO(Loss):
     rate_lambda: Callable[[int], float]
     lambda_sigma_p: float = 0.0
     lambda_mu_p: float = 0.0
+
+    def lambda_at(self, step: int) -> float | None:
+        return float(self.rate_lambda(step))
 
     def __call__(
         self, components: LossComponents, step: int
