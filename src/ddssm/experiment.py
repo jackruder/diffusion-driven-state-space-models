@@ -505,6 +505,15 @@ class Experiment:
                 **self.training.fit_kwargs(),
             )
 
+        # Emit run_summary.json so the run is self-describing (final loss,
+        # λ-warmup state, σ_data² drift, val loss, non-finite count, stages).
+        try:
+            from .report import write_run_summary
+
+            write_run_summary(run_dir)
+        except Exception as e:  # never let summary-writing fail a finished run
+            log.warning("Could not write run_summary.json: %s", e)
+
     def objective_value(
         self,
         *,

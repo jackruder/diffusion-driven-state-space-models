@@ -69,6 +69,13 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     # Reconciliation: the data module's batch_size was overridden from hparams.
     assert exp.data.batch_size == 8
 
+    # run_summary.json is emitted at train exit (task #22).
+    summary_path = run_dir / "run_summary.json"
+    assert summary_path.exists(), "run_summary.json missing"
+    import json as _json
+    summ = _json.loads(summary_path.read_text())
+    assert summ["available"] is True and summ["stages_run"] == [1, 2]
+
     csv_path = run_dir / "metrics.csv"
     assert csv_path.exists(), "metrics.csv missing"
     with csv_path.open() as f:
