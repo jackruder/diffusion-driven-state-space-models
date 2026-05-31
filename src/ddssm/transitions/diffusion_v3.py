@@ -1029,11 +1029,17 @@ class DiffusionV3Transition(BaseTransition):
         dtype = z_hist.dtype
         eps_dtype = torch.finfo(dtype).eps
 
-        # Prior at τ=1 in centered coords is N(0, σ_d² · I) under VP
-        # (the marginal variance at τ=1 is σ_data²-scaled).  Conservative
-        # initialisation: sample N(0, max(σ_d², 1) · I) — keeps the V2
-        # behaviour at σ_data ≡ 1.
-        x = math.sqrt(max(sigma_d2, 1.0)) * torch.randn(B, d, device=device, dtype=dtype)
+        # Prior at the top step (τ=1) in centered coords. The unit-diffusion
+        # VP forward marginal is N(0, α²·σ_d² + (1−α²)): the OU process drives
+        # any data variance toward the stationary variance 1 at τ=1, so the
+        # terminal is ≈ N(0, I) regardless of σ_data. Initialise at that exact
+        # marginal (reduces to N(0, I) at σ_data ≡ 1 and matches the prob-flow
+        # likelihood's N(0, I) terminal prior). The previous
+        # N(0, max(σ_d², 1)) over-dispersed forecast samples when σ_data² > 1.
+        a2_top = float(self.alpha2[-1].item())
+        om_a2_top = float(self.one_minus_alpha2[-1].item())
+        var_init = max(a2_top * sigma_d2 + om_a2_top, eps_dtype)
+        x = math.sqrt(var_init) * torch.randn(B, d, device=device, dtype=dtype)
 
         K = self.num_steps
         for i in range(K - 1, 0, -1):
