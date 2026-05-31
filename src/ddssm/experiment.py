@@ -29,6 +29,18 @@ from .data.datamodule import DDSSMDataModule
 
 log = logging.getLogger(__name__)
 
+# Dedup objective-misconfiguration warnings: an Optuna sweep calls
+# ObjectiveSpec.read once per trial, so a misconfigured metric/split would
+# otherwise warn on every trial. Keyed by message text (module-level so it
+# persists across trials in one process).
+_OBJECTIVE_WARNED: set[str] = set()
+
+
+def _warn_once(msg: str) -> None:
+    if msg not in _OBJECTIVE_WARNED:
+        _OBJECTIVE_WARNED.add(msg)
+        log.warning(msg)
+
 
 @dataclass
 class TrainingScalars:
@@ -175,13 +187,33 @@ class ObjectiveSpec:
             with open(csv_path, "r", newline="") as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames or []
-                col = (
-                    self.metric
-                    if self.metric in fieldnames
-                    else next((h for h in fieldnames if "loss" in h.lower()), "")
-                )
+                if self.metric in fieldnames:
+                    col = self.metric
+                else:
+                    col = next(
+                        (h for h in fieldnames if "loss" in h.lower()), ""
+                    )
+                    if col:
+                        _warn_once(
+                            f"ObjectiveSpec metric {self.metric!r} not in "
+                            f"{csv_path} columns; falling back to {col!r}."
+                        )
+                    else:
+                        _warn_once(
+                            f"ObjectiveSpec metric {self.metric!r} not in "
+                            f"{csv_path} and no 'loss' column found; "
+                            f"returning +inf."
+                        )
                 if not col:
                     return float("inf")
+                # If a split filter is configured but the CSV has no split
+                # column, the filter silently passes every row — surface it.
+                if self.split and "split" not in fieldnames:
+                    _warn_once(
+                        f"ObjectiveSpec split={self.split!r} requested but "
+                        f"{csv_path} has no 'split' column; not filtering by "
+                        f"split."
+                    )
                 values: list[float] = []
                 for row in reader:
                     if self.split and row.get("split", self.split) != self.split:
@@ -219,6 +251,10 @@ class ObjectiveSpec:
             return float("inf")
         value = data.get(self.metric)
         if value is None:
+            _warn_once(
+                f"ObjectiveSpec metric {self.metric!r} not in {json_path}; "
+                f"applying penalty {self.penalty!r}."
+            )
             return self._apply_penalty(run_dir)
         try:
             v = float(value)
