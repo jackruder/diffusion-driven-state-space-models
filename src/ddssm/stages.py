@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import os
+import logging
 from typing import TYPE_CHECKING, List, Callable
 from dataclasses import field, dataclass
 
@@ -19,6 +20,8 @@ from omegaconf import MISSING
 
 from .centering.handoff import CenteringHandoffConf, perform_centering_handoff
 from .losses import FullELBO, Loss
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .train import DDSSMTrainer
@@ -297,6 +300,27 @@ class StageOrchestrator:
                     lambda_sigma_p=0.0,
                     lambda_mu_p=0.0,
                 )
+
+            # Surface the *resolved* per-stage knobs. The init-centering
+            # hparams factory resolves None LRs (from base_lr × mult) and a
+            # None anchor_lambda (→ lambda_mu_p) at instantiate time, so these
+            # effective values never appear in resolved_config.yaml. Log them
+            # so a run is self-describing.
+            _active = self.trainer._active_loss
+            log.info(
+                "Stage %s effective config: steps=%d, "
+                "lrs(enc=%s, dec=%s, trans=%s), lambda_ramp(start=%s, end=%s), "
+                "reg(lambda_sigma_p=%s, lambda_mu_p=%s)",
+                key,
+                int(stage.steps),
+                stage.lrs.enc_lr,
+                stage.lrs.dec_lr,
+                stage.lrs.trans_lr,
+                stage.lambda_ramp.start,
+                stage.lambda_ramp.end,
+                getattr(_active, "lambda_sigma_p", None),
+                getattr(_active, "lambda_mu_p", None),
+            )
 
             # 5. Run the stage's training loop.  ``trainer.fit``'s
             # ``total_steps`` is the *cumulative* max step, not per-stage,

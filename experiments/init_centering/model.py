@@ -21,8 +21,8 @@ Default values reproduce the canonical cell from
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
-import warnings
 from functools import partial
 
 from hydra_zen import builds
@@ -30,6 +30,8 @@ from omegaconf import MISSING
 
 from ddssm.dssd import DDSSM_base
 from conf.registry import model_store
+
+log = logging.getLogger(__name__)
 from ddssm.decoder import GaussianDecoder
 from ddssm.encoder import GaussianEncoder
 from ddssm.diffnets import (
@@ -139,12 +141,12 @@ def _build_init_centering_model(
     happen to sample the degenerate region.
     """
     if baseline_form in _PARAM_FREE_FORMS and baseline_mode == "learnable":
-        warnings.warn(
-            f"baseline_form={baseline_form!r} has no learnable μ_p "
-            f"parameters; clamping baseline_mode from 'learnable' to "
-            f"'pinned' (auto-degenerate per init-experiment.org § "
-            f"Composition with the ablation grid).",
-            stacklevel=2,
+        log.warning(
+            "baseline_form=%r has no learnable mu_p parameters; clamping "
+            "baseline_mode from 'learnable' to 'pinned' (auto-degenerate per "
+            "init-experiment.org § Composition with the ablation grid). Note: "
+            "resolved_config.yaml still records the requested 'learnable'.",
+            baseline_form,
         )
         baseline_mode = "pinned"
 
