@@ -457,19 +457,25 @@ class DDSSMTrainer:
         import time as _time
 
         self.global_step += 1
-        log_values = {
-            "loss/total": torch.tensor(
-                accum_loss / self.grad_accum_steps, device=device
-            ),
-            # Wall-clock elapsed since the metric store was created
-            # (typically equals trainer-start time).  Surfaces ``time/elapsed_s``
-            # as a CSV column so the eval ``wallclock_to_target`` metric can
-            # find the time at which a metric first crossed a threshold.
-            "time/elapsed_s": torch.tensor(
-                _time.time() - self.metrics._t0, device=device
-            ),
-            **accum_metrics,
-        }
+        # ``accum_metrics`` carries the model's *unweighted* ELBO under
+        # "loss/total" (distortion + rate). Spread it first, then override
+        # "loss/total" with the actually-optimized objective
+        # (distortion + λ·rate) — the value the early-stop window tracks, so
+        # the logged curve and the stop criterion agree. The unweighted ELBO
+        # is preserved under "loss/total_unweighted".
+        log_values = dict(accum_metrics)
+        if "loss/total" in log_values:
+            log_values["loss/total_unweighted"] = log_values["loss/total"]
+        log_values["loss/total"] = torch.tensor(
+            accum_loss / self.grad_accum_steps, device=device
+        )
+        # Wall-clock elapsed since the metric store was created
+        # (typically equals trainer-start time).  Surfaces ``time/elapsed_s``
+        # as a CSV column so the eval ``wallclock_to_target`` metric can
+        # find the time at which a metric first crossed a threshold.
+        log_values["time/elapsed_s"] = torch.tensor(
+            _time.time() - self.metrics._t0, device=device
+        )
         self.metrics.update(split="train", values=log_values, weight=accum_weight)
         if log_every and (step % log_every == 0):
             self.metrics.step_end("train", self.global_step)
