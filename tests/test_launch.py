@@ -447,6 +447,9 @@ def test_render_preemptive_substitutes_n_per_worker_placeholder() -> None:
     script = _preempt_render()
     assert "hydra.sweeper.n_trials=$N_PER_WORKER" in script
     assert "__N_PER_WORKER__" not in script
+    # Unquoted so the shell expands it (single quotes would pass the literal
+    # "$N_PER_WORKER" string to Hydra → str/int TypeError in the sweeper).
+    assert "'hydra.sweeper.n_trials=$N_PER_WORKER'" not in script
 
 
 def test_render_preemptive_emits_ddssm_invoc_export() -> None:
@@ -956,6 +959,10 @@ def test_render_packed_preemptive_shares_preamble_and_fans_out_trap() -> None:
     assert script.count("python -m ddssm.launch_remaining") == 1
     assert "N_PER_WORKER=$(( (N_REMAINING + 8 - 1) / 8 ))" in script
     assert "hydra.sweeper.n_trials=$N_PER_WORKER" in script
+    # ...and it must NOT be single-quoted — '' would suppress shell expansion,
+    # so the literal string "$N_PER_WORKER" would reach Hydra and the Optuna
+    # sweeper's ``n_trials_to_go > 0`` would raise a str/int TypeError.
+    assert "'hydra.sweeper.n_trials=$N_PER_WORKER'" not in script
     # Fan-out trap over all PIDs (not a single $PID).
     assert 'for _p in "${PIDS[@]}"; do kill -USR1 "$_p"' in script
     # Worker id is set per-process, not a single global export.

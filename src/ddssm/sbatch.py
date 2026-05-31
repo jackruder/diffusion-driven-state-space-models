@@ -145,17 +145,21 @@ def render_sbatch(
     # "unrecognized arguments" error that surfaces when ``--multirun``
     # sits in the middle of the override list.
     overrides = list(hydra_overrides)
-    if preempt is not None:
-        # The strategies emit ``hydra.sweeper.n_trials=__N_PER_WORKER__`` under
-        # preemptive runs; this is the substitution point that bridges the
-        # shell-computed value with the python override list.
-        overrides = [
-            o.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER") for o in overrides
-        ]
     flag_args = [o for o in overrides if o.startswith("--")]
     kv_args = [o for o in overrides if not o.startswith("--")]
     flags_blob = " ".join(_shell_quote(o) for o in flag_args)
     kvs_blob = " ".join(_shell_quote(o) for o in kv_args)
+    if preempt is not None:
+        # The strategies emit ``hydra.sweeper.n_trials=__N_PER_WORKER__`` under
+        # preemptive runs; bridge it to the shell-computed ``$N_PER_WORKER``.
+        # CRITICAL: substitute AFTER ``_shell_quote`` — the placeholder has no
+        # shell-special chars so it stays unquoted, and the resulting bare
+        # ``$N_PER_WORKER`` expands at runtime. Substituting first would let
+        # ``_shell_quote`` wrap the ``$`` in single quotes, so the literal
+        # string ``$N_PER_WORKER`` reaches Hydra (n_trials becomes a str → the
+        # Optuna sweeper's ``n_trials_to_go > 0`` raises a str/int TypeError).
+        flags_blob = flags_blob.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER")
+        kvs_blob = kvs_blob.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER")
 
     if preempt is None:
         parts = ["exec python -m ddssm.app"]
@@ -276,13 +280,15 @@ def render_packed_sbatch(
         )
 
     for worker_idx, overrides in worker_overrides:
-        ovr = list(overrides)
-        if preempt is not None:
-            ovr = [o.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER") for o in ovr]
-        flag_args = [o for o in ovr if o.startswith("--")]
-        kv_args = [o for o in ovr if not o.startswith("--")]
+        flag_args = [o for o in overrides if o.startswith("--")]
+        kv_args = [o for o in overrides if not o.startswith("--")]
         flags_blob = " ".join(_shell_quote(o) for o in flag_args)
         kvs_blob = " ".join(_shell_quote(o) for o in kv_args)
+        if preempt is not None:
+            # Substitute AFTER quoting so ``$N_PER_WORKER`` stays unquoted and
+            # expands at runtime (see render_sbatch for the failure mode).
+            flags_blob = flags_blob.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER")
+            kvs_blob = kvs_blob.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER")
         parts = [
             f"DDSSM_WORKER_ID={worker_idx}",
             f"OMP_NUM_THREADS={cpus_per_worker}",
