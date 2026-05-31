@@ -83,10 +83,24 @@ class LaunchContext:
     storage_dir: str
     sweeps_root: str
     seed: int | None = None
+    # When set, ALL cells use this exact Optuna storage URL (e.g. a shared
+    # Postgres DB) with a per-cell ``study_name``; when None, each cell gets its
+    # own ``sqlite:///{storage_dir}/{prefix}_{job}.db``.
+    storage_url: str | None = None
 
 
 def _job_name(point: StudyPoint, ctx: LaunchContext) -> str:
     return point.name if ctx.seed is None else f"{point.name}__seed{ctx.seed}"
+
+
+def _storage_for(ctx: LaunchContext, job: str) -> str:
+    """The Optuna storage URL for ``job`` — the shared ``ctx.storage_url`` if set,
+    else a per-cell ``sqlite:///{storage_dir}/{prefix}_{job}.db``. The strategy
+    overrides and ``_make_preempt_spec`` MUST agree, so both go through here.
+    """
+    if ctx.storage_url:
+        return ctx.storage_url
+    return f"sqlite:///{os.path.join(ctx.storage_dir, f'{ctx.study_prefix}_{job}.db')}"
 
 
 def _preempt_env(pl: PointLaunch, *, worker_idx: int) -> dict[str, str] | None:
@@ -177,7 +191,7 @@ class OptunaSingleNode(LaunchStrategy):
             raise ValueError(f"strategy {self.name!r} needs PointLaunch.sweep set")
         job = _job_name(point, ctx)
         sweep_dir = os.path.join(ctx.sweeps_root, f"{ctx.study_prefix}_{job}")
-        db_path = os.path.join(ctx.storage_dir, f"{ctx.study_prefix}_{job}.db")
+        storage = _storage_for(ctx, job)
         # Under preemptive runs, n_trials is computed at sbatch-start time by
         # ddssm.launch_remaining and bound to $N_PER_WORKER; the orchestrator
         # substitutes the placeholder per-backend (shell var for sbatch,
@@ -188,7 +202,7 @@ class OptunaSingleNode(LaunchStrategy):
             f"+sweep={pl.sweep}",
             f"hydra.sweeper.n_trials={n_trials_value}",
             f"hydra.sweeper.study_name={ctx.study_prefix}_{job}",
-            f"hydra.sweeper.storage=sqlite:///{db_path}",
+            f"hydra.sweeper.storage={storage}",
             f"hydra.sweep.dir={sweep_dir}",
         ]
         if pl.n_jobs > 1:
@@ -219,7 +233,7 @@ class _MultiWorkerOptunaBase(LaunchStrategy):
             raise ValueError(f"strategy {self.name!r} needs PointLaunch.sweep set")
         job = _job_name(point, ctx)
         sweep_dir = os.path.join(ctx.sweeps_root, f"{ctx.study_prefix}_{job}")
-        db_path = os.path.join(ctx.storage_dir, f"{ctx.study_prefix}_{job}.db")
+        storage = _storage_for(ctx, job)
         # ``hydra.job.num`` resets per multirun invocation (per upstream
         # ``OptunaSweeperImpl.setup``), so under preemptive runs we add a
         # ``$DDSSM_INVOC`` stamp (set in the sbatch preamble) to keep retry
@@ -245,7 +259,7 @@ class _MultiWorkerOptunaBase(LaunchStrategy):
             f"+sweep={pl.sweep}",
             f"hydra.sweeper.n_trials={n_trials_value}",
             f"hydra.sweeper.study_name={ctx.study_prefix}_{job}",
-            f"hydra.sweeper.storage=sqlite:///{db_path}",
+            f"hydra.sweeper.storage={storage}",
             f"hydra.sweep.dir={sweep_dir}",
             subdir,
         ]
@@ -377,6 +391,9 @@ class StudyOrchestrator:
     study_prefix: str = "study"
     storage_dir: str = "runs/optuna"
     sweeps_root: str = "runs/sweeps"
+    # Optional shared Optuna storage URL (e.g. ``postgresql://host/db``). When
+    # set, every cell lands in this one DB as a distinct ``study_name``.
+    storage_url: str | None = None
 
     def _variant_overrides(self, point: StudyPoint, size: str | None) -> list[str]:
         if size is None:
@@ -406,7 +423,10 @@ class StudyOrchestrator:
         invocation hits the same SQLite DB as the workers — and passes it
         into ``render_sbatch``.
         """
-        ctx = LaunchContext(self.study_prefix, self.storage_dir, self.sweeps_root, seed=seed)
+        ctx = LaunchContext(
+            self.study_prefix, self.storage_dir, self.sweeps_root,
+            seed=seed, storage_url=self.storage_url,
+        )
         out: list[tuple[str, str]] = []
         for point in points:
             pl = self._point_launch(point, launch_override)
@@ -488,10 +508,9 @@ class StudyOrchestrator:
         invocation talks to a different DB than the worker.
         """
         job = _job_name(point, ctx)
-        db_path = os.path.join(ctx.storage_dir, f"{ctx.study_prefix}_{job}.db")
         return PreemptSpec(
             grace_seconds=pl.preempt_grace_seconds,
-            storage_url=f"sqlite:///{db_path}",
+            storage_url=_storage_for(ctx, job),
             study_name=f"{ctx.study_prefix}_{job}",
             target=pl.n_trials,
             n_workers=n_workers,
@@ -546,6 +565,13 @@ class StudyOrchestrator:
         """
         from optuna.storages import RDBStorage
 
+        # Shared storage (e.g. Postgres): one DB for all cells, so init the schema
+        # ONCE. (Cells are distinct study_names the sweeper creates on demand.)
+        if self.storage_url is not None:
+            RDBStorage(self.storage_url)
+            print("# Pre-created Optuna schema in shared storage.", file=sys.stderr)
+            return
+
         seen: set[str] = set()
         for seed in seeds:
             ctx = LaunchContext(
@@ -575,7 +601,10 @@ class StudyOrchestrator:
         """
         failures: list[tuple[str, int]] = []
         for seed in seeds:
-            ctx = LaunchContext(self.study_prefix, self.storage_dir, self.sweeps_root, seed=seed)
+            ctx = LaunchContext(
+            self.study_prefix, self.storage_dir, self.sweeps_root,
+            seed=seed, storage_url=self.storage_url,
+        )
             for point in points:
                 pl = self._point_launch(point, launch_override)
                 strategy = _STRATEGIES[pl.strategy]
@@ -689,6 +718,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--study-prefix", default="study")
     p.add_argument("--storage-dir", default="runs/optuna")
     p.add_argument("--sweeps-root", default="runs/sweeps")
+    p.add_argument("--storage-url", default=None,
+                   help="shared Optuna storage URL (e.g. postgresql://host/db). "
+                        "When set, ALL cells land in this one DB as distinct "
+                        "studies; --storage-dir is then ignored for the DB path.")
     p.add_argument("--out-dir", default="runs/local", help="--local run-dir root")
     args = p.parse_args(argv)
 
@@ -710,6 +743,7 @@ def main(argv: list[str] | None = None) -> int:
     orch = StudyOrchestrator(
         study, study_prefix=args.study_prefix,
         storage_dir=args.storage_dir, sweeps_root=args.sweeps_root,
+        storage_url=args.storage_url,
     )
 
     if args.local:

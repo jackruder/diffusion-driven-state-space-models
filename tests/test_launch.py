@@ -952,6 +952,95 @@ def test_precreate_storage_creates_schema_before_submit(tmp_path) -> None:
     assert "studies" in tables and "trials" in tables
 
 
+# --- Shared storage URL (one DB for all cells; e.g. Postgres) ---------------
+
+
+def test_strategy_uses_shared_storage_url_when_set() -> None:
+    """When ``LaunchContext.storage_url`` is set, every strategy emits that exact
+    URL as ``hydra.sweeper.storage`` (no per-cell sqlite path); study_name stays
+    per-cell so the cells are distinct studies in the one shared DB.
+    """
+    ctx = LaunchContext("pre", "store", "sweeps", storage_url="postgresql://h/db")
+    sp = StudyPoint("p", {}, {}, {})
+    for strat, pl in (
+        (OptunaSingleNode(), PointLaunch(strategy="optuna_single_node", sweep="sw")),
+        (
+            OptunaPackedNode(),
+            PointLaunch(strategy="optuna_packed_node", sweep="sw", n_workers=4, workers_per_gpu=4),
+        ),
+    ):
+        ov = strat.hydra_overrides(sp, pl, ctx)
+        assert "hydra.sweeper.storage=postgresql://h/db" in ov
+        assert "hydra.sweeper.study_name=pre_p" in ov
+        assert not any("sqlite:///" in o or "store/pre_p.db" in o for o in ov)
+
+
+def test_two_cells_share_db_distinct_studies() -> None:
+    """Two different cells with one shared storage_url -> identical storage, but
+    distinct study_names (so they're separate studies in the same DB).
+    """
+    ctx = LaunchContext("pre", "store", "sweeps", storage_url="postgresql://h/db")
+    ov_a = OptunaSingleNode().hydra_overrides(
+        StudyPoint("cellA", {}, {}, {}), PointLaunch(strategy="optuna_single_node", sweep="sw"), ctx
+    )
+    ov_b = OptunaSingleNode().hydra_overrides(
+        StudyPoint("cellB", {}, {}, {}), PointLaunch(strategy="optuna_single_node", sweep="sw"), ctx
+    )
+    assert "hydra.sweeper.storage=postgresql://h/db" in ov_a
+    assert "hydra.sweeper.storage=postgresql://h/db" in ov_b
+    assert "hydra.sweeper.study_name=pre_cellA" in ov_a
+    assert "hydra.sweeper.study_name=pre_cellB" in ov_b
+
+
+def test_preemptspec_uses_shared_storage_url() -> None:
+    """With a shared storage_url, the preempt preamble's ``--storage`` matches the
+    strategy override (launch_remaining must hit the SAME DB/study).
+    """
+    study = _single_stage_preempt_study(n_workers=2)
+    orch = StudyOrchestrator(study, study_prefix="abl", storage_url="postgresql://h/db")
+    for _, script in orch.render(study.points):
+        assert "--storage postgresql://h/db" in script
+        assert "--study abl_mock_preempt_point" in script
+        assert "hydra.sweeper.storage=postgresql://h/db" in script
+        assert "sqlite:///" not in script
+
+
+def test_precreate_storage_inits_shared_url_once(tmp_path) -> None:
+    """With a shared storage_url, _precreate_storage initializes that ONE DB's
+    schema and creates NO per-cell sqlite files.
+    """
+    import sqlite3
+
+    shared = tmp_path / "shared.db"
+    orch = StudyOrchestrator(
+        INIT_CENTERING_STUDY, study_prefix="t", storage_dir=str(tmp_path),
+        sweeps_root=str(tmp_path), storage_url=f"sqlite:///{shared}",
+    )
+    pts = INIT_CENTERING_STUDY.select(dataset="mv", tracking_mode="per_t")
+    orch._precreate_storage(pts, (None,))
+    assert shared.exists()
+    tables = {
+        r[0]
+        for r in sqlite3.connect(str(shared))
+        .execute("SELECT name FROM sqlite_master WHERE type='table'")
+        .fetchall()
+    }
+    assert "studies" in tables and "trials" in tables
+    # No per-cell DBs created.
+    assert not list(tmp_path.glob("t_init_*.db"))
+
+
+def test_cli_storage_url_flag(capsys) -> None:
+    rc = L.main([
+        "init_centering", "--select", "cell=init_mlp_pinned_per_t",
+        "--storage-url", "postgresql://h/db", "--dry-run",
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "hydra.sweeper.storage=postgresql://h/db" in out
+    assert "sqlite:///" not in out
+
+
 def test_render_packed_nonpreempt_inits_schema_before_workers() -> None:
     """Non-preempt packed jobs must pre-create the Optuna schema once before the
     K workers spawn, else they race on CREATE TABLE and all-but-one die with
