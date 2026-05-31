@@ -55,8 +55,9 @@ class PreemptSpec:
     saves a checkpoint and raises ``PreemptError`` when it sees the signal.
     ``storage_url`` + ``study_name`` + ``target`` drive the preamble's
     ``ddssm.launch_remaining`` invocation (which computes the still-pending
-    budget and reaps stale ``RUNNING`` trials). ``n_workers`` divides the
-    remaining budget across siblings (ceiling division). ``worker_idx`` is
+    budget; it does NOT reap RUNNING trials — see the preamble for why).
+    ``n_workers`` divides the remaining budget across siblings (ceiling
+    division). ``worker_idx`` is
     baked into the ``DDSSM_WORKER_ID`` env export so each worker subprocess
     knows its slot.
     """
@@ -200,9 +201,16 @@ def _render_preempt_preamble(ps: PreemptSpec) -> list[str]:
     trainer's signal handler sees the preempt signal.
     """
     return [
+        # Budget count ONLY — no ``--cleanup-running-older-than``. The age-based
+        # reap can't tell a live sibling's in-flight trial from a dead worker's
+        # orphan, so it would fail the live trials of any other workers sharing
+        # this study (catastrophic when groups join staggered or requeue). The
+        # real resume path is independent: a SIGUSR1 worker checkpoints, raises
+        # PreemptError, and app.py enqueues the retry. Hard-killed orphans just
+        # linger as RUNNING (inert — they don't count against the budget).
         "N_REMAINING=$(python -m ddssm.launch_remaining \\",
         f"    --storage {ps.storage_url} --study {ps.study_name} \\",
-        f"    --target {ps.target} --cleanup-running-older-than 60)",
+        f"    --target {ps.target})",
         'if [ "$N_REMAINING" -le 0 ]; then',
         '    echo "[preempt] target reached, exiting cleanly"',
         "    exit 0",
@@ -333,9 +341,10 @@ def _render_packed_preempt_preamble(ps: PreemptSpec) -> list[str]:
     :func:`render_packed_sbatch` (they are per-process / fan-out, not global).
     """
     return [
+        # Budget count ONLY (no orphan reap) — see _render_preempt_preamble.
         "N_REMAINING=$(python -m ddssm.launch_remaining \\",
         f"    --storage {ps.storage_url} --study {ps.study_name} \\",
-        f"    --target {ps.target} --cleanup-running-older-than 60)",
+        f"    --target {ps.target})",
         'if [ "$N_REMAINING" -le 0 ]; then',
         '    echo "[preempt] target reached, exiting cleanly"',
         "    exit 0",
