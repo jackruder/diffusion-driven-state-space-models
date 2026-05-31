@@ -16,22 +16,22 @@ single subprocess (replacing the old ``smoke_phase_d``). Replication is a
 
 from __future__ import annotations
 
-import abc
-import argparse
-import math
 import os
-import subprocess
+import abc
 import sys
-from dataclasses import dataclass, field
+import math
+import argparse
+import subprocess
+from dataclasses import dataclass
 
-from ddssm.experiment import SBatch
+from ddssm.study import Study, StudyPoint
 from ddssm.sbatch import (
     PreemptSpec,
-    render_packed_sbatch,
     render_sbatch,
     submit_sbatch,
+    render_packed_sbatch,
 )
-from ddssm.study import Study, StudyPoint
+from ddssm.experiment import SBatch
 
 # Placeholder emitted by preemptive strategies; the orchestrator substitutes
 # it per-backend (shell ``$N_PER_WORKER`` for sbatch; literal
@@ -497,6 +497,12 @@ class StudyOrchestrator:
             os.makedirs(write_dir, exist_ok=True)
         os.makedirs(self.storage_dir, exist_ok=True)
         os.makedirs(self.sweeps_root, exist_ok=True)
+        if submit:
+            # Deterministically kill the CREATE TABLE race: with multi-GPU cells
+            # a cell fans out into several sbatch jobs that each run a schema-init
+            # step on the shared NFS SQLite DB. Touch each DB once here (before any
+            # job starts) so the schema exists and no two jobs race on DDL.
+            self._precreate_storage(points, seeds)
         submitted = 0
         for seed in seeds:
             for job, script in self.render(
@@ -517,6 +523,34 @@ class StudyOrchestrator:
                     else f'# Submit all with: for f in {write_dir}/*.sbatch; do sbatch "$f"; done')
             print(f"\n{tail}", file=sys.stderr)
         return 0
+
+    def _precreate_storage(self, points, seeds) -> None:
+        """Create each cell's Optuna schema ONCE before submitting any jobs.
+
+        Constructing an ``RDBStorage`` runs Optuna's ``_init_tables`` (a no-op if
+        the tables already exist), so after this the ``studies``/``trials`` tables
+        exist and the per-job init steps + workers only contend on the study-row
+        INSERT — which ``create_study(load_if_exists=True)`` handles. No
+        directions needed; the sweeper still creates the study itself. The DB
+        path mirrors what the strategies emit (``_make_preempt_spec``).
+        """
+        from optuna.storages import RDBStorage
+
+        seen: set[str] = set()
+        for seed in seeds:
+            ctx = LaunchContext(
+                self.study_prefix, self.storage_dir, self.sweeps_root, seed=seed
+            )
+            for point in points:
+                db = os.path.join(
+                    self.storage_dir, f"{self.study_prefix}_{_job_name(point, ctx)}.db"
+                )
+                if db in seen:
+                    continue
+                seen.add(db)
+                RDBStorage(f"sqlite:///{db}")
+        if seen:
+            print(f"# Pre-created Optuna schema for {len(seen)} cell DB(s).", file=sys.stderr)
 
     def run_local(self, points, *, size=None, seeds=(None,), out_dir="runs/local",
                   launch_override=None) -> int:
@@ -680,8 +714,15 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "ResourceSpec", "PointLaunch", "LaunchStrategy", "StudyOrchestrator",
-    "SingleJob", "OptunaSingleNode", "OptunaMultiNode", "LocalParallel",
+    "STUDY_REGISTRY",
+    "LaunchStrategy",
+    "LocalParallel",
+    "OptunaMultiNode",
     "OptunaPackedNode",
-    "register_study", "STUDY_REGISTRY",
+    "OptunaSingleNode",
+    "PointLaunch",
+    "ResourceSpec",
+    "SingleJob",
+    "StudyOrchestrator",
+    "register_study",
 ]

@@ -924,6 +924,29 @@ def test_render_packed_single_group_one_sbatch_k_workers() -> None:
     assert script.count("hydra.sweeper.study_name=abl_init_mlp_pinned_per_t__1d") == 8
 
 
+def test_precreate_storage_creates_schema_before_submit(tmp_path) -> None:
+    """``_precreate_storage`` must create each cell's Optuna schema once, so the
+    fan-out of multi-GPU group-jobs can't race on CREATE TABLE.
+    """
+    import sqlite3
+
+    orch = StudyOrchestrator(
+        INIT_CENTERING_STUDY, study_prefix="t", storage_dir=str(tmp_path),
+        sweeps_root=str(tmp_path),
+    )
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="mv")
+    orch._precreate_storage(pts, (None,))
+    db = tmp_path / "t_init_mlp_pinned_per_t__mv.db"
+    assert db.exists()
+    tables = {
+        r[0]
+        for r in sqlite3.connect(str(db))
+        .execute("SELECT name FROM sqlite_master WHERE type='table'")
+        .fetchall()
+    }
+    assert "studies" in tables and "trials" in tables
+
+
 def test_render_packed_nonpreempt_inits_schema_before_workers() -> None:
     """Non-preempt packed jobs must pre-create the Optuna schema once before the
     K workers spawn, else they race on CREATE TABLE and all-but-one die with

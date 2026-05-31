@@ -37,7 +37,11 @@ def _build(coords: Mapping[str, Any]):
         hparams=SmokeHparams,
         training=Training800,
         # One source of baseline_mode -> model + stage mask/anchor.
-        stages=StagesB(baseline_mode=cell.baseline_mode),
+        # n_stage2 set EXPLICITLY (not the hparams default of 1000): the old
+        # shell launcher passed n_stage2=5000 on the CLI; the Study refactor
+        # dropped that override and silently fell back to 1000, leaving trials
+        # badly under-trained (still descending at the budget). Pin it here.
+        stages=StagesB(baseline_mode=cell.baseline_mode, n_stage2=5000),
         eval=PilotEval,
         objective=PilotMOObjective,
     )
@@ -62,31 +66,34 @@ _UNSAFE_ACCOUNT = "--account=group-michaelwojnowicz"
 
 
 def _launch(point: StudyPoint) -> PointLaunch:
-    """Round-1 (fresh restart) launch intent: GPU-packed Optuna MOO, one GPU/cell.
+    """Round-1 (fresh restart) launch intent: GPU-packed Optuna MOO.
 
     Every cell uses the WIDE ``init_ablation_moo`` search space (the full
     round-1 priors). The narrowed ``init_ablation_moo_r2`` space was derived
     from round-1 data that a since-found code bug invalidated, so we restart
-    from scratch on the wide ranges. Each trial is <4 GiB, so we pack workers
-    onto one GPU (4 CPUs each, thread-pinned — the round-1 starvation fix).
-    ``n_trials`` is the cell-total budget split across packed workers
-    (~``n_trials / n_workers`` each), independent of ``preemptive``.
+    from scratch on the wide ranges. Each trial is <4 GiB, so we pack 8 workers
+    per GPU (4 CPUs each, thread-pinned — the round-1 starvation fix).
+    ``n_trials`` (96) is the cell-total budget split across ALL the cell's
+    workers (~``n_trials / n_workers`` each), independent of ``preemptive``.
 
-    GPU pool = 1 A100 + 1 A40 on ``gpupriority`` (non-preempt) + 10 A40 on
-    ``gpuunsafe`` (preemptible → checkpoint/resume, ADR-0009). The two
-    gpupriority GPUs are dedicated to two named, non-preemptive cells (so the
-    rest can't grab them); everything else runs preemptibly on gpuunsafe.
+    Launched per_t-only (``--select tracking_mode=per_t`` → 6 cells), so each
+    cell can claim 2 GPUs (``n_workers=16`` = 2 × 8-pack, sharing the cell's
+    Optuna DB) and finish 96×5k-step trials in ~13h instead of ~26h. GPU pool =
+    1 A100 (16-pack) for the headline ``mlp_pinned_per_t`` + 2 A40 on
+    ``gpupriority`` (non-preempt) for ``mlp_learnable_per_t`` + 2 A40 each on
+    ``gpuunsafe`` (preemptible → checkpoint/resume, ADR-0009) for the other 4
+    cells ≈ 11 GPUs. 16 workers/cell is the proven NFS-SQLite worker level.
     """
     cell = point.coords["cell"]
     sweep = "init_ablation_moo"  # WIDE round-1 priors for every cell
 
     # --- gpupriority (non-preempt): two dedicated cells, the 2 priority GPUs ---
-    # Headline cell -> the A100 (2x memory -> 2x the pack). 64 / 16 = 4 trials/worker.
+    # Headline cell -> the A100 (2x memory -> 2x the pack). 96 / 16 = 6 trials/worker.
     if cell.name == "init_mlp_pinned_per_t":
         return PointLaunch(
             strategy="optuna_packed_node",
             sweep=sweep,
-            n_trials=64,
+            n_trials=96,
             n_workers=16,
             workers_per_gpu=16,
             preemptive=False,
@@ -95,18 +102,18 @@ def _launch(point: StudyPoint) -> PointLaunch:
                 gpus=1,
                 cpus=64,
                 mem="96G",
-                time="24:00:00",
+                time="48:00:00",
                 extra_flags=("--gres=gpu:a100:1", _PRIORITY_ACCOUNT),
                 setup=_TEMPEST_SETUP,
             ),
         )
-    # Second non-preempt cell -> the gpupriority A40 (swap this name to re-pick).
+    # Second non-preempt cell -> 2 gpupriority A40s (16 workers = 2 x 8-pack).
     if cell.name == "init_mlp_learnable_per_t":
         return PointLaunch(
             strategy="optuna_packed_node",
             sweep=sweep,
-            n_trials=64,
-            n_workers=8,
+            n_trials=96,
+            n_workers=16,
             workers_per_gpu=8,
             preemptive=False,
             resources=ResourceSpec(
@@ -114,18 +121,18 @@ def _launch(point: StudyPoint) -> PointLaunch:
                 gpus=1,
                 cpus=32,
                 mem="48G",
-                time="24:00:00",
+                time="48:00:00",
                 extra_flags=("--gres=gpu:a40:1", _PRIORITY_ACCOUNT),
                 setup=_TEMPEST_SETUP,
             ),
         )
 
-    # --- gpuunsafe (preemptible): every other cell, 8 packed workers on an A40 ---
+    # --- gpuunsafe (preemptible): every other cell, 2 A40s (16 workers = 2 x 8-pack) ---
     return PointLaunch(
         strategy="optuna_packed_node",
         sweep=sweep,
-        n_trials=64,
-        n_workers=8,
+        n_trials=96,
+        n_workers=16,
         workers_per_gpu=8,
         preemptive=True,
         resources=ResourceSpec(
@@ -133,7 +140,7 @@ def _launch(point: StudyPoint) -> PointLaunch:
             gpus=1,
             cpus=32,
             mem="48G",
-            time="24:00:00",
+            time="48:00:00",
             extra_flags=(_UNSAFE_ACCOUNT,),
             setup=_TEMPEST_SETUP,
         ),
