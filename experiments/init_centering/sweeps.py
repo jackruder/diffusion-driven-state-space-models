@@ -48,67 +48,40 @@ Run::
 
 from __future__ import annotations
 
-from hydra_zen import make_config
-
 from ddssm.stores import sweep_store
+from experiments._sweep import SweepSpace
+from experiments.init_centering.hparams import StagesB
+from experiments.init_centering.evals import PilotMOObjective
 
-_INIT_ABLATION_PARAMS = {
-    # Centering-handoff knobs.
-    "experiment.training.stages.n_pretrain":
-        "tag(log, int(interval(5, 500)))",
-    "experiment.training.stages.sigma_pert":
-        "tag(log, interval(1e-3, 5e-2))",
-    # Regulariser strengths. Post-ADR-0004 these live on the per-stage
-    # loss objects, so the sweep targets the stage builder
-    # (``experiment.training.stages.*``), not ``model``/``hparams``.
-    "experiment.training.stages.anchor_lambda":
-        "tag(log, interval(1e-4, 1e-1))",
-    "experiment.training.stages.lambda_sigma_p":
-        "tag(log, interval(1e-3, 1e-1))",
-    # Base LR + per-group multipliers (replaces 3 independent LRs).
-    "experiment.training.stages.base_lr":
-        "tag(log, interval(1e-5, 1e-3))",
-    "experiment.training.stages.dec_mult":
-        "tag(log, interval(0.1, 10.0))",
-    "experiment.training.stages.trans_mult":
-        "tag(log, interval(0.1, 10.0))",
-    # Per-stage λ-warmup fractions (CONTEXT.md § "lambda_warmup redesign").
-    # Cover 5-50% of stage 1 and 2-25% of stage 2 — the lower bound is
-    # "barely-any warmup", the upper bound is "warmup covers most of
-    # the stage".
-    "experiment.training.stages.stage_1_warmup_frac":
-        "tag(log, interval(0.05, 0.5))",
-    "experiment.training.stages.stage_2_warmup_frac":
-        "tag(log, interval(0.02, 0.25))",
-}
+# Field names below are validated against ``StagesB`` (the stage-builder
+# config) at import time — a typo or renamed factory arg raises here rather
+# than crashing every trial after launch. Post-ADR-0004 the regulariser
+# strengths + LRs live on the per-stage loss objects, so the sweep targets
+# the stage builder (``experiment.training.stages.*``), not ``model``/``hparams``.
+_ablation = SweepSpace(target=StagesB, prefix="experiment.training.stages")
+_ablation.log_int("n_pretrain", 5, 500)
+_ablation.log("sigma_pert", 1e-3, 5e-2)
+_ablation.log("anchor_lambda", 1e-4, 1e-1)
+_ablation.log("lambda_sigma_p", 1e-3, 1e-1)
+_ablation.log("base_lr", 1e-5, 1e-3)        # encoder LR; dec/trans via multipliers
+_ablation.log("dec_mult", 0.1, 10.0)
+_ablation.log("trans_mult", 0.1, 10.0)
+# Per-stage λ-warmup fractions (CONTEXT.md § "lambda_warmup redesign"):
+# 5-50% of stage 1, 2-25% of stage 2.
+_ablation.log("stage_1_warmup_frac", 0.05, 0.5)
+_ablation.log("stage_2_warmup_frac", 0.02, 0.25)
 
 
-InitAblation = make_config(
-    hydra_defaults=["_self_", {"override /hydra/sweeper": "ddssm_optuna"}],
-    hydra=dict(
-        sweeper=dict(
-            direction="minimize",
-            params=_INIT_ABLATION_PARAMS,
-        ),
-    ),
-)
+InitAblation = _ablation.build(sweeper="ddssm_optuna", direction="minimize")
 sweep_store(InitAblation, name="init_ablation")
 
 
-# Multi-objective variant. Same search space as ``InitAblation``, but
-# routes through the ``ddssm_optuna_moo`` sweeper preset (NSGA-II
-# sampler, ``direction: [minimize, minimize]``). Pair with a cell
-# experiment whose ``objective`` is a ``list[ObjectiveSpec]`` matching
-# the direction length — :data:`experiments.init_centering.evals.PilotMOObjective`.
-InitAblationMOO = make_config(
-    hydra_defaults=["_self_", {"override /hydra/sweeper": "ddssm_optuna_moo"}],
-    hydra=dict(
-        sweeper=dict(
-            # ListConfig of strings — NSGA-II uses both directions.
-            direction=["minimize", "minimize"],
-            params=_INIT_ABLATION_PARAMS,
-        ),
-    ),
+# Multi-objective variant — same search space, NSGA-II sweeper, two minimize
+# directions. The direction length is checked against PilotMOObjective.specs.
+InitAblationMOO = _ablation.build(
+    sweeper="ddssm_optuna_moo",
+    direction=["minimize", "minimize"],
+    objectives=PilotMOObjective,
 )
 sweep_store(InitAblationMOO, name="init_ablation_moo")
 
@@ -127,36 +100,22 @@ sweep_store(InitAblationMOO, name="init_ablation_moo")
 #     data to narrow it (it was never swept), and it's a no-op flat axis for the
 #     pinned cells (μ_p frozen → R_μp zeros out), but the learnable cells tune
 #     their R_μp regulariser through it.
-_INIT_ABLATION_R2_PARAMS = {
-    "experiment.training.stages.n_pretrain":
-        "tag(log, int(interval(5, 300)))",
-    "experiment.training.stages.sigma_pert":
-        "tag(log, interval(1e-3, 3e-2))",
-    "experiment.training.stages.anchor_lambda":
-        "tag(log, interval(1e-4, 1e-1))",
-    "experiment.training.stages.lambda_sigma_p":
-        "tag(log, interval(1e-3, 5e-2))",
-    "experiment.training.stages.base_lr":
-        "tag(log, interval(1e-4, 1e-3))",
-    "experiment.training.stages.dec_mult":
-        "tag(log, interval(0.3, 10.0))",
-    "experiment.training.stages.trans_mult":
-        "tag(log, interval(0.1, 10.0))",
-    "experiment.training.stages.stage_1_warmup_frac":
-        "tag(log, interval(0.05, 0.35))",
-    "experiment.training.stages.stage_2_warmup_frac":
-        "tag(log, interval(0.02, 0.18))",
-}
+_ablation_r2 = SweepSpace(target=StagesB, prefix="experiment.training.stages")
+_ablation_r2.log_int("n_pretrain", 5, 300)
+_ablation_r2.log("sigma_pert", 1e-3, 3e-2)
+_ablation_r2.log("anchor_lambda", 1e-4, 1e-1)
+_ablation_r2.log("lambda_sigma_p", 1e-3, 5e-2)
+_ablation_r2.log("base_lr", 1e-4, 1e-3)
+_ablation_r2.log("dec_mult", 0.3, 10.0)
+_ablation_r2.log("trans_mult", 0.1, 10.0)
+_ablation_r2.log("stage_1_warmup_frac", 0.05, 0.35)
+_ablation_r2.log("stage_2_warmup_frac", 0.02, 0.18)
 
 
-InitAblationMOO_R2 = make_config(
-    hydra_defaults=["_self_", {"override /hydra/sweeper": "ddssm_optuna_moo"}],
-    hydra=dict(
-        sweeper=dict(
-            direction=["minimize", "minimize"],
-            params=_INIT_ABLATION_R2_PARAMS,
-        ),
-    ),
+InitAblationMOO_R2 = _ablation_r2.build(
+    sweeper="ddssm_optuna_moo",
+    direction=["minimize", "minimize"],
+    objectives=PilotMOObjective,
 )
 sweep_store(InitAblationMOO_R2, name="init_ablation_moo_r2")
 
