@@ -326,9 +326,13 @@ class DDSSM_base(nn.Module):
 
         total_obs = total_obs.clamp_min(1.0)
 
-        # Mean NLL per observed entry, then scale back to (T * D)
-        nll_mean_per_entry = total_neg_logp / total_obs
-        L_rec = nll_mean_per_entry * (D * T)
+        # Per-sequence sum over OBSERVED entries — matches how init_kl /
+        # trans_kl are aggregated (per-seq sums averaged over B) so the
+        # ELBO stays a valid bound on the observed data. The previous
+        # `(total_neg_logp / total_obs) * (D * T)` rescaling overstated
+        # recon by `D*T / mean_obs_per_seq` under sparse masks, silently
+        # breaking comparability across missingness fractions.
+        L_rec = total_neg_logp / B
 
         # calibration ratio E[(x-μ)^2] / E[exp(logvar)]
         res2_mean = res2_sum / total_obs

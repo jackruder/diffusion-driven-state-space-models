@@ -58,16 +58,18 @@ class Loss(abc.ABC):
 
 @dataclass
 class FullELBO(Loss):
-    """Default loss: numerically reproduces today's trainer formula.
+    """Default loss: ELBO with always-on centering regularizers.
 
-    `loss = recon + rate_lambda(step) * (init_kl + trans_kl
-                                          + lambda_sigma_p * r_sigma_p
-                                          + lambda_mu_p * r_mu_p)`
+    `loss = recon + rate_lambda(step) * (init_kl + trans_kl)
+            + lambda_sigma_p * r_sigma_p
+            + lambda_mu_p * r_mu_p`
 
-    Matches the pre-refactor `distortion + λ_rate * rate`, where
-    `rate` previously included the regularizers with their own
-    per-term weights baked in inside `DDSSM_base.forward()`. Moving the
-    per-reg weights into this object keeps `LossComponents` raw.
+    The centering regularizers (`r_sigma_p`, `r_mu_p`) carry their own
+    per-term weights and are deliberately NOT gated by `rate_lambda`:
+    σ_p collapse is most likely during recon-only warmup (λ→0) when
+    the KL isn't yet pulling against the prior, so the σ_p anchor must
+    stay on the whole time. See `project_handoff_protocol_invariants`
+    — `sigma_pert > 0` is mandatory protocol.
     """
 
     rate_lambda: Callable[[int], float]
@@ -78,10 +80,9 @@ class FullELBO(Loss):
         self, components: LossComponents, step: int
     ) -> torch.Tensor:
         lam = self.rate_lambda(step)
-        rate = (
-            components.init_kl
-            + components.trans_kl
-            + self.lambda_sigma_p * components.r_sigma_p
+        rate = components.init_kl + components.trans_kl
+        reg = (
+            self.lambda_sigma_p * components.r_sigma_p
             + self.lambda_mu_p * components.r_mu_p
         )
-        return components.recon + lam * rate
+        return components.recon + lam * rate + reg

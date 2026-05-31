@@ -30,7 +30,11 @@ import torch
 
 log = logging.getLogger(__name__)
 
-_FORMAT = "ddssm_ckpt_v1"
+_FORMAT = "ddssm_ckpt_v2"
+# Older payloads we can still load (we only ever bumped here). On load, any
+# v1 fields the v2 schema added (``scaler_state``, ``scheduler_state``)
+# default to ``None``.
+_SUPPORTED_FORMATS = {"ddssm_ckpt_v1", "ddssm_ckpt_v2"}
 
 
 def _atomic_save(obj: Any, path: str) -> None:
@@ -72,12 +76,20 @@ class Checkpoint:
     # before this ckpt was written). ``None`` for single-stage checkpoints
     # and for legacy ckpts that pre-date this field.
     stage_prefix: str | None = None
+    # v2 additions. ``None`` means "the producer wasn't using one" (e.g.
+    # GradScaler disabled, no LR scheduler); a non-None value carries the
+    # corresponding ``state_dict()`` and the trainer's restore path will
+    # refuse to silently drop it on the live side.
+    scaler_state: dict | None = None
+    scheduler_state: dict | None = None
 
     @classmethod
     def from_trainer(
         cls, trainer, *, stage_prefix: str | None = None,
     ) -> "Checkpoint":
         ema = getattr(trainer, "ema", None)
+        scaler = getattr(trainer, "scaler", None)
+        scheduler = getattr(trainer, "scheduler", None)
         return cls(
             model_state=trainer.model.state_dict(),
             model_config_yaml=getattr(trainer, "_model_config_yaml", None),
@@ -90,6 +102,17 @@ class Checkpoint:
             global_step=int(trainer.global_step),
             grad_accum_steps=int(trainer.grad_accum_steps),
             stage_prefix=stage_prefix,
+            # Only persist scaler state when scaling is actually live —
+            # a disabled GradScaler carries no information worth resuming
+            # and a non-None entry on disk is the contract guard's signal
+            # that the producer was running AMP fp16.
+            scaler_state=(
+                scaler.state_dict()
+                if scaler is not None and scaler.is_enabled() else None
+            ),
+            scheduler_state=(
+                scheduler.state_dict() if scheduler is not None else None
+            ),
         )
 
     def to_payload(self) -> dict:
@@ -103,6 +126,8 @@ class Checkpoint:
             "global_step": self.global_step,
             "grad_accum_steps": self.grad_accum_steps,
             "stage_prefix": self.stage_prefix,
+            "scaler_state": self.scaler_state,
+            "scheduler_state": self.scheduler_state,
         }
 
     def save(self, path: str) -> None:
@@ -114,6 +139,12 @@ class Checkpoint:
         if not isinstance(payload, dict) or "model_state" not in payload:
             # Legacy raw state_dict (pre-payload checkpoints).
             return cls(model_state=payload)
+        fmt = payload.get("_format")
+        if fmt is not None and fmt not in _SUPPORTED_FORMATS:
+            log.warning(
+                "Unknown checkpoint _format=%r (supported: %s); loading "
+                "best-effort.", fmt, sorted(_SUPPORTED_FORMATS),
+            )
         return cls(
             model_state=payload["model_state"],
             model_config_yaml=payload.get("model_config_yaml"),
@@ -123,6 +154,11 @@ class Checkpoint:
             global_step=int(payload.get("global_step", 0)),
             grad_accum_steps=int(payload.get("grad_accum_steps", 1)),
             stage_prefix=payload.get("stage_prefix"),
+            # v1 payloads never wrote these — ``.get`` defaults to ``None``,
+            # which the trainer's contract guard treats as "producer had no
+            # scaler/scheduler".
+            scaler_state=payload.get("scaler_state"),
+            scheduler_state=payload.get("scheduler_state"),
         )
 
 

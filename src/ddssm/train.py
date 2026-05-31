@@ -190,6 +190,12 @@ class DDSSMTrainer:
             )
 
         self.scheduler = None
+        # Hoisted out of fit() so save_checkpoint can persist its state via
+        # ``Checkpoint.from_trainer``. bf16 autocast doesn't need scaling, so
+        # the default scaler stays disabled and ``scaler.state_dict()`` is
+        # NOT written to disk (see ``Checkpoint.from_trainer``); enable it
+        # externally if you wire in fp16 AMP.
+        self.scaler = torch.amp.GradScaler("cuda", enabled=False)
         self.weight_decay = self.hparams.weight_decay
 
         self.grad_accum_steps = self.hparams.grad_accum_steps
@@ -316,6 +322,12 @@ class DDSSMTrainer:
         Loads *live* weights into the model (``load_ema=False``); the
         EMA shadows go back into the trainer's EMA tracker, not into the
         transition, so training continues exactly where it left off.
+
+        Also restores GradScaler and LR-scheduler state when present.
+        The save/restore sides must agree on whether each subsystem is
+        live — see the contract guards below. v1 checkpoints predate
+        these fields, so a missing entry on disk only fails the guard
+        when the live trainer has the corresponding subsystem enabled.
         """
         from .checkpoint import load_into_model
 
@@ -333,6 +345,42 @@ class DDSSMTrainer:
             self.ema.shadow = ckpt.ema_state
             if ckpt.ema_decay is not None:
                 self.ema_decay = ckpt.ema_decay
+        # GradScaler contract guard. A non-None saved state means the
+        # producer was running fp16 AMP; silently dropping it on a
+        # disabled-scaler live trainer would bias the restart, so raise.
+        # The inverse — live scaling enabled but no saved state — would
+        # restart from default scale factors mid-run and is just as bad.
+        live_scaler = getattr(self, "scaler", None)
+        live_scaler_enabled = live_scaler is not None and live_scaler.is_enabled()
+        if ckpt.scaler_state is not None and not live_scaler_enabled:
+            raise RuntimeError(
+                "Checkpoint carries GradScaler state but the live trainer "
+                "has scaling disabled; refusing to drop state silently. "
+                "Enable AMP/scaling on the live trainer before resuming."
+            )
+        if ckpt.scaler_state is None and live_scaler_enabled:
+            raise RuntimeError(
+                "Live trainer has GradScaler enabled but the checkpoint "
+                "carries no scaler state; refusing to restart scale factors "
+                "from defaults mid-run."
+            )
+        if ckpt.scaler_state is not None and live_scaler is not None:
+            live_scaler.load_state_dict(ckpt.scaler_state)
+        # LR-scheduler contract guard — same logic as the scaler.
+        live_scheduler = getattr(self, "scheduler", None)
+        if ckpt.scheduler_state is not None and live_scheduler is None:
+            raise RuntimeError(
+                "Checkpoint carries LR scheduler state but the live trainer "
+                "has no scheduler; refusing to drop state silently."
+            )
+        if ckpt.scheduler_state is None and live_scheduler is not None:
+            raise RuntimeError(
+                "Live trainer has an LR scheduler but the checkpoint carries "
+                "no scheduler state; refusing to restart the schedule from "
+                "step 0 mid-run."
+            )
+        if ckpt.scheduler_state is not None and live_scheduler is not None:
+            live_scheduler.load_state_dict(ckpt.scheduler_state)
         self.global_step = ckpt.global_step
         return {"grad_accum_steps": ckpt.grad_accum_steps}
 
@@ -692,7 +740,9 @@ class DDSSMTrainer:
         # AMP. (GradScaler exists for fp16 underflow; enabling it for bf16 is
         # dead work and bit-identical to disabled.) The amp branches in
         # _backward_loss / _optimizer_step then pass through correctly.
-        scaler = torch.amp.GradScaler("cuda", enabled=False)
+        # The scaler lives on ``self`` so its state (when enabled) round-trips
+        # through ``save_checkpoint`` / ``restore_from_checkpoint``.
+        scaler = self.scaler
         start_step = self.global_step
 
         do_profile = profile_steps > 0

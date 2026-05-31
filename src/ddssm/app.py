@@ -40,21 +40,24 @@ implementation plan.
 
 from __future__ import annotations
 
-import logging
-import math
 import os
+import math
+import time
 from typing import Any
+import logging
+import sqlite3
 
 import hydra
-import optuna
 import torch
-from hydra.core.hydra_config import HydraConfig
+import optuna
 from hydra_zen import instantiate
-from omegaconf import DictConfig, OmegaConf
-from optuna.trial import FrozenTrial, TrialState
+from omegaconf import OmegaConf, DictConfig
+from optuna.trial import TrialState, FrozenTrial
+import optuna.exceptions
+from hydra.core.hydra_config import HydraConfig
 
-from ._experiment_registry import register_experiments
 from .train import PreemptError
+from ._experiment_registry import register_experiments
 
 register_experiments()
 
@@ -73,6 +76,42 @@ log = logging.getLogger(__name__)
 
 _PARAM_FLOAT_RTOL = 1e-6
 _PARAM_FLOAT_ATOL = 1e-12
+
+# Bounded retry for transient SQLite contention on shared study DBs (per
+# ADR-0009 §5: many 1-trial jobs share one storage file, so "database is
+# locked" / StorageInternalError happen during preempt storms).
+_LOAD_STUDY_RETRY_BACKOFFS_S = (0.5, 1.0, 2.0)
+
+
+def _load_study_with_retry(
+    study_name: str, storage: str,
+) -> optuna.Study:
+    """``optuna.load_study`` with bounded retry on transient storage errors.
+
+    Retries ``sqlite3.OperationalError`` (e.g. "database is locked") and
+    ``optuna.exceptions.StorageInternalError`` with exponential backoff.
+    All other exceptions — including ``KeyError`` (study does not exist) —
+    are propagated unchanged so the caller can distinguish "no study yet"
+    from "real failure" from "transient lock".
+    """
+    last_err: Exception | None = None
+    for attempt, backoff in enumerate(_LOAD_STUDY_RETRY_BACKOFFS_S):
+        try:
+            return optuna.load_study(study_name=study_name, storage=storage)
+        except (sqlite3.OperationalError, optuna.exceptions.StorageInternalError) as e:
+            last_err = e
+            log.warning(
+                "Preempt: transient storage error loading study (attempt "
+                "%d/%d): %s. Sleeping %.2fs before retry.",
+                attempt + 1, len(_LOAD_STUDY_RETRY_BACKOFFS_S) + 1, e, backoff,
+            )
+            time.sleep(backoff)
+    # Final attempt: let any exception propagate so the caller can decide.
+    try:
+        return optuna.load_study(study_name=study_name, storage=storage)
+    except (sqlite3.OperationalError, optuna.exceptions.StorageInternalError) as e:
+        # Chain the most recent transient error for diagnostic context.
+        raise e from last_err
 
 
 def _params_equal(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -254,11 +293,16 @@ def apply_preempt_hooks(
         )
         return None, None
 
+    # KeyError = study not yet created (first-run path); fall through to
+    # plain training. Transient SQLite contention is retried inside
+    # _load_study_with_retry. Anything else is a real bug or a misconfig
+    # (bad storage URL, permissions, etc.) — propagate rather than burn a
+    # trial slot silently.
     try:
-        study = optuna.load_study(study_name=study_name, storage=storage)
-    except (KeyError, Exception) as e:  # noqa: BLE001 — defensive
+        study = _load_study_with_retry(study_name, storage)
+    except KeyError as e:
         log.warning(
-            "Preempt: failed to load study %r at %r: %s. "
+            "Preempt: study %r not found at %r: %s. "
             "Falling back to plain training.",
             study_name, storage, e,
         )

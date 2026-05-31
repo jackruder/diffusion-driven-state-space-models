@@ -14,15 +14,13 @@ from test_dssd_stage1 import _make_batch, _make_vhp_model  # noqa: E402
 from ddssm.losses import FullELBO, Loss, LossComponents  # noqa: E402
 
 
-def test_full_elbo_reproduces_trainer_formula() -> None:
-    """FullELBO weights LossComponents the way the trainer used to.
+def test_full_elbo_assembles_recon_plus_lambda_rate_plus_anchors() -> None:
+    """FullELBO sums recon + λ·(init_kl + trans_kl) + anchor regularizers.
 
-    Old trainer: ``loss = distortion + λ_rate(step) * rate``, where
-    ``rate = init_kl + trans_kl + r_sigma_p_weighted + r_mu_p_weighted``
-    and the regularizer weights were applied inside the model. Under
-    ADR-0004 the components are unweighted; FullELBO holds both
-    ``lambda_sigma_p`` and ``lambda_mu_p`` and applies them inside the
-    same rate sum so the resulting scalar is numerically identical.
+    The centering regularizers are NOT multiplied by ``rate_lambda``: they
+    carry their own ``lambda_sigma_p`` / ``lambda_mu_p`` weights and must
+    stay live even when ``λ=0`` (recon-only warmup), otherwise σ_p is
+    free to collapse precisely when it's most fragile.
     """
     components = LossComponents(
         recon=torch.tensor(1.0),
@@ -36,8 +34,56 @@ def test_full_elbo_reproduces_trainer_formula() -> None:
         lambda_sigma_p=0.1,
         lambda_mu_p=0.01,
     )
-    expected = 1.0 + 0.5 * (2.0 + 3.0 + 0.1 * 4.0 + 0.01 * 5.0)
+    expected = 1.0 + 0.5 * (2.0 + 3.0) + 0.1 * 4.0 + 0.01 * 5.0
     assert torch.allclose(loss(components, step=0), torch.tensor(expected))
+
+
+def test_full_elbo_keeps_anchors_live_at_lambda_zero() -> None:
+    """At λ=0 (recon-only warmup) the σ_p anchor must still contribute.
+
+    Regression for the warmup-anchor bug: previously the regularizers
+    were inside the ``λ * (...)`` bracket, so they vanished when ``λ=0``
+    — exactly when σ_p collapse is most likely. Both anchors must now
+    be additive on top of ``recon`` regardless of the rate ramp.
+    """
+    components = LossComponents(
+        recon=torch.tensor(1.0),
+        init_kl=torch.tensor(2.0),
+        trans_kl=torch.tensor(3.0),
+        r_sigma_p=torch.tensor(7.0),
+        r_mu_p=torch.tensor(0.0),
+    )
+    # λ=0 (warmup), σ_p anchor weight non-zero.
+    loss_sigma = FullELBO(
+        rate_lambda=lambda step: 0.0,
+        lambda_sigma_p=1.0,
+        lambda_mu_p=0.0,
+    )
+    out = loss_sigma(components, step=0)
+    # recon (1.0) + λ·rate (0.0) + λ_σp · r_sigma_p (1·7).
+    assert torch.allclose(out, torch.tensor(8.0))
+    assert out.item() != components.recon.item(), (
+        "σ_p anchor must survive λ=0 warmup"
+    )
+
+    # Same for μ_p anchor with r_sigma_p zero.
+    components_mu = LossComponents(
+        recon=torch.tensor(1.0),
+        init_kl=torch.tensor(2.0),
+        trans_kl=torch.tensor(3.0),
+        r_sigma_p=torch.tensor(0.0),
+        r_mu_p=torch.tensor(11.0),
+    )
+    loss_mu = FullELBO(
+        rate_lambda=lambda step: 0.0,
+        lambda_sigma_p=0.0,
+        lambda_mu_p=1.0,
+    )
+    out_mu = loss_mu(components_mu, step=0)
+    assert torch.allclose(out_mu, torch.tensor(12.0))
+    assert out_mu.item() != components_mu.recon.item(), (
+        "μ_p anchor must survive λ=0 warmup"
+    )
 
 
 def test_forward_returns_loss_components() -> None:
@@ -72,6 +118,10 @@ def test_full_elbo_reproduces_pre_refactor_loss() -> None:
     Captured pre-refactor against the VHP stage-1 fixture with
     seed=0 (model init), seed=42 (forward), B=2, T=5,
     lambda_sigma_p=0.01.
+
+    Note: the warmup-anchor fix (regularizers pulled out of the
+    `λ * (...)` bracket) is numerically equivalent to the old formula
+    at ``λ=1.0``, so this captured value stays valid.
     """
     LAMBDA_SIGMA_P = 0.01
     LAMBDA_MU_P = 0.0

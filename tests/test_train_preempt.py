@@ -349,3 +349,120 @@ def test_periodic_checkpoint_pair_is_atomic_on_fault(tmp_path, monkeypatch) -> N
         if n.startswith("tmp_latest_") or n.startswith("tmp_save_")
     ]
     assert not leftovers, f"leftover tmp files after fault: {leftovers}"
+
+
+# ---------------------------------------------------------------------------
+# _safe_resume: silent-data-loss regression coverage.
+#
+# Pre-fix `_safe_resume` caught bare ``Exception`` and just ``print()``ed.
+# In an ADR-0009 preempt-retry, that meant a corrupt/schema-incompatible
+# ckpt silently turned into "start from scratch" — losing hours of work
+# with no trace in the logs. The fix narrows the except clause to the
+# specific "no usable checkpoint" exceptions, re-raises anything else,
+# and emits a WARNING that names the file + exception + the step reset.
+# ---------------------------------------------------------------------------
+
+
+def test_safe_resume_corrupt_ckpt_falls_back_with_warning(
+    tmp_path, caplog
+) -> None:
+    """A garbage-bytes ckpt → fresh start (step=0) + WARNING naming the file."""
+    import logging
+
+    trainer = _make_trainer(tmp_path)
+    bad = tmp_path / "corrupt.pth"
+    bad.write_bytes(b"\x00" * 100)  # not a torch zip / pickle
+
+    # Sanity: trainer starts at step 0; bump it so the fallback's reset is
+    # observable (the contract is "step counter is reset to 0").
+    trainer.global_step = 42
+
+    with caplog.at_level(logging.WARNING, logger="ddssm.train"):
+        trainer._safe_resume(str(bad))
+
+    assert trainer.global_step == 0, (
+        "fallback must reset global_step to 0 so downstream loops don't "
+        "advance from a stale step count"
+    )
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "fallback must emit a WARNING (not print)"
+    msg = warnings[-1].getMessage()
+    assert str(bad) in msg, f"warning must name the failing file; got {msg!r}"
+    assert "FALLBACK" in msg or "fresh" in msg.lower(), (
+        f"warning must make the fresh-start fallback unmistakable; got {msg!r}"
+    )
+    assert "global_step" in msg and "0" in msg, (
+        f"warning must mention step reset to 0; got {msg!r}"
+    )
+
+
+def test_safe_resume_missing_file_falls_back_with_warning(
+    tmp_path, caplog
+) -> None:
+    """Nonexistent ckpt path → fresh start (step=0) + WARNING."""
+    import logging
+
+    trainer = _make_trainer(tmp_path)
+    missing = tmp_path / "does_not_exist.pth"
+    assert not missing.exists()
+
+    trainer.global_step = 7
+    with caplog.at_level(logging.WARNING, logger="ddssm.train"):
+        trainer._safe_resume(str(missing))
+
+    assert trainer.global_step == 0
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "missing-file fallback must emit a WARNING"
+    assert str(missing) in warnings[-1].getMessage()
+
+
+def test_safe_resume_valid_ckpt_restores_normally(tmp_path, caplog) -> None:
+    """A valid ckpt → global_step restored, no WARNING."""
+    import logging
+
+    trainer = _make_trainer(tmp_path)
+    trainer.global_step = 13
+    ckpt_path = str(tmp_path / "good.pth")
+    trainer.save_checkpoint(ckpt_path)
+
+    # Build a fresh trainer (clean global_step) and resume.
+    resumer = _make_trainer(tmp_path)
+    assert resumer.global_step == 0
+
+    with caplog.at_level(logging.WARNING, logger="ddssm.train"):
+        resumer._safe_resume(ckpt_path)
+
+    assert resumer.global_step == 13, "valid resume must restore global_step"
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING], (
+        "valid resume must NOT emit a fallback warning"
+    )
+
+
+def test_safe_resume_reraises_unexpected_exception(
+    tmp_path, monkeypatch
+) -> None:
+    """A ``MemoryError`` from torch.load must propagate, NOT be swallowed.
+
+    Pre-fix the bare ``except Exception`` caught everything including
+    real bugs (OOM, programmer errors) — silently turning them into a
+    fresh-start restart. ``MemoryError`` is a ``BaseException`` subclass
+    so it isn't caught by ``except Exception``, but use any non-listed
+    exception to verify the narrowed clause re-raises.
+    """
+    import torch as _torch
+
+    trainer = _make_trainer(tmp_path)
+    ckpt_path = str(tmp_path / "ckpt.pth")
+    trainer.save_checkpoint(ckpt_path)
+
+    class _UnexpectedBug(Exception):
+        """Not in _RESUME_NO_CKPT_EXCEPTIONS."""
+
+    def _boom(*a, **kw):
+        raise _UnexpectedBug("simulated bug — must propagate")
+
+    monkeypatch.setattr(_torch, "load", _boom)
+
+    resumer = _make_trainer(tmp_path)
+    with pytest.raises(_UnexpectedBug):
+        resumer._safe_resume(ckpt_path)

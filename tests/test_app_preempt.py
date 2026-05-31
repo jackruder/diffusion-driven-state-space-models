@@ -15,20 +15,20 @@ sampled hparam values. These tests pin that behaviour in isolation.
 from __future__ import annotations
 
 import logging
-import os
+import sqlite3
 
 import optuna
 import pytest
-from optuna.trial import TrialState
 from omegaconf import OmegaConf
+from optuna.trial import TrialState
 
+import ddssm.app as ddssm_app
 from ddssm.app import (
-    _enqueue_preempt_retry,
-    _find_current_running_trial_by_params,
-    _get_resume_from_user_attrs,
     apply_preempt_hooks,
+    _enqueue_preempt_retry,
+    _get_resume_from_user_attrs,
+    _find_current_running_trial_by_params,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -235,3 +235,115 @@ def test_skip_resume_when_no_param_match(tmp_path, monkeypatch, caplog) -> None:
         "match" in rec.message.lower() or "trial" in rec.message.lower()
         for rec in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# apply_preempt_hooks — load_study error handling
+#
+# Regression for the over-broad-except bug: ``except (KeyError, Exception)``
+# swallowed transient SQLite-lock errors AND unexpected failures, burning
+# the trial slot with no checkpoint and no retry enqueue. The narrowed
+# handling must:
+#   - retry transient sqlite3.OperationalError / StorageInternalError,
+#   - treat KeyError ("study not yet created") as "fall through to plain
+#     training",
+#   - propagate every other exception so unexpected failures are visible.
+# ---------------------------------------------------------------------------
+
+
+def _preempt_cfg(url: str) -> OmegaConf:
+    return OmegaConf.create(
+        {
+            "experiment": {"training": {"resume_from": None}},
+            "hydra": {"sweeper": {"study_name": "s", "storage": url}},
+        },
+    )
+
+
+def test_load_study_retries_on_transient_sqlite_lock(
+    tmp_path, monkeypatch,
+) -> None:
+    """One transient ``sqlite3.OperationalError`` → retry → success."""
+    monkeypatch.setenv("DDSSM_PREEMPTIVE", "1")
+    # Real study so the second call returns a usable handle.
+    real_study, url = _make_study(tmp_path)
+
+    calls = {"n": 0}
+    real_load = optuna.load_study
+
+    def flaky_load(*, study_name, storage):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_load(study_name=study_name, storage=storage)
+
+    monkeypatch.setattr(ddssm_app.optuna, "load_study", flaky_load)
+    # Skip the backoff sleep — semantics tested, not wall-time.
+    monkeypatch.setattr(ddssm_app.time, "sleep", lambda _s: None)
+
+    cfg = _preempt_cfg(url)
+    trial, study = apply_preempt_hooks(cfg)
+    assert calls["n"] == 2, "should have retried exactly once after the lock"
+    # Study loaded → no resume injection (no RUNNING trials), trial is None.
+    assert trial is None
+    assert study is not None
+
+
+def test_load_study_propagates_when_sqlite_lock_persists(
+    tmp_path, monkeypatch,
+) -> None:
+    """Persistent transient errors exhaust retries and re-raise — they do
+    NOT silently fall through to plain training.
+    """
+    monkeypatch.setenv("DDSSM_PREEMPTIVE", "1")
+    _, url = _make_study(tmp_path)
+
+    def always_locked(*, study_name, storage):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(ddssm_app.optuna, "load_study", always_locked)
+    monkeypatch.setattr(ddssm_app.time, "sleep", lambda _s: None)
+
+    cfg = _preempt_cfg(url)
+    with pytest.raises(sqlite3.OperationalError):
+        apply_preempt_hooks(cfg)
+
+
+def test_load_study_keyerror_falls_through_to_plain_training(
+    tmp_path, monkeypatch, caplog,
+) -> None:
+    """``KeyError`` (study not yet created) → (None, None) + warning, no raise."""
+    monkeypatch.setenv("DDSSM_PREEMPTIVE", "1")
+
+    def missing_study(*, study_name, storage):
+        raise KeyError(f"Study {study_name!r} not found")
+
+    monkeypatch.setattr(ddssm_app.optuna, "load_study", missing_study)
+
+    cfg = _preempt_cfg("sqlite:////tmp/does-not-matter.db")
+    with caplog.at_level(logging.WARNING):
+        trial, study = apply_preempt_hooks(cfg)
+
+    assert trial is None
+    assert study is None
+    assert cfg.experiment.training.resume_from is None
+    assert any("not found" in rec.message.lower() for rec in caplog.records)
+
+
+def test_load_study_unexpected_exception_propagates(
+    tmp_path, monkeypatch,
+) -> None:
+    """Unexpected exceptions (e.g. ``ValueError``) must propagate — not get
+    silently turned into "fall through to plain training", which burns the
+    trial slot with no checkpoint and no retry.
+    """
+    monkeypatch.setenv("DDSSM_PREEMPTIVE", "1")
+
+    def garbage(*, study_name, storage):
+        raise ValueError("garbage")
+
+    monkeypatch.setattr(ddssm_app.optuna, "load_study", garbage)
+
+    cfg = _preempt_cfg("sqlite:////tmp/whatever.db")
+    with pytest.raises(ValueError, match="garbage"):
+        apply_preempt_hooks(cfg)

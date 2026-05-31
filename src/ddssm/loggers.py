@@ -131,18 +131,98 @@ class ConsoleLogger(Logger):
 
 
 class CSVLogger(Logger):
+    """Append-only CSV logger that tolerates schema drift.
+
+    The model emits metric keys CONDITIONALLY (stage-1 vs stage-2, train vs
+    val, λ-warmup vs steady-state).  A naive append-with-fixed-header writer
+    misaligns columns when a new key appears or an existing key is omitted.
+    To keep downstream ``csv.DictReader`` consumers correct, this writer
+    maintains a superset header: whenever a row introduces a new key, the
+    file is rewritten in place with the expanded header, padding prior rows
+    with the empty string.  Rows missing a known key likewise get an empty
+    cell.  The rewrite only happens on first-seen keys (rare — stage
+    transitions and λ-warmup edges), so steady-state cost is one append.
+    """
+
+    # First two columns are always split + the step/epoch index name.
+    _IDX_COL = "step"
+
     def __init__(self, path: str):
         self.path = path
-        self._header_written = os.path.exists(path) and os.path.getsize(path) > 0
+        self._known_keys: list[str] = []  # first-seen order
+        self._known_set: set[str] = set()
+        # If a file already exists, prime _known_keys from its header so we
+        # append compatibly on resumed runs.
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            try:
+                with open(path, "r", newline="") as f:
+                    reader = csv.reader(f)
+                    header = next(reader, None)
+                if header and len(header) >= 2:
+                    # Header is: ["split", idx_name, *metric_keys].
+                    self._IDX_COL = header[1]
+                    for k in header[2:]:
+                        if k not in self._known_set:
+                            self._known_set.add(k)
+                            self._known_keys.append(k)
+            except (OSError, StopIteration):
+                pass
+
+    def _rewrite_with_expanded_header(self, new_keys: list[str]) -> None:
+        """Rewrite the file with ``new_keys`` appended to the metric columns.
+
+        Existing rows are preserved unchanged (the new columns are simply
+        empty for them).  Called only when previously-unseen keys appear.
+        """
+        old_rows: list[list[str]] = []
+        old_header: list[str] = []
+        if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
+            with open(self.path, "r", newline="") as f:
+                reader = csv.reader(f)
+                old_header = next(reader, []) or []
+                old_rows = list(reader)
+        # Build expanded header. Preserve the leading two columns
+        # (split, idx_name) from the old header when present.
+        leading = old_header[:2] if len(old_header) >= 2 else ["split", self._IDX_COL]
+        expanded_header = leading + list(self._known_keys)
+        with open(self.path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(expanded_header)
+            # Old rows already match leading + previously-known keys; pad
+            # with empty strings for each newly-added key.
+            pad = [""] * len(new_keys)
+            for row in old_rows:
+                writer.writerow(row + pad)
 
     def _write(self, split: str, idx_name: str, idx: int, row: Dict[str, float]):
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+
+        # Detect new keys (preserve first-seen order from ``row``).
+        new_keys = [k for k in row.keys() if k not in self._known_set]
+        if new_keys:
+            for k in new_keys:
+                self._known_set.add(k)
+                self._known_keys.append(k)
+            # If the file already had a header (or rows), rewrite with the
+            # expanded header so column positions stay consistent.  If the
+            # file doesn't exist yet, the upcoming append will create it
+            # with the full header below.
+            if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
+                self._rewrite_with_expanded_header(new_keys)
+
+        file_existed = os.path.exists(self.path) and os.path.getsize(self.path) > 0
         with open(self.path, "a", newline="") as f:
             writer = csv.writer(f)
-            if not self._header_written:
-                writer.writerow(["split", idx_name] + list(row.keys()))
-                self._header_written = True
-            writer.writerow([split, idx] + [row[k] for k in row])
+            if not file_existed:
+                self._IDX_COL = idx_name
+                writer.writerow(["split", idx_name] + list(self._known_keys))
+            # Pad missing keys with empty string so column alignment matches
+            # the header.  Downstream ``csv.DictReader`` consumers see the
+            # missing values as empty strings (treat as absent / NaN).
+            writer.writerow(
+                [split, idx]
+                + [("" if k not in row else row[k]) for k in self._known_keys]
+            )
 
     def on_step(self, split, step, row):
         self._write(split, "step", step, row)
