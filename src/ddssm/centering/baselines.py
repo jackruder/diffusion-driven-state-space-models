@@ -10,7 +10,7 @@ parametric forms) shares the backbone.
 
 The ``BaseBaseline`` interface exposes two access patterns:
 
-* ``mean(z_hist)`` — μ_p alone.  Used by the stage-2 V3 transition
+* ``mean(z_hist)`` — μ_p alone.  Used by the stage-2 diffusion transition
   for the centering shift ``ẑ_t = z̃_t − μ_p(z_{t-1})``; σ_p plays
   no role in stage 2.
 * ``mean_and_logvar(z_hist)`` — both heads.  Used by the stage-1

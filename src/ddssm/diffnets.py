@@ -464,7 +464,7 @@ class CSDIUnet(nn.Module):
         # Conv1d_with_init already zero-initialises bias; the standard
         # EDM convention also zeros the final-layer weights so D_ψ ≈
         # c_skip · z̃_t at the start of training.  Toggle via flag for
-        # ablations / explicit control under model-v2 V3.
+        # ablations / explicit control under model-v2 diffusion.
         if zero_init_output:
             nn.init.zeros_(self.output_projection2.weight)
             if self.output_projection2.bias is not None:

@@ -39,9 +39,9 @@ from ddssm.centering.baselines import (
     IdentityBaseline,
 )
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3Transition,
-    DiffusionV3ScheduleConfig,
+from ddssm.transitions.diffusion import (
+    DiffusionTransition,
+    DiffusionScheduleConfig,
 )
 from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
 
@@ -158,7 +158,7 @@ def make_vhp_model(
         tracking_mode=tracking_mode,
         init_value=sigma_data_init,
     )
-    schedule = DiffusionV3ScheduleConfig(
+    schedule = DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=20, k_sampling_mode="uniform",
     )
     stage1_transition = BaselineGaussianTransition(
@@ -167,7 +167,7 @@ def make_vhp_model(
         j=J,
         emb_time_dim=EMB_TIME,
     )
-    stage2_transition = DiffusionV3Transition(
+    stage2_transition = DiffusionTransition(
         baseline=baseline,
         latent_dim=LATENT_DIM,
         j=J,

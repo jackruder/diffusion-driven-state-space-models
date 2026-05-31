@@ -388,7 +388,7 @@ class DDSSM_base(nn.Module):
         When ``stage_selector == "stage_1"`` and ``stage1_transition`` is
         set, uses it; otherwise uses ``self.transition`` (the stage-2 /
         legacy slot).  The σ_data buffer is forwarded as a kwarg to
-        whichever transition is called (legacy V2 ignores it; new V3 /
+        whichever transition is called (legacy V2 ignores it; new diffusion /
         BaselineGaussian consume it).
 
         Returns the transition's dict (at least ``"kl"``, plus any
@@ -468,12 +468,12 @@ class DDSSM_base(nn.Module):
             :meth:`_encode_latents` with ``K = self.S`` samples (override
             via the ``K`` arg).  Per-step ``log q`` already lives in
             ``logq_paths``; we sum across ``T`` for the trajectory total.
-          * Per-transition: :meth:`DiffusionV3Transition.log_prob` for
+          * Per-transition: :meth:`DiffusionTransition.log_prob` for
             ``t = j..T-1`` via the probability-flow ODE.
           * Decoder: :meth:`BaseDecoder.log_likelihood` summed across
             ``t = 0..T-1``.
           * Initial state: ``log p_ψ(z_{1:j})`` via
-            :meth:`DiffusionV3Transition.log_prob_init` (VHP IS under
+            :meth:`DiffusionTransition.log_prob_init` (VHP IS under
             ``q_Φ``) when an ``aux_posterior`` is present; otherwise 0.
 
         Args:

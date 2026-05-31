@@ -3,7 +3,7 @@
 Builds the model via a factory function so that ``baseline`` and
 ``aux_posterior`` are constructed *once* and passed by reference to
 both the stage-1 :class:`BaselineGaussianTransition` and the stage-2
-:class:`DiffusionV3Transition` — ensuring μ_p's parameters are shared
+:class:`DiffusionTransition` — ensuring μ_p's parameters are shared
 across the handoff (per ``model-v2.org`` § Generative baseline /
 § Stage-1 → stage-2 handoff step 2).
 
@@ -30,8 +30,6 @@ from omegaconf import MISSING
 
 from ddssm.dssd import DDSSM_base
 from conf.registry import model_store
-
-log = logging.getLogger(__name__)
 from ddssm.decoder import GaussianDecoder
 from ddssm.encoder import GaussianEncoder
 from ddssm.diffnets import (
@@ -48,11 +46,13 @@ from ddssm.centering.baselines import (
     IdentityBaseline,
 )
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3Transition,
-    DiffusionV3ScheduleConfig,
+from ddssm.transitions.diffusion import (
+    DiffusionTransition,
+    DiffusionScheduleConfig,
 )
 from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
+
+log = logging.getLogger(__name__)
 
 # Forms that have no learnable μ_p parameters and therefore degenerate
 # to ``baseline_mode="pinned"`` regardless of user input.
@@ -194,20 +194,20 @@ def _build_init_centering_model(
             feature=FeatureMixerConfig(type="conv", n_layers=1)
         ),
     )
-    schedule = DiffusionV3ScheduleConfig(
+    schedule = DiffusionScheduleConfig(
         S_k=diffusion_S_k,
         k_chunk=diffusion_k_chunk,
         num_steps=diffusion_num_steps,
         # LSGM-style importance sampling per model-v2.org § Importance
         # Sampling: p_k ∝ (β / (1 - α²))^γ focuses MC samples on the
         # noisy τ timesteps where the ESM loss has higher variance.
-        # ``pk_gamma=1.0`` (the DiffusionV3ScheduleConfig default)
+        # ``pk_gamma=1.0`` (the DiffusionScheduleConfig default)
         # leaves the distribution at its base shape; the IS reweighting
         # in ``_esm_chunk_loss`` divides by ``K · p_k`` so the loss is
         # an unbiased estimator regardless of the sampling distribution.
         k_sampling_mode="lsgm_is",
     )
-    stage2_transition = DiffusionV3Transition(
+    stage2_transition = DiffusionTransition(
         baseline=baseline,
         latent_dim=latent_dim,
         j=j,

@@ -1,7 +1,7 @@
 """EMA buffer tracking the per-step centered-residual variance ``σ_data²(t)``.
 
 Per ``model-v2.org`` § Data-variance tracking and § σ_data buffer
-extension, the V3 transition needs ``σ_data²(t)`` to scale the EDM
+extension, the diffusion transition needs ``σ_data²(t)`` to scale the EDM
 preconditioning constants ``(c_skip, c_out, c_in)``.  The buffer:
 
 * Covers ``t = 1 … T`` (extended to include the VHP-covered initial
@@ -48,7 +48,7 @@ def _coerce_t_idx(t_idx: int | torch.Tensor) -> torch.Tensor:
 
 
 class SigmaDataBuffer(nn.Module):
-    """EMA buffer of σ_data²(t) for the V3 transition.
+    """EMA buffer of σ_data²(t) for the diffusion transition.
 
     Args:
         T_max: Max latent timestep covered by the buffer (1-based,

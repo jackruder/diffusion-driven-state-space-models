@@ -3,7 +3,7 @@
 The component primitives (prob-flow ODE, IWAE assembly, VHP) are
 unit-tested in ``test_prob_flow``, ``test_iwae`` and ``test_vhp``;
 this test verifies the composition layer wires them into a valid
-``(B,)`` log-likelihood on a tiny stage-2 V3 model.
+``(B,)`` log-likelihood on a tiny stage-2 diffusion model.
 """
 
 from __future__ import annotations
@@ -33,9 +33,9 @@ from ddssm.fusions import ConcatLinearFusion
 from ddssm.futsum import GRUFutureSummary
 from ddssm.gaussians import GaussianHead
 from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
-from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3ScheduleConfig,
-    DiffusionV3Transition,
+from ddssm.transitions.diffusion import (
+    DiffusionScheduleConfig,
+    DiffusionTransition,
 )
 
 J = 2
@@ -81,14 +81,14 @@ def _make_stage2_model() -> DDSSM_base:
         context=ctx, gaussian_head=GaussianHead,
     )
     baseline = MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
-    schedule = DiffusionV3ScheduleConfig(
+    schedule = DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=20, beta_min=0.1, beta_max=20.0,
         tau_min=1e-3, k_sampling_mode="uniform",
     )
     stage1 = BaselineGaussianTransition(
         baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
     )
-    v3 = DiffusionV3Transition(
+    transition = DiffusionTransition(
         baseline=baseline, latent_dim=LATENT_DIM, j=J,
         emb_time_dim=EMB_TIME, T_max=T_MAX,
         unet=tiny_unet, schedule=schedule,
@@ -102,7 +102,7 @@ def _make_stage2_model() -> DDSSM_base:
         trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
     )
     model = DDSSM_base(
-        encoder=encoder, decoder=decoder, transition=v3,
+        encoder=encoder, decoder=decoder, transition=transition,
         j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM,
         emb_time_dim=EMB_TIME,
         aux_posterior=aux, baseline=baseline,
@@ -113,13 +113,13 @@ def _make_stage2_model() -> DDSSM_base:
 
 
 def test_log_prob_runs_end_to_end_and_returns_finite_log_likelihood() -> None:
-    """``DDSSM_base.log_prob`` composes encoder + decoder + V3.log_prob + VHP.
+    """``DDSSM_base.log_prob`` composes encoder + decoder + diffusion.log_prob + VHP.
 
     Cycle-6 tracer.  This is the integration test: the underlying
     primitives are correctness-tested individually (prob-flow, IWAE
     assembly, VHP IS estimator).  Here we verify the composition wires
     them together into a valid ``(B,)`` log-likelihood on a tiny
-    stage-2 V3 model with VHP-via-AuxPosterior.
+    stage-2 diffusion model with VHP-via-AuxPosterior.
     """
     torch.manual_seed(0)
     model = _make_stage2_model()

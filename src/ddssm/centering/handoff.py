@@ -20,7 +20,7 @@ warmup is deferred).  Steps in this exact order:
    stage 1); only the EMA *schedule* (step counter, "fixed" frozen
    flag) resets.
 
-Zero-initialising F_ψ's final layer is **not** a handoff step — V3
+Zero-initialising F_ψ's final layer is **not** a handoff step — diffusion
 constructs its U-Net with ``zero_init_output=True`` and stage 1 does not
 train it, so the zero-init naturally carries through.
 """
@@ -64,7 +64,7 @@ def perform_centering_handoff(
     if getattr(model, "baseline", None) is None:
         raise AttributeError(
             "perform_centering_handoff: trainer.model.baseline is None; "
-            "the V3 path requires a Baseline to snapshot."
+            "the diffusion path requires a Baseline to snapshot."
         )
     model.baseline_anchor = model.baseline.snapshot()
 

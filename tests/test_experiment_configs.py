@@ -10,7 +10,7 @@ must:
   (``ddssm._experiment_registry.register_experiments`` →
   ``compose(config_name='config', overrides=[experiment=NAME])``).
 
-Post legacy-purge the only family is init-centering (V3 / VHP path);
+Post legacy-purge the only family is init-centering (diffusion / VHP path);
 the synthetic / kdd / variance_probe families were deleted (their
 datasets survive as library code in ``ddssm.data.presets``).
 """

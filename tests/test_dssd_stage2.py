@@ -3,7 +3,7 @@
 Verify that:
 
 * :class:`DDSSM_base` forward at ``stage_selector="stage_2"`` runs
-  through :class:`DiffusionV3Transition` end-to-end (centered ESM/EDM
+  through :class:`DiffusionTransition` end-to-end (centered ESM/EDM
   loss + σ_data buffer updates + VHP init term + ``R_μp`` under the
   Learnable baseline-mode).
 * Stage-2 ``L_init`` omits the encoder-entropy term per
@@ -39,9 +39,9 @@ from ddssm.aggregators import ContextProducerAggregator
 from ddssm.aux_posterior import AuxPosterior
 from ddssm.centering.baselines import MLPBaseline
 from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.transitions.diffusion_v3 import (
-    DiffusionV3Transition,
-    DiffusionV3ScheduleConfig,
+from ddssm.transitions.diffusion import (
+    DiffusionTransition,
+    DiffusionScheduleConfig,
 )
 from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
 
@@ -141,13 +141,13 @@ def _make_stage2_model(
     snapshot_anchor: bool = False,
 ) -> DDSSM_base:
     baseline = MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
-    schedule = DiffusionV3ScheduleConfig(
+    schedule = DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=20, k_sampling_mode="uniform",
     )
     stage1_transition = BaselineGaussianTransition(
         baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
     )
-    v3 = DiffusionV3Transition(
+    transition = DiffusionTransition(
         baseline=baseline,
         latent_dim=LATENT_DIM,
         j=J,
@@ -162,7 +162,7 @@ def _make_stage2_model(
     model = DDSSM_base(
         encoder=_make_encoder(),
         decoder=_make_decoder(),
-        transition=v3,
+        transition=transition,
         j=J,
         data_dim=DATA_DIM,
         latent_dim=LATENT_DIM,

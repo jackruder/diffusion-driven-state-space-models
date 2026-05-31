@@ -5,7 +5,7 @@ Implements the stage-1 transition prior
 from ``model-v2.org`` § Assembled losses for stage 1 / § State-conditional prior
 variance.  Functionally a refactoring of :class:`ddssm.transitions.transitions.GaussianTransition`
 that delegates the ``(μ_p, log σ_p²)`` heads to a shared :class:`ddssm.centering.baselines.BaseBaseline`
-module — letting the stage-2 :class:`ddssm.transitions.diffusion_v3.DiffusionV3Transition`
+module — letting the stage-2 :class:`ddssm.transitions.diffusion.DiffusionTransition`
 read the same μ_p instance for the centering shift.
 
 Provides two entry points:
@@ -46,7 +46,7 @@ class BaselineGaussianTransition(BaseTransition):
     Args:
         baseline: Shared :class:`BaseBaseline` instance.  The *same*
             instance is also passed to the stage-2
-            :class:`DiffusionV3Transition` so μ_p's parameters are
+            :class:`DiffusionTransition` so μ_p's parameters are
             shared across the two stages.
         latent_dim: Latent dimension ``d``.
         j: History length.

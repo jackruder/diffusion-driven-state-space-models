@@ -1,8 +1,8 @@
-"""Smoke test for the variance probe stage on the V3 path.
+"""Smoke test for the variance probe stage on the diffusion path.
 
-Post legacy-purge the probe runs against the init-centering V3
+Post legacy-purge the probe runs against the init-centering diffusion
 transition (the V2 family it was originally written for is gone).
-``DiffusionV3Transition.transition_kl`` gained ``return_per_sample`` so
+``DiffusionTransition.transition_kl`` gained ``return_per_sample`` so
 the probe can collect per-sample ESM losses + score-net gradients.
 """
 
@@ -29,7 +29,7 @@ def _make_experiment(name: str):
 
 
 def test_variance_runner_smoke(tmp_path: Path) -> None:
-    """The probe runner drives a V3 model end-to-end and writes its artefacts."""
+    """The probe runner drives a diffusion model end-to-end and writes its artefacts."""
     expt = _make_experiment("init_smoke_simple")
     spec = ProbeSpec(
         cells=[ProbeCell("esm", "uniform"), ProbeCell("dsm", "uniform")],
