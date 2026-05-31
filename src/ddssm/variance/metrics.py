@@ -60,9 +60,13 @@ def metric_loss_var(ctx: ProbeContext) -> dict[str, Any]:
         by_cell.setdefault(key, {})[replica] = float(
             r.get("L_p_scalar", r["L_p"])
         )
+    # NaN for <2 replicas: np.var would report a confident 0.0 for a single
+    # replica, which reads as a flat estimator rather than an undersampled one
+    # (matches the guard on grad_var / _loss_var_per_tau).
     return {
         "loss_var": {
-            k: float(np.var(list(v.values()))) for k, v in by_cell.items()
+            k: float(np.var(list(v.values()))) if len(v) >= 2 else float("nan")
+            for k, v in by_cell.items()
         }
     }
 

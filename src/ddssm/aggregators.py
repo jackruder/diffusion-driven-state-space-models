@@ -287,7 +287,9 @@ class MLPAggregator(BaseHistoryAggregator):
 class AttentionAggregator(BaseHistoryAggregator):
     """Transformer-encoder self-attention pool over the ``j``-step history.
 
-    Mean-pools the resulting length-``j`` sequence to a single feature.
+    Masked-mean-pools the resulting length-``j`` sequence to a single feature:
+    padded history slots are excluded both from the self-attention (via a
+    ``src_key_padding_mask``) and from the pooling denominator.
     """
 
     def __init__(
@@ -348,8 +350,29 @@ class AttentionAggregator(BaseHistoryAggregator):
         static_context: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         x = self.per_step(z_hist=z_hist, hist_time_emb=hist_time_emb, pad_mask=pad_mask)
-        x = self.attn(x)  # (B, j, H)
-        return x.mean(dim=1)
+
+        # Hard key-padding mask so real query positions don't attend to padded
+        # history keys (for early t<j left-padding and GluonTS past_is_pad).
+        # ``nn.TransformerEncoder`` wants True == "ignore this key"; pad_mask is
+        # 1=real / 0=pad. This is the repo's only hard attention-mask (the rest
+        # use mask-as-feature) — intentional, to keep the attention aggregator
+        # correct under j>1.
+        key_pad = pad_mask == 0  # (B, j) bool, True at padded slots
+        # A fully-padded row (no real history) would make every key -inf and
+        # produce a NaN softmax. Let those rows attend uniformly (well-defined);
+        # the masked mean below zeroes their contribution anyway.
+        all_pad = key_pad.all(dim=1)
+        if bool(all_pad.any()):
+            key_pad = key_pad.clone()
+            key_pad[all_pad] = False
+
+        x = self.attn(x, src_key_padding_mask=key_pad)  # (B, j, H)
+
+        # Masked mean over valid (non-padded) positions only — divide by the
+        # real-step count, not j, so padding doesn't dilute the pooled feature.
+        pm = pad_mask.to(x.dtype).unsqueeze(-1)  # (B, j, 1)
+        denom = pm.sum(dim=1).clamp_min(1.0)  # (B, 1)
+        return (x * pm).sum(dim=1) / denom
 
 
 class ContextProducerAggregator(BaseHistoryAggregator):

@@ -1004,7 +1004,12 @@ class DiffusionTransition(BaseTransition):
         sigma_data: Optional[SigmaDataBuffer] = ctx.get("sigma_data")
         t_external = int(ctx.get("t", self.j + 1))
         if sigma_data is not None:
-            sd2_scalar = float(sigma_data.read(t_external).item())
+            # Constant extrapolation beyond the trained horizon
+            # (model-v2.org:1442-1459): F_ψ does not take t as input, so for
+            # t > T reuse σ_data²[T] — keeps the EDM constants in the regime the
+            # network was calibrated against. read() is strict, so clamp here.
+            t_clamped = max(1, min(t_external, int(sigma_data.T_max)))
+            sd2_scalar = float(sigma_data.read(t_clamped).item())
         else:
             sd2_scalar = 1.0
 

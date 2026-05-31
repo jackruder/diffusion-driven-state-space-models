@@ -82,6 +82,55 @@ def test_attention_aggregator_shape(j):
     assert agg.out_features == H
 
 
+def test_attention_aggregator_ignores_padded_positions():
+    """Output is invariant to the *values* at padded slots.
+
+    With the key-padding mask, real query positions attend only to real keys,
+    and the masked mean pools only real positions — so perturbing padded-slot
+    z/time values must not change the pooled feature.
+    """
+    j = 4
+    agg = AttentionAggregator(
+        latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T,
+        nheads=NHEADS, num_attn_layers=1,
+    )
+    agg.eval()
+    torch.manual_seed(0)
+    z = torch.randn(B, D, j)
+    t = torch.randn(B, j, E_T)
+    pad_mask = torch.ones(B, j)
+    pad_mask[:, :2] = 0.0  # first two slots padded (mimics t<j left-padding)
+
+    out1 = agg(z_hist=z, hist_time_emb=t, pad_mask=pad_mask)
+    z2 = z.clone()
+    z2[:, :, :2] += 5.0 * torch.randn(B, D, 2)
+    t2 = t.clone()
+    t2[:, :2, :] += 5.0 * torch.randn(B, 2, E_T)
+    out2 = agg(z_hist=z2, hist_time_emb=t2, pad_mask=pad_mask)
+
+    assert torch.allclose(out1, out2, atol=1e-5)
+
+
+def test_attention_aggregator_handles_fully_padded_row():
+    """A fully-padded row yields a finite, zero pooled feature (no NaN)."""
+    j = 4
+    agg = AttentionAggregator(
+        latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T,
+        nheads=NHEADS, num_attn_layers=1,
+    )
+    agg.eval()
+    torch.manual_seed(0)
+    z = torch.randn(B, D, j)
+    t = torch.randn(B, j, E_T)
+    pad_mask = torch.ones(B, j)
+    pad_mask[0, :] = 0.0  # row 0 has no real history
+
+    out = agg(z_hist=z, hist_time_emb=t, pad_mask=pad_mask)
+    assert torch.isfinite(out).all()
+    # masked mean over zero valid positions → zero contribution (denom clamped).
+    assert torch.allclose(out[0], torch.zeros(H))
+
+
 @pytest.mark.parametrize("j", [1, 2, 4])
 def test_context_producer_aggregator_shape(j):
     # ResidualBlockConfig default nheads=8; use a small nheads divisor of H=8.

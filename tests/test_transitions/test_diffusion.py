@@ -564,3 +564,48 @@ def test_sample_shape_and_baseline_shift() -> None:
     z_sample = transition.sample(z_hist=z_hist, S=1, ctx=ctx)
     assert z_sample.shape == (B, 1, D)
     assert torch.isfinite(z_sample).all()
+
+
+def test_sample_reads_sigma_data_buffer_at_t() -> None:
+    """``sample`` indexes the frozen σ_data² buffer at the 1-based ``t`` in ctx."""
+    from unittest import mock
+
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    transition = _make_diffusion(baseline)
+    z_hist = torch.randn(B, D, J)
+    buf = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed")
+    with torch.no_grad():
+        buf.sigma_data2.copy_(torch.linspace(0.5, 0.9, T_MAX))
+    ctx = {
+        "hist_time_emb": torch.zeros(B, J, EMB_TIME),
+        "target_time_emb": torch.zeros(B, 1, EMB_TIME),
+        "sigma_data": buf,
+        "t": 3,
+    }
+    with mock.patch.object(buf, "read", wraps=buf.read) as spy:
+        z = transition.sample(z_hist=z_hist, S=1, ctx=ctx)
+    assert torch.isfinite(z).all()
+    assert int(spy.call_args[0][0]) == 3  # read(t=3), not the σ_data≡1 fallback
+
+
+def test_sample_clamps_sigma_data_beyond_horizon() -> None:
+    """Beyond the trained horizon, ``sample`` holds σ_data²[T_max] (no IndexError)."""
+    from unittest import mock
+
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    transition = _make_diffusion(baseline)
+    z_hist = torch.randn(B, D, J)
+    buf = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed")
+    # read(t) is strict and would raise for t > T_max; sample() must clamp.
+    with pytest.raises(IndexError):
+        buf.read(T_MAX + 5)
+    ctx = {
+        "hist_time_emb": torch.zeros(B, J, EMB_TIME),
+        "target_time_emb": torch.zeros(B, 1, EMB_TIME),
+        "sigma_data": buf,
+        "t": T_MAX + 5,  # past the trained horizon
+    }
+    with mock.patch.object(buf, "read", wraps=buf.read) as spy:
+        z = transition.sample(z_hist=z_hist, S=1, ctx=ctx)  # must NOT raise
+    assert torch.isfinite(z).all()
+    assert int(spy.call_args[0][0]) == T_MAX  # clamped to the last trained slot

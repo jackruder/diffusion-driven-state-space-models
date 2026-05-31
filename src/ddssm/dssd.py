@@ -611,8 +611,6 @@ class DDSSM_base(nn.Module):
             stats: Empty dict during training; contains ``zs``, ``mus``,
                 ``logvars`` when ``train=False``.
         """
-        j = self.j
-
         static_embed = self._embed_static(static_covariates)
         time_embed = time_embedding(
             timepoints, self.emb_time_dim, device=observed_data.device
@@ -912,6 +910,14 @@ class DDSSM_base(nn.Module):
             # extract time step t
             target_time_emb = time_embed_all_bs[:, t_end : t_end + 1, :]
             ctx = {"hist_time_emb": hist_time_emb, "target_time_emb": target_time_emb}
+            if self.sigma_data is not None:
+                # Use the frozen per-t σ_data² buffer for the sampler's EDM
+                # constants (model-v2.org § Practical considerations). The buffer
+                # is 1-based; the target's 0-based position is ``t_abs``, so the
+                # 1-based index is ``t_abs + 1``. sample() clamps to [1, T_max]
+                # for constant extrapolation beyond the training horizon.
+                ctx["sigma_data"] = self.sigma_data
+                ctx["t"] = t_abs + 1
             if hist_covariates is not None:
                 ctx["hist_covariates"] = hist_covariates.permute(
                     0, 2, 1
