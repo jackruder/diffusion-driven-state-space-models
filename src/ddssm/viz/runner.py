@@ -91,6 +91,17 @@ def visualize(
     )
 
     os.makedirs(run_dir, exist_ok=True)
+
+    # Cross-stage W&B reconnect: when the train run wrote a run-id under
+    # ``run_dir/.wandb_run_id`` and the experiment carries an enabled
+    # ``wandb_config``, push each generated PNG to the original W&B run
+    # so plots and training scalars live together.
+    from ..loggers import resume_run_from_dir
+
+    wandb_mod = resume_run_from_dir(
+        run_dir, getattr(experiment, "wandb_config", None),
+    )
+
     saved: list[str] = []
     for plot in spec.plots:
         if plot.name not in PLOT_REGISTRY:
@@ -102,4 +113,14 @@ def visualize(
         log.info("Plotting %s -> %s", plot.name, out_path)
         PLOT_REGISTRY[plot.name](ctx, out_path, **plot.kwargs)
         saved.append(out_path)
+        if wandb_mod is not None:
+            try:
+                wandb_mod.log({f"viz/{plot.name}": wandb_mod.Image(out_path)})
+            except Exception as e:  # noqa: BLE001 — best-effort
+                log.warning("wandb image log failed for %s: %s", plot.name, e)
+    if wandb_mod is not None:
+        try:
+            wandb_mod.finish()
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
     return saved

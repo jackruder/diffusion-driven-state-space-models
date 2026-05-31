@@ -320,10 +320,26 @@ class WandbLogger(Logger):
         base_url: URL of a self-hosted W&B server, e.g.
             ``"https://wandb.example.com"``.  When set it overrides the
             ``WANDB_BASE_URL`` environment variable for this process.
+        run_dir: Directory where W&B run artefacts (and ``.wandb_run_id``)
+            land. When set, the constructor persists the active run-id to
+            ``<run_dir>/.wandb_run_id`` so post-training stages (eval,
+            viz, variance) can ``wandb.init(resume="allow", id=...)``
+            against the same run.
+        watch_log: Forwarded to ``wandb.watch`` when not ``None``. One of
+            ``"gradients"`` / ``"parameters"`` / ``"all"`` — see the W&B
+            docs. The model to watch is supplied later via
+            :meth:`watch_model` (the trainer calls it after building the
+            logger).
+        watch_log_freq: ``log_freq`` passed to ``wandb.watch``. Ignored
+            unless ``watch_log`` is set.
         enabled: If ``False`` the logger is a no-op regardless of whether
             ``wandb`` is installed (useful for quick local runs where you
             don't want any W&B traffic).
     """
+
+    # Filename used to persist the run-id under ``run_dir`` so post-training
+    # stages can resume into the same W&B run (cross-stage reconnect).
+    _RUN_ID_FILENAME = ".wandb_run_id"
 
     def __init__(
         self,
@@ -335,9 +351,14 @@ class WandbLogger(Logger):
         config: Optional[Dict[str, Any]] = None,
         base_url: Optional[str] = None,
         run_dir: Optional[str] = None,
+        watch_log: Optional[str] = None,
+        watch_log_freq: int = 100,
         enabled: bool = True,
     ):
         self._active = False
+        self._run_dir = run_dir
+        self._watch_log = watch_log
+        self._watch_log_freq = int(watch_log_freq)
         if not enabled:
             return
 
@@ -379,6 +400,39 @@ class WandbLogger(Logger):
         self._wandb = wandb
         self._active = True
 
+        # Persist the active run-id so post-training stages can resume
+        # into this same W&B run (no env var, no Optuna user_attr — the
+        # run-dir is the only handle every standalone stage already has).
+        if run_dir:
+            self._persist_run_id(run_dir)
+
+    def _persist_run_id(self, run_dir: str) -> None:
+        run = getattr(self._wandb, "run", None)
+        run_id = getattr(run, "id", None) if run is not None else None
+        if not run_id:
+            return
+        try:
+            os.makedirs(run_dir, exist_ok=True)
+            with open(os.path.join(run_dir, self._RUN_ID_FILENAME), "w") as f:
+                f.write(str(run_id))
+        except OSError as e:
+            print(f"[WandbLogger] Could not persist run-id: {e}")
+
+    def watch_model(self, model: Any) -> None:
+        """Call ``wandb.watch`` on ``model`` if watch_log was configured.
+
+        Trainer calls this after construction so the W&B run watches the
+        live module (gradients / parameters per ``watch_log``).
+        """
+        if not self._active or self._watch_log is None or model is None:
+            return
+        try:
+            self._wandb.watch(
+                model, log=self._watch_log, log_freq=self._watch_log_freq,
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort; never break training
+            print(f"[WandbLogger] wandb.watch failed: {e}")
+
     def _log(self, prefix: str, step_key: str, step: int, row: Dict[str, float]) -> None:
         if not self._active:
             return
@@ -395,7 +449,88 @@ class WandbLogger(Logger):
     def on_epoch(self, split: str, epoch: int, row: Dict[str, float]) -> None:
         self._log(f"epoch/{split}", "epoch", epoch, row)
 
+    def _upload_artifacts(self) -> None:
+        """Upload final checkpoint + resolved config as W&B artifacts.
+
+        Best-effort: any failure (missing file, network hiccup, partial
+        W&B install) is swallowed with a warning — close() must always
+        finish so the trainer's ``finally:`` cleanup doesn't mask the
+        underlying training error.
+        """
+        if not self._active or not self._run_dir:
+            return
+        artifact_targets = [
+            ("model", "pth",
+             os.path.join(self._run_dir, "checkpoints", "ckpt_latest.pth")),
+            ("config", "yaml",
+             os.path.join(self._run_dir, "resolved_config.yaml")),
+        ]
+        run = getattr(self._wandb, "run", None)
+        run_id = getattr(run, "id", "") if run is not None else ""
+        for kind, ext, path in artifact_targets:
+            if not os.path.exists(path):
+                continue
+            try:
+                # Name artifacts off the run-id so reruns don't collide
+                # under one canonical name (W&B versions them anyway, but
+                # the human-readable identity stays unique per run).
+                artifact = self._wandb.Artifact(
+                    name=f"{kind}-{run_id or 'run'}", type=kind,
+                )
+                artifact.add_file(path)
+                self._wandb.log_artifact(artifact)
+            except Exception as e:  # noqa: BLE001 — best-effort
+                print(
+                    f"[WandbLogger] Failed to upload {kind} artifact "
+                    f"({path}): {e}"
+                )
+
     def close(self) -> None:
         if self._active:
+            self._upload_artifacts()
             self._wandb.finish()
             self._active = False
+
+
+def resume_run_from_dir(
+    run_dir: str, wandb_config: Optional[Dict[str, Any]],
+) -> Any:
+    """Re-open the train run's W&B session from ``<run_dir>/.wandb_run_id``.
+
+    Returns the live ``wandb`` module on success (with a resumed run
+    attached) or ``None`` if W&B is disabled, the package is missing,
+    the run-id file isn't present, or anything else trips the soft path.
+    Post-training stages (viz / eval / variance) use this so their PNGs
+    and metrics land on the same W&B run produced by training.
+    """
+    if not wandb_config or not bool(wandb_config.get("enabled", True)):
+        return None
+    id_path = os.path.join(run_dir, WandbLogger._RUN_ID_FILENAME)
+    if not os.path.isfile(id_path):
+        return None
+    try:
+        with open(id_path) as f:
+            run_id = f.read().strip()
+    except OSError:
+        return None
+    if not run_id:
+        return None
+    try:
+        import wandb  # noqa: PLC0415
+    except ImportError:
+        return None
+    base_url = wandb_config.get("base_url")
+    if base_url:
+        os.environ["WANDB_BASE_URL"] = base_url
+    try:
+        wandb.init(
+            project=wandb_config.get("project", "ddssm"),
+            entity=wandb_config.get("entity"),
+            id=run_id,
+            resume="allow",
+            dir=run_dir,
+        )
+    except Exception as e:  # noqa: BLE001 — best-effort
+        print(f"[WandbLogger] resume failed: {e}")
+        return None
+    return wandb

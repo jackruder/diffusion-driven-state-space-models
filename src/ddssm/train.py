@@ -199,7 +199,12 @@ class DDSSMTrainer:
         if csv_log_path:
             loggers.append(CSVLogger(path=csv_log_path))
         if wandb_config is not None:
-            loggers.append(WandbLogger(**wandb_config))
+            wandb_logger = WandbLogger(**wandb_config)
+            # ``wandb.watch`` is opt-in via ``watch_log`` in wandb_config;
+            # when set the logger registers grad / param hooks on the
+            # live model so W&B records histograms next to the scalars.
+            wandb_logger.watch_model(self.model)
+            loggers.append(wandb_logger)
         if not quiet:
             loggers.append(
                 ConsoleLogger(every_steps=0),

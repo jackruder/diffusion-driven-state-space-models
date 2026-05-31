@@ -104,4 +104,33 @@ def evaluate(
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2, default=float)
     log.info("Wrote %s", out_path)
+
+    # Cross-stage W&B reconnect: surface eval scalars on the original
+    # training run under the ``eval/`` namespace and snapshot the JSON
+    # as an artifact. Soft-fails so eval still returns the in-memory
+    # dict even when W&B is unreachable.
+    from ..loggers import resume_run_from_dir
+
+    wandb_mod = resume_run_from_dir(
+        run_dir, getattr(experiment, "wandb_config", None),
+    )
+    if wandb_mod is not None:
+        scalar_payload: dict[str, float] = {}
+        for k, v in results.items():
+            try:
+                scalar_payload[f"eval/{k}"] = float(v)
+            except (TypeError, ValueError):
+                continue
+        try:
+            if scalar_payload:
+                wandb_mod.log(scalar_payload)
+            artifact = wandb_mod.Artifact(name="eval-metrics", type="eval")
+            artifact.add_file(out_path)
+            wandb_mod.log_artifact(artifact)
+        except Exception as e:  # noqa: BLE001 — best-effort
+            log.warning("wandb eval log/upload failed: %s", e)
+        try:
+            wandb_mod.finish()
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
     return results

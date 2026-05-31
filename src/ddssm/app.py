@@ -328,6 +328,16 @@ def main(cfg: DictConfig):
     experiment.model_config_yaml = OmegaConf.to_yaml(
         cfg.experiment.model, resolve=True,
     )
+    # Push the fully-resolved experiment dict into ``wandb.config`` so
+    # the W&B UI's hparam table is populated and sweep parallel-coords
+    # plots can actually colour points by hyperparameter. The trainer
+    # forwards this through to ``wandb.init(config=...)``.
+    if getattr(experiment, "wandb_config", None) is not None:
+        resolved_exp = OmegaConf.to_container(
+            cfg.experiment, resolve=True, throw_on_missing=False,
+        )
+        cfg_slot = experiment.wandb_config.setdefault("config", {})
+        cfg_slot.update(resolved_exp or {})
     try:
         experiment.train(device=device, run_dir=run_dir)
     except PreemptError as e:
