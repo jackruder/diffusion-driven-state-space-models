@@ -53,9 +53,17 @@ def _build(coords: Mapping[str, Any]):
 # CUDA resolve on the allocated node. ``source .venv/bin/activate`` is relative
 # to the submit dir (the repo root), so it is user/path agnostic.
 _TEMPEST_SETUP = (
+    # epyc/gpu sbatch shells do not pre-define `module`; source /etc/profile to
+    # get the Lmod function. /etc/profile + Lmod reference unset vars and return
+    # nonzero, so relax `set -eu` around the whole block (pipefail stays on).
+    # Without this, the merged `set -euo pipefail` aborts the job at `module
+    # purge` with "module: command not found".
+    "set +eu",
+    "source /etc/profile",
     "module purge",
     "module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22",
     "source .venv/bin/activate",
+    "set -eu",
 )
 
 # Slurm accounts (Tempest). gpupriority only admits the ``priority-*`` accounts

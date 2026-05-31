@@ -29,8 +29,13 @@ set -uo pipefail
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p runs/pg
 
+# epyc sbatch shells do not pre-define `module`; source /etc/profile for the
+# Lmod function. Relax `set -u` around it (Lmod references unset vars).
+set +u
+source /etc/profile
 module purge
 module load PostgreSQL/17.5-GCCcore-14.3.0
+set -u
 
 # Node-local data dir (never NFS). Fall back to /tmp if SLURM_TMPDIR is unset.
 export PGDATA="${SLURM_TMPDIR:-/tmp/$USER}/ddssm_pgdata"
@@ -57,7 +62,7 @@ host    all    all    ::/0         trust
 HBA
 
 pg_ctl -D "$PGDATA" -l "$PGLOG" -w start
-createdb -U ddssm -h /tmp -p "$PGPORT" round1 2>/dev/null || createdb -U ddssm round1
+createdb -U ddssm -h 127.0.0.1 -p "$PGPORT" round1
 
 NODE=$(hostname)
 echo "PG_URL=postgresql://ddssm@${NODE}:${PGPORT}/round1"
