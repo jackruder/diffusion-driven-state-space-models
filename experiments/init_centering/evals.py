@@ -6,21 +6,22 @@ as the post-training eval surface.
 
 The default ``PilotObjective`` (legacy single-objective) optimises
 ``stage2_elbo_surrogate`` alone. ``PilotMOObjective`` is the
-two-axis multi-objective list used by Round-1 sweeps:
+two-axis multi-objective list used by Round-2 sweeps:
 
-  * ``wallclock_to_target_seconds`` (minimise) — seconds from stage-2
-    start to first hitting ``loss/total <= target``. ``penalty=
-    "csv_tail_time"`` substitutes the trial's full training wall-clock
-    when the target is never reached, keeping misses on the same units
-    as hits. The target itself is set via the eval's
-    ``kwargs.wallclock_to_target.target_value`` Hydra override (the
-    overnight script exposes it as ``WALLCLOCK_TARGET``).
+  * ``wallclock_to_target_step`` (minimise) — training *steps* to first
+    hitting ``loss/total <= target``. ``penalty="csv_tail_step"``
+    substitutes the trial's full step budget when the target is never
+    reached, keeping misses on the same (step) units as hits. Steps are
+    contention-invariant — unlike the round-1 ``wallclock_to_target_seconds``
+    axis they survive GPU packing / per-cell hardware differences. The
+    target is set via the eval's ``kwargs.wallclock_to_target.target_value``
+    Hydra override.
   * ``stage2_elbo_surrogate`` (minimise) — depth of final fit.
 
 The Pareto front separates fast-to-target-but-shallow hparams from
-slow-but-deep ones. ``wallclock_to_relative_target_seconds`` (time to
-90% of the trial's own descent) is computed as a diagnostic but NOT
-an Optuna axis — see report.py.
+slow-but-deep ones. ``wallclock_to_relative_target_*`` (to 90% of the
+trial's own descent) is computed as a diagnostic but NOT an Optuna
+axis — see report.py.
 """
 
 from __future__ import annotations
@@ -41,9 +42,9 @@ PilotObjective = Objective(
 # ``direction: [minimize, minimize]``.
 PilotMOObjective = Objectives(specs=[
     Objective(
-        metric="wallclock_to_target_seconds",
+        metric="wallclock_to_target_step",
         source="json",
-        penalty="csv_tail_time",
+        penalty="csv_tail_step",
     ),
     Objective(
         metric="stage2_elbo_surrogate",

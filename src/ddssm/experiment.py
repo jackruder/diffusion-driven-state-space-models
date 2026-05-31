@@ -93,13 +93,20 @@ class ObjectiveSpec:
       where "never reached" should cost the trial's full training time
       (its compute budget) rather than an unbounded sentinel — keeps
       misses on the same units as hits.
+    * ``"csv_tail_step"`` — substitute the last ``step`` from
+      ``metrics.csv``. The step-denominated sibling of ``csv_tail_time``
+      for *steps*-to-target objectives (e.g.
+      ``wallclock_to_target_step``): a miss costs the full step budget,
+      keeping misses on the same (step) units as hits. Unlike the
+      seconds penalty this is contention-invariant, so it survives GPU
+      packing / hardware differences across cells.
     """
 
     metric: str = "loss/total"
     split: str = "train"
     tail_frac: float = 0.1
     source: Literal["csv", "json"] = "csv"
-    penalty: Literal["inf", "csv_tail_time"] = "inf"
+    penalty: Literal["inf", "csv_tail_time", "csv_tail_step"] = "inf"
 
     def read(self, run_dir_or_csv: str) -> float:
         """Read the objective value from ``run_dir`` (or, legacy: a CSV path).
@@ -116,12 +123,19 @@ class ObjectiveSpec:
     def _apply_penalty(self, run_dir_or_csv: str) -> float:
         """Resolve the configured penalty when the primary value is unavailable."""
         if self.penalty == "csv_tail_time":
-            return self._tail_time_from_csv(run_dir_or_csv)
+            return self._tail_column_from_csv(run_dir_or_csv, "time/elapsed_s")
+        if self.penalty == "csv_tail_step":
+            return self._tail_column_from_csv(run_dir_or_csv, "step")
         return float("inf")
 
     @staticmethod
-    def _tail_time_from_csv(run_dir_or_csv: str) -> float:
-        """Last finite ``time/elapsed_s`` from ``metrics.csv``, or ``+inf``."""
+    def _tail_column_from_csv(run_dir_or_csv: str, column: str) -> float:
+        """Last finite value of ``column`` in ``metrics.csv``, or ``+inf``.
+
+        Backs both ``csv_tail_time`` (``column="time/elapsed_s"``) and
+        ``csv_tail_step`` (``column="step"``): a miss costs the trial's
+        full budget on whichever axis the objective is denominated in.
+        """
         if not run_dir_or_csv:
             return float("inf")
         csv_path = (
@@ -130,12 +144,12 @@ class ObjectiveSpec:
         )
         if not os.path.isfile(csv_path):
             return float("inf")
-        last_time: float | None = None
+        last_value: float | None = None
         try:
             with open(csv_path, "r", newline="") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    raw = row.get("time/elapsed_s", "")
+                    raw = row.get(column, "")
                     if raw in ("", None):
                         continue
                     try:
@@ -143,10 +157,10 @@ class ObjectiveSpec:
                     except (TypeError, ValueError):
                         continue
                     if math.isfinite(v):
-                        last_time = v
+                        last_value = v
         except OSError:
             return float("inf")
-        return last_time if last_time is not None else float("inf")
+        return last_value if last_value is not None else float("inf")
 
     def _read_csv(self, path: str) -> float:
         # If caller passed a run_dir, append the conventional filename.

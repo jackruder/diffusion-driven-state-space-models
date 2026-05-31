@@ -113,10 +113,56 @@ InitAblationMOO = make_config(
 sweep_store(InitAblationMOO, name="init_ablation_moo")
 
 
+# Round-2 narrowed search space — used by EVERY round-2 cell (pinned + learnable).
+# Surgically tightened off the CLEAN round-1 axes (ELBO + steps), per the round-1
+# param-importance + top-20%-concentration analysis:
+#   * base_lr dominates the ELBO response (importance ~0.42) and its bottom
+#     decade [1e-5, 5e-5] is consistently dead -> floor raised to 1e-4.
+#   * dec_mult bottom [0.1, 0.3] is never in any cell's top-20%; the high
+#     ceiling is kept (mlp_per_t prefers ~3-7) -> [0.3, 10].
+#   * lambda_sigma_p / sigma_pert / stage_*_warmup upper tails are rarely
+#     good -> mild upper trims.
+#   * n_pretrain is ~irrelevant (importance ~0.03); drop the dead upper tail.
+#   * anchor_lambda is DROPPED here. It is a no-op for pinned mu_p anyway; for
+#     the learnable cells this means anchor_lambda is NOT swept and falls back to
+#     the StagesB default (~1e-2). Re-add it (wide) if learnable cells should tune
+#     their R_mu_p regulariser — the wide ``init_ablation_moo`` above still has it.
+_INIT_ABLATION_R2_PARAMS = {
+    "experiment.training.stages.n_pretrain":
+        "tag(log, int(interval(5, 300)))",
+    "experiment.training.stages.sigma_pert":
+        "tag(log, interval(1e-3, 3e-2))",
+    "experiment.training.stages.lambda_sigma_p":
+        "tag(log, interval(1e-3, 5e-2))",
+    "experiment.training.stages.base_lr":
+        "tag(log, interval(1e-4, 1e-3))",
+    "experiment.training.stages.dec_mult":
+        "tag(log, interval(0.3, 10.0))",
+    "experiment.training.stages.trans_mult":
+        "tag(log, interval(0.1, 10.0))",
+    "experiment.training.stages.stage_1_warmup_frac":
+        "tag(log, interval(0.05, 0.35))",
+    "experiment.training.stages.stage_2_warmup_frac":
+        "tag(log, interval(0.02, 0.18))",
+}
+
+
+InitAblationMOO_R2 = make_config(
+    hydra_defaults=["_self_", {"override /hydra/sweeper": "ddssm_optuna_moo"}],
+    hydra=dict(
+        sweeper=dict(
+            direction=["minimize", "minimize"],
+            params=_INIT_ABLATION_R2_PARAMS,
+        ),
+    ),
+)
+sweep_store(InitAblationMOO_R2, name="init_ablation_moo_r2")
+
+
 # Back-compat alias. The launcher and CLI examples still reference
 # ``+sweep=init_pilot`` from the Phase-C era; keep the name working so
 # old commands don't break. New code should prefer ``init_ablation``.
 sweep_store(InitAblation, name="init_pilot")
 
 
-__all__ = ["InitAblation", "InitAblationMOO"]
+__all__ = ["InitAblation", "InitAblationMOO", "InitAblationMOO_R2"]

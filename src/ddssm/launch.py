@@ -25,7 +25,12 @@ import sys
 from dataclasses import dataclass, field
 
 from ddssm.experiment import SBatch
-from ddssm.sbatch import PreemptSpec, render_sbatch, submit_sbatch
+from ddssm.sbatch import (
+    PreemptSpec,
+    render_packed_sbatch,
+    render_sbatch,
+    submit_sbatch,
+)
 from ddssm.study import Study, StudyPoint
 
 # Placeholder emitted by preemptive strategies; the orchestrator substitutes
@@ -52,6 +57,12 @@ class PointLaunch:
     is the per-point worker count for multi-worker strategies (multi-node sbatch
     sharing an NFS DB, or local subprocesses sharing a local SQLite DB); ignored
     by single-worker strategies.
+
+    ``n_trials`` is the TOTAL trial budget for the point, split across its
+    ``n_workers`` (~1/n_workers each) — the same meaning whether or not the run
+    is ``preemptive``. ``workers_per_gpu`` packs that many workers onto one GPU
+    (one sbatch per pack) for the ``optuna_packed_node`` strategy; ``1`` (default)
+    keeps one GPU per worker.
     """
 
     strategy: str = "optuna_single_node"
@@ -59,6 +70,7 @@ class PointLaunch:
     n_trials: int = 40
     n_jobs: int = 1
     n_workers: int = 1
+    workers_per_gpu: int = 1
     resources: ResourceSpec | None = None
     extra_overrides: tuple[str, ...] = ()
     preemptive: bool = False
@@ -118,7 +130,10 @@ class LaunchStrategy(abc.ABC):
     allowed for this strategy. ``n_workers_per_point`` reports how many parallel
     workers a multi-worker strategy emits per point (the orchestrator iterates
     ``range(n_workers_per_point(pl))`` and passes ``worker_idx`` to
-    :meth:`hydra_overrides`).
+    :meth:`hydra_overrides`). ``workers_per_job`` reports how many of those
+    workers share ONE sbatch (and thus one GPU): the default ``1`` keeps the
+    historical one-sbatch-per-worker shape; a packed strategy returns >1 to
+    co-locate that many workers on a single GPU.
     """
 
     name: str
@@ -126,6 +141,9 @@ class LaunchStrategy(abc.ABC):
     supports_local: bool = True
 
     def n_workers_per_point(self, pl: PointLaunch) -> int:
+        return 1
+
+    def workers_per_job(self, pl: PointLaunch) -> int:
         return 1
 
     @abc.abstractmethod
@@ -206,7 +224,17 @@ class _MultiWorkerOptunaBase(LaunchStrategy):
         # ``OptunaSweeperImpl.setup``), so under preemptive runs we add a
         # ``$DDSSM_INVOC`` stamp (set in the sbatch preamble) to keep retry
         # trial sub-dirs from colliding across requeues.
-        n_trials_value = "__N_PER_WORKER__" if pl.preemptive else str(pl.n_trials)
+        #
+        # ``pl.n_trials`` is the TOTAL trial budget for the cell, divided across
+        # its ``n_workers``. Preemptive runs split it dynamically from the
+        # remaining budget (``$N_PER_WORKER``, computed in the sbatch preamble);
+        # non-preemptive runs split it statically here. Either way each worker
+        # gets a ~1/n_workers share, so ``n_trials`` means the same thing
+        # regardless of ``preemptive`` (it is NOT per-worker).
+        n_trials_value = (
+            "__N_PER_WORKER__" if pl.preemptive
+            else str(math.ceil(pl.n_trials / max(1, pl.n_workers)))
+        )
         subdir = (
             f"hydra.sweep.subdir=w{worker_idx}_${{oc.env:DDSSM_INVOC}}_${{hydra.job.num}}"
             if pl.preemptive
@@ -237,6 +265,28 @@ class OptunaMultiNode(_MultiWorkerOptunaBase):
 
     name = "optuna_multi_node"
     supports_local = False
+
+
+class OptunaPackedNode(_MultiWorkerOptunaBase):
+    """Optuna multirun packing ``workers_per_gpu`` workers onto ONE GPU per sbatch.
+
+    Like :class:`OptunaMultiNode` (workers share one DB via the multi-worker
+    override layout — per-worker ``hydra.sweep.subdir``, shared ``study_name`` /
+    ``storage`` / ``sweep.dir``), but instead of one single-GPU sbatch *per
+    worker*, the orchestrator emits one sbatch per group of ``pl.workers_per_gpu``
+    workers that all run on the job's single GPU. Each worker is CPU-thread-pinned
+    to ``resources.cpus // workers_per_gpu`` so K procs do not oversubscribe the
+    allocation. Use when a trial's GPU-memory footprint is small (<<GPU) so many
+    trials fit on one card and GPU parallelism beats one-GPU-per-trial waste.
+
+    Local execution is rejected — the orchestrator renders this for sbatch only.
+    """
+
+    name = "optuna_packed_node"
+    supports_local = False
+
+    def workers_per_job(self, pl):
+        return max(1, pl.workers_per_gpu)
 
 
 class LocalParallel(_MultiWorkerOptunaBase):
@@ -277,6 +327,7 @@ _STRATEGIES: dict[str, LaunchStrategy] = {
         SingleJob(),
         OptunaSingleNode(),
         OptunaMultiNode(),
+        OptunaPackedNode(),
         LocalParallel(),
         SlurmArray(),
     )
@@ -357,30 +408,57 @@ class StudyOrchestrator:
                 )
             _validate_preempt_compat(pl, point)
             n_w = strategy.n_workers_per_point(pl)
+            per_job = max(1, strategy.workers_per_job(pl))
             base_name = _job_name(point, ctx)
-            for w_idx in range(n_w):
-                overrides = strategy.hydra_overrides(point, pl, ctx, worker_idx=w_idx)
-                overrides += self._variant_overrides(point, size)
-                overrides += list(pl.extra_overrides)
+
+            def _worker_overrides(w_idx: int) -> list[str]:
+                ov = strategy.hydra_overrides(point, pl, ctx, worker_idx=w_idx)
+                ov += self._variant_overrides(point, size)
+                ov += list(pl.extra_overrides)
                 if seed is not None:
-                    overrides.append(f"experiment.seed={seed}")
-                job = base_name if n_w == 1 else f"{base_name}_w{w_idx}"
+                    ov.append(f"experiment.seed={seed}")
+                return ov
+
+            # Group workers into sbatch jobs: one-per-job for the historical
+            # shapes (per_job == 1), or ``workers_per_gpu``-sized packs.
+            groups = [
+                list(range(i, min(i + per_job, n_w)))
+                for i in range(0, n_w, per_job)
+            ]
+            for g_idx, w_idxs in enumerate(groups):
+                # ``experiment=<point.name>`` is the registered preset; the
+                # job_name + output_pattern carry the worker/group/seed suffix so
+                # each sbatch is distinguishable in squeue and logs separately.
+                if per_job == 1:
+                    # One sbatch per worker: bare name for a lone worker, else _w<i>.
+                    job = base_name if n_w == 1 else f"{base_name}_w{w_idxs[0]}"
+                else:
+                    # Packed: bare name when it's the only group, else _g<i>.
+                    job = base_name if len(groups) == 1 else f"{base_name}_g{g_idx}"
+                # PreemptSpec divides the cell-wide budget by the TOTAL worker
+                # count (n_w), not the per-job group size.
                 preempt = (
-                    self._make_preempt_spec(pl, ctx, point, n_w, w_idx)
+                    self._make_preempt_spec(pl, ctx, point, n_w, w_idxs[0])
                     if pl.preemptive else None
                 )
-                # ``experiment=<point.name>`` is the registered preset (never the
-                # job-name suffix); ``job_name`` + ``output_pattern`` carry the
-                # worker/seed suffix so each sbatch is distinguishable in
-                # ``squeue`` and writes to a unique log directory.
-                script = render_sbatch(
-                    point.name,
-                    exp_sbatch=pl.resources,
-                    hydra_overrides=overrides,
-                    cli_overrides={"job_name": f"ddssm-{job}"},
-                    output_pattern=f"runs/{job}/slurm-%j.out",
-                    preempt=preempt,
-                )
+                if per_job == 1:
+                    script = render_sbatch(
+                        point.name,
+                        exp_sbatch=pl.resources,
+                        hydra_overrides=_worker_overrides(w_idxs[0]),
+                        cli_overrides={"job_name": f"ddssm-{job}"},
+                        output_pattern=f"runs/{job}/slurm-%j.out",
+                        preempt=preempt,
+                    )
+                else:
+                    script = render_packed_sbatch(
+                        point.name,
+                        exp_sbatch=pl.resources,
+                        worker_overrides=[(w, _worker_overrides(w)) for w in w_idxs],
+                        cli_overrides={"job_name": f"ddssm-{job}"},
+                        output_pattern=f"runs/{job}/slurm-%j.out",
+                        preempt=preempt,
+                    )
                 out.append((job, script))
         return out
 
@@ -604,5 +682,6 @@ if __name__ == "__main__":
 __all__ = [
     "ResourceSpec", "PointLaunch", "LaunchStrategy", "StudyOrchestrator",
     "SingleJob", "OptunaSingleNode", "OptunaMultiNode", "LocalParallel",
+    "OptunaPackedNode",
     "register_study", "STUDY_REGISTRY",
 ]

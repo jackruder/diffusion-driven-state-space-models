@@ -45,13 +45,52 @@ def _build(coords: Mapping[str, Any]):
 
 
 def _launch(point: StudyPoint) -> PointLaunch:
-    # Single-node Optuna sweep per point. Resource shape could scale off
-    # ``point.coords`` (e.g. larger latent -> more cpus); uniform for now.
+    """Round-2 launch intent: GPU-packed Optuna MOO, one GPU per cell.
+
+    Round-2 sweeps the ``per_t`` cells only (drop ``fixed`` at launch via
+    ``--select tracking_mode=per_t``). Every cell uses the narrowed
+    ``init_ablation_moo_r2`` search space. Each trial is <4 GiB, so we pack
+    workers onto one GPU (4 CPUs each, thread-pinned — the round-1 starvation
+    fix). ``n_trials`` is the cell-total budget split across packed workers
+    (~``n_trials / n_workers`` each), independent of ``preemptive``.
+
+    GPU pool = 1 A100 + 1 A40 on ``gpupriority`` (non-preempt) + 10 A40 on
+    ``gpuunsafe`` (preemptible → checkpoint/resume, ADR-0009). The two
+    gpupriority GPUs are dedicated to two named, non-preemptive cells (so the
+    rest can't grab them); everything else runs preemptibly on gpuunsafe.
+    """
+    cell = point.coords["cell"]
+    sweep = "init_ablation_moo_r2"  # narrowed r2 for every cell
+
+    # --- gpupriority (non-preempt): two dedicated cells, the 2 priority GPUs ---
+    # Headline cell -> the A100 (2x memory -> 2x the pack). 64 / 16 = 4 trials/worker.
+    if cell.name == "init_mlp_pinned_per_t":
+        return PointLaunch(
+            strategy="optuna_packed_node", sweep=sweep,
+            n_trials=64, n_workers=16, workers_per_gpu=16, preemptive=False,
+            resources=ResourceSpec(
+                partition="gpupriority", gpus=1, cpus=64, mem="96G", time="24:00:00",
+                extra_flags=("--gres=gpu:a100:1",),  # confirm Tempest's A100 gres name
+            ),
+        )
+    # Second non-preempt cell -> the gpupriority A40 (swap this name to re-pick).
+    if cell.name == "init_mlp_learnable_per_t":
+        return PointLaunch(
+            strategy="optuna_packed_node", sweep=sweep,
+            n_trials=64, n_workers=8, workers_per_gpu=8, preemptive=False,
+            resources=ResourceSpec(
+                partition="gpupriority", gpus=1, cpus=32, mem="48G", time="24:00:00",
+                extra_flags=("--gres=gpu:a40:1",),  # confirm Tempest's A40 gres name
+            ),
+        )
+
+    # --- gpuunsafe (preemptible): every other cell, 8 packed workers on an A40 ---
     return PointLaunch(
-        strategy="optuna_single_node",
-        sweep="init_ablation_moo",
-        n_trials=40,
-        resources=ResourceSpec(time="08:00:00", gpus=1, cpus=4, mem="32G"),
+        strategy="optuna_packed_node", sweep=sweep,
+        n_trials=64, n_workers=8, workers_per_gpu=8, preemptive=True,
+        resources=ResourceSpec(
+            partition="gpuunsafe", gpus=1, cpus=32, mem="48G", time="24:00:00",
+        ),
     )
 
 

@@ -10,6 +10,7 @@ from ddssm.launch import (
     LaunchContext,
     LocalParallel,
     OptunaMultiNode,
+    OptunaPackedNode,
     OptunaSingleNode,
     PointLaunch,
     SingleJob,
@@ -121,7 +122,12 @@ def test_local_parallel_emits_n_per_worker_placeholder_when_preemptive() -> None
 
 
 def test_strategies_emit_literal_n_trials_when_not_preemptive() -> None:
-    """Regression: the placeholder must NOT leak into non-preemptive renders."""
+    """Non-preemptive renders carry a literal n_trials (no placeholder leak).
+
+    Single-node gets the full total (one worker == the whole budget); multi-worker
+    statically splits the total across n_workers — the SAME total-per-cell meaning
+    as the preemptive ``$N_PER_WORKER`` path (NOT n_trials *per* worker).
+    """
     ctx = LaunchContext("pre", "store", "sweeps")
     sp = StudyPoint("p", {}, {}, {})
 
@@ -134,8 +140,24 @@ def test_strategies_emit_literal_n_trials_when_not_preemptive() -> None:
         strategy="optuna_multi_node", sweep="sw", n_trials=12, n_workers=3,
     )
     ov_multi = OptunaMultiNode().hydra_overrides(sp, pl_multi, ctx)
-    assert "hydra.sweeper.n_trials=12" in ov_multi
+    # 12 total / 3 workers = 4 each (NOT 12 per worker).
+    assert "hydra.sweeper.n_trials=4" in ov_multi
     assert "__N_PER_WORKER__" not in " ".join(ov_multi)
+
+
+def test_multi_worker_total_n_trials_split_across_workers() -> None:
+    """``n_trials`` is the cell total: non-preemptive multi-worker splits it (ceil)."""
+    ctx = LaunchContext("pre", "store", "sweeps")
+    sp = StudyPoint("p", {}, {}, {})
+    # 64 total across 8 packed workers -> 8 each; across 16 -> 4 each.
+    ov8 = OptunaPackedNode().hydra_overrides(
+        sp, PointLaunch(strategy="optuna_packed_node", sweep="sw",
+                        n_trials=64, n_workers=8, workers_per_gpu=8), ctx)
+    assert "hydra.sweeper.n_trials=8" in ov8
+    ov16 = OptunaPackedNode().hydra_overrides(
+        sp, PointLaunch(strategy="optuna_packed_node", sweep="sw",
+                        n_trials=64, n_workers=16, workers_per_gpu=16), ctx)
+    assert "hydra.sweeper.n_trials=4" in ov16
 
 
 def test_slurm_array_is_still_stubbed() -> None:
@@ -410,9 +432,16 @@ def test_render_preemptive_runs_child_in_background_with_wait() -> None:
 
 
 def test_render_non_preemptive_unchanged_regression() -> None:
-    """Default (non-preemptive) render: none of the preempt-mode artifacts leak in."""
+    """A non-preemptive render emits none of the preempt-mode artifacts.
+
+    (Decoupled from the study's default launch policy via an explicit
+    non-preemptive override — init_centering's own default is now preemptive.)
+    """
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
-    jobs = _orch().render(pts)
+    override = lambda p: PointLaunch(
+        strategy="optuna_single_node", sweep="init_ablation_moo", n_trials=7,
+    )
+    jobs = _orch().render(pts, launch_override=override)
     assert jobs, "expected at least one job"
     script = jobs[0][1]
     assert "--requeue" not in script
@@ -680,7 +709,8 @@ def test_orchestrator_run_local_preemptive_sets_env_and_literal_n_trials(
 
 
 def test_orchestrator_run_local_non_preemptive_unchanged(monkeypatch, tmp_path) -> None:
-    """Regression: without preemptive=True, no env mutation and no n_trials substitution."""
+    """Without preemptive=True: no env mutation, and n_trials is the (already
+    divided) literal — no ``__N_PER_WORKER__`` placeholder to substitute."""
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
     override = lambda p: PointLaunch(
         strategy="local_parallel", sweep="init_ablation_moo", n_trials=6, n_workers=2,
@@ -711,8 +741,8 @@ def test_orchestrator_run_local_non_preemptive_unchanged(monkeypatch, tmp_path) 
         if env is not None:
             assert "DDSSM_PREEMPTIVE" not in env
             assert "DDSSM_WORKER_ID" not in env
-        # Literal n_trials, no placeholder.
-        assert "hydra.sweeper.n_trials=6" in cmd
+        # Total (6) split across 2 workers -> 3 each; literal, no placeholder.
+        assert "hydra.sweeper.n_trials=3" in cmd
         assert not any("__N_PER_WORKER__" in a for a in cmd)
 
 
@@ -753,3 +783,96 @@ def test_submit_shells_out_once_per_file(tmp_path, monkeypatch) -> None:
     written = sorted(str(p) for p in write_dir.glob("*.sbatch"))
     assert len(written) == 2
     assert sorted(calls) == written
+
+
+# --- Packed-node strategy (K workers per GPU) -------------------------------
+
+
+def _force_packed(*, n_workers: int, workers_per_gpu: int, cpus: int = 32,
+                  preemptive: bool = False):
+    """Launch override: rewrite every point to the optuna_packed_node strategy."""
+
+    def _o(point):
+        return PointLaunch(
+            strategy="optuna_packed_node",
+            sweep="init_ablation_moo_r2",
+            n_trials=64,
+            n_workers=n_workers,
+            workers_per_gpu=workers_per_gpu,
+            preemptive=preemptive,
+            resources=SBatch(partition="gpuunsafe", gpus=1, cpus=cpus, mem="48G"),
+        )
+
+    return _o
+
+
+def test_packed_node_reports_workers_per_job() -> None:
+    pl = PointLaunch(strategy="optuna_packed_node", n_workers=8, workers_per_gpu=8)
+    s = OptunaPackedNode()
+    assert s.n_workers_per_point(pl) == 8
+    assert s.workers_per_job(pl) == 8
+    # Other strategies pack one worker per sbatch.
+    assert OptunaMultiNode().workers_per_job(pl) == 1
+
+
+def test_render_packed_single_group_one_sbatch_k_workers() -> None:
+    """8 workers, workers_per_gpu=8 → ONE sbatch (base name) running 8 packed procs."""
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    jobs = _orch().render(pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8))
+    # A single group → no _g suffix.
+    assert [j for j, _ in jobs] == ["init_mlp_pinned_per_t__1d"]
+    _, script = jobs[0]
+    # One CPU allocation for the whole pack; each proc pinned to cpus // K = 4.
+    assert "--cpus-per-task=32" in script
+    assert "--gres=gpu:1" in script
+    # 8 distinct workers, each thread-pinned and carrying its own worker id + subdir.
+    for w in range(8):
+        assert f"DDSSM_WORKER_ID={w} OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 python -m ddssm.app" in script
+        assert f"hydra.sweep.subdir=w{w}_" in script
+    assert script.count("PIDS+=($!)") == 8
+    # All share one study + DB.
+    assert script.count("hydra.sweeper.study_name=abl_init_mlp_pinned_per_t__1d") == 8
+
+
+def test_render_packed_multi_group_splits_into_g_suffixed_jobs() -> None:
+    """4 workers, workers_per_gpu=2 → 2 sbatch jobs (_g0, _g1) of 2 workers each."""
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    jobs = _orch().render(pts, launch_override=_force_packed(
+        n_workers=4, workers_per_gpu=2, cpus=8))
+    assert [j for j, _ in jobs] == [
+        "init_mlp_pinned_per_t__1d_g0",
+        "init_mlp_pinned_per_t__1d_g1",
+    ]
+    # Group 0 packs workers 0,1; group 1 packs workers 2,3 — pinned to cpus//2 = 4.
+    _, g0 = jobs[0]
+    assert "DDSSM_WORKER_ID=0 OMP_NUM_THREADS=4" in g0
+    assert "DDSSM_WORKER_ID=1 OMP_NUM_THREADS=4" in g0
+    assert g0.count("PIDS+=($!)") == 2
+    _, g1 = jobs[1]
+    assert "DDSSM_WORKER_ID=2 OMP_NUM_THREADS=4" in g1
+    assert "DDSSM_WORKER_ID=3 OMP_NUM_THREADS=4" in g1
+
+
+def test_render_packed_preemptive_shares_preamble_and_fans_out_trap() -> None:
+    """Preemptive packed job: one launch_remaining preamble, N_PER_WORKER over the
+    cell total, and a trap that fans the signal out to every packed PID."""
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    jobs = _orch().render(pts, launch_override=_force_packed(
+        n_workers=8, workers_per_gpu=8, preemptive=True))
+    _, script = jobs[0]
+    assert "#SBATCH --requeue" in script
+    # One shared preamble; per-worker trials bound to the shared budget.
+    assert script.count("python -m ddssm.launch_remaining") == 1
+    assert "N_PER_WORKER=$(( (N_REMAINING + 8 - 1) / 8 ))" in script
+    assert "hydra.sweeper.n_trials=$N_PER_WORKER" in script
+    # Fan-out trap over all PIDs (not a single $PID).
+    assert 'for _p in "${PIDS[@]}"; do kill -USR1 "$_p"' in script
+    # Worker id is set per-process, not a single global export.
+    assert "export DDSSM_PREEMPTIVE=1\n" in script
+    assert "DDSSM_WORKER_ID=0 OMP_NUM_THREADS=4" in script
+
+
+def test_packed_node_rejects_local() -> None:
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    with pytest.raises(ValueError, match="local"):
+        _orch().run_local(pts, launch_override=_force_packed(n_workers=2, workers_per_gpu=2))

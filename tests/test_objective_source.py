@@ -220,3 +220,68 @@ def test_moo_objective_penalty_survives_instantiation(tmp_path: Path) -> None:
         device=torch.device("cpu"), run_dir=str(tmp_path),
     )
     assert isinstance(values, list) and len(values) == 1
+
+
+# ---------------------------------------------------------------------------
+# csv_tail_step penalty — step-denominated sibling of csv_tail_time, for
+# steps-to-target objectives (e.g. ``wallclock_to_target_step``). A miss costs
+# the full step budget, keeping misses on the same units as hits.
+# ---------------------------------------------------------------------------
+
+
+def test_csv_tail_step_penalty_on_miss(tmp_path: Path) -> None:
+    """JSON metric absent + ``penalty='csv_tail_step'`` ⇒ last CSV ``step``."""
+    _write_csv(tmp_path / "metrics.csv", [
+        {"step": "100", "split": "train", "loss/total": "5.0"},
+        {"step": "4900", "split": "train", "loss/total": "1.0"},
+        {"step": "5000", "split": "train", "loss/total": "0.5"},
+    ])
+    (tmp_path / "metrics.json").write_text(json.dumps({"other": 1.0}))
+    spec = ObjectiveSpec(
+        metric="wallclock_to_target_step", source="json", penalty="csv_tail_step",
+    )
+    # Target never reached → cost the full step budget (last step = 5000).
+    assert spec.read(str(tmp_path)) == pytest.approx(5000.0)
+
+
+def test_csv_tail_step_hit_returns_recorded_value(tmp_path: Path) -> None:
+    """When the metric IS present, the step penalty is never consulted."""
+    (tmp_path / "metrics.json").write_text(
+        json.dumps({"wallclock_to_target_step": 1234})
+    )
+    spec = ObjectiveSpec(
+        metric="wallclock_to_target_step", source="json", penalty="csv_tail_step",
+    )
+    assert spec.read(str(tmp_path)) == pytest.approx(1234.0)
+
+
+def test_csv_tail_step_returns_inf_without_csv(tmp_path: Path) -> None:
+    """Miss + no ``metrics.csv`` ⇒ ``+inf`` (no step budget to fall back on)."""
+    (tmp_path / "metrics.json").write_text(json.dumps({"other": 1.0}))
+    spec = ObjectiveSpec(
+        metric="wallclock_to_target_step", source="json", penalty="csv_tail_step",
+    )
+    result = spec.read(str(tmp_path))
+    assert math.isinf(result) and result > 0
+
+
+def test_csv_tail_step_survives_instantiation(tmp_path: Path) -> None:
+    """``penalty='csv_tail_step'`` survives the hydra-zen instantiate round-trip."""
+    from hydra_zen import instantiate
+
+    from ddssm.builders import Objective as ObjectiveCfg, Objectives as ObjectivesCfg
+    from ddssm.experiment import _as_objective_spec
+
+    cfg = ObjectivesCfg(specs=[
+        ObjectiveCfg(
+            metric="wallclock_to_target_step", source="json", penalty="csv_tail_step",
+        ),
+    ])
+    obj = instantiate(cfg)
+    spec = _as_objective_spec(obj.specs[0])
+    assert spec.penalty == "csv_tail_step"
+    _write_csv(tmp_path / "metrics.csv", [
+        {"step": "5000", "split": "train", "loss/total": "0.5"},
+    ])
+    (tmp_path / "metrics.json").write_text(json.dumps({"other": 1.0}))
+    assert spec.read(str(tmp_path)) == pytest.approx(5000.0)

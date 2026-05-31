@@ -208,6 +208,125 @@ def _render_preempt_preamble(ps: PreemptSpec) -> list[str]:
     ]
 
 
+def render_packed_sbatch(
+    name: str,
+    *,
+    exp_sbatch: SBatch | None,
+    worker_overrides: list[tuple[int, list[str]]],
+    cli_overrides: dict[str, object] | None = None,
+    output_pattern: str | None = None,
+    preempt: PreemptSpec | None = None,
+) -> str:
+    """Render ONE sbatch that runs K workers packed on the job's GPU(s).
+
+    ``worker_overrides`` is a list of ``(worker_idx, hydra_overrides)`` — one
+    entry per packed worker. All K workers share the job's single GPU and the
+    cell's Optuna DB (same ``study_name`` / ``storage`` / ``sweep.dir``); each is
+    pinned to ``spec.cpus // K`` CPU threads via ``OMP_NUM_THREADS`` /
+    ``MKL_NUM_THREADS`` so K procs × that-many threads = ``spec.cpus`` with no
+    oversubscription (the actual round-1 fix — round-1 starved 6 procs on 4 CPUs).
+
+    Under ``preempt`` the shared preamble runs ``launch_remaining`` once and binds
+    ``$N_PER_WORKER``; each worker exports its own ``DDSSM_WORKER_ID`` inline, and
+    a single ``trap`` fans the preempt signal out to all packed PIDs.
+    """
+    if not worker_overrides:
+        raise ValueError("render_packed_sbatch needs at least one worker")
+    spec = _resolve(name=name, exp_sbatch=exp_sbatch, overrides=cli_overrides or {})
+    log_pattern = output_pattern or f"runs/{name}/slurm-%j.out"
+    k = len(worker_overrides)
+    cpus_per_worker = max(1, spec.cpus // k)
+
+    lines: list[str] = [
+        "#!/bin/bash",
+        f"#SBATCH --job-name={spec.job_name}",
+        f"#SBATCH --partition={spec.partition}",
+        f"#SBATCH --time={spec.time}",
+        f"#SBATCH --gres=gpu:{spec.gpus}",
+        f"#SBATCH --cpus-per-task={spec.cpus}",
+        f"#SBATCH --mem={spec.mem}",
+        f"#SBATCH --nodes={spec.nodes}",
+        f"#SBATCH --output={log_pattern}",
+    ]
+    if preempt is not None:
+        lines += [
+            "#SBATCH --requeue",
+            f"#SBATCH --signal=B:USR1@{preempt.grace_seconds}",
+            "#SBATCH --open-mode=append",
+        ]
+    for flag in spec.extra_flags:
+        lines.append(f"#SBATCH {flag}")
+
+    lines += [
+        "set -uo pipefail",
+        'cd "$SLURM_SUBMIT_DIR"',
+    ]
+    if preempt is not None:
+        lines += _render_packed_preempt_preamble(preempt)
+
+    lines.append("PIDS=()")
+    if preempt is not None:
+        # Fan the preempt signal out to every packed worker so each trainer's
+        # handler checkpoints its in-flight trial and raises PreemptError.
+        lines.append(
+            "trap 'for _p in \"${PIDS[@]}\"; do kill -USR1 \"$_p\" 2>/dev/null; done; wait' USR1 TERM"
+        )
+
+    for worker_idx, overrides in worker_overrides:
+        ovr = list(overrides)
+        if preempt is not None:
+            ovr = [o.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER") for o in ovr]
+        flag_args = [o for o in ovr if o.startswith("--")]
+        kv_args = [o for o in ovr if not o.startswith("--")]
+        flags_blob = " ".join(_shell_quote(o) for o in flag_args)
+        kvs_blob = " ".join(_shell_quote(o) for o in kv_args)
+        parts = [
+            f"DDSSM_WORKER_ID={worker_idx}",
+            f"OMP_NUM_THREADS={cpus_per_worker}",
+            f"MKL_NUM_THREADS={cpus_per_worker}",
+            "python -m ddssm.app",
+        ]
+        if flags_blob:
+            parts.append(flags_blob)
+        parts.append(f"experiment={name}")
+        if kvs_blob:
+            parts.append(kvs_blob)
+        parts.append('"$@" &')
+        lines.append(" ".join(parts))
+        lines.append("PIDS+=($!)")
+
+    lines += [
+        "STATUS=0",
+        'for _p in "${PIDS[@]}"; do wait "$_p" || STATUS=$?; done',
+        "exit $STATUS",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _render_packed_preempt_preamble(ps: PreemptSpec) -> list[str]:
+    """Shared preempt preamble for a packed (K-workers-one-GPU) job.
+
+    Like :func:`_render_preempt_preamble` but for the packed shape: it computes
+    the cell-wide remaining budget ONCE (``ps.n_workers`` is the cell total, so
+    ``$N_PER_WORKER`` is the per-worker slice across all packed workers), exports
+    the shared ``DDSSM_INVOC`` + ``DDSSM_PREEMPTIVE`` env, and leaves the
+    per-worker ``DDSSM_WORKER_ID`` export and the signal ``trap`` to
+    :func:`render_packed_sbatch` (they are per-process / fan-out, not global).
+    """
+    return [
+        "N_REMAINING=$(python -m ddssm.launch_remaining \\",
+        f"    --storage {ps.storage_url} --study {ps.study_name} \\",
+        f"    --target {ps.target} --cleanup-running-older-than 60)",
+        'if [ "$N_REMAINING" -le 0 ]; then',
+        '    echo "[preempt] target reached, exiting cleanly"',
+        "    exit 0",
+        "fi",
+        f"N_PER_WORKER=$(( (N_REMAINING + {ps.n_workers} - 1) / {ps.n_workers} ))",
+        "export DDSSM_INVOC=$(date +%s)",
+        "export DDSSM_PREEMPTIVE=1",
+    ]
+
+
 def _shell_quote(s: str) -> str:
     """Quote ``s`` for safe embedding in a generated bash script."""
     if not s or any(ch in s for ch in " \t\n\"'\\$`!*?(){}[]<>|&;#"):
@@ -228,4 +347,7 @@ def submit_sbatch(path: str) -> str:
     return result.stdout.strip()
 
 
-__all__ = ["DEFAULT_SBATCH", "PreemptSpec", "render_sbatch", "submit_sbatch"]
+__all__ = [
+    "DEFAULT_SBATCH", "PreemptSpec",
+    "render_sbatch", "render_packed_sbatch", "submit_sbatch",
+]
