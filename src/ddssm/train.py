@@ -6,6 +6,7 @@ there.
 """
 
 import os
+import math
 import signal
 from typing import TYPE_CHECKING, Any, Callable, final
 from contextlib import nullcontext, contextmanager
@@ -168,6 +169,10 @@ class DDSSMTrainer:
         # StageOrchestrator); 0 for single-fit runs with no stages. Logged as
         # ``stage/idx`` so multi-stage curves are interpretable from the CSV.
         self._current_stage_idx: int = 0
+        # Opt-in fail-fast: when True, a non-finite optimized loss raises
+        # instead of silently NaN-poisoning the weights. Off by default so
+        # existing runs are unchanged; the logger always counts it regardless.
+        self.abort_on_nonfinite_loss: bool = False
         # ADR-0004: active loss object (installed by orchestrator per
         # stage; constructed lazily at fit() start otherwise).
         from .losses import Loss
@@ -723,6 +728,11 @@ class DDSSMTrainer:
                         accum_metrics = self._accumulate_metrics(accum_metrics, metrics)
                         accum_weight += weight
 
+                    if self.abort_on_nonfinite_loss and not math.isfinite(accum_loss):
+                        raise FloatingPointError(
+                            f"Non-finite training loss ({accum_loss}) at step "
+                            f"{step}; aborting (abort_on_nonfinite_loss=True)."
+                        )
                     self._optimizer_step(scaler=scaler, amp=amp)
                     accum_metrics = self._finalize_accum_metrics(accum_metrics)
 

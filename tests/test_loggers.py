@@ -59,6 +59,23 @@ def test_csv_logger_fills_missing_keys_with_restval(tmp_path: Path):
     assert float(val_row["loss/total"]) == 2.0
 
 
+def test_metric_store_counts_nonfinite(caplog):
+    """NaN/Inf metrics are counted into nonfinite/total and warned (deduped)."""
+    import logging
+
+    store = MetricStore(spec=[MetricSpec("loss/*", "last")], loggers=[])
+    with caplog.at_level(logging.WARNING, logger="ddssm.loggers"):
+        store.update("train", {"loss/total": float("nan")})
+        row = store.step_end("train", 1)
+    assert row["nonfinite/total"] == 1.0
+    assert "Non-finite" in caplog.text
+
+    # A finite step doesn't increment, and a healthy row carries the 0-baseline.
+    store2 = MetricStore(spec=[MetricSpec("loss/*", "last")], loggers=[])
+    store2.update("train", {"loss/total": 1.0})
+    assert store2.step_end("train", 1)["nonfinite/total"] == 0.0
+
+
 def test_metric_store_val_uses_mean_meter_train_uses_last(tmp_path: Path):
     """split_spec gives val mean meters (set-average) while train stays 'last'."""
     store = MetricStore(
