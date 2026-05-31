@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 from ddssm.experiment import SBatch
 
-# Project default — mirrors `submitit_slurm.yaml`.
+# Project default Slurm resources for a single-job render.
 DEFAULT_SBATCH = SBatch(
     partition="gpu",
     time="04:00:00",

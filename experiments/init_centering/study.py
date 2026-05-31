@@ -62,13 +62,14 @@ _UNSAFE_ACCOUNT = "--account=group-michaelwojnowicz"
 
 
 def _launch(point: StudyPoint) -> PointLaunch:
-    """Round-2 launch intent: GPU-packed Optuna MOO, one GPU per cell.
+    """Round-1 (fresh restart) launch intent: GPU-packed Optuna MOO, one GPU/cell.
 
-    Round-2 sweeps the ``per_t`` cells only (drop ``fixed`` at launch via
-    ``--select tracking_mode=per_t``). Every cell uses the narrowed
-    ``init_ablation_moo_r2`` search space. Each trial is <4 GiB, so we pack
-    workers onto one GPU (4 CPUs each, thread-pinned — the round-1 starvation
-    fix). ``n_trials`` is the cell-total budget split across packed workers
+    Every cell uses the WIDE ``init_ablation_moo`` search space (the full
+    round-1 priors). The narrowed ``init_ablation_moo_r2`` space was derived
+    from round-1 data that a since-found code bug invalidated, so we restart
+    from scratch on the wide ranges. Each trial is <4 GiB, so we pack workers
+    onto one GPU (4 CPUs each, thread-pinned — the round-1 starvation fix).
+    ``n_trials`` is the cell-total budget split across packed workers
     (~``n_trials / n_workers`` each), independent of ``preemptive``.
 
     GPU pool = 1 A100 + 1 A40 on ``gpupriority`` (non-preempt) + 10 A40 on
@@ -77,7 +78,7 @@ def _launch(point: StudyPoint) -> PointLaunch:
     rest can't grab them); everything else runs preemptibly on gpuunsafe.
     """
     cell = point.coords["cell"]
-    sweep = "init_ablation_moo_r2"  # narrowed r2 for every cell
+    sweep = "init_ablation_moo"  # WIDE round-1 priors for every cell
 
     # --- gpupriority (non-preempt): two dedicated cells, the 2 priority GPUs ---
     # Headline cell -> the A100 (2x memory -> 2x the pack). 64 / 16 = 4 trials/worker.
