@@ -35,7 +35,7 @@ def _get_experiment_cfg(name: str):
     from ddssm._experiment_registry import register_experiments
 
     register_experiments()  # puts repo root on sys.path + imports experiments
-    from conf.registry import store
+    from ddssm.stores import store
 
     for entry in store:
         if entry["group"] == "experiment" and entry["name"] == name:

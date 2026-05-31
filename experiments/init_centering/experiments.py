@@ -22,7 +22,7 @@ flow through that Study.
 
 from __future__ import annotations
 
-from conf.registry import experiment_store
+from ddssm.stores import experiment_store
 from experiments._make import experiment
 from experiments.init_centering.data import (
     NonlinBimodalLift1D,

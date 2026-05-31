@@ -50,7 +50,7 @@ from __future__ import annotations
 
 from hydra_zen import make_config
 
-from conf.registry import sweep_store
+from ddssm.stores import sweep_store
 
 _INIT_ABLATION_PARAMS = {
     # Centering-handoff knobs.

@@ -29,7 +29,7 @@ from hydra_zen import builds
 from omegaconf import MISSING
 
 from ddssm.dssd import DDSSM_base
-from conf.registry import model_store
+from ddssm.stores import model_store
 from ddssm.decoder import GaussianDecoder
 from ddssm.encoder import GaussianEncoder
 from ddssm.diffnets import (

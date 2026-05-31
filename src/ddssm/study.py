@@ -128,7 +128,7 @@ class Study:
         return cls(name=name, points=tuple(points), launch=launch, variants=dict(variants or {}))
 
     def register(self, store: Callable[..., Any]) -> None:
-        """Register every point's config into a ``conf.registry`` store."""
+        """Register every point's config into a ``ddssm.stores`` store."""
         for p in self.points:
             store(p.config, name=p.name)
 

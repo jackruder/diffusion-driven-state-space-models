@@ -29,6 +29,10 @@ dependencies = [
 wandb = ["wandb>=0.19"]
 
 [tool.pytest.ini_options]
+# Repo root on sys.path so the top-level ``experiments`` package (intentionally
+# outside ``src/``) imports during collection without relying on
+# ``register_experiments()`` having run first — keeps tests isolation-safe.
+pythonpath = ["."]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]

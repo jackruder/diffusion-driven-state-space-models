@@ -109,7 +109,7 @@ def test_log_sigma_p2_collapse_runs_on_smoke_model() -> None:
     """Snapshot shape + finiteness on a fresh init-centering smoke model."""
     from ddssm._experiment_registry import register_experiments
     from hydra_zen import instantiate
-    from conf.registry import store
+    from ddssm.stores import store
 
     register_experiments()
     cfg = store["experiment"]["experiment", "init_smoke_high_surface"]
