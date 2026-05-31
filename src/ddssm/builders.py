@@ -54,7 +54,7 @@ from .diffnets import (
     ResidualBlockConfig,
     TimeMixerConfig,
 )
-from .dist_heads import GaussianDistHead, MixtureGaussianDistHead
+from .dist_heads import GaussianDistHead
 from .dssd import DDSSM_base, DDSSMHyperParamsConf  # dataclasses
 from .encoder import GaussianEncoder
 from .eval.runner import EvalSpec
@@ -146,7 +146,7 @@ MLPContext = builds(
 #
 # An encoder is built from three slots:
 #   combiner = CompoundCombiner(aggregator=..., fusion=...)
-#   dist_head = GaussianDistHead | MoGDistHead (stub)
+#   dist_head = GaussianDistHead
 # Each builder is ``zen_partial=True`` so the encoder (or another module)
 # supplies shape kwargs at construction time.
 # ---------------------------------------------------------------------------
@@ -224,13 +224,6 @@ def Combiner(*, aggregator, fusion=None):
 
 GaussianDistHeadB = builds(
     GaussianDistHead,
-    populate_full_signature=True,
-    zen_partial=True,
-)
-
-MoGDistHeadB = builds(
-    MixtureGaussianDistHead,
-    K=4,
     populate_full_signature=True,
     zen_partial=True,
 )
@@ -447,7 +440,7 @@ __all__ = [
     "AttentionAggregatorB", "ContextAggregatorB",
     "ConcatLinearFusionB", "DKSFusionB", "GatedFusionB",
     "Combiner",
-    "GaussianDistHeadB", "MoGDistHeadB",
+    "GaussianDistHeadB",
     # Module-slot builders
     "Encoder", "Decoder",
     "GaussTransition",
