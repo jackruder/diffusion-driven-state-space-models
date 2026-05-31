@@ -34,7 +34,6 @@ from experiments.init_centering.evals import (
 )
 from experiments.init_centering.model import SmokeModel
 from experiments.init_centering.hparams import StagesB, Training800, SmokeHparams
-from experiments.init_centering.study import INIT_CENTERING_STUDY
 
 # ---------------------------------------------------------------------------
 # Simple-smoke cell: (zero, pinned, fixed) on the 1D ablation dataset.
@@ -106,6 +105,8 @@ experiment_store(init_smoke_high_surface, name="init_smoke_high_surface")
 # docs/adr/0002-drop-canonical-controls.md (σ_pert > 0 is mandatory; n_pretrain=0
 # is meaningless for parametric μ_p). The sweep's σ_pert lower bound covers
 # "operationally indistinguishable from 0" instead.
+#
+# The study's cell points are published to ``experiment_store`` by
+# ``register_study(..., into=experiment_store)`` in ``study.py`` — importing
+# ``INIT_CENTERING_STUDY`` above is what triggers it; no separate call here.
 # ---------------------------------------------------------------------------
-
-INIT_CENTERING_STUDY.register(experiment_store)

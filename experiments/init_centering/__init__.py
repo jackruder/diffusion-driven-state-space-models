@@ -42,13 +42,14 @@ chart, markdown headline table) from the JSONL records alone — so
 plot iterations never touch the model or re-scan disk.
 """
 
-from . import data, cells, evals, model, sweeps, hparams, experiments
+from . import data, cells, evals, model, sweeps, hparams, study, experiments
 
 __all__ = [
     "cells",
     "data",
     "evals",
     "experiments",
+    "study",
     "hparams",
     "model",
     "sweeps",

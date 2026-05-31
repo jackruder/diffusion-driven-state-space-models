@@ -80,6 +80,18 @@ class Study:
     launch: Callable[[StudyPoint], "PointLaunch"]
     variants: Mapping[str, Callable[[StudyPoint], list[str]]] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        # Point names become preset names; a collision (axis keys / name_point
+        # mapping two coords to the same name) would silently overwrite one
+        # point in the store. Fail loudly at construction instead.
+        names = [p.name for p in self.points]
+        dups = sorted({n for n in names if names.count(n) > 1})
+        if dups:
+            raise ValueError(
+                f"Study {self.name!r}: duplicate point names {dups}. Axis keys / "
+                f"name_point must map each coordinate to a unique name."
+            )
+
     @classmethod
     def from_axes(
         cls,

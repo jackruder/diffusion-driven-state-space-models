@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 from ddssm.study import Axis, Study, StudyPoint
 from ddssm.launch import PointLaunch, ResourceSpec, register_study
+from ddssm.stores import experiment_store
 from experiments._make import experiment
 from experiments.init_centering.cells import Cell, iter_cells
 from experiments.init_centering.evals import PilotEval, PilotMOObjective
@@ -184,7 +185,10 @@ INIT_CENTERING_STUDY = register_study(
             "paper": _paper_overrides,
             "smoke": _smoke_overrides,
         },
-    )
+    ),
+    # Publish the cell points to the experiment store in the same call, so the
+    # launcher registry and ``experiment=<cell>`` resolution can't desync.
+    into=experiment_store,
 )
 
 __all__ = ["INIT_CENTERING_STUDY"]
