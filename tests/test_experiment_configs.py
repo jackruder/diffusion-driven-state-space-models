@@ -94,6 +94,23 @@ def test_experiment_cli_compose(name: str) -> None:
     assert cfg.experiment.data._target_
 
 
+def test_data_group_override_targets_experiment_data() -> None:
+    """``+data=NAME`` overrides the preset's baked dataset.
+
+    The data store is packaged at ``experiment.data`` so a ``+data=``
+    selection replaces ``experiment.data`` rather than writing an unread
+    top-level ``data:`` key (the old silent no-op).
+    """
+    with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
+        cfg = compose(
+            config_name="config",
+            overrides=["experiment=init_smoke_simple", "+data=harmonic"],
+        )
+    assert cfg.experiment.data.mode == "harmonic"
+    # No stray top-level data: key — the override landed inside experiment.
+    assert "data" not in cfg
+
+
 def test_default_experiment_is_init_smoke_simple() -> None:
     """The default composes to the canonical (zero, pinned, fixed) anchor cell."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):

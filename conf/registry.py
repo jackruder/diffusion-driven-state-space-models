@@ -22,7 +22,10 @@ from hydra_zen import store
 
 # Composed top-level configs
 model_store = store(group="model")
-data_store = store(group="data")
+# ``package="experiment.data"`` so a ``+data=NAME`` selection overrides the
+# dataset baked into the chosen experiment preset, instead of writing an
+# unread top-level ``data:`` key.
+data_store = store(group="data", package="experiment.data")
 experiment_store = store(group="experiment")
 
 # Multirun / Optuna sweep presets. Entries are merged at root via
