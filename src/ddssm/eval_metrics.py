@@ -113,20 +113,32 @@ def mae_metrics(
 def crps_sum_metrics(
     pred_samples: torch.Tensor, y_future: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """CRPS-sum at 19 quantile levels (0.05..0.95), globally and per timestep.
+    """ND-normalized CRPS-sum at 19 quantile levels (0.05..0.95).
 
     ``pred_samples`` is expected to have shape ``(B, S, D, L2)`` and
     ``y_future`` shape ``(B, D, L2)``. Sums across the channel dimension are
     computed before quantilisation, matching the standard probabilistic
     forecasting convention.
+
+    Per batch element the integrated pinball loss ``2 ∫₀¹ QL(τ) dτ`` is
+    estimated by a Δτ-weighted Riemann sum over the level grid (``Δτ = 0.05``;
+    using the discrete mean instead would inflate the value by ≈5.3%), then
+    normalized by ``Σ_t |Σ_d y|`` — the GluonTS CRPS-sum / ND convention, which
+    makes the metric dimensionless and comparable across scales. The global
+    value is the mean over the batch of the time-summed normalized loss; the
+    per-timestep vector is the batch mean and sums to the global value.
     """
     levels = torch.arange(0.05, 1.0, 0.05, device=pred_samples.device)
+    dtau = 0.05
     pred_sum = pred_samples.sum(dim=2)  # (B, S, L2)
     y_sum = y_future.sum(dim=1)  # (B, L2)
     qs = torch.quantile(pred_sum, levels, dim=1).permute(1, 2, 0)  # (B, L2, Q)
     indicator = (y_sum.unsqueeze(-1) < qs).float()
-    crps = 2 * ((levels - indicator) * (y_sum.unsqueeze(-1) - qs)).mean(dim=-1)
-    return crps.mean(), crps.mean(dim=0)
+    # 2 ∫₀¹ QL dτ ≈ 2 Σ_τ QL(τ) Δτ, per (B, L2).
+    ql = 2 * ((levels - indicator) * (y_sum.unsqueeze(-1) - qs)).sum(dim=-1) * dtau
+    denom = y_sum.abs().sum(dim=1, keepdim=True).clamp_min(1e-8)  # (B, 1)
+    nd = ql / denom  # (B, L2)
+    return nd.sum(dim=1).mean(), nd.mean(dim=0)
 
 
 def crps_sum_latent_metrics(
@@ -140,12 +152,17 @@ def crps_sum_latent_metrics(
     across the latent dimension ``d``.
 
     Used by ``ddssm.eval.metrics.crps_sum_latent`` for the model-v2
-    init-experiment headline metric on the latent path.
+    init-experiment headline metric on the latent path. See
+    :func:`crps_sum_metrics` for the integral / ND-normalization details.
     """
     levels = torch.arange(0.05, 1.0, 0.05, device=z_samples.device)
+    dtau = 0.05
     z_sum = z_samples.sum(dim=2)  # (B, S, L2)
     y_sum = z_gt.sum(dim=1)  # (B, L2)
     qs = torch.quantile(z_sum, levels, dim=1).permute(1, 2, 0)  # (B, L2, Q)
     indicator = (y_sum.unsqueeze(-1) < qs).float()
-    crps = 2 * ((levels - indicator) * (y_sum.unsqueeze(-1) - qs)).mean(dim=-1)
-    return crps.mean(), crps.mean(dim=0)
+    # 2 ∫₀¹ QL dτ ≈ 2 Σ_τ QL(τ) Δτ, per (B, L2).
+    ql = 2 * ((levels - indicator) * (y_sum.unsqueeze(-1) - qs)).sum(dim=-1) * dtau
+    denom = y_sum.abs().sum(dim=1, keepdim=True).clamp_min(1e-8)  # (B, 1)
+    nd = ql / denom  # (B, L2)
+    return nd.sum(dim=1).mean(), nd.mean(dim=0)

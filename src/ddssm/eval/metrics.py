@@ -127,7 +127,16 @@ def eval_energy_score(ctx: EvalContext) -> Dict[str, Any]:
         y_flat = y_future.reshape(B, -1).unsqueeze(1)     # (B, 1, D*L2)
         term1 = torch.norm(s_flat - y_flat, dim=-1).mean(dim=1)        # (B,)
         diff = s_flat.unsqueeze(2) - s_flat.unsqueeze(1)               # (B,S,S,D*L2)
-        term2 = torch.norm(diff, dim=-1).mean(dim=(1, 2))              # (B,)
+        pair = torch.norm(diff, dim=-1)                                # (B,S,S)
+        # Unbiased U-statistic for E||X-X'||: exclude the zero diagonal
+        # (the i==i pairs). Averaging over the full S×S matrix would
+        # underestimate by (S-1)/S, biasing the score high by a margin
+        # that shrinks with S. The diagonal is zero, so summing the whole
+        # matrix and dividing by S(S-1) drops it cleanly.
+        if S > 1:
+            term2 = pair.sum(dim=(1, 2)) / (S * (S - 1))               # (B,)
+        else:
+            term2 = torch.zeros_like(term1)
         scores.append(float((term1 - 0.5 * term2).mean().item()))
     if not scores:
         return {"energy_score": float("nan")}
