@@ -260,9 +260,6 @@ class DDSSMTrainer:
         """
         self._preempt_pending = True
 
-    def get_batch_size(self) -> int:
-        return self.hparams.batch_size
-
     def _set_trainable(self, t):
         """t: StageTrainable"""
 

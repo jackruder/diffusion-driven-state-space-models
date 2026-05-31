@@ -394,6 +394,22 @@ class Experiment:
             log.info("Applying trainable mask: %s", self.training.trainable)
             trainer._set_trainable(self.training.trainable)
 
+        # hparams.batch_size is the single source of truth for the loader
+        # batch size (ADR-0004: hparams owns runtime knobs). Reconcile it
+        # onto the data module before building loaders so a CLI override of
+        # experiment.hparams.batch_size actually takes effect — the data
+        # preset's own batch_size is otherwise what the DataLoader would use.
+        hp_bs = getattr(self.hparams, "batch_size", None)
+        if hp_bs is not None and hasattr(self.data, "batch_size"):
+            if self.data.batch_size != hp_bs:
+                log.info(
+                    "DataLoader batch_size := hparams.batch_size (%d); data "
+                    "module configured %s, overridden.",
+                    hp_bs,
+                    self.data.batch_size,
+                )
+            self.data.batch_size = hp_bs
+
         train_loader = self.data.train_loader()
         if train_loader is None:
             log.info("No data attached. Skipping fit().")

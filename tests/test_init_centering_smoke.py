@@ -57,10 +57,17 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     exp.training.stages.stage_1.checkpoint_every = 100
     exp.training.stages.stage_2.checkpoint_every = 100
 
+    # hparams.batch_size is the source of truth: a distinct value (≠ the
+    # dataset preset's 32, ≠ the SmokeHparams 16) must reach the loader.
+    exp.hparams.batch_size = 8
+
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cpu")
     exp.train(device=device, run_dir=str(run_dir))
+
+    # Reconciliation: the data module's batch_size was overridden from hparams.
+    assert exp.data.batch_size == 8
 
     csv_path = run_dir / "metrics.csv"
     assert csv_path.exists(), "metrics.csv missing"
