@@ -9,9 +9,9 @@ import torch
 
 # Reuse the canonical VHP fixture from the existing stage-1 test file.
 sys.path.insert(0, str(Path(__file__).parent))
-from test_dssd_stage1 import _make_batch, _make_vhp_model  # noqa: E402
+from test_dssd_stage1 import _make_batch, _make_vhp_model
 
-from ddssm.losses import FullELBO, Loss, LossComponents  # noqa: E402
+from ddssm.losses import Loss, FullELBO, LossComponents
 
 
 def test_full_elbo_assembles_recon_plus_lambda_rate_plus_anchors() -> None:
@@ -121,11 +121,14 @@ def test_full_elbo_reproduces_pre_refactor_loss() -> None:
 
     Note: the warmup-anchor fix (regularizers pulled out of the
     `λ * (...)` bracket) is numerically equivalent to the old formula
-    at ``λ=1.0``, so this captured value stays valid.
+    at ``λ=1.0``. The value was recaptured after commit a00f7a3 (#2:
+    encoder logvars are now clamped in-place in ``enc_stats`` so the
+    downstream init/KL terms see the clamped values), which legitimately
+    shifts the stage-1 ELBO by ~0.25%.
     """
     LAMBDA_SIGMA_P = 0.01
     LAMBDA_MU_P = 0.0
-    EXPECTED_LOSS = 22.7022514343  # captured pre-refactor
+    EXPECTED_LOSS = 22.75912094116211  # recaptured post-a00f7a3 (clamp writeback)
 
     torch.manual_seed(0)
     model = _make_vhp_model(lambda_sigma_p=LAMBDA_SIGMA_P)

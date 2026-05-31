@@ -36,21 +36,21 @@ centered ESM target.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from typing import Any, Dict, Callable, Optional, final
 from functools import partial
-from typing import Any, Callable, Dict, Optional, final
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 
-from ..aux_posterior import AuxPosterior
-from ..centering.baselines import BaseBaseline
-from ..centering.sigma_data import SigmaDataBuffer
 from ..diffnets import CSDIUnet
 from ..gaussians import GaussianStats
 from ..net_utils import get_side_info
-from ..torch_compile import maybe_compile
 from .transitions import BaseTransition
+from ..aux_posterior import AuxPosterior
+from ..torch_compile import maybe_compile
+from ..centering.baselines import BaseBaseline
+from ..centering.sigma_data import SigmaDataBuffer
 
 
 @dataclass
@@ -139,6 +139,12 @@ class DiffusionTransition(BaseTransition):
             unet = partial(
                 CSDIUnet, channels=64, n_layers=4, embedding_dim=128,
             )
+        # Side-info channel layout is [time(+cov), feat, cond_mask, padding_mask],
+        # so the conditioning mask is the second-to-last channel. Pass the index
+        # explicitly so the U-Net never has to guess it from a relative offset.
+        cond_mask_channel = (
+            self.emb_time_dim + self.covariate_dim + self.emb_feature_dim
+        )
         self.diffmodel = unet(
             output_len=1,
             diffusion_steps=schedule.num_steps,
@@ -146,6 +152,7 @@ class DiffusionTransition(BaseTransition):
             latent_history_len=self.j,
             side_dim=self.side_dim,
             zero_init_output=True,
+            cond_mask_channel=cond_mask_channel,
         )
         self.diffmodel = maybe_compile(self.diffmodel)
 
@@ -165,7 +172,12 @@ class DiffusionTransition(BaseTransition):
         if beta_max <= beta_min:
             raise ValueError(f"beta_max ({beta_max}) must be > beta_min ({beta_min})")
 
-        tau = torch.linspace(tau_min, 1.0, K, dtype=dtype64)
+        # K left-endpoint grid points {τ_min, …, 1 − dτ} with spacing exactly
+        # dτ = (1 − τ_min)/K, so the baked Riemann measure below is consistent.
+        # ``linspace(τ_min, 1, K+1)`` has spacing (1 − τ_min)/K; dropping the
+        # right endpoint τ=1 keeps K points and total measure K·dτ = (1 − τ_min).
+        # (Previously ``linspace(…, K)`` had spacing (1 − τ_min)/(K−1) ≠ dτ.)
+        tau = torch.linspace(tau_min, 1.0, K + 1, dtype=dtype64)[:-1]
         beta = beta_min + (beta_max - beta_min) * tau
         int_beta = beta_min * tau + 0.5 * (beta_max - beta_min) * tau * tau
         alpha = torch.exp(-0.5 * int_beta)
@@ -560,7 +572,7 @@ class DiffusionTransition(BaseTransition):
         dtype = zs.dtype
         if d != self.latent_dim:
             raise ValueError(f"zs latent dim {d} != self.latent_dim {self.latent_dim}")
-        if T < j:
+        if j > T:
             raise ValueError(f"zs has T={T} < j={j}")
         BS = B * S
         log_2pi = math.log(2.0 * math.pi)
@@ -1038,7 +1050,7 @@ class DiffusionTransition(BaseTransition):
         dtype = z_hist.dtype
         eps_dtype = torch.finfo(dtype).eps
 
-        # Prior at the top step (τ=1) in centered coords. The unit-diffusion
+        # Prior at the top grid step (τ ≈ 1) in centered coords. The unit-diffusion
         # VP forward marginal is N(0, α²·σ_d² + (1−α²)): the OU process drives
         # any data variance toward the stationary variance 1 at τ=1, so the
         # terminal is ≈ N(0, I) regardless of σ_data. Initialise at that exact

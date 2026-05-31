@@ -53,12 +53,13 @@ PilotMOObjective = Objectives(specs=[
 ])
 
 
-# Default ELBO target for the wallclock objective. Set to 0 (the ELBO
-# ceiling) for the 5k-step retune: the old -30 was unreachable at 1k steps
-# (every trial under-trained, obj0 saturated), so we raise both the step
-# budget and the target. Override via Hydra:
+# Default ELBO target for the wallclock objective. Set to -100 for the
+# trans-KL-fix rerun: the a00f7a3 fix sums trans-KL over t instead of
+# averaging (x(T-j)=x31 larger), so the convergent ELBO drops from ~0 to the
+# -100..-600 band. -100 is a reachable-but-discriminating threshold once the
+# now-dominant trans-KL is driven down. Override via Hydra:
 # ``experiment.eval.kwargs.wallclock_to_target.target_value=...``.
-PILOT_WALLCLOCK_TARGET: float = 0.0
+PILOT_WALLCLOCK_TARGET: float = -100.0
 
 
 # The five Phase-A headline metrics + two diagnostic secondary metrics

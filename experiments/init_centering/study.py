@@ -66,83 +66,49 @@ _PRIORITY_ACCOUNT = "--account=priority-michaelwojnowicz"
 _UNSAFE_ACCOUNT = "--account=group-michaelwojnowicz"
 
 
+# Cells routed to the idle b6000 (Blackwell, 96 GB) GPUs; the rest go to A40.
+# Each cell takes 2 GPUs, so 3 b6000 cells use all 6 idle b6000s. The mlp cells
+# (heaviest model) + one learnable get the faster b6000; A40 covers the rest.
+_B6000_CELLS = frozenset(
+    {
+        "init_mlp_pinned_per_t",
+        "init_mlp_learnable_per_t",
+        "init_linear_learnable_per_t",
+    }
+)
+
+
 def _launch(point: StudyPoint) -> PointLaunch:
-    """Round-1 (fresh restart) launch intent: GPU-packed Optuna MOO.
+    """Round-1 (trans-KL-fix rerun) launch intent: GPU-packed Optuna MOO.
 
-    Every cell uses the WIDE ``init_ablation_moo`` search space (the full
-    round-1 priors). The narrowed ``init_ablation_moo_r2`` space was derived
-    from round-1 data that a since-found code bug invalidated, so we restart
-    from scratch on the wide ranges. Each trial is <4 GiB, so we pack 8 workers
-    per GPU (4 CPUs each, thread-pinned — the round-1 starvation fix).
-    ``n_trials`` (96) is the cell-total budget split across ALL the cell's
-    workers (~``n_trials / n_workers`` each), independent of ``preemptive``.
-
-    Launched per_t-only (``--select tracking_mode=per_t`` → 6 cells), so each
-    cell can claim 2 GPUs (``n_workers=16`` = 2 × 8-pack, sharing the cell's
-    Optuna DB) and finish 96×5k-step trials in ~13h instead of ~26h. GPU pool =
-    1 A100 (16-pack) for the headline ``mlp_pinned_per_t`` + 2 A40 on
-    ``gpupriority`` (non-preempt) for ``mlp_learnable_per_t`` + 2 A40 each on
-    ``gpuunsafe`` (preemptible → checkpoint/resume, ADR-0009) for the other 4
-    cells ≈ 11 GPUs. 16 workers/cell is the proven NFS-SQLite worker level.
+    Every cell uses the WIDE ``init_ablation_moo`` search space. Each cell gets
+    **2 GPUs** (``n_workers=32`` = 2 × 16-pack, sharing the cell's Optuna DB) at
+    **2 CPUs/worker** (32 CPUs/GPU → 16 workers/GPU), so the 96-trial budget
+    splits 3/worker. The packed strategy splits a cell's budget across
+    SAME-gres GPUs, so each cell uses 2 of ONE type: 3 cells on b6000 (the 6
+    idle Blackwells) and 3 on A40 — both fast, both ``gpuunsafe``/preemptible.
+    Preemption is safe now: the reaper is liveness-based (``fail_stale_trials``)
+    and the preamble no longer age-reaps, so requeues/joins never fail live
+    trials.
     """
     cell = point.coords["cell"]
-    sweep = "init_ablation_moo"  # WIDE round-1 priors for every cell
-
-    # --- gpupriority (non-preempt): two dedicated cells, the 2 priority GPUs ---
-    # Headline cell -> the A100 (2x memory -> 2x the pack). 96 / 16 = 6 trials/worker.
-    if cell.name == "init_mlp_pinned_per_t":
-        return PointLaunch(
-            strategy="optuna_packed_node",
-            sweep=sweep,
-            n_trials=96,
-            n_workers=16,
-            workers_per_gpu=16,
-            preemptive=False,
-            resources=ResourceSpec(
-                partition="gpupriority",
-                gpus=1,
-                cpus=64,
-                mem="96G",
-                time="48:00:00",
-                extra_flags=("--gres=gpu:a100:1", _PRIORITY_ACCOUNT),
-                setup=_TEMPEST_SETUP,
-            ),
-        )
-    # Second non-preempt cell -> 2 gpupriority A40s (16 workers = 2 x 8-pack).
-    if cell.name == "init_mlp_learnable_per_t":
-        return PointLaunch(
-            strategy="optuna_packed_node",
-            sweep=sweep,
-            n_trials=96,
-            n_workers=16,
-            workers_per_gpu=8,
-            preemptive=False,
-            resources=ResourceSpec(
-                partition="gpupriority",
-                gpus=1,
-                cpus=32,
-                mem="48G",
-                time="48:00:00",
-                extra_flags=("--gres=gpu:a40:1", _PRIORITY_ACCOUNT),
-                setup=_TEMPEST_SETUP,
-            ),
-        )
-
-    # --- gpuunsafe (preemptible): every other cell, 2 A40s (16 workers = 2 x 8-pack) ---
+    gres = (
+        "--gres=gpu:b6000:1" if cell.name in _B6000_CELLS else "--gres=gpu:a40:1"
+    )
     return PointLaunch(
         strategy="optuna_packed_node",
-        sweep=sweep,
+        sweep="init_ablation_moo",  # WIDE round-1 priors for every cell
         n_trials=96,
-        n_workers=16,
-        workers_per_gpu=8,
+        n_workers=32,
+        workers_per_gpu=16,
         preemptive=True,
         resources=ResourceSpec(
             partition="gpuunsafe",
             gpus=1,
-            cpus=32,
-            mem="48G",
+            cpus=32,  # 16 workers x 2 CPUs = 32 (the per-GPU half-node share)
+            mem="80G",
             time="48:00:00",
-            extra_flags=(_UNSAFE_ACCOUNT,),
+            extra_flags=(gres, _UNSAFE_ACCOUNT),
             setup=_TEMPEST_SETUP,
         ),
     )

@@ -1,26 +1,25 @@
 """Core DDSSM model: ELBO forward pass, encoder/decoder/transition dispatch, and forecast rollout."""
 
-from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Dict, List, final
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 
-from .aux_posterior import AuxPosterior
-from .centering.baselines import BaseBaseline
-from .centering.regularizers import r_mu_p_loss, r_sigma_p_loss
-from .centering.sigma_data import SigmaDataBuffer
-from .decoder import BaseDecoder, GaussianDecoder
+from .losses import LossComponents
+from .decoder import BaseDecoder
 from .encoder import (
     BaseEncoder,
-    GaussianEncoder,
 )
-from .losses import LossComponents
 from .net_utils import (
     time_embedding,
 )
-from .transitions.transitions import BaseTransition, GaussianTransition
+from .aux_posterior import AuxPosterior
+from .centering.baselines import BaseBaseline
+from .centering.sigma_data import SigmaDataBuffer
+from .centering.regularizers import r_mu_p_loss, r_sigma_p_loss
+from .transitions.transitions import BaseTransition
 
 
 @dataclass
@@ -184,8 +183,8 @@ class DDSSM_base(nn.Module):
         observed_data = batch["observed_data"]
         observation_mask = batch["observation_mask"]
         timepoints = batch["timepoints"]
-        covariates = batch.get("covariates", None)
-        static_covariates = batch.get("static_covariates", None)
+        covariates = batch.get("covariates")
+        static_covariates = batch.get("static_covariates")
 
         te = time_embedding(timepoints, self.emb_time_dim, device=observed_data.device)
         static_embed = self._embed_static(static_covariates)
@@ -423,7 +422,7 @@ class DDSSM_base(nn.Module):
         """
         B, S, d, T = zs.shape
         j = self.j
-        if T <= j:
+        if j >= T:
             return torch.zeros(0, d, j, device=zs.device, dtype=zs.dtype)
         # (B, S, d, T - j + j - 1 + 1) -> unfold gives (B, S, d, T - j, j)
         unfolded = zs.unfold(dimension=-1, size=j, step=1)[..., :T - j, :]
@@ -591,7 +590,6 @@ class DDSSM_base(nn.Module):
         covariates: torch.Tensor | None = None,  # (B, V, T) or None
         static_covariates: torch.Tensor | None = None,  # (B, D, V_s) or None
         train: bool = True,
-        report_scaled: bool = True,
     ):
         """Compute ELBO loss and its components for a batch.
 
@@ -602,8 +600,6 @@ class DDSSM_base(nn.Module):
             covariates: Optional time-varying covariates, shape ``(B, V, T)``.
             static_covariates: Optional static categorical features, shape ``(B, D, V_s)``.
             train: If ``False``, also returns posterior samples/stats in ``stats``.
-            report_scaled: If ``True``, also emit dimension-normalised variants of
-                each loss component under ``"<key>_scaled"`` keys in ``metrics``.
 
         Returns:
             components: ``LossComponents`` with unweighted per-term
@@ -713,16 +709,6 @@ class DDSSM_base(nn.Module):
         rate = L_init + L_trans + r_sigma_p_raw + r_mu_p_raw
         loss = distortion + rate
 
-        dev = L_rec.device
-        dtype = L_rec.dtype
-        d = int(self.latent_dim)
-        t = int(timepoints.size(1))
-        j = int(self.j)
-        Tk = max(t - j, 1)
-        D_dim = torch.tensor(float(d), device=dev, dtype=dtype)
-        DT = torch.tensor(float(d * t), device=dev, dtype=dtype)
-        DTk = torch.tensor(float(d * Tk), device=dev, dtype=dtype)
-
         metrics = {
             "loss/total": loss.detach(),
             "loss/distortion/rec": L_rec.detach(),
@@ -756,22 +742,6 @@ class DDSSM_base(nn.Module):
         # transition-driven keys.
         for key, val in trans_subterms.items():
             metrics[f"loss/rate/trans/{key}"] = val.detach()
-
-        if report_scaled:
-            rescale = lambda key, factor: metrics.update({
-                f"{key}_scaled": metrics[key] / factor
-            })
-
-            rescale("loss/total", DT)
-            rescale("loss/distortion/rec", DT)
-            rescale("loss/rate/init/tot", D_dim * j)
-            rescale("loss/rate/init/vhp", D_dim * j)
-            rescale("loss/rate/init/entropy", D_dim * j)
-            rescale("loss/rate/trans/kl", DTk)
-            for key in trans_subterms:
-                rescale(f"loss/rate/trans/{key}", DTk)
-            rescale("loss/rate/total", DT)
-            rescale("calib/ratio_res2_to_sigma2", 1.0)
 
         stats = {}  # return optional params
         if not train:  # Optionally return posterior stats/samples for analysis
@@ -1020,7 +990,6 @@ def _default_hyperparams():
         logvar_min=-7.0,
         logvar_max=7.0,
     )
-
 
 
 # ---------------------------------------------------------------------------

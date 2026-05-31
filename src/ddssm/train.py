@@ -5,14 +5,14 @@ trainer's ``save_checkpoint`` / ``restore_from_checkpoint`` delegate
 there.
 """
 
-import logging
-import math
 import os
+import math
 import pickle
 import shutil
 import signal
-import tempfile
 from typing import TYPE_CHECKING, Any, Callable, final
+import logging
+import tempfile
 from contextlib import nullcontext, contextmanager
 from collections import deque
 
@@ -455,7 +455,6 @@ class DDSSMTrainer:
                 covariates=covariates,
                 static_covariates=static_covariates,
                 train=True,
-                report_scaled=False,
             )
 
         # Per ADR-0004: the active loss object owns the rate-λ schedule;
@@ -872,7 +871,6 @@ class DDSSMTrainer:
                                     flush=True,
                                 )
                                 early_stop_triggered = True
-
 
                     self._maybe_run_validation(
                         step=step,

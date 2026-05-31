@@ -11,17 +11,17 @@ live in ``ddssm.eval_metrics`` and are reused here unchanged.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Dict
-
+import os
 import csv
 import math
-import os
+from typing import Any, Dict, Callable
+from dataclasses import dataclass
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ..eval_metrics import crps_sum_metrics, mae_metrics
+from ..eval_metrics import mae_metrics, crps_sum_metrics
 
 
 @dataclass
@@ -94,10 +94,10 @@ def _iter_forecast_batches(ctx: EvalContext):
             future_time = batch["timepoints"][:, L1:]
             y_future = batch["observed_data"][..., L1:]
 
-            covariates = batch.get("covariates", None)
+            covariates = batch.get("covariates")
             past_cov = covariates[..., :L1] if covariates is not None else None
             future_cov = covariates[..., L1:] if covariates is not None else None
-            static_cov = batch.get("static_covariates", None)
+            static_cov = batch.get("static_covariates")
 
             out = model.forecast(
                 x_hist=x_hist,
@@ -656,10 +656,9 @@ def eval_stage2_elbo_surrogate(
                 batch["observed_data"],
                 batch["observation_mask"],
                 batch["timepoints"],
-                covariates=batch.get("covariates", None),
-                static_covariates=batch.get("static_covariates", None),
+                covariates=batch.get("covariates"),
+                static_covariates=batch.get("static_covariates"),
                 train=False,
-                report_scaled=False,
             )
             # Reconstruct a "loss/total"-style surrogate from the
             # unweighted LossComponents: distortion + the ELBO rate
@@ -779,8 +778,8 @@ def eval_nll(
                     batch["observed_data"],
                     batch["observation_mask"],
                     batch["timepoints"],
-                    covariates=batch.get("covariates", None),
-                    static_covariates=batch.get("static_covariates", None),
+                    covariates=batch.get("covariates"),
+                    static_covariates=batch.get("static_covariates"),
                     K=num_iwae_samples,
                     rtol=rtol,
                     atol=atol,
@@ -871,7 +870,7 @@ def eval_sigma_data_drift(
                 observation_mask=mask,
             )
             B, S, _, T = zs.shape
-            if T <= j:
+            if j >= T:
                 continue
             mus = stats["mus"]
             logvars = stats["logvars"]
@@ -1050,7 +1049,7 @@ def eval_log_sigma_p2_collapse(
                 observed_data=obs, time_embed=te, observation_mask=mask,
             )
             B, S, _, T = zs.shape
-            if T <= j:
+            if j >= T:
                 continue
             for t in range(j, T):
                 z_hist = zs[:, :, :, t - j : t].reshape(B * S, d, j)
@@ -1143,7 +1142,7 @@ def eval_crps_sum_latent(
                     k: v.to(device) if isinstance(v, torch.Tensor) else v
                     for k, v in batch.items()
                 }
-            gt_latent = batch.get("gt_latent", None)
+            gt_latent = batch.get("gt_latent")
             if gt_latent is None:
                 return {"crps_sum_latent_available": False}
 
@@ -1277,7 +1276,7 @@ def eval_gt_latent_jsd(
                     k: v.to(device) if isinstance(v, torch.Tensor) else v
                     for k, v in batch.items()
                 }
-            gt_latent = batch.get("gt_latent", None)
+            gt_latent = batch.get("gt_latent")
             if gt_latent is None:
                 return {"gt_latent_jsd_available": False, "gt_latent_jsd_reason": "no gt_latent"}
             B, d, T = gt_latent.shape

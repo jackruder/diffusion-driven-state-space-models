@@ -1,15 +1,14 @@
 """This file implements common conditional diffusion models for timeseries."""
 
 import math
-from dataclasses import dataclass, field
 from typing import final
+from dataclasses import field, dataclass
 
 import torch
 import torch.nn as nn
 
 # from mamba_ssm import Mamba2
 import torch.nn.functional as F
-
 
 from .net_utils import (
     Conv1d_with_init,
@@ -271,6 +270,7 @@ class DiffResidualBlockConfig:
     time: TimeMixerConfig = field(default_factory=TimeMixerConfig)
     feature: FeatureMixerConfig = field(default_factory=FeatureMixerConfig)
 
+
 class DiffusionEmbedding(nn.Module):
     """Continuous EDM conditioning: embeds c_noise scalars into vectors.
 
@@ -416,6 +416,7 @@ class CSDIUnet(nn.Module):
         projection_dim: int | None = None,
         residual_block: DiffResidualBlockConfig | None = None,
         zero_init_output: bool = True,
+        cond_mask_channel: int | None = None,
     ) -> None:
         super().__init__()
         if residual_block is None:
@@ -428,6 +429,25 @@ class CSDIUnet(nn.Module):
         self.n_layers = n_layers
 
         self.side_dim = side_dim
+
+        # Absolute channel index of the *conditioning* mask within ``side_info``
+        # (1 on clean-history slots, 0 on the noised target slot). The
+        # ``get_side_info`` layout is ``[time(+cov), feat, cond_mask,
+        # padding_mask]``, so cond_mask sits at ``side_dim - 2`` and the
+        # padding mask at ``side_dim - 1``. We index it *explicitly* rather than
+        # relatively: a prior bug read ``side_info[:, -1]`` (the padding mask),
+        # which silently routed the whole window into the noisy stream. The
+        # owning transition passes the exact index; the ``-2`` fallback matches
+        # the both-masks-present layout. See model-v2.org § "Padding mask in the
+        # diffusion side-info tensor".
+        if cond_mask_channel is None:
+            cond_mask_channel = side_dim - 2
+        if not (0 <= cond_mask_channel < side_dim):
+            raise ValueError(
+                f"cond_mask_channel={cond_mask_channel} out of range "
+                f"[0, side_dim={side_dim})"
+            )
+        self.cond_mask_channel = int(cond_mask_channel)
 
         self.diffusion_embedding_dim = embedding_dim
         self.diffusion_projection_dim = projection_dim or embedding_dim
@@ -470,6 +490,32 @@ class CSDIUnet(nn.Module):
             if self.output_projection2.bias is not None:
                 nn.init.zeros_(self.output_projection2.bias)
 
+    def _split_history_noise(
+        self, x: torch.Tensor, side_info: torch.Tensor
+    ) -> torch.Tensor:
+        """Split ``x`` into the clean-history and noised streams.
+
+        Uses the *conditioning* mask (``cond_mask == 1`` on the clean-history
+        slots, ``0`` on the noised target slot), read by its explicit absolute
+        channel index ``self.cond_mask_channel``. A prior bug read the last
+        channel — the *padding* mask — which on the t≥2 training path is all
+        zeros, silently routing the whole window into the noisy stream and
+        zeroing the clean-history stream.
+
+        Args:
+            x: ``(B, d, L)`` window (history slots + noised target slot).
+            side_info: ``(B, side_dim, d, L)`` side-info tensor.
+
+        Returns:
+            ``(B, 2, d, L)`` stacked ``[x_noisy, x_hist_clean]``.
+        """
+        c = self.cond_mask_channel
+        mask = side_info[:, c : c + 1, :, :]  # (B, 1, d, L)
+        x = x.unsqueeze(1)  # (B, 1, d, L)
+        x_noisy = x * (1.0 - mask)  # zero out clean history
+        x_hist_clean = x * mask  # zero out the noised target
+        return torch.cat([x_noisy, x_hist_clean], dim=1)  # (B, 2, d, L)
+
     def forward(
         self, x: torch.Tensor, side_info: torch.Tensor, diffusion_step: torch.Tensor
     ):
@@ -489,16 +535,7 @@ class CSDIUnet(nn.Module):
         B, d, L = x.shape
         P = self.output_len
 
-        # recover mask
-        mask = side_info[:, -1:, :, :]  # (B, 1, d, L)
-
-        x = x.unsqueeze(1)  # (B, 1, d, J + 1)
-
-        # separate x into history + noise
-        x_noisy = x * (1.0 - mask)  # (B, 1, d, L), zero out clean history
-        x_hist_clean = x * mask  # (B, 1, d, L), zero out noisy part
-
-        x_cat = torch.cat([x_noisy, x_hist_clean], dim=1)  # (B, 2, d, L)
+        x_cat = self._split_history_noise(x, side_info)  # (B, 2, d, L)
 
         x_cat = x_cat.view(B, 2, d * L)
         x = self.input_projection(x_cat)
@@ -539,10 +576,16 @@ class MLPCSDIUnet(nn.Module):
         projection_dim: int | None = None,
         residual_block: DiffResidualBlockConfig | None = None,
         zero_init_output: bool = False,
+        cond_mask_channel: int | None = None,
     ) -> None:
         super().__init__()
-        # Kept for constructor compatibility with ``CSDIUnet``.
-        _ = diffusion_steps, embedding_dim, projection_dim, residual_block
+        # Kept for constructor compatibility with ``CSDIUnet``. The MLP flattens
+        # every side-info channel into its input, so it has no separate
+        # history/noise stream and ignores ``cond_mask_channel``.
+        _ = (
+            diffusion_steps, embedding_dim, projection_dim, residual_block,
+            cond_mask_channel,
+        )
 
         self.output_len = int(output_len)
         self.latent_dim = int(latent_dim)
@@ -571,7 +614,7 @@ class MLPCSDIUnet(nn.Module):
     ) -> torch.Tensor:
         B, d, L = x.shape
         assert d == self.latent_dim
-        assert L == self.latent_history_len + self.output_len
+        assert self.latent_history_len + self.output_len == L
 
         x_flat = x.reshape(B, -1)
         side_flat = side_info.reshape(B, -1)
@@ -861,7 +904,7 @@ class MLPContextProducer(nn.Module):
     ) -> torch.Tensor:
         B, H_seq, L = combined.shape
         assert H_seq == self.combined_dim
-        assert L == self.combined_len
+        assert self.combined_len == L
 
         if self.skip_mask:
             if mask_embedded is None:
