@@ -53,6 +53,13 @@ _TEMPEST_SETUP = (
     "source .venv/bin/activate",
 )
 
+# Slurm accounts (Tempest). gpupriority only admits the ``priority-*`` accounts
+# in its AllowAccounts list — a job submitted under any other account sits
+# PENDING forever with reason ``(PartitionConfig)``. gpuunsafe takes the
+# matching ``group-*`` account. Both gate on the michaelwojnowicz project here.
+_PRIORITY_ACCOUNT = "--account=priority-michaelwojnowicz"
+_UNSAFE_ACCOUNT = "--account=group-michaelwojnowicz"
+
 
 def _launch(point: StudyPoint) -> PointLaunch:
     """Round-2 launch intent: GPU-packed Optuna MOO, one GPU per cell.
@@ -88,7 +95,7 @@ def _launch(point: StudyPoint) -> PointLaunch:
                 cpus=64,
                 mem="96G",
                 time="24:00:00",
-                extra_flags=("--gres=gpu:a100:1",),  # confirm Tempest's A100 gres name
+                extra_flags=("--gres=gpu:a100:1", _PRIORITY_ACCOUNT),
                 setup=_TEMPEST_SETUP,
             ),
         )
@@ -107,7 +114,7 @@ def _launch(point: StudyPoint) -> PointLaunch:
                 cpus=32,
                 mem="48G",
                 time="24:00:00",
-                extra_flags=("--gres=gpu:a40:1",),  # confirm Tempest's A40 gres name
+                extra_flags=("--gres=gpu:a40:1", _PRIORITY_ACCOUNT),
                 setup=_TEMPEST_SETUP,
             ),
         )
@@ -126,6 +133,7 @@ def _launch(point: StudyPoint) -> PointLaunch:
             cpus=32,
             mem="48G",
             time="24:00:00",
+            extra_flags=(_UNSAFE_ACCOUNT,),
             setup=_TEMPEST_SETUP,
         ),
     )
