@@ -270,6 +270,16 @@ def render_packed_sbatch(
     lines += list(spec.setup)
     if preempt is not None:
         lines += _render_packed_preempt_preamble(preempt)
+    else:
+        # Non-preempt packed runs have no ``launch_remaining`` preamble, so the
+        # Optuna schema is never initialized before the K workers spawn. Without
+        # this, all K race on ``CREATE TABLE`` against the fresh SQLite file and
+        # all-but-one die with ``sqlite3.OperationalError: table studies already
+        # exists`` (observed: 15/16 A100 workers lost). Touch the storage once
+        # here to create the tables — workers then only contend on the study-row
+        # INSERT, which ``create_study(load_if_exists=True)`` handles. Mirrors
+        # the schema init that ``launch_remaining`` performs for the preempt path.
+        lines += _render_packed_storage_init(worker_overrides)
 
     lines.append("PIDS=()")
     if preempt is not None:
@@ -334,6 +344,31 @@ def _render_packed_preempt_preamble(ps: PreemptSpec) -> list[str]:
         "export DDSSM_INVOC=$(date +%s)",
         "export DDSSM_PREEMPTIVE=1",
     ]
+
+
+def _render_packed_storage_init(
+    worker_overrides: list[tuple[int, list[str]]],
+) -> list[str]:
+    """One-time Optuna schema init for the non-preempt packed shape.
+
+    Extracts the shared ``hydra.sweeper.storage`` URL from the workers' override
+    lists (they all carry the same value) and emits a single ``RDBStorage(url)``
+    construction, which runs Optuna's ``_init_tables`` and creates the schema
+    before the K workers start. Returns ``[]`` if no storage override is found
+    (e.g. an in-memory sweeper), in which case there is no DDL race to avoid.
+    """
+    storage = None
+    for _, overrides in worker_overrides:
+        for o in overrides:
+            if o.startswith("hydra.sweeper.storage="):
+                storage = o.split("=", 1)[1]
+                break
+        if storage is not None:
+            break
+    if not storage:
+        return []
+    code = f'from optuna.storages import RDBStorage; RDBStorage("{storage}")'
+    return [f"python -c {_shell_quote(code)}"]
 
 
 def _shell_quote(s: str) -> str:

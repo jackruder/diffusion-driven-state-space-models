@@ -924,6 +924,36 @@ def test_render_packed_single_group_one_sbatch_k_workers() -> None:
     assert script.count("hydra.sweeper.study_name=abl_init_mlp_pinned_per_t__1d") == 8
 
 
+def test_render_packed_nonpreempt_inits_schema_before_workers() -> None:
+    """Non-preempt packed jobs must pre-create the Optuna schema once before the
+    K workers spawn, else they race on CREATE TABLE and all-but-one die with
+    "table studies already exists". The init must precede the worker loop.
+    """
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    jobs = _orch().render(pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8))
+    _, script = jobs[0]
+    lines = script.splitlines()
+    init_idx = next(i for i, ln in enumerate(lines) if "RDBStorage(" in ln)
+    pids_idx = next(i for i, ln in enumerate(lines) if ln == "PIDS=()")
+    first_worker = next(i for i, ln in enumerate(lines) if "python -m ddssm.app" in ln)
+    assert init_idx < pids_idx < first_worker
+    # It is the non-preempt path — no launch_remaining (that does the init for preempt).
+    assert "ddssm.launch_remaining" not in script
+
+
+def test_render_packed_preempt_skips_redundant_schema_init() -> None:
+    """Preempt packed jobs init the schema via launch_remaining, so they must NOT
+    also emit the RDBStorage pre-init (it would be redundant).
+    """
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    jobs = _orch().render(
+        pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8, preemptive=True)
+    )
+    _, script = jobs[0]
+    assert "RDBStorage(" not in script
+    assert "ddssm.launch_remaining" in script
+
+
 def test_render_packed_multi_group_splits_into_g_suffixed_jobs() -> None:
     """4 workers, workers_per_gpu=2 → 2 sbatch jobs (_g0, _g1) of 2 workers each."""
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
