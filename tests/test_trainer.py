@@ -153,6 +153,39 @@ def test_trainer_logs_time_elapsed_s_to_csv(small_model, tmp_path):
     assert all(b >= a - 1e-6 for a, b in zip(elapsed_values, elapsed_values[1:]))
 
 
+def test_fit_writes_validation_rows_to_csv(small_model, tmp_path):
+    """Validation metrics reach metrics.csv (not just TensorBoard).
+
+    Regression guard: CSVLogger.on_epoch used to be a no-op, so val/* was
+    invisible to the CSV that the objective reader and triage tools read.
+    """
+    import csv as _csv
+
+    csv_path = tmp_path / "metrics.csv"
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        csv_log_path=str(csv_path),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+    trainer.fit(
+        train_loader=loader,
+        val_loader=loader,
+        total_steps=2,
+        validate_every=1,
+        log_every=1,
+        checkpoint_every=None,
+        amp=False,
+    )
+    with open(csv_path, newline="") as f:
+        rows = list(_csv.DictReader(f))
+    val_rows = [r for r in rows if r["split"] == "val"]
+    assert val_rows, "no val rows written to metrics.csv"
+    assert all(r["loss/total"] not in ("", None) for r in val_rows)
+
+
 def test_log_train_step_records_optimized_loss_not_unweighted_elbo(
     small_model, tmp_path
 ):

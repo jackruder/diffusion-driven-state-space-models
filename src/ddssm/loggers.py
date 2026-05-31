@@ -131,25 +131,65 @@ class ConsoleLogger(Logger):
 
 
 class CSVLogger(Logger):
-    def __init__(self, path: str):
-        self.path = path
-        self._header_written = os.path.exists(path) and os.path.getsize(path) > 0
+    """Append metric rows to a CSV, keyed by ``(split, step)``.
 
-    def _write(self, split: str, idx_name: str, idx: int, row: Dict[str, float]):
+    Both per-step (train) and per-epoch (val) rows are written, so the
+    file carries every split a run logs. The writer is robust to a
+    changing key set across rows — train vs val, or a stage boundary that
+    introduces new transition sub-terms: when a row introduces a column
+    not yet in the header, the file is rewritten with the widened header
+    and missing cells filled with ``restval``. Within a single, stable key
+    set (the common case) this never triggers and writing is a plain
+    append.
+    """
+
+    def __init__(self, path: str, restval: str = ""):
+        self.path = path
+        self.restval = restval
+        self._fieldnames: list[str] | None = None
+        # Adopt an existing file's header so appends stay column-aligned
+        # (e.g. resuming a run, or a fresh logger over a preempt restart).
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            with open(path, newline="") as f:
+                header = next(csv.reader(f), None)
+            if header:
+                self._fieldnames = list(header)
+
+    def _write(self, split: str, idx: int, row: Dict[str, float]):
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        record = {"split": split, "step": idx, **row}
+        if self._fieldnames is None:
+            self._fieldnames = list(record.keys())
+            with open(self.path, "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=self._fieldnames, restval=self.restval)
+                w.writeheader()
+                w.writerow(record)
+            return
+        new_keys = [k for k in record if k not in self._fieldnames]
+        if new_keys:
+            self._widen_header(new_keys)
         with open(self.path, "a", newline="") as f:
-            writer = csv.writer(f)
-            if not self._header_written:
-                writer.writerow(["split", idx_name] + list(row.keys()))
-                self._header_written = True
-            writer.writerow([split, idx] + [row[k] for k in row])
+            w = csv.DictWriter(
+                f, fieldnames=self._fieldnames, restval=self.restval,
+                extrasaction="ignore",
+            )
+            w.writerow(record)
+
+    def _widen_header(self, new_keys: list[str]):
+        """Rewrite the file with the existing columns plus ``new_keys``."""
+        with open(self.path, newline="") as f:
+            existing = list(csv.DictReader(f))
+        self._fieldnames = self._fieldnames + new_keys
+        with open(self.path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=self._fieldnames, restval=self.restval)
+            w.writeheader()
+            w.writerows(existing)
 
     def on_step(self, split, step, row):
-        self._write(split, "step", step, row)
+        self._write(split, step, row)
 
     def on_epoch(self, split, epoch, row):
-        # Intentionally no-op: this logger currently captures per-step metrics only.
-        pass
+        self._write(split, epoch, row)
 
 
 # ---------- spec & store ----------
@@ -204,15 +244,21 @@ class MetricStore:
         self,
         spec: Optional[list[MetricSpec]] = None,
         loggers: Optional[list[Logger]] = None,
+        split_spec: Optional[Dict[str, list[MetricSpec]]] = None,
     ):
         self.spec = spec or [MetricSpec("loss/*", "mean")]
+        # Per-split spec overrides. Validation, for instance, accumulates
+        # over the whole val set within one ``epoch_end`` and wants mean
+        # meters (weighted by batch size), whereas train samples the last
+        # step before each flush.
+        self.split_spec = split_spec or {}
         self.loggers = loggers or [ConsoleLogger()]
         self.splits: Dict[str, SplitStore] = {}
         self._t0 = time.time()
 
     def _split(self, split: str) -> SplitStore:
         if split not in self.splits:
-            self.splits[split] = SplitStore(self.spec)
+            self.splits[split] = SplitStore(self.split_spec.get(split, self.spec))
         return self.splits[split]
 
     @staticmethod

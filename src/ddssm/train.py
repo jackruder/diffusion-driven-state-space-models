@@ -211,6 +211,16 @@ class DDSSMTrainer:
                 MetricSpec("optim/*", "last"),
                 MetricSpec("mem/*", "last"),
             ],
+            # Validation accumulates over the whole val set within one
+            # ``epoch_end`` flush, so losses are mean-reduced (weighted by
+            # batch size) rather than reported from the last batch.
+            split_spec={
+                "val": [
+                    MetricSpec("loss/*", "mean"),
+                    MetricSpec("optim/*", "last"),
+                    MetricSpec("*", "mean"),
+                ],
+            },
             loggers=loggers,
         )
 
@@ -520,11 +530,14 @@ class DDSSMTrainer:
                 vstep = self.global_step - self._stage_start_step + 1
                 assert self._active_loss is not None
                 vloss = self._active_loss(vcomponents, vstep)
-                self.metrics.update(
-                    "val",
-                    values={"loss/total": vloss, **vmetrics},
-                    weight=vwin.size(0),
-                )
+                # Mirror _log_train_step: report the optimized objective as
+                # loss/total and keep the model's unweighted ELBO under
+                # loss/total_unweighted (vmetrics carries the latter).
+                vlog = dict(vmetrics)
+                if "loss/total" in vlog:
+                    vlog["loss/total_unweighted"] = vlog["loss/total"]
+                vlog["loss/total"] = vloss
+                self.metrics.update("val", values=vlog, weight=vwin.size(0))
 
     def _maybe_run_validation(
         self,
