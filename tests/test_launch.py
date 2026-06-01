@@ -924,9 +924,51 @@ def test_render_packed_single_group_one_sbatch_k_workers() -> None:
             in script
         )
         assert f"hydra.sweep.subdir=w{w}_" in script
+        # Distinct, job-id-derived sampler seed inlined per worker.
+        assert (
+            f"hydra.sweeper.sampler.seed=$(( (SLURM_JOB_ID * 100 + {w}) % 2000000000 ))"
+            in script
+        )
     assert script.count("PIDS+=($!)") == 8
     # All share one study + DB.
     assert script.count("hydra.sweeper.study_name=abl_init_mlp_pinned_per_t__1d") == 8
+
+
+def test_multiworker_overrides_carry_per_worker_sampler_seed() -> None:
+    """Every multi-worker strategy must override ``hydra.sweeper.sampler.seed``
+    from the per-worker ``DDSSM_SAMPLER_SEED`` env, else all packed workers build
+    the SAME NSGA-II sampler and draw identical (duplicate) configs.
+    """
+    ctx = LaunchContext("pre", "store", "sweeps")
+    sp = StudyPoint("p", {}, {}, {})
+    pl = PointLaunch(strategy="optuna_packed_node", sweep="sw", n_trials=6, n_workers=4)
+    for strat in (OptunaPackedNode(), OptunaMultiNode(), LocalParallel()):
+        ov = strat.hydra_overrides(sp, pl, ctx, worker_idx=2)
+        # A placeholder the renderers substitute per worker (a literal
+        # ${oc.env:...} would not survive Hydra's override grammar).
+        assert "hydra.sweeper.sampler.seed=__SAMPLER_SEED__" in ov
+    # Single-worker can't collide, so it intentionally does NOT inject the seed.
+    single = OptunaSingleNode().hydra_overrides(
+        sp, PointLaunch(strategy="optuna_single_node", sweep="sw"), ctx
+    )
+    assert not any("sampler.seed" in o for o in single)
+
+
+def test_packed_render_inlines_distinct_sampler_seed_per_worker() -> None:
+    """The packed sbatch inlines a DISTINCT, SLURM_JOB_ID-derived seed per worker
+    (so workers diverge within a job AND resubmissions diverge across jobs), and
+    the placeholder never leaks into the rendered script.
+    """
+    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    _, script = _orch().render(
+        pts, launch_override=_force_packed(n_workers=4, workers_per_gpu=4)
+    )[0]
+    for w in range(4):
+        assert (
+            f"hydra.sweeper.sampler.seed=$(( (SLURM_JOB_ID * 100 + {w}) % 2000000000 ))"
+            in script
+        )
+    assert "__SAMPLER_SEED__" not in script
 
 
 def test_precreate_storage_creates_schema_before_submit(tmp_path) -> None:
@@ -1089,6 +1131,9 @@ def test_render_packed_multi_group_splits_into_g_suffixed_jobs() -> None:
     _, g1 = jobs[1]
     assert "DDSSM_WORKER_ID=2 OMP_NUM_THREADS=4" in g1
     assert "DDSSM_WORKER_ID=3 OMP_NUM_THREADS=4" in g1
+    # Seed term carries the GLOBAL worker index (2,3 in g1), not a per-group reset.
+    assert "hydra.sweeper.sampler.seed=$(( (SLURM_JOB_ID * 100 + 2) % 2000000000 ))" in g1
+    assert "hydra.sweeper.sampler.seed=$(( (SLURM_JOB_ID * 100 + 3) % 2000000000 ))" in g1
 
 
 def test_render_packed_preemptive_shares_preamble_and_fans_out_trap() -> None:

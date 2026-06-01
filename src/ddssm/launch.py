@@ -38,6 +38,19 @@ from ddssm.experiment import SBatch
 # ``ceil(n_trials/n_workers)`` for the local backend).
 _N_PER_WORKER_PLACEHOLDER = "__N_PER_WORKER__"
 
+# Per-worker NSGA-II sampler seed. Without this, every packed/multi worker builds
+# its sampler from the SAME ``hydra.sweeper.sampler.seed`` (42 in the yaml) and so
+# draws the IDENTICAL trial sequence — a cell's "N trials" collapse to a handful
+# of repeated configs, because at small per-worker budgets the gen-0 random
+# population is never escaped (observed: 30 COMPLETE trials = 2 distinct configs).
+# The value is a PLACEHOLDER the renderers replace with a distinct seed per worker:
+# the sbatch paths substitute a bash arithmetic expansion over ``$SLURM_JOB_ID``
+# (so the int reaches Hydra directly — env-var interpolation like
+# ``${oc.env:...}`` does NOT parse through Hydra's override grammar), and
+# ``run_local`` substitutes ``idx+1``. See ``_SAMPLER_SEED_PLACEHOLDER`` in sbatch.py.
+_SAMPLER_SEED_PLACEHOLDER = "__SAMPLER_SEED__"
+_SAMPLER_SEED_OVERRIDE = f"hydra.sweeper.sampler.seed={_SAMPLER_SEED_PLACEHOLDER}"
+
 # A study point's resource ask reuses the per-experiment SBatch dataclass.
 ResourceSpec = SBatch
 
@@ -262,6 +275,7 @@ class _MultiWorkerOptunaBase(LaunchStrategy):
             f"hydra.sweeper.storage={storage}",
             f"hydra.sweep.dir={sweep_dir}",
             subdir,
+            _SAMPLER_SEED_OVERRIDE,
         ]
 
 
@@ -654,6 +668,12 @@ class StudyOrchestrator:
                         overrides += list(pl.extra_overrides)
                         if seed is not None:
                             overrides.append(f"experiment.seed={seed}")
+                        # Distinct sampler seed per local worker (no SLURM here);
+                        # idx+1 keeps it nonzero and unique across the pack.
+                        overrides = [
+                            o.replace(_SAMPLER_SEED_PLACEHOLDER, str(w_idx + 1))
+                            for o in overrides
+                        ]
                         if n_per_worker_literal is not None:
                             overrides = [
                                 o.replace(_N_PER_WORKER_PLACEHOLDER, n_per_worker_literal)

@@ -27,7 +27,12 @@ max_failure_rate: 0.0
 search_space: null
 params: {}
 custom_search_space: null
-# Seed the sampler so reruns of the same CLI explore the same hp points.
-# Override per-study via ``hydra.sweeper.sampler.seed=N``.
+# Default sampler seed for a SINGLE-process run (reproducible re-exploration).
+# NOTE: distributed launches (``ddssm.launch`` packed/multi-worker) MUST override
+# this PER WORKER — else every worker builds its sampler from seed=42 and draws
+# the IDENTICAL trial sequence, collapsing a cell's trials to duplicate configs.
+# The launcher injects ``hydra.sweeper.sampler.seed=<SLURM_JOB_ID-derived int>``
+# per worker (see ``ddssm.launch._SAMPLER_SEED_OVERRIDE``). Override manually via
+# ``hydra.sweeper.sampler.seed=N``.
 sampler:
   seed: 42

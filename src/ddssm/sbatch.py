@@ -45,6 +45,9 @@ DEFAULT_SBATCH = SBatch(
 # Placeholder token that the preempt-aware strategies emit for ``n_trials``;
 # substituted in this file with the bash-side ``$N_PER_WORKER`` shell var.
 _N_PER_WORKER_PLACEHOLDER = "__N_PER_WORKER__"
+# Mirrors ddssm.launch._SAMPLER_SEED_PLACEHOLDER (kept in sync, like the above —
+# launch.py imports from sbatch.py, not vice-versa, so the value is duplicated).
+_SAMPLER_SEED_PLACEHOLDER = "__SAMPLER_SEED__"
 
 
 @dataclass(frozen=True)
@@ -161,6 +164,13 @@ def render_sbatch(
         # Optuna sweeper's ``n_trials_to_go > 0`` raises a str/int TypeError).
         flags_blob = flags_blob.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER")
         kvs_blob = kvs_blob.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER")
+
+    # One worker per sbatch here (OptunaMultiNode), so the job id alone is a
+    # distinct per-worker seed — no worker_idx term needed. No-op when the
+    # placeholder is absent (e.g. single-node strategy, which doesn't inject it).
+    kvs_blob = kvs_blob.replace(
+        _SAMPLER_SEED_PLACEHOLDER, "$(( SLURM_JOB_ID % 2000000000 ))"
+    )
 
     if preempt is None:
         parts = ["exec python -m ddssm.app"]
@@ -307,6 +317,16 @@ def render_packed_sbatch(
             # expands at runtime (see render_sbatch for the failure mode).
             flags_blob = flags_blob.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER")
             kvs_blob = kvs_blob.replace(_N_PER_WORKER_PLACEHOLDER, "$N_PER_WORKER")
+        # Distinct NSGA-II sampler seed per (job, worker): SLURM_JOB_ID makes
+        # resubmits/cells differ, ``*100 + worker_idx`` separates the packed
+        # workers that share one job, and the modulo stays inside numpy's seed
+        # range. Substituted AFTER _shell_quote so the bare ``$(( ))`` arithmetic
+        # expands at runtime to a plain int (an ``${oc.env:...}`` interpolation
+        # would NOT survive Hydra's override grammar).
+        kvs_blob = kvs_blob.replace(
+            _SAMPLER_SEED_PLACEHOLDER,
+            f"$(( (SLURM_JOB_ID * 100 + {worker_idx}) % 2000000000 ))",
+        )
         parts = [
             f"DDSSM_WORKER_ID={worker_idx}",
             f"OMP_NUM_THREADS={cpus_per_worker}",
