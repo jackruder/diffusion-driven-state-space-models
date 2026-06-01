@@ -57,7 +57,7 @@ class BaseEncoderCombiner(nn.Module, metaclass=abc.ABCMeta):
         *,
         h_fut: torch.Tensor,  # (B, summary_dim)
         z_hist: torch.Tensor,  # (B, d, j) — left-padded
-        hist_time_emb: torch.Tensor,  # (B, j+1, emb_time_dim) — index 0 is h_fut slot
+        hist_time_emb: torch.Tensor,  # (B, j, emb_time_dim) — history steps only
         pad_mask_hist: torch.Tensor,  # (B, j) — 1 if real history, 0 if padded
         static_context: Optional[torch.Tensor] = None,  # (B, E_s, hidden_dim)
     ) -> torch.Tensor:  # (B, out_features)

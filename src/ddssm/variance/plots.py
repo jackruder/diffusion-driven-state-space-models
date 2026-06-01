@@ -12,6 +12,14 @@ import numpy as np
 
 @dataclass
 class ProbePlotContext:
+    """Inputs available to every probe-plot function.
+
+    Attributes:
+        rows: Per-sample probe rows.
+        summary: Probe-loop summary dict.
+        metrics: Computed metric outputs keyed by metric name.
+    """
+
     rows: list[dict[str, Any]]
     summary: dict[str, Any]
     metrics: dict[str, Any]
@@ -22,6 +30,18 @@ PROBE_PLOT_REGISTRY: dict[str, ProbePlotFn] = {}
 
 
 def register_probe_plot(name: str) -> Callable[[ProbePlotFn], ProbePlotFn]:
+    """Decorator registering a probe-plot function under ``name``.
+
+    Args:
+        name: Registry key a ``ProbeSpec`` uses to select this plot.
+
+    Returns:
+        The decorator, which returns the function unchanged.
+
+    Raises:
+        ValueError: If ``name`` is already registered.
+    """
+
     def _wrap(fn: ProbePlotFn) -> ProbePlotFn:
         if name in PROBE_PLOT_REGISTRY:
             raise ValueError(f"Probe plot {name!r} already registered.")
@@ -72,6 +92,7 @@ def _plot_var_per_k(
     ylim: tuple[float, float] | None = None,
     xlim: tuple[float, float] | None = None,
 ) -> None:
+    """Draw one log-scale variance-vs-τ curve per cell from ``metric_key``."""
     var = ctx.metrics.get(metric_key, {})
     if not var:
         _plot_empty(save_path, f"No data for {metric_key!r}")
@@ -134,6 +155,7 @@ def plot_var_grad_vs_tau(
     xlim: tuple[float, float] | None = None,
     **_: Any,
 ) -> None:
+    """Gradient variance per τ-bin (forced k), one curve per cell."""
     _plot_var_per_k(
         ctx, save_path,
         metric_key="grad_var_per_tau",
@@ -154,6 +176,7 @@ def plot_var_loss_vs_tau(
     xlim: tuple[float, float] | None = None,
     **_: Any,
 ) -> None:
+    """Loss variance per τ-bin (forced k), one curve per cell."""
     _plot_var_per_k(
         ctx, save_path,
         metric_key="loss_var_per_tau",
@@ -228,6 +251,7 @@ def plot_ratio_vs_tau(
 
 @register_probe_plot("summary_table")
 def plot_summary_table(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
+    """Render the probe summary dict as a monospace text panel."""
     text = json.dumps(ctx.summary, indent=2)
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.axis("off")
@@ -239,6 +263,7 @@ def plot_summary_table(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
 
 @register_probe_plot("var_grad_vs_step")
 def plot_var_grad_vs_step(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
+    """Placeholder for the R2 checkpoint-sweep grad-variance-vs-step plot."""
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.text(0.5, 0.5, "R2 checkpoint-sweep plot placeholder",
             ha="center", va="center")

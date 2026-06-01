@@ -66,6 +66,11 @@ def _resolve_template(study, points, resources_from: str | None):
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry: render one co-located sbatch per GPU for a study's cells.
+
+    Resolves the study, picks a resource template, then renders/writes/submits
+    the per-GPU packed jobs. Returns the process exit code (0 on success).
+    """
     p = argparse.ArgumentParser(prog="python -m ddssm.colocate")
     p.add_argument("study", help="registered study name (e.g. init_centering)")
     p.add_argument(

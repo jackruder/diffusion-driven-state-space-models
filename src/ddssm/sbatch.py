@@ -60,9 +60,8 @@ class PreemptSpec:
     ``ddssm.launch_remaining`` invocation (which computes the still-pending
     budget; it does NOT reap RUNNING trials — see the preamble for why).
     ``n_workers`` divides the remaining budget across siblings (ceiling
-    division). ``worker_idx`` is
-    baked into the ``DDSSM_WORKER_ID`` env export so each worker subprocess
-    knows its slot.
+    division). ``worker_idx`` is baked into the ``DDSSM_WORKER_ID`` env export
+    so each worker subprocess knows its slot.
     """
 
     grace_seconds: int
@@ -200,15 +199,15 @@ def render_sbatch(
 
 
 def _render_preempt_preamble(ps: PreemptSpec) -> list[str]:
-    """Bash preamble for preempt-aware rendering.
+    """Bash preamble for preempt-aware rendering (single worker per sbatch).
 
-    Order matters: the launch_remaining call runs FIRST (under ``DDSSM_PREEMPTIVE=1``
-    via the surrounding env exports it's still safe — the cleanup callback path
-    is the explicit-enqueue model from app.py per the Phase 0/1 gate-test
-    outcome). The early-exit guard short-circuits when the study has already
-    hit its target; otherwise the worker computes its slice via ceiling
-    division and dispatches the python child under a USR1/TERM trap so the
-    trainer's signal handler sees the preempt signal.
+    Order matters: ``launch_remaining`` runs FIRST to compute the study's
+    remaining budget. The early-exit guard then short-circuits when the study
+    has already hit its target; otherwise it computes this worker's slice via
+    ceiling division, exports the preempt-aware env vars
+    (``DDSSM_INVOC`` / ``DDSSM_PREEMPTIVE`` / ``DDSSM_WORKER_ID``), and installs
+    the USR1/TERM ``trap`` that forwards the preempt signal to the python child
+    (caller dispatches that child).
     """
     return [
         # Budget count ONLY — no ``--cleanup-running-older-than``. The age-based

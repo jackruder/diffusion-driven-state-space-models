@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 
 
 def seed_everything(seed: int) -> None:
+    """Seed Python, NumPy, and Torch (incl. CUDA) RNGs for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -68,6 +69,30 @@ def run_probe(
     device: torch.device,
     checkpoint_path: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, torch.nn.Module]]:
+    """Run the variance-probe loop and collect per-sample rows and summaries.
+
+    Loads a checkpoint, freezes the encoder/decoder/embed submodules, then
+    for each (seed, batch) draws ``R`` replicas — measuring the transition
+    score-net loss and gradient under each probe cell with shared noise and
+    step indices so cells are paired. When ``spec.force_per_k`` is set it
+    additionally sweeps every diffusion step ``k`` to build the per-τ curves.
+
+    Args:
+        experiment: The built :class:`~ddssm.experiment.Experiment`.
+        spec: The driving :class:`~ddssm.variance.runner.ProbeSpec`.
+        device: Torch device for the forward/backward passes.
+        checkpoint_path: Checkpoint to load (EMA shadows by default).
+
+    Returns:
+        A ``(rows, summary, transitions)`` triple: per-sample row dicts,
+        the per-cell / per-k summary, and the transition modules keyed by
+        k-sampling mode.
+
+    Raises:
+        TypeError: If the model lacks a ``transition`` module or the
+            transition has no ``p_k`` buffer.
+        ValueError: If the probed split has no loader.
+    """
     from ..checkpoint import prepare_model
 
     # ``prepare_model`` defaults to ``load_ema=True`` — the probe measures

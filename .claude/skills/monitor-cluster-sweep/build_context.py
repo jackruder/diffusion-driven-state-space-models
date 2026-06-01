@@ -33,6 +33,11 @@ import argparse
 
 
 def short_label(name):
+    """Derive a short, human display label for an objective/metric name.
+
+    Maps known families (ELBO/CRPS/MAE/RMSE/JSD/time-to-target) to fixed
+    labels; otherwise falls back to the last one or two underscore tokens.
+    """
     n = name.lower()
     if "elbo" in n:
         return "ELBO"
@@ -52,11 +57,17 @@ def short_label(name):
 
 
 def is_time_axis(name):
+    """Return True if the metric name denotes a wallclock/time axis."""
     n = name.lower()
     return ("seconds" in n) or ("wallclock" in n) or n.endswith("_time")
 
 
 def main():
+    """Introspect the study + a resolved config and emit the display context.
+
+    Prints a human summary to stderr and one ``__JSON__``-prefixed context line
+    to stdout for the local driver to cache as the per-experiment profile.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--remote-dir", default="~/diffusion-driven-state-space-models")
     ap.add_argument("--study-prefix", required=True)

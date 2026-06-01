@@ -46,10 +46,13 @@ class BaseEncoder(nn.Module, metaclass=abc.ABCMeta):
         covariates: Optional[torch.Tensor] = None,
         static_embed: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, GaussianStats]:
-        """Returns:
-        zs        : (B, S, d, T)
-        logq_paths: (B, S, T)  (log q_ϕ(z_t^{(s)} | ·)), MC densities
-        stats     : EncoderStats (may be empty for non-Gaussian encoders)
+        """Sample ``S`` latent paths and their per-step encoder log-densities.
+
+        Returns:
+            zs: ``(B, S, d, T)`` sampled latent paths.
+            logq_paths: ``(B, S, T)`` per-step ``log q_ϕ(z_t^{(s)} | ·)``.
+            stats: per-step distribution params (may be empty for
+                non-Gaussian encoders).
         """
         ...
 
@@ -102,12 +105,13 @@ class GaussianEncoder(BaseEncoder):
     The encoder owns the future-summary RNN and the per-step time/mask
     construction logic; the actual mixing of ``h_fut`` with the latent
     history happens inside the configurable ``combiner`` slot, and the
-    distribution parameterization lives in the ``dist_head`` slot. With
-    ``combiner=LegacyJointCombiner`` and ``dist_head=GaussianDistHead``
-    this matches the pre-refactor encoder bit-for-bit.
+    distribution parameterization lives in the ``dist_head`` slot. The
+    defaults are a :class:`~ddssm.combiners.CompoundCombiner`
+    (``ContextProducerAggregator`` + ``ConcatLinearFusion``) and a
+    :class:`~ddssm.dist_heads.GaussianDistHead`.
 
-    The name retains "Gaussian" for now even though the dist head is
-    pluggable, to avoid mass-renaming downstream call sites.
+    The name retains "Gaussian" even though the dist head is pluggable, to
+    avoid mass-renaming downstream call sites.
     """
 
     def __init__(
@@ -414,6 +418,3 @@ class GaussianEncoder(BaseEncoder):
 
     def entropy_init(self, stats: dict, steps: int) -> torch.Tensor:
         return self.dist_head.entropy_init(stats, steps)
-
-
-# ---- Initial Prior Interface ---- ####

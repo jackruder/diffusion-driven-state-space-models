@@ -1,3 +1,5 @@
+"""Opt-in ``torch.compile`` wrapper gated by ``DDSSM_TORCH_COMPILE``."""
+
 from __future__ import annotations
 
 import logging

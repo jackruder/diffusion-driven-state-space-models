@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-
 # Nonlinear-bimodal-lift constants shared with
 # ``ddssm.eval.synthetic_kernels`` so the closed-form transition kernel
 # matches the data generator exactly.
@@ -24,6 +23,14 @@ NLBL_MV_A_SEED = 12345
 
 
 class SyntheticDataset(Dataset):
+    """Sequence dataset of synthetically generated time series.
+
+    A single generated population of ``3 * N_per_split`` sequences is
+    partitioned into deterministic disjoint ``train``/``val``/``test``
+    slices. Each item is a ``(D, T)`` sequence with an all-ones
+    observation mask; see :meth:`__getitem__` for the emitted dict.
+    """
+
     def __init__(
         self,
         mode: str,
@@ -32,18 +39,20 @@ class SyntheticDataset(Dataset):
         T: int = 100,
         D: int = 1,
         seed: int = 42,
-        dataset_seed: int = 1234,  # new: controls the data split, not the model seed
+        dataset_seed: int = 1234,
         expose_gt_latents: bool = False,
     ):
-        """
+        """Generate the population and keep the slice for ``split``.
+
         Args:
-            mode: 'iid', 'lgssm', ...
-            split: 'train', 'val', 'test'
-            N_per_split: Number of sequences per split (default 1024)
-            T: Length of each sequence
-            D: Data dimension
-            seed: (legacy, ignored for splitting)
-            dataset_seed: Seed for data generation and split
+            mode: Generator mode (e.g. ``"iid"``, ``"lgssm"``,
+                ``"nonlinear-bimodal-lift"``); see :meth:`_generate_data`.
+            split: One of ``"train"``, ``"val"``, ``"test"``.
+            N_per_split: Number of sequences per split.
+            T: Length of each sequence.
+            D: Data (observation) dimension.
+            seed: Legacy; ignored (splitting is driven by ``dataset_seed``).
+            dataset_seed: Seed for data generation and the split.
             expose_gt_latents: When True, ``__getitem__`` returns an
                 additional ``gt_latent`` field containing the
                 ground-truth latent ``z`` underlying each sequence.
@@ -86,6 +95,12 @@ class SyntheticDataset(Dataset):
         self.N = len(self.data)
 
     def _generate_data(self, seed):
+        """Generate the full ``(N_total, D, T)`` population for ``self.mode``.
+
+        Seeds torch and numpy with ``seed`` for reproducibility and, for
+        latent modes with ``expose_gt_latents`` set, records the clean
+        latent path in ``self._all_gt_latents``.
+        """
         torch.manual_seed(seed)
         np.random.seed(seed)
 
@@ -398,12 +413,13 @@ class SyntheticDataset(Dataset):
         return self.N
 
     def __getitem__(self, idx):
-        full_seq = self.data[idx]  # (D, T)
+        """Return one model-ready item.
 
-        # Standard format for DDSSM training
-        # observed_data: (D, T)
-        # observation_mask: (D, T)
-        # timepoints: (T)
+        Keys: ``observed_data`` (D, T), ``observation_mask`` (D, T,
+        all ones), ``timepoints`` (T,), and ``gt_latent`` (D, T) when
+        ``expose_gt_latents`` is set and the mode supports it.
+        """
+        full_seq = self.data[idx]  # (D, T)
 
         T = full_seq.shape[1]
 
@@ -412,8 +428,6 @@ class SyntheticDataset(Dataset):
             "observation_mask": torch.ones_like(full_seq),
             "timepoints": torch.arange(T, dtype=torch.float32),
         }
-        # Optional GT-latent surface (e.g. for ``gt_latent_jsd`` +
-        # ``crps_sum_latent`` evaluators on the LGSSM mode).
         if self.expose_gt_latents and self.gt_latents is not None:
             item["gt_latent"] = self.gt_latents[idx]
         return item

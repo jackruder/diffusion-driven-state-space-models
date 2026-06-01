@@ -107,6 +107,7 @@ experiment_store(init_smoke_high_surface, name="init_smoke_high_surface")
 # "operationally indistinguishable from 0" instead.
 #
 # The study's cell points are published to ``experiment_store`` by
-# ``register_study(..., into=experiment_store)`` in ``study.py`` — importing
-# ``INIT_CENTERING_STUDY`` above is what triggers it; no separate call here.
+# ``register_study(..., into=experiment_store)`` in ``study.py``. That runs at
+# import time when the package ``__init__`` imports the ``study`` submodule, so
+# this module needs no separate call.
 # ---------------------------------------------------------------------------

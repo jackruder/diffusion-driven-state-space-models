@@ -1,8 +1,9 @@
-"""Future-summary modules (F_ϕ) that summarise an observed sequence into a fixed-dimension context vector.
+"""Future-summary modules (F_ϕ) that summarise an observed sequence.
 
-Supports pluggable time-mixing backbones (Mamba, GRU, Conv, Identity, Transformer)
-and handles missing-data masking.  The summary is consumed by the encoder to
-produce latent distributions q_ϕ(z_t | ·).
+Each module reverses time, runs a pluggable mixing backbone (GRU, Conv,
+Identity, Transformer), and projects to a per-step context vector. Missing-data
+masking is handled inline. The summary is consumed by the encoder to produce
+latent distributions q_ϕ(z_t | ·).
 """
 
 import torch
@@ -21,7 +22,7 @@ class FutureSummary(nn.Module):
         static_embed  : (B, D, E_s)
 
     Output:
-        h : (B, T, hidden_dim)
+        h : (B, T, summary_dim)
     """
 
     def __init__(
@@ -51,11 +52,13 @@ class FutureSummary(nn.Module):
         self.input_proj = nn.Linear(self.input_dim, self.summary_dim)
 
     def _forward_mixer(self, x: torch.Tensor) -> torch.Tensor:
-        """Process the sequence in the hidden space.
+        """Process the time-reversed sequence in the summary space.
+
         Args:
-            x: (B, T, hidden_dim) - already reversed
+            x: (B, T, summary_dim), already time-reversed.
+
         Returns:
-            x: (B, T, hidden_dim)
+            x: (B, T, summary_dim).
         """
         raise NotImplementedError
 
@@ -91,6 +94,8 @@ class FutureSummary(nn.Module):
 
 
 class GRUFutureSummary(FutureSummary):
+    """Future-summary with a GRU time-mixing backbone."""
+
     def __init__(
         self,
         data_dim: int,
@@ -123,6 +128,12 @@ class GRUFutureSummary(FutureSummary):
 
 
 class TransformerFutureSummary(FutureSummary):
+    """Future-summary with a causal Transformer-encoder time-mixing backbone.
+
+    The causal mask is applied in reversed-time order, so each step attends
+    only to its own future in the original sequence.
+    """
+
     def __init__(
         self,
         data_dim: int,

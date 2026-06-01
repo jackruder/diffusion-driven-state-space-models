@@ -61,6 +61,28 @@ def get_loaders_for(
     num_train_batches_per_epoch: int | None = None, force_fresh_repo: bool = False,
     covariates_list: List[np.ndarray] | None = None,
 ):
+    """Build windowed loaders for a named GluonTS repository dataset.
+
+    Looks up the per-dataset window spec in ``DATASETS``, fetches the
+    series via the GluonTS repository, and delegates to
+    :func:`build_loaders_for_expt`. Defaults for the epoch size and
+    instances-per-series are derived from the number of available train
+    windows when not given.
+
+    Args:
+        name: Dataset key in ``DATASETS`` (``solar``, ``electricity``, …).
+        batch_size: Loader batch size.
+        train_instances_per_series: Override sampler intensity.
+        num_train_batches_per_epoch: Override train epoch size.
+        force_fresh_repo: Regenerate the cached GluonTS repository.
+        covariates_list: Optional per-series dynamic covariates.
+
+    Returns:
+        ``(train_loader, val_loader, test_loader, (means, stds))``.
+
+    Raises:
+        AssertionError: ``name`` is not a known dataset key.
+    """
     assert name in DATASETS, f"Unknown dataset key: {name}"
     series_list, _ = _repo_to_series_list(REPO_NAMES[name], expected_k=EXPECTED_K[name], force_fresh=force_fresh_repo)
     
@@ -81,4 +103,3 @@ def get_loaders_for(
 def get_solar_loaders(**kw): return get_loaders_for("solar", **kw)
 def get_electricity_loaders(**kw): return get_loaders_for("electricity", **kw)
 def get_traffic_loaders(**kw): return get_loaders_for("traffic", **kw)
-# Add similar wrappers for covariates if needed

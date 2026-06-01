@@ -12,6 +12,19 @@ MIN_DIVISOR = 1e-12
 
 @dataclass
 class ProbeContext:
+    """Inputs available to every probe-metric function.
+
+    Attributes:
+        model: The probed model.
+        transitions: Transition modules keyed by k-sampling mode.
+        loader: DataModule loader for the probed split.
+        device: Torch device.
+        spec: The driving :class:`~ddssm.variance.runner.ProbeSpec`.
+        run_dir: Output directory for this probe run.
+        rows: Per-sample probe rows (replica and forced-k kinds).
+        summary: Probe-loop summary (per-cell and per-k gradient stats).
+    """
+
     model: Any
     transitions: dict[str, Any]
     loader: Any
@@ -27,6 +40,18 @@ PROBE_METRIC_REGISTRY: dict[str, ProbeMetricFn] = {}
 
 
 def register_probe_metric(name: str) -> Callable[[ProbeMetricFn], ProbeMetricFn]:
+    """Decorator registering a probe-metric function under ``name``.
+
+    Args:
+        name: Registry key a ``ProbeSpec`` uses to select this metric.
+
+    Returns:
+        The decorator, which returns the function unchanged.
+
+    Raises:
+        ValueError: If ``name`` is already registered.
+    """
+
     def _wrap(fn: ProbeMetricFn) -> ProbeMetricFn:
         if name in PROBE_METRIC_REGISTRY:
             raise ValueError(f"Probe metric {name!r} already registered.")
@@ -74,6 +99,7 @@ def metric_loss_var(ctx: ProbeContext) -> dict[str, Any]:
 
 @register_probe_metric("grad_var")
 def metric_grad_var(ctx: ProbeContext) -> dict[str, Any]:
+    """Across-replica gradient variance per cell, read from the summary."""
     return {
         "grad_var": {
             k: float(v.get("grad_variance", np.nan))
@@ -84,6 +110,7 @@ def metric_grad_var(ctx: ProbeContext) -> dict[str, Any]:
 
 @register_probe_metric("ratio_esm_dsm")
 def metric_ratio_esm_dsm(ctx: ProbeContext) -> dict[str, Any]:
+    """Scalar ESM/DSM variance ratio per k-sampling mode (loss and grad)."""
     loss_var = metric_loss_var(ctx)["loss_var"]
     grad_var = metric_grad_var(ctx)["grad_var"]
     out: dict[str, Any] = {"loss": {}, "grad": {}}
@@ -124,6 +151,7 @@ def _loss_var_per_tau(ctx: ProbeContext) -> dict[str, dict[str, float]]:
 
 @register_probe_metric("loss_var_per_tau")
 def metric_loss_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    """Per-(cell, k) loss variance from the forced-k loop."""
     return {"loss_var_per_tau": _loss_var_per_tau(ctx)}
 
 
@@ -131,6 +159,7 @@ def metric_loss_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
 # the same value under the legacy key.
 @register_probe_metric("var_per_tau")
 def metric_var_per_tau(ctx: ProbeContext) -> dict[str, Any]:
+    """Legacy alias of ``loss_var_per_tau`` under the ``var_per_tau`` key."""
     return {"var_per_tau": _loss_var_per_tau(ctx)}
 
 

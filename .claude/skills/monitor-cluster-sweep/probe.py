@@ -32,6 +32,7 @@ from collections import Counter
 
 
 def _q(xs, p):
+    """Return the ``p``-quantile (0..1) of ``xs`` by nearest-rank, or None."""
     if not xs:
         return None
     xs = sorted(xs)
@@ -70,6 +71,12 @@ def trial_dirs(remote, study):
 
 
 def main():
+    """Compute per-cell stats per the context and emit the table + JSON.
+
+    Prints a human table to stderr and one ``__JSON__``-prefixed line carrying
+    the per-cell rows (state counts, best-per-objective, derived columns,
+    median trial duration, queue state, projected final count) to stdout.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--remote-dir", default="~/diffusion-driven-state-space-models")
     ap.add_argument("--context", required=True, help="context JSON from build_context.py")

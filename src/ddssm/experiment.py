@@ -1,8 +1,8 @@
 """Experiment: composition root for a DDSSM training run.
 
 An :class:`Experiment` ties together a :class:`DDSSMDataModule`, a model,
-a trainer factory, training scalars, and an objective. ``run()`` is
-called by :mod:`ddssm.app` after Hydra composes the config. The class is
+a trainer factory, training scalars, and an objective. :meth:`Experiment.train`
+is called by :mod:`ddssm.app` after Hydra composes the config. The class is
 intentionally a thin composition layer — no construction logic lives
 here, no inheritance, no abstract methods. The Hydra config layer
 handles wiring; this class handles orchestration.
@@ -349,7 +349,7 @@ def _seed_everything(seed: int | None) -> None:
 class Experiment:
     """Composition of a data module, a model, a trainer factory, and run scalars.
 
-    The trainer is constructed lazily inside :meth:`run` because it
+    The trainer is constructed lazily inside :meth:`train` because it
     needs the device and the per-trial run directory — both of which
     are owned by :mod:`ddssm.app`.
     """

@@ -45,6 +45,18 @@ PLOT_REGISTRY: Dict[str, PlotFn] = {}
 
 
 def register_plot(name: str) -> Callable[[PlotFn], PlotFn]:
+    """Decorator registering a plot function under ``name`` in the registry.
+
+    Args:
+        name: Registry key a ``VizSpec`` uses to select this plot.
+
+    Returns:
+        The decorator, which returns the function unchanged.
+
+    Raises:
+        ValueError: If ``name`` is already registered.
+    """
+
     def _wrap(fn: PlotFn) -> PlotFn:
         if name in PLOT_REGISTRY:
             raise ValueError(f"Plot {name!r} already registered")

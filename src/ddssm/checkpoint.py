@@ -87,6 +87,12 @@ class Checkpoint:
     def from_trainer(
         cls, trainer, *, stage_prefix: str | None = None,
     ) -> "Checkpoint":
+        """Snapshot a trainer's state into a :class:`Checkpoint`.
+
+        Scaler state is captured only when the GradScaler is enabled (a
+        disabled scaler carries nothing worth resuming); ``stage_prefix``
+        records the originating stage for multi-stage resume (ADR-0009).
+        """
         ema = getattr(trainer, "ema", None)
         scaler = getattr(trainer, "scaler", None)
         scheduler = getattr(trainer, "scheduler", None)
@@ -135,6 +141,13 @@ class Checkpoint:
 
     @classmethod
     def load(cls, path: str, *, device: torch.device) -> "Checkpoint":
+        """Parse a ``.pth`` payload into a :class:`Checkpoint`.
+
+        Tolerates legacy raw ``state_dict`` payloads (no ``model_state`` key)
+        and v1 payloads (missing ``scaler_state`` / ``scheduler_state``, which
+        default to ``None``); an unknown ``_format`` is loaded best-effort
+        with a warning.
+        """
         payload = torch.load(path, map_location=device, weights_only=False)
         if not isinstance(payload, dict) or "model_state" not in payload:
             # Legacy raw state_dict (pre-payload checkpoints).

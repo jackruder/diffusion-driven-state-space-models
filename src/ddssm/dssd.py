@@ -1,4 +1,8 @@
-"""Core DDSSM model: ELBO forward pass, encoder/decoder/transition dispatch, and forecast rollout."""
+"""Core DDSSM model.
+
+Owns the ELBO forward pass, encoder/decoder/transition dispatch, and the
+autoregressive forecast rollout.
+"""
 
 from types import SimpleNamespace
 from typing import Any, Dict, List, final
@@ -33,6 +37,7 @@ class ProbeBatch:
     covariates: torch.Tensor | None = None
 
     def as_kwargs(self) -> dict:
+        """Return the payload as a keyword-argument dict for probe calls."""
         return {
             "enc_stats": self.enc_stats,
             "zs": self.zs,
@@ -46,16 +51,18 @@ class ProbeBatch:
 class DDSSM_base(nn.Module):
     """Diffusion-Driven State Space Model (DDSSM).
 
-    Implements the full variational model: encoder q_ϕ, decoder p_θ,
-    initialisation prior p_η, and a pluggable transition p_ψ (Gaussian or
-    diffusion-based).  The ``forward`` method returns the ELBO loss and its
-    components; ``forecast`` autoregressively rolls out future latent states
-    and decodes them.
+    Implements the full variational model: encoder q_ϕ, decoder p_θ, and a
+    pluggable transition p_ψ (Gaussian or diffusion-based). The initial-state
+    term over the first ``j`` latents is the transition's hierarchical
+    VHP-via-diffusion walk (ADR-0006), which requires an auxiliary posterior
+    ``q_Φ``; there is no standalone init-prior module. The ``forward`` method
+    returns the ELBO loss and its components; ``forecast`` autoregressively
+    rolls out future latent states and decodes them.
 
     Args:
         encoder: Instantiated encoder module.
         decoder: Instantiated decoder module.
-        transition: Instantiated transition module.
+        transition: Instantiated transition module (the stage-2 slot).
         j: Number of history steps used by each module.
         data_dim: Observed data dimension D.
         latent_dim: Latent dimension d.
@@ -68,6 +75,17 @@ class DDSSM_base(nn.Module):
         logvar_min: Min clamp for decoder/encoder log-variance.
         logvar_max: Max clamp for decoder/encoder log-variance.
         S: Number of Monte Carlo encoder samples.
+        aux_posterior: Required ``q_Φ(z_aux | z_{1:j})`` for the init term.
+        baseline: Optional centering baseline for the transition.
+        baseline_anchor: Optional frozen anchor for the ``r_mu_p`` regularizer.
+        baseline_mode: ``"pinned"`` or ``"learnable"``.
+        sigma_data: Optional per-t σ_data² buffer consumed by the transition.
+        stage1_transition: Optional transition used when
+            ``stage_selector == "stage_1"``.
+
+    Raises:
+        ValueError: If ``aux_posterior`` is ``None`` or ``baseline_mode`` is
+            not ``"pinned"`` / ``"learnable"``.
     """
 
     def __init__(
@@ -775,10 +793,11 @@ class DDSSM_base(nn.Module):
         s_tmin: float = 0.0,
         s_tmax: float = float("inf"),
     ) -> Dict[str, torch.Tensor]:
-        """Encode history → Autoregresie transition → decode future.
+        """Encode history, autoregressively roll out, and decode the future.
 
         Returns:
-          {'pred_mean': (B, K, L2), 'pred_samples': (B, S, K, L2)}
+            Dict with ``pred_mean`` ``(B, D, L2)`` and ``pred_samples``
+            ``(B, num_samples, D, L2)``.
         """
         assert (
             x_hist is not None

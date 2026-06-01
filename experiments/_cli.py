@@ -137,6 +137,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse ``argv`` and dispatch to the matching subcommand handler.
+
+    Args:
+        argv: Argument list (defaults to ``sys.argv[1:]`` when ``None``).
+
+    Returns:
+        The subcommand's process exit code.
+    """
     parser = _build_parser()
     args = parser.parse_args(argv)
     cmd = {"list": _cmd_list, "run": _cmd_run, "sbatch": _cmd_sbatch}[args.cmd]

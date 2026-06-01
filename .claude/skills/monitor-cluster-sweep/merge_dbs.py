@@ -16,6 +16,12 @@ import glob
 
 
 def main():
+    """Copy each per-cell study from ``pull_dir`` into one combined DB.
+
+    Reads ``pull_dir``, ``combined.db`` path, and study ``prefix`` from argv.
+    Each cell study is stored under its prefix-stripped short name, replacing
+    any prior copy so re-runs refresh idempotently.
+    """
     pull_dir, combined_path, prefix = sys.argv[1], sys.argv[2], sys.argv[3]
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)

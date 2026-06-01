@@ -242,8 +242,9 @@ def _collect_sampled_hparams_from_cfg(
     """Extract the values of ``param_keys`` from ``cfg`` via dot-paths.
 
     Hydra-Optuna applies sampled params as CLI overrides like
-    ``experiment.training.n_pretrain=123``; the resolved cfg therefore
-    carries those values at the same dot-path. Missing keys are silently
+    ``experiment.training.stages.n_pretrain=123``; the resolved cfg
+    therefore carries those values at the same dot-path. Missing keys
+    are silently
     skipped (caller's match logic will fail-soft on missing keys).
     """
     hparams: dict[str, Any] = {}
@@ -356,6 +357,25 @@ def apply_preempt_hooks(
 
 @hydra.main(config_path="./conf", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
+    """Instantiate the experiment, train it, and return the Optuna objective.
+
+    Persists the resolved config, wires up preempt-aware resume/retry
+    (a no-op unless ``DDSSM_PREEMPTIVE=1``), runs :meth:`Experiment.train`,
+    and returns :meth:`Experiment.objective_value` (a scalar, a list for
+    multi-objective runs, or ``None`` when no objective is configured) for
+    the sweeper.
+
+    Args:
+      cfg: The Hydra-composed config; ``cfg.experiment`` is instantiated
+        into an :class:`~ddssm.experiment.Experiment`.
+
+    Returns:
+      The objective value(s), or ``None`` if no objective is set.
+
+    Raises:
+      PreemptError: Re-raised after enqueuing a resume-carrying retry
+        trial so the sweeper marks the current trial FAILED.
+    """
     # Phase 0: preempt hand-off (no-op unless DDSSM_PREEMPTIVE=1).
     current_trial, study = apply_preempt_hooks(cfg)
 

@@ -277,8 +277,15 @@ class SplitStore:
 
 
 class MetricStore:
-    """Usage:
-    metrics = MetricStore(
+    """Per-split metric aggregator that fans flushed rows out to loggers.
+
+    Accumulates metrics into per-split meters (kind chosen by glob from
+    ``spec`` / ``split_spec``), then flushes mean/last/sum values to every
+    attached :class:`Logger` on ``step_end`` / ``epoch_end``.
+
+    Usage::
+
+        metrics = MetricStore(
        spec=[MetricSpec("loss/*","mean"), MetricSpec("time/*","sum")],
        loggers=[ConsoleLogger(every_steps=50), CSVLogger("metrics.csv")]
     )
@@ -379,6 +386,8 @@ class MetricStore:
 
 
 class TensorBoardLogger(Logger):
+    """SummaryWriter-backed logger; a no-op if tensorboard isn't installed."""
+
     def __init__(self, log_dir: str = "runs/ddssm", flush_secs: int = 10):
         self._active = False
         self.writer = None

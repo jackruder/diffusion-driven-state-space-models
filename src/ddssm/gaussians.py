@@ -1,4 +1,8 @@
-"""Gaussian distribution helpers: log-probability, entropy, and parameterisation heads."""
+"""Gaussian distribution helpers.
+
+Log-probability, entropy, KL, and the parameterisation head used across the
+encoder / decoder / transition modules.
+"""
 
 import math
 from typing import TypedDict
@@ -12,7 +16,7 @@ from .net_utils import softplus_inv
 
 
 def logvar_from_raw(raw: torch.Tensor, var_min) -> torch.Tensor:
-    # raw -> var -> logvar (positive & stable)
+    """Map a raw head output to a log-variance via softplus + ``var_min`` floor."""
     var = F.softplus(raw) + var_min
     return var.log()
 
@@ -20,6 +24,7 @@ def logvar_from_raw(raw: torch.Tensor, var_min) -> torch.Tensor:
 def clamp_logvar(
     logvar: torch.Tensor, clamp_logvar_min, clamp_logvar_max
 ) -> torch.Tensor:
+    """Clamp a log-variance to ``[clamp_logvar_min, clamp_logvar_max]``."""
     return logvar.clamp(clamp_logvar_min, clamp_logvar_max)
 
 
@@ -36,8 +41,11 @@ def gaussian_log_prob(
 def gaussian_entropy(logvars: torch.Tensor) -> torch.Tensor:
     """Entropy of a diagonal Gaussian with given log-variances.
 
-    Keeps the leading two dims (e.g., batch and sample) and sums over the rest.
-    Returns a tensor shaped like logvars[:, :1, ...] squeezed to (B, S).
+    Keeps the leading two dims (e.g. batch and sample) and sums the entropy
+    over the remaining (latent / time) dims.
+
+    Returns:
+        Tensor of shape ``logvars.shape[:2]`` (e.g. ``(B, S)``).
     """
     if logvars.ndim < 3:
         raise ValueError("logvars must have at least 3 dims (B, S, d[,...])")

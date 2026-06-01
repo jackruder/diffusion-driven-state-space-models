@@ -1,10 +1,13 @@
 """Optuna sweep presets for the init-centering family.
 
-The init-centering ablation sweeps two handoff-protocol knobs, two
-regulariser strengths, and a base-LR plus two per-group multipliers
-(7 dims for Learnable cells, 6 dims for Pinned cells — ``anchor_lambda``
-is a no-op when μ_p is frozen so Optuna's TPE sees a flat response
-along that axis for Pinned).
+The init-centering ablation sweeps two handoff-protocol knobs
+(``n_pretrain``, ``sigma_pert``), two regulariser strengths
+(``anchor_lambda``, ``lambda_sigma_p``), a base-LR plus two per-group
+multipliers (``base_lr``, ``dec_mult``, ``trans_mult``), and the two
+per-stage λ-warmup fractions (``stage_1_warmup_frac``,
+``stage_2_warmup_frac``) — 9 axes. ``anchor_lambda`` is a no-op when μ_p
+is frozen, so Optuna sees a flat response along that axis for Pinned
+cells.
 
 Per-axis ranges:
 

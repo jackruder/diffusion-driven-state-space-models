@@ -20,18 +20,41 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class ProbeCell:
+    """One probe configuration: an objective crossed with a k-sampling mode.
+
+    Attributes:
+        objective: Diffusion loss objective (``"esm"`` or ``"dsm"``).
+        k_sampling_mode: Diffusion-step sampling (``"uniform"`` or
+            ``"lsgm_is"``).
+    """
+
     objective: str
     k_sampling_mode: str
 
 
 @dataclass
 class ProbeMetricSpec:
+    """A metric to compute: a registry name plus its kwargs.
+
+    Attributes:
+        name: Key into ``PROBE_METRIC_REGISTRY``.
+        kwargs: Extra keyword arguments forwarded to the metric function.
+    """
+
     name: str
     kwargs: Any = field(default_factory=dict)
 
 
 @dataclass
 class ProbePlotSpec:
+    """A plot to produce: a registry name, output filename, and kwargs.
+
+    Attributes:
+        name: Key into ``PROBE_PLOT_REGISTRY``.
+        save_filename: Output PNG name; defaults to ``f"{name}.png"``.
+        kwargs: Extra keyword arguments forwarded to the plot function.
+    """
+
     name: str
     save_filename: str = ""
     kwargs: dict[str, Any] = field(default_factory=dict)
@@ -39,6 +62,26 @@ class ProbePlotSpec:
 
 @dataclass
 class ProbeSpec:
+    """Full variance-probe configuration: cells, sampling, metrics, plots.
+
+    Attributes:
+        cells: Probe cells (objective × k-sampling mode) to measure.
+        R: Replicas per (seed, batch) for the across-replica variance.
+        B_var: Variance batch size.
+        n_batches: Batches drawn per seed.
+        K_bins: Number of τ-bins.
+        force_per_k: Also run the per-k forced-step loop for the
+            per-τ variance curves.
+        split: DataModule loader to draw from.
+        seeds: Seeds the probe loop iterates over.
+        freeze: Submodules held frozen during the probe.
+        metrics: :class:`ProbeMetricSpec` list to compute.
+        plots: :class:`ProbePlotSpec` list to render.
+        raw_filename: Per-sample CSV output name.
+        summary_filename: Summary JSON output name.
+        checkpoint_path: Checkpoint to probe; overridable by the caller.
+    """
+
     # Keep as untyped ``list`` so OmegaConf/hydra-zen accepts both ProbeCell
     # and Builds_ProbeCell instances in structured configs.
     cells: list = field(default_factory=lambda: [
@@ -93,6 +136,26 @@ def variance(
     run_dir: str,
     checkpoint_path: str | None = None,
 ) -> dict[str, Any]:
+    """Load a checkpoint, run the probe, then compute metrics and plots.
+
+    Writes the per-sample raw CSV and the summary JSON to ``run_dir`` and
+    renders each requested plot. Loads a checkpoint and reads the train
+    loader; it does not train.
+
+    Args:
+        experiment: The built :class:`~ddssm.experiment.Experiment`.
+        spec: The :class:`ProbeSpec` driving the run.
+        device: Torch device for the probe forward/backward passes.
+        run_dir: Output directory for the CSV, JSON, and PNGs.
+        checkpoint_path: Checkpoint to probe; falls back to
+            ``spec.checkpoint_path``.
+
+    Returns:
+        The summary dict that was written to the summary JSON.
+
+    Raises:
+        KeyError: If a requested metric or plot name is not registered.
+    """
     os.makedirs(run_dir, exist_ok=True)
     ckpt = checkpoint_path or spec.checkpoint_path
     log.info("Variance probe → %s (checkpoint=%s)", run_dir, ckpt)

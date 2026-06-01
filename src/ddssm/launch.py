@@ -815,6 +815,10 @@ def _parse_select(items: list[str] | None) -> dict[str, set[str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry: resolve a registered study, then render/write/submit or run local.
+
+    Returns the process exit code (0 on success).
+    """
     p = argparse.ArgumentParser(prog="python -m ddssm.launch")
     p.add_argument("study", help="registered study name (e.g. init_centering)")
     p.add_argument("--select", nargs="+", default=None, metavar="K=V",
@@ -859,7 +863,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.local:
-        # Local backend runs single jobs (no Optuna multirun) — for smoke/debug.
+        # Local backend: single-worker strategies run one subprocess per point;
+        # local_parallel spawns n_workers sharing a local SQLite DB.
         return orch.run_local(points, size=args.size, seeds=seeds, out_dir=args.out_dir)
     return orch.launch(points, size=args.size, seeds=seeds,
                        write_dir=args.write_dir, submit=args.submit)

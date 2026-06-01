@@ -26,6 +26,8 @@ def param_groups_for_adamw(
         dec_lr: Learning rate for decoder parameters.
         trans_lr: Learning rate for transition model parameters.
         weight_decay: L2 regularisation coefficient for decay groups.
+        baseline_lr: Learning rate for the baseline μ_p head; defaults to
+            ``trans_lr`` when ``None``.
 
     Returns:
         List of parameter-group dicts ready to pass to ``torch.optim.AdamW``.

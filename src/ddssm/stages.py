@@ -81,12 +81,20 @@ class EarlyStopSpec:
 
 @dataclass
 class StageSchedulerConf:
+    """Per-stage LR scheduler knobs (linear warmup + final-LR scale)."""
+
     warmup_steps: int = 0
     final_lr_scale: float = 1.0
 
 
 @dataclass
 class LambdaRampConf:
+    """Cosine rate-λ ramp spec consumed by :func:`make_lambda_cosine`.
+
+    The ramp runs from ``start`` to ``end`` over ``steps`` stage-relative
+    steps after an initial ``delay``.
+    """
+
     end: float | None = 1.0
     delay: int = 0
     steps: int | None = None
@@ -119,6 +127,12 @@ class StageSpecConf:
 
 @dataclass
 class StagesConf:
+    """Multi-stage plan: up to three stages plus the ``run`` order.
+
+    ``run`` lists the stage keys to execute in order; keys whose
+    ``StageSpecConf`` is ``None`` are skipped.
+    """
+
     stage_1: StageSpecConf | None = None
     stage_2: StageSpecConf | None = None
     stage_3: StageSpecConf | None = None

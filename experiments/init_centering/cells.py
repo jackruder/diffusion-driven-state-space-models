@@ -38,9 +38,8 @@ TRACKING_MODES: tuple[str, ...] = ("fixed", "per_t")
 # imports this single definition rather than mirroring it.
 _PARAM_FREE_FORMS: frozenset[str] = frozenset({"zero", "identity"})
 
-# The Phase-C pilot cell — also the default in
-# ``_build_init_centering_model``.  Reused by the V2-reduction test
-# and the Phase-D control presets.
+# The canonical cell — also the default in ``_build_init_centering_model``.
+# Reused by the V2-reduction test.
 CANONICAL_CELL: tuple[str, str, str] = ("mlp", "pinned", "per_t")
 
 

@@ -1,4 +1,8 @@
-"""Decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history."""
+"""Decoder p_θ(x_t | z_{t-j+1:t}, time_window) over the latent history.
+
+Runs a ContextProducer over the length-``j`` latent history to parameterise a
+diagonal-Gaussian observation model for ``x_t``.
+"""
 
 import abc
 import math
@@ -22,9 +26,9 @@ class BaseDecoder(nn.Module, metaclass=abc.ABCMeta):
     ``log_likelihood`` returning ``(logp_t, mu_x, logvar_x, obs_count_t)``
     suitable for masked Gaussian observation models.
 
-    Concrete decoders are registered with the ``decoder`` Hydra config
-    group (see :mod:`ddssm.conf._infra`) so they are plug-and-play with
-    ``decoder=NAME`` overrides.
+    Concrete decoders are composed in Python when building the model (see
+    ``experiments/init_centering/model.py`` and ``src/ddssm/builders.py``),
+    not selected via a Hydra config group.
     """
 
     @abc.abstractmethod
@@ -36,6 +40,7 @@ class BaseDecoder(nn.Module, metaclass=abc.ABCMeta):
         covariates: torch.Tensor | None = None,
         static_embed: torch.Tensor | None = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return ``(mu, logvar)`` Gaussian observation params, each ``(B, D)``."""
         ...
 
     @abc.abstractmethod
@@ -49,15 +54,16 @@ class BaseDecoder(nn.Module, metaclass=abc.ABCMeta):
         covariates: torch.Tensor | None = None,
         static_embed: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return ``(logp_t, mu_x, logvar_x, obs_count_t)`` for x_t."""
         ...
 
 
 class GaussianDecoder(BaseDecoder):
-    """Gaussian decoder p_θ(x_t | z_{t-j+1:t}, time_window) with ContextProducer over latent history.
+    """Gaussian decoder p_θ(x_t | z_{t-j+1:t}, time_window).
 
-    - Treats z_{t-j+1:t} as a short sequence of length j.
-    - Runs ContextProducer along this history axis.
-    - Outputs diagonal Gaussian parameters (mu, logvar) for x_t.
+    Treats z_{t-j+1:t} as a short sequence of length j, runs a
+    ContextProducer along this history axis, and outputs diagonal Gaussian
+    parameters (mu, logvar) for x_t.
     """
 
     def __init__(
@@ -219,7 +225,7 @@ class GaussianDecoder(BaseDecoder):
             static_embedded=static_context,
         )  # (B, C*tot_dim)
 
-        # residulal/skip connection from static covariates if available
+        # residual/skip connection from static covariates if available
         if self.static_proj_out is not None and se_flat is not None:
             static_out = self.static_proj_out(se_flat)  # (B, head_in_dim)
             x = x + static_out

@@ -1,8 +1,8 @@
 """Stage-1 → stage-2 centering handoff.
 
-Implements the seven-step protocol from ``model-v2.org`` § Stage-1 → stage-2
-handoff (the items relevant for this PR — zero-init F_ψ is build-time, LR
-warmup is deferred).  Steps in this exact order:
+Implements the subset of the ``model-v2.org`` § Stage-1 → stage-2
+handoff protocol relevant for this PR (zero-init F_ψ is build-time, LR
+warmup is deferred).  Steps run in this order:
 
 1. *Snapshot μ_p* — ``trainer.model.baseline_anchor =
    trainer.model.baseline.snapshot()``.

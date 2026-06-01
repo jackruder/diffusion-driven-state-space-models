@@ -289,7 +289,17 @@ class DDSSMTrainer:
         self._preempt_pending = True
 
     def _set_trainable(self, t):
-        """t: StageTrainable"""
+        """Toggle ``requires_grad`` per submodule from a stage trainable mask.
+
+        This is the single gradient-suppression mechanism: the forward pass
+        always computes every ELBO term, but frozen submodules accumulate no
+        gradients. ``static_embeddings`` and ``aux_posterior`` are part of the
+        encoder family and share ``t.encoder``.
+
+        Args:
+            t: A ``StageTrainable``-like object with ``encoder`` / ``decoder``
+                / ``transition`` / ``baseline`` boolean flags.
+        """
 
         def maybe_flag(mod, flag: bool):
             if mod is None:
@@ -315,7 +325,12 @@ class DDSSMTrainer:
         self,
         lrs,
     ):
-        """lrs: StageLrs"""
+        """Rebuild the AdamW optimizer with per-component stage learning rates.
+
+        Args:
+            lrs: A ``StageLrs``-like object with ``enc_lr`` / ``dec_lr`` /
+                ``trans_lr`` learning rates.
+        """
         groups = param_groups_for_adamw(
             self.model,
             enc_lr=lrs.enc_lr,
@@ -737,16 +752,37 @@ class DDSSMTrainer:
         profile_steps: int = 0,
         early_stop: "EarlyStopSpec | None" = None,
     ) -> int:
-        """One optimizer step == one 'step'.
-        Validation / checkpoints / logs are triggered by step counts.
-        - Resumes from `resume_from` if provided (restores global_step, optimizer, EMA).
-        - Uses grad accumulation and optional AMP for memory efficiency.
-        - Profiles up to `profile_steps` optimizer steps if > 0.
-        - When ``early_stop`` is an enabled :class:`EarlyStopSpec`, the
-          loop terminates early if the rolling-window improvement of
-          ``loss/total`` falls below ``min_improvement``.
+        """Run the training loop. One optimizer step counts as one step.
 
-        Returns the global step at which the loop exited.
+        Validation, checkpoints, and logs are triggered by step counts. Uses
+        gradient accumulation and optional AMP for memory efficiency.
+
+        Args:
+            train_loader: Training data loader (re-iterated on exhaustion).
+            val_loader: Optional validation loader; skipped when ``None``.
+            total_steps: Cumulative max global step to stop at (not per-stage).
+            validate_every: Run validation every N steps (0 disables).
+            log_every: Flush step-level metrics every N steps.
+            checkpoint_every: Save a periodic checkpoint every N steps.
+            checkpoint_prefix: Filename prefix for periodic / stage checkpoints.
+            amp: Enable bf16 autocast (the GradScaler stays disabled for bf16).
+            resume_from: Path to a checkpoint to resume from; restores
+                ``global_step``, optimizer, and EMA when present.
+            batch_transform: Optional per-batch transform applied on device.
+            profile_steps: Profile up to this many optimizer steps when > 0.
+            early_stop: When an enabled :class:`EarlyStopSpec`, the loop exits
+                early once the rolling-window improvement of ``loss/total``
+                falls below ``min_improvement``.
+
+        Returns:
+            The global step at which the loop exited.
+
+        Raises:
+            PreemptError: A SIGUSR1/SIGTERM (or SIGINT under
+                ``DDSSM_PREEMPTIVE=1``) was caught; a checkpoint is saved and
+                its path is carried on ``resume_from``.
+            FloatingPointError: ``abort_on_nonfinite_loss`` is set and the
+                accumulated loss is non-finite.
         """
         device = self.device
         self.model.to(device)

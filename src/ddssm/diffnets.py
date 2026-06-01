@@ -1,4 +1,10 @@
-"""This file implements common conditional diffusion models for timeseries."""
+"""Conditional diffusion network building blocks for time series.
+
+Provides the CSDI-style U-Net denoiser (:class:`CSDIUnet`), an MLP ablation
+denoiser, the pluggable time/feature mixing layers used inside the residual
+stacks, EDM diffusion-step conditioning (:class:`DiffusionEmbedding`), and the
+encoder-side :class:`ContextProducer`.
+"""
 
 import math
 from typing import final
@@ -18,8 +24,10 @@ from .net_utils import (
 
 @final
 class SmallTimeConv(nn.Module):
-    """Mix along the short time axis (L<=6).
-    Input/Output: (B*d, C, L)  — preserves shape.
+    """Depthwise-separable conv mixing over a short time axis.
+
+    Input/output are ``(B*d, C, L)`` and the shape is preserved. Acts as a
+    residual no-op when ``L == 1``.
     """
 
     def __init__(self, channels: int, k: int = 3, dilation: int = 1):
@@ -50,6 +58,8 @@ class SmallTimeConv(nn.Module):
 
 @final
 class SmallTimeConvStack(nn.Module):
+    """Two stacked :class:`SmallTimeConv` blocks with dilation 1 then 2."""
+
     def __init__(self, channels: int):
         super().__init__()
         self.m1 = SmallTimeConv(channels, k=3, dilation=1)
@@ -98,6 +108,8 @@ class TimeLayer(nn.Module):
 
 
 class ConvTimeLayer(TimeLayer):
+    """Time mixer using a :class:`SmallTimeConvStack` over the ``L`` axis."""
+
     def __init__(self, channels: int, kernel_size: int = 3):
         super().__init__()
         self.layer = SmallTimeConvStack(channels)
@@ -118,6 +130,8 @@ class ConvTimeLayer(TimeLayer):
 
 
 class GRUTimeLayer(TimeLayer):
+    """Time mixer running a GRU over the ``L`` axis (per feature)."""
+
     def __init__(self, channels: int, gru_layers: int = 1):
         super().__init__()
         self.layer = nn.GRU(
@@ -156,6 +170,8 @@ class FeatureLayer(nn.Module):
 
 
 class TransformerFeatureLayer(FeatureLayer):
+    """Feature mixer running a Transformer encoder over the ``d`` axis."""
+
     def __init__(self, channels: int, nheads: int = 8, layers: int = 1):
         super().__init__()
         self.layer = get_torch_trans(
@@ -203,6 +219,8 @@ class ConvFeatureLayer(FeatureLayer):
 
 
 class IdentityLayer(FeatureLayer, TimeLayer):
+    """No-op mixer; usable as either a time or feature layer."""
+
     def forward(
         self, x_flat: torch.Tensor, base_shape: tuple[int, int, int, int]
     ) -> torch.Tensor:
@@ -272,21 +290,18 @@ class DiffResidualBlockConfig:
 
 
 class DiffusionEmbedding(nn.Module):
-    """Continuous EDM conditioning: embeds c_noise scalars into vectors.
+    """Continuous EDM conditioning: embeds ``c_noise`` scalars into vectors.
+
+    A sinusoidal feature map followed by a two-layer SiLU projection. The
+    input ``c_noise`` is the EDM scalar per sample, e.g. ``(1/4)·log(σ̃)``.
 
     Args:
-    ----
-    embedding_dim : int
-        Size of the sinusoidal feature vector before projection (must be even).
-    projection_dim : int | None
-        Output dimension after two-layer projection (defaults to embedding_dim).
-    max_freq_log10 : float
-        Frequency range: uses frequencies 10**(linspace(0, 1, D/2) * max_freq_log10).
-
-    Forward
-    -------
-    forward(c_noise: Tensor[B]) -> Tensor[B, projection_dim]
-        c_noise is the EDM scalar per sample, e.g. (1/4)*log(sigma).
+        embedding_dim: Size of the sinusoidal feature vector before
+            projection (must be even).
+        projection_dim: Output dimension after the two-layer projection
+            (defaults to ``embedding_dim``).
+        max_freq_log10: Frequency range; uses frequencies
+            ``10**(linspace(0, 1, embedding_dim/2) * max_freq_log10)``.
     """
 
     def __init__(
@@ -308,9 +323,7 @@ class DiffusionEmbedding(nn.Module):
         self.projection2 = nn.Linear(projection_dim, projection_dim)
 
     def forward(self, c_noise: torch.Tensor) -> torch.Tensor:
-        """c_noise: (B,) float tensor (EDM scalar, e.g., 0.25 * log σ)
-        returns: (B, projection_dim)
-        """
+        """Embed ``c_noise`` ``(B,)`` (or ``(B, 1)``) into ``(B, projection_dim)``."""
         if c_noise.dim() == 2 and c_noise.size(1) == 1:
             c_noise = c_noise.squeeze(1)
         assert c_noise.dim() == 1, "c_noise must be shape (B,) or (B,1)"
@@ -325,17 +338,16 @@ class DiffusionEmbedding(nn.Module):
 
 @final
 class DiffResidualBlock(nn.Module):
-    """Residual block with:
-      - diffusion-step conditioning
-      - side-info conditioning
-      - a time mixer over L (per feature): conv / gru / identity
-      - a feature mixer over d (per time): transformer / conv / identity
-      - gated conv-style update with residual + skip
+    """CSDI residual block with diffusion-step and side-info conditioning.
+
+    Composes a time mixer over ``L`` (conv / gru / identity), a feature mixer
+    over ``d`` (transformer / conv / identity), and a gated conv-style update
+    returning a residual + skip pair.
 
     Shapes:
-      x:         (B, C, d, L)
-      side_info: (B, side_dim, d, L)
-      diffusion_emb: (B, diffusion_embedding_dim)
+        x: ``(B, C, d, L)``
+        side_info: ``(B, side_dim, d, L)``
+        diffusion_emb: ``(B, diffusion_embedding_dim)``
     """
 
     def __init__(
@@ -358,9 +370,15 @@ class DiffResidualBlock(nn.Module):
     def forward(
         self, x: torch.Tensor, side_info: torch.Tensor, diffusion_emb: torch.Tensor
     ):
-        """x:         (B, C, d, L)
-        side_info: (B, side_dim, d, L)
-        diffusion_emb: (B, diffusion_embedding_dim)
+        """Apply the residual block.
+
+        Args:
+            x: ``(B, C, d, L)`` block input.
+            side_info: ``(B, side_dim, d, L)`` conditioning tensor.
+            diffusion_emb: ``(B, diffusion_embedding_dim)`` step embedding.
+
+        Returns:
+            Tuple ``(out, skip)``, each ``(B, C, d, L)``.
         """
         B, C, d, L = x.shape
         base_shape = x.shape
@@ -522,14 +540,15 @@ class CSDIUnet(nn.Module):
         """Forward pass of the U-Net denoiser.
 
         Args:
-            x (Tensor[B, d, L]): Noisy input. Noise is in the last self.output_len
-                time steps. The first self.latent_history_len time steps are the clean history
-                (L = latent_history_len + output_len).
-            side_info (Tensor[B, side_dim, d, L]): Side information.
-            diffusion_step (Tensor of shape (B,)): step of the diffusion process.
+            x: ``(B, d, L)`` input. The last ``output_len`` slots hold the
+                noised target; the first ``latent_history_len`` slots are the
+                clean history (``L = latent_history_len + output_len``).
+            side_info: ``(B, side_dim, d, L)`` side-information tensor.
+            diffusion_step: ``(B,)`` EDM ``c_noise`` conditioning scalar.
 
         Returns:
-            Tensor[B, d, L]: Predicted noise.
+            ``(B, d, output_len)`` EDM denoiser output ``F_ψ`` for the target
+            slots.
         """
         # L = J + 1
         B, d, L = x.shape
@@ -685,10 +704,12 @@ class ResidualBlock(nn.Module):
 
 
 class ContextProducer(nn.Module):
-    """This forms an input to a residual block stack,
-    by building a tensor with [h_t | z_{t-j:t-1} ].
-    That way the residual-block time/feature mixers let the h_t future summary
-    combine with the latent history z_{t-j:t-1} to produce the parameters for z_t.
+    """Produce a context token feeding a residual block stack.
+
+    Builds a tensor combining the per-step side info with the latent history
+    ``z_{t-j:t-1}`` so the residual-block time/feature mixers can summarise the
+    history into the parameters for ``z_t``. The token is returned flattened to
+    ``(B, C * H_seq)`` for a downstream head to split.
     """
 
     def __init__(
@@ -777,7 +798,7 @@ class ContextProducer(nn.Module):
         hist_time_emb: torch.Tensor,  # (B, H_time, L)
         static_embedded: torch.Tensor | None = None,  # (B, E_static, H_seq)
     ) -> torch.Tensor:
-        """Return context token for sequence, to be further split"""
+        """Return the ``(B, C * H_seq)`` context token for the window."""
         device = combined.device
 
         # z_prev: (B, d, j)

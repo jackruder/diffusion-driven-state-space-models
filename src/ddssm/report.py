@@ -179,6 +179,7 @@ def _print_parent(parent: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """CLI entry: print one run's summary, or a table over a parent of run dirs."""
     import argparse
 
     ap = argparse.ArgumentParser(description="Summarize DDSSM run health from metrics.csv.")

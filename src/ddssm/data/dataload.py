@@ -43,6 +43,14 @@ except (ImportError, ModuleNotFoundError) as err:  # pragma: no cover - GluonTS 
 
 
 class FixedLastKSampler(InstanceSampler):
+    """Deterministic sampler taking the last ``k_last`` window starts.
+
+    Walks backwards from the latest valid start in strides of
+    ``step_size`` (defaulting to ``min_future``) and returns the last
+    ``k_last`` starts in ascending order. Used to build fixed eval
+    windows for the GluonTS backend.
+    """
+
     k_last: int = 1
     step_size: int | None = None
 
@@ -68,6 +76,19 @@ def _stack_series(series_list: list[pd.Series]) -> np.ndarray:
 
 
 def compute_per_series_zscore(series_list: list[pd.Series], train_end: int):
+    """Per-series mean/std over the train tail (NaN-safe).
+
+    Statistics are computed on each series up to ``train_end`` so eval
+    windows are never used to normalize. Near-zero stds are clamped to
+    1.0 and any NaN mean/std falls back to 0.0 / 1.0.
+
+    Args:
+        series_list: One pandas Series per channel.
+        train_end: Exclusive end index of the training region.
+
+    Returns:
+        ``(means, stds)`` float32 arrays of shape ``(len(series_list),)``.
+    """
     arr = _stack_series(series_list)[:, :train_end]
     means = np.nanmean(arr, axis=1)
     stds = np.nanstd(arr, axis=1)
@@ -81,6 +102,11 @@ def compute_per_series_zscore(series_list: list[pd.Series], train_end: int):
 def apply_per_series_zscore(
     series_list: list[pd.Series], means: np.ndarray, stds: np.ndarray
 ):
+    """Z-score each series with the given per-series ``means``/``stds``.
+
+    Returns a new list of Series (original index preserved); inputs are
+    not mutated.
+    """
     scaled = []
     for k, s in enumerate(series_list):
         v = (s.to_numpy(dtype=np.float32, copy=False) - means[k]) / stds[k]
@@ -96,13 +122,15 @@ class _WindowSpec:
 
 
 class _GroupedWindowDataset(Dataset):
-    """
-    Returns model-ready dict:
-      observed_data: (D, L1+L2)
-      observation_mask: (D, L1+L2)
-      timepoints: (L1+L2,)
-      covariates: (V, L1+L2) or None
-      static_covariates: (D, V_static) or None
+    """Sliding-window view over stacked multivariate series.
+
+    Each item is the canonical model-ready dict with keys:
+
+    * ``observed_data``: ``(D, L1+L2)`` (NaNs zero-filled).
+    * ``observation_mask``: ``(D, L1+L2)`` (1 where finite, else 0).
+    * ``timepoints``: ``(L1+L2,)`` (local index ``0..L1+L2-1``).
+    * ``covariates``: ``(V, L1+L2)`` or ``None``.
+    * ``static_covariates``: ``(D, V_static)`` or ``None``.
     """
 
     def __init__(
@@ -204,6 +232,43 @@ def build_loaders_for_expt(
     eval_step_size: int | None = None,
     backend: str = "torch",
 ):
+    """Build train/val/test loaders of past/future windows from raw series.
+
+    Splits chronologically into train / val / test regions sized from
+    the window counts and stride, optionally z-scores each series using
+    train-tail statistics, and constructs sliding-window loaders. The
+    ``"torch"`` backend yields the canonical model-ready dict directly
+    (see :class:`_GroupedWindowDataset`); the ``"gluonts"`` backend uses
+    a GluonTS ``InstanceSplitter`` pipeline whose batches are mapped by
+    :func:`parse_batch`.
+
+    Args:
+        series_list: One pandas Series per channel, shared time index.
+        L1: Past (conditioning) window length.
+        L2: Future (forecast) window length.
+        test_windows: Number of eval windows in the test region.
+        val_windows: Number of eval windows in the validation region.
+        batch_size: Loader batch size.
+        normalize: Apply per-series z-score (train-tail statistics).
+        num_train_batches_per_epoch: ``None`` walks every train window
+            (torch backend); otherwise samples a fixed-size epoch.
+        train_instances_per_series: GluonTS sampler intensity (and the
+            torch fallback epoch size); ignored when walking all windows.
+        device: Device for the returned ``means``/``stds`` tensors.
+        covariates_list: Optional per-channel dynamic covariates ``(V, T)``.
+        static_covariates: Optional static covariates ``(D, V_static)``.
+        eval_step_size: Stride between consecutive eval windows; defaults
+            to ``L2`` (non-overlapping).
+        backend: ``"torch"`` or ``"gluonts"``.
+
+    Returns:
+        ``(train_loader, val_loader, test_loader, (means, stds))`` where
+        ``means``/``stds`` are tensors when ``normalize`` else ``None``.
+
+    Raises:
+        ImportError: ``backend="gluonts"`` but GluonTS failed to import.
+        ValueError: Unknown ``backend``, or no train windows available.
+    """
     freq = pd.infer_freq(series_list[0].index)
     T_total = min(len(s) for s in series_list)
 
@@ -383,6 +448,16 @@ def build_loaders_for_expt(
 def series_ticks_from_batch(
     batch: dict, device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Recover integer time ticks for a GluonTS batch's past/future windows.
+
+    Uses each item's ``start`` / ``forecast_start`` timestamps and the
+    inferred frequency to compute the offset of the forecast start, then
+    lays out per-item ``arange`` ticks.
+
+    Returns:
+        ``(past_ticks, future_ticks)`` of shape ``(B, L1)`` and
+        ``(B, L2)``.
+    """
     B, L1 = batch["past_target"].shape[0], batch["past_target"].shape[1]
     L2 = batch["future_target"].shape[1]
 
@@ -419,6 +494,23 @@ def series_ticks_from_batch(
 
 
 def parse_batch(batch: dict, device: torch.device):
+    """Normalize a raw loader batch into the canonical model-ready dict.
+
+    Serves as the ``batch_transform`` for every DataModule. A batch
+    already carrying ``observed_data``/``observation_mask``/``timepoints``
+    (torch backend, synthetic, KDD) is moved to ``device`` as-is, with
+    optional ``covariates``, ``static_covariates`` and ``gt_latent``
+    passed through. A GluonTS batch is assembled from its
+    ``past_*``/``future_*`` fields: past and future are concatenated
+    along time into ``(B, D, L1+L2)``, masks combine observed indicators
+    with past padding, and timepoints come from
+    :func:`series_ticks_from_batch` (rebased to start at 0).
+
+    Returns:
+        A dict with ``observed_data``, ``observation_mask``,
+        ``timepoints`` and ``covariates`` (plus pass-through keys on the
+        torch path), all on ``device``.
+    """
     # Native torch backend path (already model-ready)
     if (
         "observed_data" in batch

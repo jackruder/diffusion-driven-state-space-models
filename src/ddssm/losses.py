@@ -34,12 +34,15 @@ class LossComponents:
     r_mu_p: torch.Tensor
 
     def elbo(self) -> torch.Tensor:
+        """Unweighted ELBO: ``recon + init_kl + trans_kl``."""
         return self.recon + self.init_kl + self.trans_kl
 
     def elbo_reg(self) -> torch.Tensor:
+        """ELBO plus the (unweighted) centering regularizers."""
         return self.elbo() + self.r_sigma_p + self.r_mu_p
 
     def total(self) -> torch.Tensor:
+        """Alias for :meth:`elbo_reg` — the full unweighted diagnostic sum."""
         return self.elbo_reg()
 
 
@@ -53,7 +56,18 @@ class Loss(abc.ABC):
     @abc.abstractmethod
     def __call__(
         self, components: LossComponents, step: int
-    ) -> torch.Tensor: ...
+    ) -> torch.Tensor:
+        """Weight and sum ``components`` into the scalar to backprop.
+
+        Args:
+            components: Unweighted per-term ELBO tensors.
+            step: Step index within the current stage, driving any λ
+                schedule.
+
+        Returns:
+            Scalar loss tensor.
+        """
+        ...
 
     def lambda_at(self, step: int) -> float | None:
         """Rate-λ in effect at ``step``, for logging. ``None`` if not applicable.
@@ -76,7 +90,7 @@ class FullELBO(Loss):
     per-term weights and are deliberately NOT gated by `rate_lambda`:
     σ_p collapse is most likely during recon-only warmup (λ→0) when
     the KL isn't yet pulling against the prior, so the σ_p anchor must
-    stay on the whole time. See `project_handoff_protocol_invariants`
+    stay on the whole time. See `handoff_protocol_invariants`
     — `sigma_pert > 0` is mandatory protocol.
     """
 

@@ -67,7 +67,31 @@ def evaluate(
     checkpoint_path: str | None = None,
     csv_path: str | None = None,
 ) -> dict[str, Any]:
-    """Run every metric named in ``spec`` and write the result to disk."""
+    """Run every metric named in ``spec`` and write the result to disk.
+
+    Loads ``checkpoint_path`` into the experiment's model, selects the
+    ``spec.split`` loader, walks ``spec.metrics``, merges their results,
+    and writes them to ``spec.output_filename`` under ``run_dir``. If a
+    W&B run can be resumed from ``run_dir``, the scalar results are also
+    logged under the ``eval/`` namespace (best-effort).
+
+    Args:
+        experiment: The built :class:`Experiment` (model + data module).
+        spec: Which metrics to compute, on which split, with defaults.
+        device: Device to load the model onto and run metrics on.
+        run_dir: Hydra run dir; the JSON is written here.
+        checkpoint_path: Checkpoint to load; ``None`` uses the model as
+            built (untrained weights).
+        csv_path: Path to a training ``metrics.csv`` for CSV-derived
+            metrics (e.g. ``loss_tail``).
+
+    Returns:
+        The merged metric-results dict (also persisted to disk).
+
+    Raises:
+        KeyError: If ``spec`` names a metric absent from
+            ``METRIC_REGISTRY``.
+    """
     from ..checkpoint import prepare_model
 
     model = prepare_model(

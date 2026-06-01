@@ -11,9 +11,10 @@ log-density follows from the instantaneous change-of-variables
 
 The integrand is the trace of the drift Jacobian.  For VP-SDE the
 drift divergence is constant (``-½ β(τ) · D``); only the score
-divergence ``∇ · s_ψ`` requires estimation — ``exact`` mode computes
-it as the sum of ``D`` reverse-mode passes.  Hutchinson trace estimation
-arrives in cycle 3.
+divergence ``∇ · s_ψ`` requires estimation. ``exact`` mode computes
+it as the sum of ``D`` reverse-mode passes; ``hutchinson`` mode
+estimates it with a single reverse-mode pass against a fixed probe
+vector.
 """
 
 from __future__ import annotations

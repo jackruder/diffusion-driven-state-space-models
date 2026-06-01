@@ -180,7 +180,7 @@ class BaseTransition(nn.Module):
         self,
         zs: torch.Tensor,  # (B, S, d, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
-        time_chunk_num: Optional[int] = None,  #
+        time_chunk_num: Optional[int] = None,
         time_chunk_size: Optional[int] = None,
         covariates: Optional[torch.Tensor] = None,
         mc_override: Optional[Dict[str, Any]] = None,
@@ -195,6 +195,8 @@ class BaseTransition(nn.Module):
             time_chunk_size: Size of each chunk along the time dimension.
                 Overrides ``time_chunk_num`` when provided.
             covariates: Optional ``(B, V, T)`` time-varying covariates.
+            mc_override: Optional forced MC draws forwarded to
+                :meth:`log_prob` (used by the variance probe).
 
         Returns:
             ``(B,)`` total log-probability per batch element.
@@ -529,11 +531,11 @@ class BaseTransition(nn.Module):
 
 
 class GaussianTransition(BaseTransition):
-    """Non-linear diagonal Gaussian transition p(z_t | z_{t-j:t-1}, ...).
+    """Non-linear diagonal Gaussian transition ``p(z_t | z_{t-j:t-1}, ...)``.
 
-    Refactored to use the same internal architecture as InitPrior/Decoder:
-      - z history -> ContextProducer -> GaussianHead
-    No padding mask and no collect_samples.
+    The latent history is projected, summarised by a
+    :class:`~ddssm.diffnets.ContextProducer` (no mask features), and mapped to
+    ``(μ, log σ²)`` by a :class:`~ddssm.encoder.GaussianHead`.
     """
 
     def __init__(

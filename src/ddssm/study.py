@@ -163,6 +163,7 @@ class Study:
         return [p for p in self.points if matches(p)]
 
     def point(self, name: str) -> StudyPoint:
+        """Return the point named ``name``; raise ``KeyError`` if absent."""
         for p in self.points:
             if p.name == name:
                 return p

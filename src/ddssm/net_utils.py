@@ -6,7 +6,14 @@ import torch.nn as nn
 
 def time_embedding(pos: torch.Tensor, d_model: int = 128, device: torch.device = "cpu"):
     """Sinusoidal (Vaswani) embeddings for integer or real timestamps.
-    pos: (B, T) -> returns (B, T, d_model)
+
+    Args:
+        pos: ``(B, T)`` timestamps (cast to float).
+        d_model: Embedding dimension.
+        device: Device to build the embedding on.
+
+    Returns:
+        ``(B, T, d_model)`` sinusoidal time embeddings.
     """
     pos = pos.to(device).float()  # ensure float for sin/cos
     B, T = pos.shape
@@ -96,7 +103,7 @@ def get_side_info(
 
 
 def Conv1d_with_init(in_channels, out_channels, kernel_size):
-    """Utility to create a 1×1 Conv1d with daiming init and zero bias."""
+    """Create a Conv1d with Kaiming-normal weights and zero bias."""
     conv = nn.Conv1d(in_channels, out_channels, kernel_size)
     nn.init.kaiming_normal_(conv.weight, nonlinearity="relu")
     if conv.bias is not None:
@@ -105,6 +112,16 @@ def Conv1d_with_init(in_channels, out_channels, kernel_size):
 
 
 def get_torch_trans(heads=8, layers=1, channels=64):
+    """Build a batch-first GELU :class:`nn.TransformerEncoder`.
+
+    Args:
+        heads: Number of attention heads.
+        layers: Number of encoder layers.
+        channels: Model dimension (``d_model``).
+
+    Returns:
+        The configured ``nn.TransformerEncoder``.
+    """
     encoder_layer = nn.TransformerEncoderLayer(
         d_model=channels,
         nhead=heads,
@@ -116,7 +133,7 @@ def get_torch_trans(heads=8, layers=1, channels=64):
 
 
 def softplus_inv(x: torch.Tensor | float) -> torch.Tensor:
-    # inverse of softplus: log(exp(x) - 1), numerically stable for x>0
+    """Inverse softplus ``log(exp(x) - 1)``, numerically stable for ``x > 0``."""
     x = torch.as_tensor(x, dtype=torch.float32)
     return torch.log(torch.expm1(x))
 

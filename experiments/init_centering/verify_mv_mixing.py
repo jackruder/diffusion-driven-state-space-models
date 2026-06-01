@@ -4,8 +4,8 @@ The ``nonlinear-bimodal-lift-mv`` latent has 2^d = 16 attractors
 (d=4, per-dim independent Rademacher signs). The grilling decision
 held ``T_max = 32`` constant — but with 32 timesteps we need to see
 *evidence* that trajectories visit multiple attractors per sequence,
-not get stuck near one mode. If they don't, the per-t tracking-mode
-ablation has no signal to distinguish from the global-EMA mode.
+not get stuck near one mode. If they don't, the ``per_t`` tracking
+mode has no signal to distinguish it from the ``fixed`` mode.
 
 This script:
 
@@ -51,6 +51,14 @@ def _sign_attractor_indices(z: np.ndarray) -> np.ndarray:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Sample MV trajectories, measure attractor mixing, and write the plot.
+
+    Args:
+        argv: Optional argument vector; defaults to ``sys.argv`` when ``None``.
+
+    Returns:
+        Process exit code (``0`` on success).
+    """
     p = argparse.ArgumentParser(
         prog="python -m experiments.init_centering.verify_mv_mixing",
     )

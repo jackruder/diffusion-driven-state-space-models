@@ -1,8 +1,10 @@
 """Objective + eval specs for the init-centering pilot Optuna sweep.
 
-The Phase-C pilot uses the five headline metric primitives from
-``init-experiment.org`` § Headline metrics (the ones Phase A landed)
-as the post-training eval surface.
+The eval surface (:data:`PilotEval`) is the five headline metric
+primitives from ``init-experiment.org`` § Headline metrics (the ones
+Phase A landed) plus two diagnostic secondary metrics and the
+relative-target wallclock diagnostic — see :data:`PilotEval` for the
+full breakdown.
 
 The default ``PilotObjective`` (legacy single-objective) optimises
 ``stage2_elbo_surrogate`` alone. ``PilotMOObjective`` is the

@@ -48,10 +48,12 @@ class BaseDistHead(nn.Module, metaclass=abc.ABCMeta):
         self,
         x: torch.Tensor,  # (B, in_features)
     ) -> tuple[torch.Tensor, torch.Tensor, dict]:
-        """Returns ``(z, logq, step_params)``:
-        * ``z``:           ``(B, latent_dim)`` reparameterized sample
-        * ``logq``:        ``(B,)`` log q(z | x)
-        * ``step_params``: dict of per-step parameters for this head's family
+        """Map features to a reparameterized sample and its log-density.
+
+        Returns:
+            z: ``(B, latent_dim)`` reparameterized sample.
+            logq: ``(B,)`` log q(z | x).
+            step_params: dict of per-step parameters for this head's family.
         """
         ...
 
