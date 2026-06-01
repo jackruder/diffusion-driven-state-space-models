@@ -677,11 +677,11 @@ class GaussianTransition(BaseTransition):
     ) -> torch.Tensor:
         """Log p(z | z_hist, ctx) summed over latent dims.
 
-        Shapes:
-            z:
-                - (B, d)      -> returns (B,)
-                - (B, S, d)   -> returns (B, S)
-            z_hist: (B, d, j) or equivalent (see _ensure_seq)
+        Shapes::
+
+            z:       (B, d)      -> returns (B,)
+                     (B, S, d)   -> returns (B, S)
+            z_hist:  (B, d, j) or equivalent (see _ensure_seq)
         """
         B = z_hist.shape[0]
         p_mu, p_logvar = self.prior_params(z_hist, ctx=ctx)  # (B, d)

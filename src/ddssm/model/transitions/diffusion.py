@@ -533,7 +533,7 @@ class DiffusionTransition(BaseTransition):
         ESM/EDM surrogate it accumulates the probability-flow ODE
         log-densities ``log p_ψ^ode(z_step | z_hist_step)`` (via
         :meth:`log_prob`) with ``z_0 ∼ q_Φ`` in the aux slots, then
-        reduces the importance weights
+        reduces the importance weights::
 
             log p_ψ(z_{1:j}) ≈ logmeanexp_J[
                 Σ_step log p_ψ^ode(z_step | z_hist)

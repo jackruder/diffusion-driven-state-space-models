@@ -18,7 +18,7 @@ legacy InitPrior (its ``context_producer_aux``, ``aux_proj``,
 ``sample_aux_posterior``) reduced to a small MLP.  The InitPrior's
 own Gaussian head + ``latent_init`` padding module + hierarchical-KL
 bound are NOT ported — they are replaced by the t=1..j VHP path that
-the transitions own (see :doc:`ADR-0006 </adr/0006-polymorphic-transition-interface>`).
+the transitions own (see ADR-0006, ``docs/adr/0006-polymorphic-transition-interface.md``).
 
 Per the doc, ``q_Φ`` is described as a "small diagonal-Gaussian MLP
 head" conditioned on z_1 (or, in the general-j case, z_{1:j}).  We

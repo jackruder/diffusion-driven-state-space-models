@@ -92,7 +92,7 @@ If you need a new experiment, **add a Python file under `experiments/<family>/`*
 `Experiment.train`, `evaluate`, `visualize`, `variance_probe` are independent entry methods — eval/viz/variance load a checkpoint and don't trigger training.
 
 ### Model: `DDSSM_base` (`src/ddssm/model/dssd.py`)
-ELBO over latent state-space: encoder `q_ϕ(z|x)`, decoder `p_θ(x|z)`, init prior `p_η(z_{1:j})`, transition `p_ψ(z_t|z_{t-j:t-1})`. The transition is pluggable: a Gaussian transition (`GaussianTransition`, or the baseline-centering `BaselineGaussianTransition`) or a diffusion transition (`DiffusionV3Transition`, a CSDI U-Net denoiser). `j` is the history window. `forecast(...)` rolls out autoregressively.
+ELBO over latent state-space: encoder `q_ϕ(z|x)`, decoder `p_θ(x|z)`, init prior `p_η(z_{1:j})`, transition `p_ψ(z_t|z_{t-j:t-1})`. The transition is pluggable: a Gaussian transition (`GaussianTransition`, or the baseline-centering `BaselineGaussianTransition`) or a diffusion transition (`DiffusionTransition`, a CSDI U-Net denoiser). `j` is the history window. `forecast(...)` rolls out autoregressively.
 
 The model exposes a `ProbeBatch` payload (encoded latents + log-q paths) reused by the variance probe.
 

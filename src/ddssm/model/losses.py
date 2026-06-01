@@ -82,11 +82,13 @@ class Loss(abc.ABC):
 class FullELBO(Loss):
     """Default loss: ELBO with always-on centering regularizers.
 
-    `loss = recon + rate_lambda(step) * (init_kl + trans_kl)
-            + lambda_sigma_p * r_sigma_p
-            + lambda_mu_p * r_mu_p`
+    Computes::
 
-    The centering regularizers (`r_sigma_p`, `r_mu_p`) carry their own
+        loss = recon + rate_lambda(step) * (init_kl + trans_kl)
+               + lambda_sigma_p * r_sigma_p
+               + lambda_mu_p * r_mu_p
+
+    The centering regularizers (``r_sigma_p``, ``r_mu_p``) carry their own
     per-term weights and are deliberately NOT gated by `rate_lambda`:
     σ_p collapse is most likely during recon-only warmup (λ→0) when
     the KL isn't yet pulling against the prior, so the σ_p anchor must

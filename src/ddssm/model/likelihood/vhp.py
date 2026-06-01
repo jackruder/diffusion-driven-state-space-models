@@ -1,11 +1,11 @@
 """VHP initial-state estimator (Layer 4 of the exact-likelihood evaluator).
 
-See ``model-v2.org`` § "VHP initial state".  The initial-state prior
+See ``model-v2.org`` § "VHP initial state".  The initial-state prior::
 
     p_ψ(z_1) = E_{z_0 ∼ N(0, I)}[ p_ψ^ode(z_1 | z_0) ]
 
 is estimated by importance sampling under the trained auxiliary
-posterior ``q_Φ(z_0 | z_1)``:
+posterior ``q_Φ(z_0 | z_1)``::
 
     log p_ψ(z_1)
         ≈ logmeanexp_j[

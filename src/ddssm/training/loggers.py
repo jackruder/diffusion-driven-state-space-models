@@ -286,14 +286,18 @@ class MetricStore:
     Usage::
 
         metrics = MetricStore(
-       spec=[MetricSpec("loss/*","mean"), MetricSpec("time/*","sum")],
-       loggers=[ConsoleLogger(every_steps=50), CSVLogger("metrics.csv")]
-    )
-    # step loop:
-    metrics.update("train", {"loss/total": loss, "loss/recon": Lrec}, weights={"loss/recon": obs})
-    metrics.step_end("train", global_step)
-    # epoch end:
-    metrics.epoch_end("train", epoch) -> dict (averaged)
+            spec=[MetricSpec("loss/*", "mean"), MetricSpec("time/*", "sum")],
+            loggers=[ConsoleLogger(every_steps=50), CSVLogger("metrics.csv")],
+        )
+        # step loop:
+        metrics.update(
+            "train",
+            {"loss/total": loss, "loss/recon": Lrec},
+            weights={"loss/recon": obs},
+        )
+        metrics.step_end("train", global_step)
+        # epoch end:
+        metrics.epoch_end("train", epoch)  # -> dict (averaged)
     """
 
     def __init__(

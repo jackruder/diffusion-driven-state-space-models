@@ -483,25 +483,24 @@ class DDSSM_base(nn.Module):
         See ``model-v2.org`` § "Exact likelihood evaluation".  Composes
         the layer-1..3 primitives:
 
-          * Trajectory proposal: ``q_φ(z_{1:T} | x_{1:T})`` via
-            :meth:`_encode_latents` with ``K = self.S`` samples (override
-            via the ``K`` arg).  Per-step ``log q`` already lives in
-            ``logq_paths``; we sum across ``T`` for the trajectory total.
-          * Per-transition: :meth:`DiffusionTransition.log_prob` for
-            ``t = j..T-1`` via the probability-flow ODE.
-          * Decoder: :meth:`BaseDecoder.log_likelihood` summed across
-            ``t = 0..T-1``.
-          * Initial state: ``log p_ψ(z_{1:j})`` via
-            :meth:`DiffusionTransition.log_prob_init` (VHP IS under
-            ``q_Φ``) when an ``aux_posterior`` is present; otherwise 0.
+        * Trajectory proposal: ``q_φ(z_{1:T} | x_{1:T})`` via
+          :meth:`_encode_latents` with ``K = self.S`` samples (override
+          via the ``K`` arg).  Per-step ``log q`` already lives in
+          ``logq_paths``; we sum across ``T`` for the trajectory total.
+        * Per-transition: :meth:`DiffusionTransition.log_prob` for
+          ``t = j..T-1`` via the probability-flow ODE.
+        * Decoder: :meth:`BaseDecoder.log_likelihood` summed across
+          ``t = 0..T-1``.
+        * Initial state: ``log p_ψ(z_{1:j})`` via
+          :meth:`DiffusionTransition.log_prob_init` (VHP IS under
+          ``q_Φ``) when an ``aux_posterior`` is present; otherwise 0.
 
         Args:
-            observed_data, observation_mask, timepoints, covariates,
-                static_covariates: same shapes/semantics as
-                :meth:`forward`.
+            observed_data, observation_mask, timepoints, covariates, static_covariates:
+                same shapes/semantics as :meth:`forward`.
             K: number of trajectory samples (defaults to ``self.S``).
-            rtol, atol, method, divergence_mode, generator: forwarded
-                to the per-transition prob-flow ODE solver.
+            rtol, atol, method, divergence_mode, generator: forwarded to the
+                per-transition prob-flow ODE solver.
 
         Returns:
             ``(B,)`` per-sequence log-likelihood estimate.

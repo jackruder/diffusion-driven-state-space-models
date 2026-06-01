@@ -23,6 +23,7 @@ import math
 import argparse
 import subprocess
 import dataclasses
+from typing import Any, Callable
 from dataclasses import dataclass
 
 from ddssm.experiment import SBatch
