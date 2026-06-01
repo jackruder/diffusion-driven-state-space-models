@@ -22,14 +22,17 @@ import sys
 import math
 import argparse
 import subprocess
+import dataclasses
 from dataclasses import dataclass
 
 from ddssm.study import Study, StudyPoint
 from ddssm.sbatch import (
+    CellWorker,
     PreemptSpec,
     render_sbatch,
     submit_sbatch,
     render_packed_sbatch,
+    render_multicell_packed_sbatch,
 )
 from ddssm.experiment import SBatch
 
@@ -530,6 +533,95 @@ class StudyOrchestrator:
             n_workers=n_workers,
             worker_idx=worker_idx,
         )
+
+    def render_colocated(
+        self,
+        points,
+        *,
+        n_gpus: int,
+        workers_per_cell_per_gpu: int,
+        target: int,
+        sweep: str,
+        resources: SBatch,
+        preemptive: bool = True,
+        grace_seconds: int = 180,
+        size: str | None = None,
+        seed: int | None = None,
+    ) -> list[tuple[str, str]]:
+        """Render ONE sbatch per GPU, each co-locating ALL ``points`` on its card.
+
+        Where :meth:`render` emits one job per cell (a cell's workers own a GPU),
+        this packs EVERY cell onto each of ``n_gpus`` GPUs with
+        ``workers_per_cell_per_gpu`` workers apiece — so a cell's total
+        concurrency is ``workers_per_cell_per_gpu × n_gpus`` against one shared
+        study, while each GPU hosts ``len(points) × workers_per_cell_per_gpu``
+        processes. Used to ADD trials to an existing shared-DB study at low
+        per-cell concurrency (let NSGA-II evolve) without burning a GPU per cell.
+
+        ``target`` is the per-cell TOTAL trial budget; under ``preemptive`` the
+        existing study's COMPLETE trials count toward it (each cell's preamble
+        runs its own ``launch_remaining``), so re-running converges to ``target``
+        rather than over-running it. The reused :class:`OptunaPackedNode` override
+        layout keeps the per-worker ``hydra.sweep.subdir`` + NSGA-II sampler seed
+        distinct; worker indices are cell-global (GPU ``g`` owns ``[g·k, g·k+k)``)
+        so the same cell's subdirs never collide across its GPU jobs.
+        """
+        ctx = LaunchContext(
+            self.study_prefix, self.storage_dir, self.sweeps_root,
+            seed=seed, storage_url=self.storage_url,
+        )
+        pts = list(points)
+        k = max(1, workers_per_cell_per_gpu)
+        total_per_cell = n_gpus * k
+        strategy = _STRATEGIES["optuna_packed_node"]
+        out: list[tuple[str, str]] = []
+        for g in range(n_gpus):
+            cell_workers: list[CellWorker] = []
+            preempts: dict[str, PreemptSpec] = {}
+            for point in pts:
+                job = _job_name(point, ctx)
+                pl = PointLaunch(
+                    strategy="optuna_packed_node",
+                    sweep=sweep,
+                    n_trials=target,
+                    n_workers=total_per_cell,
+                    workers_per_gpu=k,
+                    preemptive=preemptive,
+                    preempt_grace_seconds=grace_seconds,
+                    resources=resources,
+                )
+                _validate_preempt_compat(pl, point)
+                for j in range(k):
+                    w_idx = g * k + j  # cell-global; distinct across GPUs
+                    ov = strategy.hydra_overrides(point, pl, ctx, worker_idx=w_idx)
+                    ov += self._variant_overrides(point, size)
+                    ov += list(pl.extra_overrides)
+                    if seed is not None:
+                        ov.append(f"experiment.seed={seed}")
+                    cell_workers.append(
+                        CellWorker(
+                            experiment=point.name, cell_key=job,
+                            worker_idx=w_idx, overrides=ov,
+                        )
+                    )
+                if preemptive:
+                    preempts[job] = PreemptSpec(
+                        grace_seconds=grace_seconds,
+                        storage_url=_storage_for(ctx, job),
+                        study_name=f"{self.study_prefix}_{job}",
+                        target=target,
+                        n_workers=total_per_cell,
+                    )
+            gpu_job = f"{self.study_prefix}_colo_g{g}"
+            spec = dataclasses.replace(resources, job_name=f"ddssm-{gpu_job}")
+            script = render_multicell_packed_sbatch(
+                cell_workers,
+                spec=spec,
+                output_pattern=f"runs/{gpu_job}/slurm-%j.out",
+                preempts=preempts if preemptive else None,
+            )
+            out.append((gpu_job, script))
+        return out
 
     def launch(self, points, *, size=None, seeds=(None,), write_dir=None,
                submit=False, launch_override=None) -> int:

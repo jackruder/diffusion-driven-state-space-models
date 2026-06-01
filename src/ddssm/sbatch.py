@@ -350,6 +350,170 @@ def render_packed_sbatch(
     return "\n".join(lines) + "\n"
 
 
+@dataclass(frozen=True)
+class CellWorker:
+    """One packed worker in a multi-cell co-located job (:func:`render_multicell_packed_sbatch`).
+
+    ``experiment`` is the ``experiment=<preset>`` value. ``cell_key`` groups the
+    workers that share one Optuna study, so the per-cell preamble + the
+    ``__N_PER_WORKER__`` substitution resolve to that cell's own shell var.
+    ``worker_idx`` is the cell-global worker index (distinct across GPUs for the
+    SAME cell — it drives the per-worker NSGA-II sampler seed and
+    ``hydra.sweep.subdir``). ``overrides`` is the hydra override list the
+    multi-worker strategy already emitted (carrying the cell's study_name /
+    storage / sweep / subdir and the ``__N_PER_WORKER__`` / ``__SAMPLER_SEED__``
+    placeholders this renderer substitutes).
+    """
+
+    experiment: str
+    cell_key: str
+    worker_idx: int
+    overrides: list[str]
+
+
+def render_multicell_packed_sbatch(
+    workers: list[CellWorker],
+    *,
+    spec: SBatch,
+    output_pattern: str,
+    preempts: dict[str, PreemptSpec] | None = None,
+) -> str:
+    """Render ONE sbatch packing workers from SEVERAL cells onto the job's GPU.
+
+    Where :func:`render_packed_sbatch` packs K workers of ONE cell, this packs
+    workers spanning MULTIPLE Optuna studies onto a single GPU — the shape that
+    co-locates every ablation cell on each of a few GPUs. Each cell's workers
+    carry that cell's ``study_name`` / ``storage`` in their ``overrides``; the
+    same cell also runs on the other GPUs (its own sbatch each), so a cell's
+    total concurrency is ``workers-per-gpu × n_gpus`` against one shared study.
+
+    ``spec`` is the FULLY-RESOLVED resource ask for this GPU (``job_name`` set);
+    no per-experiment merge happens here (the cells differ — there is no single
+    ``experiment`` to resolve against). ``preempts`` maps each ``cell_key`` to a
+    :class:`PreemptSpec`; when given, the preamble runs ``launch_remaining`` ONCE
+    PER CELL (each cell owns its remaining budget + ``$NPW_<i>``) and a worker is
+    launched only while its cell still owes trials, under a single ``trap`` that
+    fans the preempt signal out to every packed PID.
+    """
+    if not workers:
+        raise ValueError("render_multicell_packed_sbatch needs at least one worker")
+    k = len(workers)
+    cpus_per_worker = max(1, spec.cpus // k)
+
+    # Distinct cells in first-appearance order -> stable shell-var indices.
+    cell_order: list[str] = []
+    for w in workers:
+        if w.cell_key not in cell_order:
+            cell_order.append(w.cell_key)
+    cell_var = {key: i for i, key in enumerate(cell_order)}
+
+    lines: list[str] = [
+        "#!/bin/bash",
+        f"#SBATCH --job-name={spec.job_name}",
+        f"#SBATCH --partition={spec.partition}",
+        f"#SBATCH --time={spec.time}",
+        f"#SBATCH --gres=gpu:{spec.gpus}",
+        f"#SBATCH --cpus-per-task={spec.cpus}",
+        f"#SBATCH --mem={spec.mem}",
+        f"#SBATCH --nodes={spec.nodes}",
+        f"#SBATCH --output={output_pattern}",
+    ]
+    if preempts is not None:
+        # One grace window for the whole job (max across cells, to be safe).
+        grace = max(ps.grace_seconds for ps in preempts.values())
+        lines += [
+            "#SBATCH --requeue",
+            f"#SBATCH --signal=B:USR1@{grace}",
+            "#SBATCH --open-mode=append",
+        ]
+    for flag in spec.extra_flags:
+        lines.append(f"#SBATCH {flag}")
+
+    lines += [
+        "set -euo pipefail",
+        'cd "$SLURM_SUBMIT_DIR"',
+    ]
+    lines += list(spec.setup)
+
+    if preempts is not None:
+        # Per-cell remaining budget: each cell has its own study, so its own
+        # launch_remaining + $NPW_<i> (budget count ONLY — no orphan reap, see
+        # _render_preempt_preamble for why we never age-reap live siblings).
+        for key in cell_order:
+            ps = preempts[key]
+            i = cell_var[key]
+            lines += [
+                f"N_REMAINING_{i}=$(python -m ddssm.launch_remaining \\",
+                f"    --storage {ps.storage_url} --study {ps.study_name} \\",
+                f"    --target {ps.target})",
+                f"NPW_{i}=$(( (N_REMAINING_{i} + {ps.n_workers} - 1) / {ps.n_workers} ))",
+            ]
+        lines += [
+            "export DDSSM_INVOC=$(date +%s)",
+            "export DDSSM_PREEMPTIVE=1",
+        ]
+    else:
+        # Non-preempt: no launch_remaining to init the schema, so touch the
+        # shared storage once before the workers race on CREATE TABLE.
+        lines += _render_packed_storage_init([
+            (w.worker_idx, w.overrides) for w in workers
+        ])
+
+    lines.append("PIDS=()")
+    if preempts is not None:
+        lines.append(
+            'trap \'for _p in "${PIDS[@]}"; do kill -USR1 "$_p" 2>/dev/null; done; wait\' USR1 TERM'
+        )
+
+    for w in workers:
+        i = cell_var[w.cell_key]
+        flag_args = [o for o in w.overrides if o.startswith("--")]
+        kv_args = [o for o in w.overrides if not o.startswith("--")]
+        flags_blob = " ".join(_shell_quote(o) for o in flag_args)
+        kvs_blob = " ".join(_shell_quote(o) for o in kv_args)
+        if preempts is not None:
+            # Each cell's worker reads ITS cell's $NPW (see render_sbatch for why
+            # the substitution happens AFTER _shell_quote).
+            flags_blob = flags_blob.replace(_N_PER_WORKER_PLACEHOLDER, f"$NPW_{i}")
+            kvs_blob = kvs_blob.replace(_N_PER_WORKER_PLACEHOLDER, f"$NPW_{i}")
+        kvs_blob = kvs_blob.replace(
+            _SAMPLER_SEED_PLACEHOLDER,
+            f"$(( (SLURM_JOB_ID * 100 + {w.worker_idx}) % 2000000000 ))",
+        )
+        parts = [
+            f"DDSSM_WORKER_ID={w.worker_idx}",
+            f"OMP_NUM_THREADS={cpus_per_worker}",
+            f"MKL_NUM_THREADS={cpus_per_worker}",
+            "python -m ddssm.app",
+        ]
+        if flags_blob:
+            parts.append(flags_blob)
+        parts.append(f"experiment={w.experiment}")
+        if kvs_blob:
+            parts.append(kvs_blob)
+        parts.append('"$@" &')
+        launch_line = " ".join(parts)
+        if preempts is not None:
+            # Skip a cell's worker once that cell has met its target ($NPW=0);
+            # the other cells packed in this job keep running.
+            lines += [
+                f'if [ "$NPW_{i}" -gt 0 ]; then',
+                f"  {launch_line}",
+                "  PIDS+=($!)",
+                "fi",
+            ]
+        else:
+            lines.append(launch_line)
+            lines.append("PIDS+=($!)")
+
+    lines += [
+        "STATUS=0",
+        'for _p in "${PIDS[@]}"; do wait "$_p" || STATUS=$?; done',
+        "exit $STATUS",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _render_packed_preempt_preamble(ps: PreemptSpec) -> list[str]:
     """Shared preempt preamble for a packed (K-workers-one-GPU) job.
 
@@ -424,7 +588,9 @@ def submit_sbatch(path: str) -> str:
 
 __all__ = [
     "DEFAULT_SBATCH",
+    "CellWorker",
     "PreemptSpec",
+    "render_multicell_packed_sbatch",
     "render_packed_sbatch",
     "render_sbatch",
     "submit_sbatch",
