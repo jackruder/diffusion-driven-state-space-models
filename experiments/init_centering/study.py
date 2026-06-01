@@ -74,13 +74,20 @@ _PRIORITY_ACCOUNT = "--account=priority-michaelwojnowicz"
 _UNSAFE_ACCOUNT = "--account=group-michaelwojnowicz"
 
 
-# Non-headline cells routed to the idle b6000 (Blackwell, 96 GB) GPUs; the
-# rest go to A40. Each takes 2 GPUs, so 3 b6000 cells use all 6 idle b6000s.
+# Non-headline cells routed to the b6000 (Blackwell, 96 GB) GPUs. The two
+# ``pinned`` cells (identity/zero) were moved here off A40: the A40 nodes have
+# only 32 CPU for BOTH GPUs (16/GPU), so they can't be un-starved, whereas b6000
+# is ~4x faster AND well-fed at 2 CPU/worker. Each cell takes 2 GPUs, so these 5
+# cells (10 GPUs) oversubscribe the 6 b6000s and time-share them via the queue —
+# still well under the A100 headline cell's wall time. Only ``mlp_pinned`` stays
+# on the guaranteed A100 (gpupriority, now 4 CPU/worker).
 _B6000_CELLS = frozenset(
     {
         "init_mlp_learnable_per_t",
         "init_linear_learnable_per_t",
         "init_linear_pinned_per_t",
+        "init_identity_pinned_per_t",
+        "init_zero_pinned_per_t",
     }
 )
 
@@ -116,7 +123,7 @@ def _launch(point: StudyPoint) -> PointLaunch:
             resources=ResourceSpec(
                 partition="gpupriority",
                 gpus=1,
-                cpus=32,  # 16 workers x 2 CPUs
+                cpus=64,  # 16 workers x 4 CPUs
                 mem="80G",
                 time="48:00:00",
                 extra_flags=("--gres=gpu:a100:1", _PRIORITY_ACCOUNT),
