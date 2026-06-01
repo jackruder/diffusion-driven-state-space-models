@@ -5,7 +5,8 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 from gluonts.dataset.repository.datasets import get_dataset
-from .dataload import build_loaders_for_expt
+
+from ddssm.data.dataload import build_loaders_for_expt
 
 DATASETS: Dict[str, Dict] = {
     "solar": dict(L1=168, L2=24, test_windows=7, val_windows=5),

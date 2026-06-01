@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from ddssm.likelihood.iwae import iwae_log_likelihood, logmeanexp
+from ddssm.model.likelihood.iwae import logmeanexp, iwae_log_likelihood
 
 
 def test_iwae_collapses_to_log_marginal_when_q_matches_posterior() -> None:

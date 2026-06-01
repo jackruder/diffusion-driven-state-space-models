@@ -27,7 +27,7 @@ Usage::
         hydra.sweeper.n_trials=20
 
 Experiments are discovered from ``experiments/*.py`` in the repo root;
-see :mod:`ddssm._experiment_registry`.
+see :mod:`ddssm.experiment.registry`.
 
 Under ``DDSSM_PREEMPTIVE=1`` (set by the preempt-aware sbatch preamble —
 see ADR-0009), :func:`main` performs an app-level trial-resume hand-off:
@@ -35,7 +35,7 @@ it loads the Optuna study, looks up the current RUNNING trial by
 param-match against the cfg's sampled hparams, injects any pending
 ``resume_from`` saved by a previous preempt cycle into
 ``cfg.experiment.training.resume_from``, and on a
-:class:`ddssm.train.PreemptError` enqueues a retry trial via
+:class:`ddssm.training.train.PreemptError` enqueues a retry trial via
 ``study.add_trial(...)`` carrying the saved checkpoint path. The retry
 machinery is deliberately app-level (no monkey-patch, no
 ``RetryFailedTrialCallback``) because Optuna's callback path does not
@@ -62,8 +62,8 @@ from optuna.trial import TrialState, FrozenTrial
 import optuna.exceptions
 from hydra.core.hydra_config import HydraConfig
 
-from .train import PreemptError
-from ._experiment_registry import register_experiments
+from ddssm.training.train import PreemptError
+from ddssm.experiment.registry import register_experiments
 
 register_experiments()
 

@@ -23,8 +23,8 @@ from typing import Literal
 
 from hydra_zen import builds
 
-from ddssm.losses import FullELBO
-from ddssm.stages import (
+from ddssm.model.losses import FullELBO
+from ddssm.training.stages import (
     StagesConf,
     StageLrsConf,
     EarlyStopSpec,
@@ -33,7 +33,7 @@ from ddssm.stages import (
     StageTrainableConf,
     make_lambda_cosine,
 )
-from ddssm.builders import Hparams, Training, CenteringHandoff
+from ddssm.experiment.builders import Hparams, Training, CenteringHandoff
 
 LR = 5e-4
 LAMBDA_WARMUP = 50  # short: smoke runs are ~800 total steps

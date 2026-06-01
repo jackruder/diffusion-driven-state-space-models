@@ -26,14 +26,14 @@ import pytest
 from hydra_zen import instantiate
 from hydra.core.global_hydra import GlobalHydra
 
-from ddssm.stores import store
-from ddssm.centering.baselines import (
+from ddssm.experiment.stores import store
+from ddssm.experiment.registry import register_experiments
+from ddssm.model.centering.baselines import (
     MLPBaseline,
     ZeroBaseline,
     LinearBaseline,
     IdentityBaseline,
 )
-from ddssm._experiment_registry import register_experiments
 from experiments.init_centering.cells import (
     BASELINE_FORMS,
     BASELINE_MODES,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from ddssm.likelihood.vhp import vhp_log_prob_init
+from ddssm.model.likelihood.vhp import vhp_log_prob_init
 
 
 def test_vhp_log_prob_init_collapses_when_q_is_true_posterior() -> None:

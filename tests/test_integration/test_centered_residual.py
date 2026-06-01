@@ -33,7 +33,7 @@ def _measure_centered_residual_norm(model, data) -> float:
     """
     j = model.j
     with torch.no_grad():
-        from ddssm.net_utils import time_embedding
+        from ddssm.nn.net_utils import time_embedding
 
         te = time_embedding(
             data["timepoints"], model.emb_time_dim, device=data["observed_data"].device,

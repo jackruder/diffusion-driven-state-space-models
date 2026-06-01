@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import torch
 
 from ddssm.experiment import Experiment, TrainingScalars
-from ddssm.stages import StageTrainableConf
+from ddssm.training.stages import StageTrainableConf
 
 
 def test_trainable_modules_defaults_all_true():

@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 import pytest
 
-from ddssm.centering.baselines import (
+from ddssm.model.centering.baselines import (
     MLPBaseline,
     BaseBaseline,
     ZeroBaseline,

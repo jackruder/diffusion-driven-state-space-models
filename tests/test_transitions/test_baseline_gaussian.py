@@ -7,16 +7,16 @@ from unittest.mock import patch
 import torch
 import pytest
 
-from ddssm.gaussians import gaussian_kl_divergence
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.baselines import (
+from ddssm.nn.gaussians import gaussian_kl_divergence
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.centering.baselines import (
     MLPBaseline,
     BaseBaseline,
     ZeroBaseline,
     IdentityBaseline,
 )
-from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
+from ddssm.model.centering.sigma_data import SigmaDataBuffer
+from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 # ---------------------------------------------------------------------------
 # Shapes / helpers

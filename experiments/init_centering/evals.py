@@ -28,7 +28,7 @@ axis — see report.py.
 
 from __future__ import annotations
 
-from ddssm.builders import Eval, Objective, Objectives
+from ddssm.experiment.builders import Eval, Objective, Objectives
 
 # Legacy single-objective spec (still used by smoke tests and the
 # variance probe family). Read from ``metrics.json`` since the metric

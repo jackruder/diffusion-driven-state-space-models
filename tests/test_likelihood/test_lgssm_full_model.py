@@ -25,47 +25,46 @@ Mocked to ground truth:
 
 from __future__ import annotations
 
-from functools import partial
 from types import SimpleNamespace
+from functools import partial
 
 import torch
 
-from ddssm.aggregators import ContextProducerAggregator
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.baselines import MLPBaseline
-from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.combiners import CompoundCombiner
-from ddssm.decoder import GaussianDecoder
-from ddssm.diffnets import (
+from ddssm.nn.futsum import GRUFutureSummary
+from ddssm.model.dssd import DDSSM_base
+from ddssm.nn.fusions import ConcatLinearFusion
+from ddssm.nn.diffnets import (
     CSDIUnet,
     ContextProducer,
-    DiffResidualBlockConfig,
     FeatureMixerConfig,
     ResidualBlockConfig,
+    DiffResidualBlockConfig,
 )
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.dssd import DDSSM_base
-from ddssm.encoder import GaussianEncoder
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.futsum import GRUFutureSummary
-from ddssm.gaussians import GaussianHead
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
-from ddssm.transitions.diffusion import (
-    DiffusionScheduleConfig,
+from ddssm.nn.combiners import CompoundCombiner
+from ddssm.nn.gaussians import GaussianHead
+from ddssm.model.decoder import GaussianDecoder
+from ddssm.model.encoder import GaussianEncoder
+from ddssm.nn.dist_heads import GaussianDistHead
+from ddssm.nn.aggregators import ContextProducerAggregator
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.centering.sigma_data import SigmaDataBuffer
+from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
+    DiffusionScheduleConfig,
 )
-
+from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 from tests.test_likelihood.test_lgssm_integration import (
-    A,
-    BETA_MAX,
-    BETA_MIN,
     M0,
     P0,
+    BETA_MAX,
+    BETA_MIN,
+    A,
     Q,
     R,
-    _backward_sample,
     _kalman_loglik,
     _normal_logpdf,
+    _backward_sample,
 )
 
 EMB_TIME = 8

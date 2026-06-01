@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 import pytest
 
-from ddssm.fusions import DKSFusion, GatedFusion, ConcatLinearFusion
+from ddssm.nn.fusions import DKSFusion, GatedFusion, ConcatLinearFusion
 
 B = 3
 H = 8           # hidden_dim

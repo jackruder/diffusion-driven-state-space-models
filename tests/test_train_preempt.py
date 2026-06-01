@@ -9,27 +9,26 @@ from __future__ import annotations
 
 import os
 import signal
-from functools import partial
 from typing import Any
+from functools import partial
 
-import pytest
 import torch
-from torch.utils.data import DataLoader, Dataset
+import pytest
+from torch.utils.data import Dataset, DataLoader
 
-from ddssm.aggregators import IdentityAggregator
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.combiners import CompoundCombiner
-from ddssm.decoder import GaussianDecoder
-from ddssm.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.dssd import DDSSM_base
-from ddssm.encoder import GaussianEncoder
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.futsum import GRUFutureSummary
-from ddssm.gaussians import GaussianHead
-from ddssm.train import DDSSMTrainer, PreemptError
-from ddssm.transitions.transitions import GaussianTransition
-
+from ddssm.nn.futsum import GRUFutureSummary
+from ddssm.model.dssd import DDSSM_base
+from ddssm.nn.fusions import ConcatLinearFusion
+from ddssm.nn.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
+from ddssm.nn.combiners import CompoundCombiner
+from ddssm.nn.gaussians import GaussianHead
+from ddssm.model.decoder import GaussianDecoder
+from ddssm.model.encoder import GaussianEncoder
+from ddssm.nn.dist_heads import GaussianDistHead
+from ddssm.nn.aggregators import IdentityAggregator
+from ddssm.training.train import DDSSMTrainer, PreemptError
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.transitions.transitions import GaussianTransition
 
 # ---------------------------------------------------------------------------
 # Minimal-model fixtures (mirror tests/test_trainer.py).
@@ -317,7 +316,7 @@ def test_periodic_checkpoint_pair_is_atomic_on_fault(tmp_path, monkeypatch) -> N
             raise OSError("simulated SIGKILL between step-N and latest writes")
         return real_replace(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr("ddssm.train.os.replace", _faulty_replace)
+    monkeypatch.setattr("ddssm.training.train.os.replace", _faulty_replace)
 
     with pytest.raises(OSError, match="simulated SIGKILL"):
         trainer._save_periodic_checkpoint(step=10, checkpoint_prefix="atom_test")
@@ -377,7 +376,7 @@ def test_safe_resume_corrupt_ckpt_falls_back_with_warning(
     # observable (the contract is "step counter is reset to 0").
     trainer.global_step = 42
 
-    with caplog.at_level(logging.WARNING, logger="ddssm.train"):
+    with caplog.at_level(logging.WARNING, logger="ddssm.training.train"):
         trainer._safe_resume(str(bad))
 
     assert trainer.global_step == 0, (
@@ -407,7 +406,7 @@ def test_safe_resume_missing_file_falls_back_with_warning(
     assert not missing.exists()
 
     trainer.global_step = 7
-    with caplog.at_level(logging.WARNING, logger="ddssm.train"):
+    with caplog.at_level(logging.WARNING, logger="ddssm.training.train"):
         trainer._safe_resume(str(missing))
 
     assert trainer.global_step == 0
@@ -429,7 +428,7 @@ def test_safe_resume_valid_ckpt_restores_normally(tmp_path, caplog) -> None:
     resumer = _make_trainer(tmp_path)
     assert resumer.global_step == 0
 
-    with caplog.at_level(logging.WARNING, logger="ddssm.train"):
+    with caplog.at_level(logging.WARNING, logger="ddssm.training.train"):
         resumer._safe_resume(ckpt_path)
 
     assert resumer.global_step == 13, "valid resume must restore global_step"

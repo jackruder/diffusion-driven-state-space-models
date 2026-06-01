@@ -51,10 +51,10 @@ Run::
 
 from __future__ import annotations
 
-from ddssm.stores import sweep_store
 from experiments._sweep import SweepSpace
-from experiments.init_centering.hparams import StagesB
+from ddssm.experiment.stores import sweep_store
 from experiments.init_centering.evals import PilotMOObjective
+from experiments.init_centering.hparams import StagesB
 
 # Field names below are validated against ``StagesB`` (the stage-builder
 # config) at import time — a typo or renamed factory arg raises here rather

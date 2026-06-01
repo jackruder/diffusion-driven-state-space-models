@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from ddssm.loggers import CSVLogger, MetricStore, MetricSpec
+from ddssm.training.loggers import CSVLogger, MetricSpec, MetricStore
 
 
 def _read(path: Path) -> tuple[list[str], list[dict]]:
@@ -64,7 +64,7 @@ def test_metric_store_counts_nonfinite(caplog):
     import logging
 
     store = MetricStore(spec=[MetricSpec("loss/*", "last")], loggers=[])
-    with caplog.at_level(logging.WARNING, logger="ddssm.loggers"):
+    with caplog.at_level(logging.WARNING, logger="ddssm.training.loggers"):
         store.update("train", {"loss/total": float("nan")})
         row = store.step_end("train", 1)
     assert row["nonfinite/total"] == 1.0

@@ -19,7 +19,7 @@ term, :class:`SigmaDataBuffer` in the requested tracking mode, and a
 :class:`StagesConf` running ``stage_1`` → ``stage_2`` with a
 :class:`CenteringHandoffConf` between them.
 
-The full ablation grid is a first-class library :class:`~ddssm.study.Study`
+The full ablation grid is a first-class library :class:`~ddssm.cluster.study.Study`
 (:mod:`.study`); see :mod:`.cells` for the cell enumerator and
 :mod:`.datasets` for the dataset axis. 12 cells × 2 datasets = 24 registered
 presets named ``init_<cell>__<dataset>``. The Optuna sweep
@@ -42,7 +42,7 @@ chart, markdown headline table) from the JSONL records alone — so
 plot iterations never touch the model or re-scan disk.
 """
 
-from . import data, cells, evals, model, sweeps, hparams, study, experiments
+from . import data, cells, evals, model, study, sweeps, hparams, experiments
 
 __all__ = [
     "cells",

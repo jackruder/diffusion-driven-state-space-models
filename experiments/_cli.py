@@ -12,7 +12,7 @@ Three subcommands::
   :func:`experiments._make.run` and trains it locally (writing
   outputs under ``runs/<name>`` unless ``--run-dir`` is given).
 * ``sbatch`` renders a one-job Slurm submit script via
-  :func:`ddssm.sbatch.render_sbatch`; writes to ``--out=`` or stdout. Does
+  :func:`ddssm.cluster.sbatch.render_sbatch`; writes to ``--out=`` or stdout. Does
   not call ``sbatch`` — submission is left to the user. (For launching a whole
   *study*, use ``python -m ddssm.launch <study>``.)
 
@@ -22,17 +22,16 @@ forwarded as Hydra overrides (e.g. ``training.steps=200``).
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from typing import Any
+import argparse
 
-from hydra_zen import instantiate, store
+from hydra_zen import store, instantiate
 
-from ddssm._experiment_registry import register_experiments
-
-from experiments._make import override, run
-from ddssm.sbatch import render_sbatch
+from experiments._make import run, override
+from ddssm.cluster.sbatch import render_sbatch
+from ddssm.experiment.registry import register_experiments
 
 
 def _registered_names() -> list[str]:

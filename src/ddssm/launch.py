@@ -1,4 +1,4 @@
-"""Run a :class:`ddssm.study.Study` — per-point launch strategies + the orchestrator.
+"""Run a :class:`ddssm.cluster.study.Study` — per-point launch strategies + the orchestrator.
 
 Where ``StageOrchestrator`` (``stages.py``) runs the *stages of one experiment*,
 :class:`StudyOrchestrator` runs the *points of one study*. The launch **shape** is
@@ -25,8 +25,9 @@ import subprocess
 import dataclasses
 from dataclasses import dataclass
 
-from ddssm.study import Study, StudyPoint
-from ddssm.sbatch import (
+from ddssm.experiment import SBatch
+from ddssm.cluster.study import Study, StudyPoint
+from ddssm.cluster.sbatch import (
     CellWorker,
     PreemptSpec,
     render_sbatch,
@@ -34,7 +35,6 @@ from ddssm.sbatch import (
     render_packed_sbatch,
     render_multicell_packed_sbatch,
 )
-from ddssm.experiment import SBatch
 
 # Placeholder emitted by preemptive strategies; the orchestrator substitutes
 # it per-backend (shell ``$N_PER_WORKER`` for sbatch; literal
@@ -378,7 +378,7 @@ def register_study(
 ) -> Study:
     """Register a study so ``python -m ddssm.launch <name>`` can find it.
 
-    Pass ``into=<store>`` (e.g. ``ddssm.stores.experiment_store``) to also
+    Pass ``into=<store>`` (e.g. ``ddssm.experiment.stores.experiment_store``) to also
     publish every point's config so ``experiment=<point_name>`` resolves — one
     call keeps the launcher registry and the experiment store in sync instead
     of requiring a separate ``study.register(store)``.
@@ -799,7 +799,7 @@ class StudyOrchestrator:
 
 def _load_studies() -> None:
     # Importing the experiment families triggers register_study(...) side effects.
-    from ddssm._experiment_registry import register_experiments
+    from ddssm.experiment.registry import register_experiments
 
     register_experiments()
 

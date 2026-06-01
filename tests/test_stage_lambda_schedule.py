@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ddssm.stages import LambdaRampConf, make_lambda_cosine
+from ddssm.training.stages import LambdaRampConf, make_lambda_cosine
 
 
 def test_cosine_ramp_starts_at_start() -> None:

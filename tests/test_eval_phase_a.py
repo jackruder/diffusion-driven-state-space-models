@@ -132,7 +132,7 @@ def test_wallclock_to_target_missing_csv() -> None:
 
 def test_crps_sum_latent_metrics_shape() -> None:
     """Helper returns ``(scalar, per-t)`` of the right shape."""
-    from ddssm.eval_metrics import crps_sum_latent_metrics
+    from ddssm.eval.eval_metrics import crps_sum_latent_metrics
 
     torch.manual_seed(0)
     B, S, d, L2 = 3, 16, 2, 5
@@ -145,7 +145,7 @@ def test_crps_sum_latent_metrics_shape() -> None:
 
 def test_crps_sum_latent_zero_when_samples_match_gt() -> None:
     """Tight sample distribution centred on the GT gives near-zero CRPS."""
-    from ddssm.eval_metrics import crps_sum_latent_metrics
+    from ddssm.eval.eval_metrics import crps_sum_latent_metrics
 
     torch.manual_seed(0)
     B, S, d, L2 = 2, 32, 2, 4
@@ -191,6 +191,7 @@ def test_nonlinear_bimodal_lift_kernel_registered_1d_and_mv() -> None:
 def test_nonlinear_bimodal_lift_kernel_samples_are_bimodal_1d() -> None:
     """The 1D kernel samples cluster around tanh(z_{t-1}) ± δ."""
     import numpy as np
+
     from ddssm.data.synthetic import NLBL_DELTA
 
     kernel = KERNEL_REGISTRY["nonlinear-bimodal-lift"]
@@ -216,6 +217,7 @@ def test_nonlinear_bimodal_lift_mv_kernel_uses_consistent_A() -> None:
     """The MV kernel's A matrix matches what the data generator uses."""
     import numpy as np
     import torch
+
     from ddssm.data.synthetic import (
         NLBL_MV_A_SEED,
         NLBL_MV_LATENT_D,
@@ -232,6 +234,7 @@ def test_nonlinear_bimodal_lift_mv_kernel_uses_consistent_A() -> None:
 def test_nonlinear_bimodal_lift_mv_kernel_samples_shape() -> None:
     """The MV kernel returns (B, S, d=NLBL_MV_LATENT_D)."""
     import numpy as np
+
     from ddssm.data.synthetic import NLBL_MV_LATENT_D
 
     kernel = KERNEL_REGISTRY["nonlinear-bimodal-lift-mv"]
@@ -260,10 +263,10 @@ def test_sigma_data_drift_snapshot_with_init_smoke_simple(tmp_path) -> None:
     """
     from hydra_zen import instantiate
 
-    from ddssm._experiment_registry import register_experiments
+    from ddssm.experiment.registry import register_experiments
 
     register_experiments()
-    from ddssm.stores import store
+    from ddssm.experiment.stores import store
 
     cfg = None
     for entry in store:
@@ -320,10 +323,10 @@ def test_stage2_elbo_surrogate_with_init_smoke_simple(tmp_path) -> None:
     """End-to-end: the metric runs on a trained smoke checkpoint."""
     from hydra_zen import instantiate
 
-    from ddssm._experiment_registry import register_experiments
+    from ddssm.experiment.registry import register_experiments
 
     register_experiments()
-    from ddssm.stores import store
+    from ddssm.experiment.stores import store
 
     cfg = None
     for entry in store:

@@ -26,7 +26,7 @@ from hydra.core.global_hydra import GlobalHydra
 
 from ddssm.experiment import Experiment, ObjectiveSpec, TrainingScalars
 from ddssm.data.datamodule import DDSSMDataModule
-from ddssm._experiment_registry import register_experiments
+from ddssm.experiment.registry import register_experiments
 
 CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
 

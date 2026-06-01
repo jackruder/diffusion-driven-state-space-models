@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import csv
 
-from ddssm.loggers import CSVLogger
+from ddssm.training.loggers import CSVLogger
 
 
 def _read_rows(path: str) -> tuple[list[str], list[dict[str, str]]]:

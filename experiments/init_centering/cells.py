@@ -21,7 +21,7 @@ because they have no μ_p parameters to learn.  That removes 4 cells
 The ``global_ema`` tracking mode (single scalar EMA-tracked σ_data²)
 was dropped from the ablation — only ``fixed`` (σ_data² = 1) and
 ``per_t`` (time-varying buffer) are studied.  The underlying
-:class:`ddssm.centering.sigma_data.SigmaDataBuffer` still supports
+:class:`ddssm.model.centering.sigma_data.SigmaDataBuffer` still supports
 ``global_ema`` as a valid mode; it just isn't a cell in this grid.
 """
 

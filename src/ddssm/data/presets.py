@@ -13,9 +13,8 @@ CLI overrides resolve) happens in :mod:`experiments.datasets`.
 
 from __future__ import annotations
 
-from ddssm.builders import Synthetic
 from ddssm.data.synthetic import NLBL_MV_OBS_D
-
+from ddssm.experiment.builders import Synthetic
 
 T = 32
 BATCH_SIZE = 32

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import logging
 from types import SimpleNamespace
+import logging
 
 import torch
-import torch.nn as nn
 import pytest
+import torch.nn as nn
 
-from ddssm.checkpoint import Checkpoint, load_into_model, prepare_model
+from ddssm.training.checkpoint import Checkpoint, prepare_model, load_into_model
 
 
 class _Toy(nn.Module):
@@ -67,7 +67,7 @@ def test_cross_check_warns_on_drift(tmp_path, caplog):
     path = str(tmp_path / "ckpt.pth")
     Checkpoint.from_trainer(_fake_trainer(model, yaml="hidden_dim: 64")).save(path)
 
-    with caplog.at_level(logging.WARNING, logger="ddssm.checkpoint"):
+    with caplog.at_level(logging.WARNING, logger="ddssm.training.checkpoint"):
         load_into_model(
             _Toy(), path, device=torch.device("cpu"),
             expected_model_config_yaml="hidden_dim: 80",
@@ -80,7 +80,7 @@ def test_cross_check_silent_when_match(tmp_path, caplog):
     path = str(tmp_path / "ckpt.pth")
     Checkpoint.from_trainer(_fake_trainer(model, yaml="hidden_dim: 64")).save(path)
 
-    with caplog.at_level(logging.WARNING, logger="ddssm.checkpoint"):
+    with caplog.at_level(logging.WARNING, logger="ddssm.training.checkpoint"):
         load_into_model(
             _Toy(), path, device=torch.device("cpu"),
             expected_model_config_yaml="hidden_dim: 64",
@@ -226,7 +226,8 @@ def test_restore_raises_when_saved_scaler_state_but_live_scaler_disabled(tmp_pat
     if tests_dir not in sys.path:
         sys.path.insert(0, tests_dir)
     from test_trainer import make_small_model  # type: ignore
-    from ddssm.train import DDSSMTrainer
+
+    from ddssm.training.train import DDSSMTrainer
 
     model = make_small_model()
     trainer = DDSSMTrainer(

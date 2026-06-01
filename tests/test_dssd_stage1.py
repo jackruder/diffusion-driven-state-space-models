@@ -19,24 +19,24 @@ from functools import partial
 import torch
 import pytest
 
-from ddssm.dssd import DDSSM_base
-from ddssm.futsum import GRUFutureSummary
-from ddssm.decoder import GaussianDecoder
-from ddssm.encoder import GaussianEncoder
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.diffnets import (
+from ddssm.nn.futsum import GRUFutureSummary
+from ddssm.model.dssd import DDSSM_base
+from ddssm.nn.fusions import ConcatLinearFusion
+from ddssm.nn.diffnets import (
     ContextProducer,
     FeatureMixerConfig,
     ResidualBlockConfig,
 )
-from ddssm.combiners import CompoundCombiner
-from ddssm.gaussians import GaussianHead
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.aggregators import ContextProducerAggregator
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.baselines import MLPBaseline
-from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
+from ddssm.nn.combiners import CompoundCombiner
+from ddssm.nn.gaussians import GaussianHead
+from ddssm.model.decoder import GaussianDecoder
+from ddssm.model.encoder import GaussianEncoder
+from ddssm.nn.dist_heads import GaussianDistHead
+from ddssm.nn.aggregators import ContextProducerAggregator
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.centering.sigma_data import SigmaDataBuffer
+from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 # ---------------------------------------------------------------------------
 # Tiny test-only constants.

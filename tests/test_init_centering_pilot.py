@@ -27,9 +27,9 @@ import pytest
 from hydra_zen import instantiate
 from hydra.core.global_hydra import GlobalHydra
 
-from ddssm.stores import store
 from ddssm.experiment import Experiment, ObjectiveSpec
-from ddssm._experiment_registry import register_experiments
+from ddssm.experiment.stores import store
+from ddssm.experiment.registry import register_experiments
 
 CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
 

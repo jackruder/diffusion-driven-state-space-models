@@ -18,13 +18,13 @@ from functools import partial
 
 import torch
 
-from ddssm.diffnets import (
+from ddssm.nn.diffnets import (
     CSDIUnet,
     FeatureMixerConfig,
     DiffResidualBlockConfig,
 )
-from ddssm.centering.baselines import MLPBaseline
-from ddssm.transitions.diffusion import (
+from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
     DiffusionScheduleConfig,
 )

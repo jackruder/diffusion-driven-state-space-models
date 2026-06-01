@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import csv
 import json
-import logging
-import os
-from dataclasses import dataclass, field
 from typing import Any
+import logging
+from dataclasses import field, dataclass
 
 import torch
 
-from .metrics import PROBE_METRIC_REGISTRY, ProbeContext
-from .plots import PROBE_PLOT_REGISTRY, ProbePlotContext
-from .probe import run_probe
+from ddssm.variance.plots import PROBE_PLOT_REGISTRY, ProbePlotContext
+from ddssm.variance.probe import run_probe
+from ddssm.variance.metrics import PROBE_METRIC_REGISTRY, ProbeContext
 
 log = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ def variance(
     plot_ctx = ProbePlotContext(rows=rows, summary=summary, metrics=metric_out)
 
     # Cross-stage W&B reconnect — same shape as ``viz.runner.visualize``.
-    from ..loggers import resume_run_from_dir
+    from ddssm.training.loggers import resume_run_from_dir
 
     wandb_mod = resume_run_from_dir(
         run_dir, getattr(experiment, "wandb_config", None),

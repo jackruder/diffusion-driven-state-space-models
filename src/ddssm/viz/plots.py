@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import csv as _csv
 import math
+from typing import Any, Dict, Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
 
 @dataclass
@@ -98,7 +98,7 @@ def _run_recon_and_forecast(ctx: PlotContext, batch: dict, T_split: int, num_sam
         zs = stats["zs"]
         z_sample = zs[:, 0, :, :]
 
-        from ..net_utils import time_embedding
+        from ddssm.nn.net_utils import time_embedding
         te = time_embedding(timepoints, model.emb_time_dim, device=device)
 
         recons = []

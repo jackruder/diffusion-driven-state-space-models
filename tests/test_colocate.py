@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from ddssm.launch import StudyOrchestrator
-from ddssm.sbatch import SBatch, CellWorker, render_multicell_packed_sbatch
+from ddssm.cluster.sbatch import SBatch, CellWorker, render_multicell_packed_sbatch
 from experiments.init_centering.study import INIT_CENTERING_STUDY
 
 # Two concrete cells (1d) to co-locate in the tests.

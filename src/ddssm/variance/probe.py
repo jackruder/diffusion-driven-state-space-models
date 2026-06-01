@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import logging
-import random
 import time
-from collections import defaultdict
+import random
 from typing import Any
+import logging
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -93,7 +93,7 @@ def run_probe(
             transition has no ``p_k`` buffer.
         ValueError: If the probed split has no loader.
     """
-    from ..checkpoint import prepare_model
+    from ddssm.training.checkpoint import prepare_model
 
     # ``prepare_model`` defaults to ``load_ema=True`` — the probe measures
     # the sampling-path EMA shadows, matching training-time sampling

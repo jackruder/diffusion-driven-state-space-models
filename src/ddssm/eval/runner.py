@@ -13,15 +13,15 @@ from the CLI.
 
 from __future__ import annotations
 
-import json
-import logging
 import os
-from dataclasses import dataclass, field
+import json
 from typing import Any
+import logging
+from dataclasses import field, dataclass
 
 import torch
 
-from .metrics import EvalContext, METRIC_REGISTRY
+from ddssm.eval.metrics import METRIC_REGISTRY, EvalContext
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ def evaluate(
         KeyError: If ``spec`` names a metric absent from
             ``METRIC_REGISTRY``.
     """
-    from ..checkpoint import prepare_model
+    from ddssm.training.checkpoint import prepare_model
 
     model = prepare_model(
         experiment, checkpoint_path=checkpoint_path, device=device,
@@ -133,7 +133,7 @@ def evaluate(
     # training run under the ``eval/`` namespace and snapshot the JSON
     # as an artifact. Soft-fails so eval still returns the in-memory
     # dict even when W&B is unreachable.
-    from ..loggers import resume_run_from_dir
+    from ddssm.training.loggers import resume_run_from_dir
 
     wandb_mod = resume_run_from_dir(
         run_dir, getattr(experiment, "wandb_config", None),

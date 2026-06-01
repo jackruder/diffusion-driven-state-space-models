@@ -1,4 +1,4 @@
-"""Integration tests for :class:`ddssm.stages.StageOrchestrator`'s handoff hook.
+"""Integration tests for :class:`ddssm.training.stages.StageOrchestrator`'s handoff hook.
 
 Verify that when a stage has ``centering_handoff`` set, the orchestrator
 calls :func:`perform_centering_handoff` *before* the stage's fit loop,
@@ -11,14 +11,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ddssm.stages import (
+from ddssm.training.stages import (
     StagesConf,
     StageLrsConf,
     StageSpecConf,
     StageOrchestrator,
     StageTrainableConf,
 )
-from ddssm.centering.handoff import CenteringHandoffConf
+from ddssm.model.centering.handoff import CenteringHandoffConf
 
 
 class _DummyTrainer:
@@ -86,7 +86,7 @@ def test_orchestrator_calls_handoff_before_fit_when_configured() -> None:
     def _spy_handoff(trainer_arg, spec, *, new_lrs) -> None:  # noqa: ANN001
         handoff_called.append((spec.sigma_pert, new_lrs.enc_lr))
 
-    with patch("ddssm.stages.perform_centering_handoff", side_effect=_spy_handoff):
+    with patch("ddssm.training.stages.perform_centering_handoff", side_effect=_spy_handoff):
         orch.run(train_loader=object(), amp=False)
 
     # The handoff was called exactly once, with stage_2's σ_pert and LRs.
@@ -99,7 +99,7 @@ def test_orchestrator_skips_rebuild_when_handoff_set() -> None:
     cfg = _make_config(stage_2_with_handoff=True)
     orch = StageOrchestrator(trainer, cfg)
 
-    with patch("ddssm.stages.perform_centering_handoff"):
+    with patch("ddssm.training.stages.perform_centering_handoff"):
         orch.run(train_loader=object(), amp=False)
 
     # Stage 1 had no handoff → one rebuild.  Stage 2 had handoff → zero

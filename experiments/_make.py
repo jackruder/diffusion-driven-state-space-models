@@ -6,8 +6,8 @@ factories live in the experiment families (e.g.
 import a model factory + a dataset and call :func:`experiment` (it ties
 them together and curries ``hparams`` onto the trainer)::
 
-    from ddssm.builders import Eval, Hparams, Training
-    from ddssm.stores import experiment_store
+    from ddssm.experiment.builders import Eval, Hparams, Training
+    from ddssm.experiment.stores import experiment_store
     from experiments._make import experiment, run
     from experiments.init_centering.model import SmokeModel
     from ddssm.data.presets import NonlinBimodalLift1D
@@ -29,16 +29,16 @@ experiment with :func:`override` (Hydra-CLI-style strings or dicts).
 
 from __future__ import annotations
 
-import dataclasses
-import logging
 import os
 from typing import Any
+import logging
+import dataclasses
 
 import torch
-from hydra_zen import instantiate, to_yaml as _zen_to_yaml
+from hydra_zen import to_yaml as _zen_to_yaml, instantiate
 from omegaconf import OmegaConf
 
-from ddssm.builders import ExperimentC, TrainerPartial
+from ddssm.experiment.builders import ExperimentC, TrainerPartial
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def experiment(
     ``sbatch`` is purely metadata at training time; it is read by
     ``python -m experiments sbatch <name>`` when emitting a Slurm
     submit script. Leave ``None`` to inherit the project default in
-    :mod:`ddssm.sbatch`. (Study launches read resources from each
+    :mod:`ddssm.cluster.sbatch`. (Study launches read resources from each
     point's ``PointLaunch.resources`` instead — see ADR-0008.)
     """
     if stages is not None:

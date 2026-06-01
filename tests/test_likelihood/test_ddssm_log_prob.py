@@ -8,35 +8,35 @@ this test verifies the composition layer wires them into a valid
 
 from __future__ import annotations
 
-from functools import partial
 from types import SimpleNamespace
+from functools import partial
 
 import torch
 
-from ddssm.aggregators import ContextProducerAggregator
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.baselines import MLPBaseline
-from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.combiners import CompoundCombiner
-from ddssm.decoder import GaussianDecoder
-from ddssm.diffnets import (
+from ddssm.nn.futsum import GRUFutureSummary
+from ddssm.model.dssd import DDSSM_base
+from ddssm.nn.fusions import ConcatLinearFusion
+from ddssm.nn.diffnets import (
     CSDIUnet,
     ContextProducer,
-    DiffResidualBlockConfig,
     FeatureMixerConfig,
     ResidualBlockConfig,
+    DiffResidualBlockConfig,
 )
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.dssd import DDSSM_base
-from ddssm.encoder import GaussianEncoder
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.futsum import GRUFutureSummary
-from ddssm.gaussians import GaussianHead
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
-from ddssm.transitions.diffusion import (
-    DiffusionScheduleConfig,
+from ddssm.nn.combiners import CompoundCombiner
+from ddssm.nn.gaussians import GaussianHead
+from ddssm.model.decoder import GaussianDecoder
+from ddssm.model.encoder import GaussianEncoder
+from ddssm.nn.dist_heads import GaussianDistHead
+from ddssm.nn.aggregators import ContextProducerAggregator
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.centering.sigma_data import SigmaDataBuffer
+from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
+    DiffusionScheduleConfig,
 )
+from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 J = 2
 DATA_DIM = 3
@@ -160,7 +160,7 @@ def test_log_prob_at_k1_equals_single_trajectory_iwae_weight() -> None:
     observation_mask = torch.ones(B, DATA_DIM, T)
     timepoints = torch.arange(T).expand(B, T).clone().long()
 
-    from ddssm.net_utils import time_embedding
+    from ddssm.nn.net_utils import time_embedding
 
     # Encode once; reuse the SAME trajectory for both the method and the
     # manual reassembly (seed the model's internal sampling identically).

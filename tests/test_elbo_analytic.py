@@ -41,16 +41,15 @@ from __future__ import annotations
 
 import types
 
-import pytest
 import torch
+import pytest
 import torch.nn as nn
 
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.baselines import ZeroBaseline
-from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.dssd import DDSSM_base
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
-
+from ddssm.model.dssd import DDSSM_base
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.centering.baselines import ZeroBaseline
+from ddssm.model.centering.sigma_data import SigmaDataBuffer
+from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 D = 2     # latent dim
 J = 1     # history window

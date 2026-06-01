@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from ddssm import launch as L
-from ddssm.study import Study as _Study, StudyPoint, StudyPoint as _StudyPoint
 from ddssm.launch import (
     SingleJob,
     SlurmArray,
@@ -20,6 +19,7 @@ from ddssm.launch import (
     StudyOrchestrator,
 )
 from ddssm.experiment import SBatch
+from ddssm.cluster.study import Study as _Study, StudyPoint, StudyPoint as _StudyPoint
 from experiments.init_centering.study import INIT_CENTERING_STUDY
 
 
@@ -376,7 +376,7 @@ def _preempt_render(
     under ``pl.preemptive=True``), then calls ``render_sbatch`` with a
     ``PreemptSpec`` directly (orchestrator wiring is Phase 5).
     """
-    from ddssm.sbatch import PreemptSpec, render_sbatch
+    from ddssm.cluster.sbatch import PreemptSpec, render_sbatch
 
     pl = PointLaunch(
         strategy="optuna_multi_node",
@@ -1203,7 +1203,7 @@ def test_packed_node_rejects_local() -> None:
 
 @pytest.mark.parametrize("renderer", ["render_sbatch", "render_packed_sbatch"])
 def test_renderers_emit_strict_bash_pipefail(renderer: str) -> None:
-    from ddssm.sbatch import render_sbatch, render_packed_sbatch
+    from ddssm.cluster.sbatch import render_sbatch, render_packed_sbatch
 
     exp_sbatch = SBatch(
         partition="gpu",

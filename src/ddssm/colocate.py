@@ -45,7 +45,7 @@ from ddssm.launch import (
     _load_studies,
     _parse_select,
 )
-from ddssm.sbatch import DEFAULT_SBATCH, submit_sbatch
+from ddssm.cluster.sbatch import DEFAULT_SBATCH, submit_sbatch
 
 
 def _resolve_template(study, points, resources_from: str | None):
