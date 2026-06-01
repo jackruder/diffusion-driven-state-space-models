@@ -111,12 +111,12 @@ def _launch(point: StudyPoint) -> PointLaunch:
     """
     cell = point.coords["cell"]
 
-    # Headline cell -> the guaranteed A100 (gpupriority, non-preempt). 96/16 = 6.
+    # Headline cell -> the guaranteed A100 (gpupriority, non-preempt). 64/16 = 4.
     if cell.name == "init_mlp_pinned_per_t":
         return PointLaunch(
             strategy="optuna_packed_node",
-            sweep="init_ablation_moo",
-            n_trials=96,
+            sweep="init_ablation_moo_r2",
+            n_trials=64,
             n_workers=16,
             workers_per_gpu=16,
             preemptive=False,
@@ -131,12 +131,12 @@ def _launch(point: StudyPoint) -> PointLaunch:
             ),
         )
 
-    # Other cells -> 2 GPUs each (b6000 or A40), gpuunsafe/preemptible. 96/32 = 3.
+    # Other cells -> 2 GPUs each (b6000 or A40), gpuunsafe/preemptible. 64/32 = 2.
     gres = "--gres=gpu:b6000:1" if cell.name in _B6000_CELLS else "--gres=gpu:a40:1"
     return PointLaunch(
         strategy="optuna_packed_node",
-        sweep="init_ablation_moo",
-        n_trials=96,
+        sweep="init_ablation_moo_r2",
+        n_trials=64,
         n_workers=32,
         workers_per_gpu=16,
         preemptive=True,

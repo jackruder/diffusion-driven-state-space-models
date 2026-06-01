@@ -86,30 +86,33 @@ InitAblationMOO = _ablation.build(
 sweep_store(InitAblationMOO, name="init_ablation_moo")
 
 
-# Round-2 narrowed search space — used by EVERY round-2 cell (pinned + learnable).
-# Surgically tightened off the CLEAN round-1 axes (ELBO + steps), per the round-1
-# param-importance + top-20%-concentration analysis:
-#   * base_lr dominates the ELBO response (importance ~0.42) and its bottom
-#     decade [1e-5, 5e-5] is consistently dead -> floor raised to 1e-4.
-#   * dec_mult bottom [0.1, 0.3] is never in any cell's top-20%; the high
-#     ceiling is kept (mlp_per_t prefers ~3-7) -> [0.3, 10].
-#   * lambda_sigma_p / sigma_pert / stage_*_warmup upper tails are rarely
-#     good -> mild upper trims.
-#   * n_pretrain is ~irrelevant (importance ~0.03); drop the dead upper tail.
-#   * anchor_lambda is kept WIDE (``interval(1e-4, 1e-1)``). There's no round-1
-#     data to narrow it (it was never swept), and it's a no-op flat axis for the
-#     pinned cells (μ_p frozen → R_μp zeros out), but the learnable cells tune
-#     their R_μp regulariser through it.
+# Round-2 search space — used by EVERY round-2 cell (pinned + learnable).
+# Derived from the FIRST VALID round-1 data (round1v2_20260531, the seed-fixed
+# rerun — earlier rounds had the duplicate-seed bug, see
+# ddssm.launch._SAMPLER_SEED_OVERRIDE). Univariate signal analysis over 189
+# pooled COMPLETE trials (Spearman |rho| of log-param vs obj1, tertile-mean obj1,
+# best-25% concentration) found only THREE axes carry signal, all monotone
+# "higher is better":
+#   * base_lr     |rho|=0.76 (dominant): bottom 1.5 decades [1e-5, 1e-4] dead,
+#                 best-25% in [1.5e-4, 8e-4] -> floor raised to 1e-4.
+#   * dec_mult    |rho|=0.32: bottom [0.1, 0.3] never in best-25% -> [0.3, 10].
+#   * trans_mult  |rho|=0.31: bottom [0.1, 0.5] weak               -> [0.5, 10].
+# The other six axes (n_pretrain, sigma_pert, anchor_lambda, lambda_sigma_p,
+# stage_1/2_warmup_frac) were flat noise (|rho| < 0.13, best-25% spans the full
+# range). Per the round-2 decision we keep them at the FULL round-1 ranges rather
+# than fixing them — the analysis is univariate (no fANOVA interaction terms;
+# sklearn absent on the cluster), so we only commit to narrowing the three clear
+# signals and let the others vary.
 _ablation_r2 = SweepSpace(target=StagesB, prefix="experiment.training.stages")
-_ablation_r2.log_int("n_pretrain", 5, 300)
-_ablation_r2.log("sigma_pert", 1e-3, 3e-2)
+_ablation_r2.log_int("n_pretrain", 5, 500)
+_ablation_r2.log("sigma_pert", 1e-3, 5e-2)
 _ablation_r2.log("anchor_lambda", 1e-4, 1e-1)
-_ablation_r2.log("lambda_sigma_p", 1e-3, 5e-2)
-_ablation_r2.log("base_lr", 1e-4, 1e-3)
-_ablation_r2.log("dec_mult", 0.3, 10.0)
-_ablation_r2.log("trans_mult", 0.1, 10.0)
-_ablation_r2.log("stage_1_warmup_frac", 0.05, 0.35)
-_ablation_r2.log("stage_2_warmup_frac", 0.02, 0.18)
+_ablation_r2.log("lambda_sigma_p", 1e-3, 1e-1)
+_ablation_r2.log("base_lr", 1e-4, 1e-3)     # narrowed: dead bottom dropped
+_ablation_r2.log("dec_mult", 0.3, 10.0)     # narrowed: dead bottom dropped
+_ablation_r2.log("trans_mult", 0.5, 10.0)   # narrowed: weak bottom dropped
+_ablation_r2.log("stage_1_warmup_frac", 0.05, 0.5)
+_ablation_r2.log("stage_2_warmup_frac", 0.02, 0.25)
 
 
 InitAblationMOO_R2 = _ablation_r2.build(
