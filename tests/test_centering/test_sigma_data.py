@@ -67,13 +67,59 @@ def test_per_t_update_matches_analytic_estimator() -> None:
         mu_block = mu[k * per_t : (k + 1) * per_t]
         s2_block = s2[k * per_t : (k + 1) * per_t]
         avg_post_var = s2_block.mean(dim=0).sum()
-        mu_var = mu_block.var(dim=0, unbiased=False).sum()
+        mu_var = mu_block.var(dim=0, unbiased=True).sum()
         expected.append(((avg_post_var + mu_var) / D).item())
     for k, t in enumerate(t_idx.tolist()):
         assert pytest.approx(float(buf.read(t).item()), rel=1e-5) == expected[k]
     # Unvisited slots untouched.
     for t in (1, 3, 5):
         assert float(buf.read(t).item()) == 0.0
+
+
+def test_steady_state_is_batch_size_invariant() -> None:
+    """EMA steady-state target is unchanged when batch size grows.
+
+    Regression for the ``unbiased=False`` bug: the maximum-likelihood
+    variance estimator's expectation scales as ``(per_t − 1)/per_t``, so
+    the steady-state EMA value moved with batch size (e.g. ~6% low at
+    per_t=16, converging from below as per_t→∞). Using the
+    Bessel-corrected estimator removes that dependence: with a true
+    distribution held fixed and ``ema_decay=0`` (so the buffer equals
+    the per-update estimate), the *expected* per-update estimate is
+    identical for any ``per_t > 1``.
+    """
+    torch.manual_seed(0)
+    # Synthesise per-sample (μ̂, σ²) from a known marginal distribution:
+    # μ̂ ~ N(0, mu_scale² I), σ² fixed. The true ``σ_data² = (1/D)(‖σ²‖
+    # + d · mu_scale²)``. Average the per-update estimator across many
+    # independent draws to suppress sampling noise; with ``unbiased=True``
+    # the average should converge to the same value for any per_t.
+    mu_scale = 0.7
+    sigma2_true = torch.tensor([0.4, 0.5, 0.6])
+    true_target = (sigma2_true.sum().item() + D * mu_scale ** 2) / D
+
+    n_draws = 4000
+    means = {}
+    for per_t in (4, 16, 256):
+        buf = SigmaDataBuffer(
+            T_max=T_MAX, tracking_mode="per_t", ema_decay=0.0, init_value=0.0,
+        )
+        acc = 0.0
+        for _ in range(n_draws):
+            mu = torch.randn(per_t, D) * mu_scale
+            s2 = sigma2_true.unsqueeze(0).expand(per_t, D).clone()
+            buf.update(
+                t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2,
+            )
+            acc += float(buf.read(2).item())
+        means[per_t] = acc / n_draws
+
+    # Each per_t setting should match the true target within MC noise
+    # (~1/sqrt(n_draws) on the variance estimate).
+    for per_t, mean in means.items():
+        assert abs(mean - true_target) < 5e-3, (
+            f"per_t={per_t} estimator avg {mean:.4f} vs true {true_target:.4f}"
+        )
 
 
 def test_global_ema_updates_all_slots_uniformly() -> None:

@@ -104,6 +104,11 @@ def _build_init_centering_model(
     T_max: int = 32,
     data_dim: int = 1,
     latent_dim: int = 4,
+    # Reserved for the future irregular-timestep / relative-time regime;
+    # gated off by ``use_time_embedding=False`` for the current uniform-grid
+    # regime where ``timepoints`` is just an within-window index and the
+    # sinusoidal embedding carries no signal.
+    use_time_embedding: bool = False,
     emb_time_dim: int = 16,
     # ``None`` ⇒ derive via the "channels = 16 × latent_dim" scaling rule
     # locked in by CONTEXT.md § "Size axis". Set explicitly to override.
@@ -151,6 +156,13 @@ def _build_init_centering_model(
             baseline_form,
         )
         baseline_mode = "pinned"
+
+    # ``use_time_embedding`` is the authoritative on/off switch; ``emb_time_dim``
+    # is only consulted when the path is enabled. Forcing 0 here makes every
+    # submodule's ``self.emb_time_dim > 0`` guard collapse the time-conditioning
+    # ops out of both eager and torch.compile graphs.
+    if not use_time_embedding:
+        emb_time_dim = 0
 
     # ---- size-matrix defaults (CONTEXT.md § "Size axis") ----
     if channels is None:

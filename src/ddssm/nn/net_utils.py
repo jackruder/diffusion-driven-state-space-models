@@ -7,9 +7,14 @@ import torch.nn as nn
 def time_embedding(pos: torch.Tensor, d_model: int = 128, device: torch.device = "cpu"):
     """Sinusoidal (Vaswani) embeddings for integer or real timestamps.
 
+    Reserved for the future irregular-timestep / relative-time regime
+    (``use_time_embedding=True``). When ``d_model == 0`` the call short-circuits
+    to an empty ``(B, T, 0)`` tensor so the regular-timestep path can call
+    through unconditionally.
+
     Args:
         pos: ``(B, T)`` timestamps (cast to float).
-        d_model: Embedding dimension.
+        d_model: Embedding dimension. ``0`` disables the embedding.
         device: Device to build the embedding on.
 
     Returns:
@@ -17,6 +22,8 @@ def time_embedding(pos: torch.Tensor, d_model: int = 128, device: torch.device =
     """
     pos = pos.to(device).float()  # ensure float for sin/cos
     B, T = pos.shape
+    if d_model == 0:
+        return torch.empty(B, T, 0, device=device, dtype=pos.dtype)
     pe = torch.zeros(B, T, d_model, device=device, dtype=pos.dtype)
     # inv_freq[k] = 1 / (10000^{2k/d_model})
     k = torch.arange(0, d_model, 2, device=device, dtype=pos.dtype)
@@ -72,17 +79,32 @@ def get_side_info(
     """
     B, T, E_t = time_embed.shape
     D = data_dim
+    E_f = int(embed_layer.embedding_dim)
 
     time_embed = time_embed.to(device)
-    feats = torch.arange(D, device=device)
-    feat_embed = embed_layer(feats)  # (D, E_f)
 
-    # Broadcast to (B, T, D, *)
-    time_b = time_embed.unsqueeze(2).expand(B, T, D, E_t)
-    feat_b = feat_embed.unsqueeze(0).unsqueeze(0).expand(B, T, D, -1)
+    # Skip time and feature channels independently when their dim is 0. Branch
+    # on the Python ints (compile-time constants) rather than letting
+    # ``(…, 0)`` tensors cascade — cuDNN's conv backward errors when a
+    # ``(D, 0)`` ``embed_layer.weight`` parameter is wired into the autograd
+    # graph through the downstream ``cond_projection`` Conv1d, even though the
+    # forward pass succeeds.
+    channels: list[torch.Tensor] = []
+    if E_t > 0:
+        time_b = time_embed.unsqueeze(2).expand(B, T, D, E_t)
+        channels.append(time_b)
+    if E_f > 0:
+        feats = torch.arange(D, device=device)
+        feat_embed = embed_layer(feats)  # (D, E_f)
+        feat_b = feat_embed.unsqueeze(0).unsqueeze(0).expand(B, T, D, -1)
+        channels.append(feat_b)
 
-    # Concatenate along channels then permute to (B, C_side, D, T)
-    side = torch.cat([time_b, feat_b], dim=-1).permute(0, 3, 2, 1).contiguous()
+    if channels:
+        side = torch.cat(channels, dim=-1).permute(0, 3, 2, 1).contiguous()
+    else:
+        # No time, no feature embeddings — start from an empty (B, 0, D, T)
+        # tensor with no grad-tracked degenerate parameters in its history.
+        side = torch.zeros(B, 0, D, T, device=device, dtype=time_embed.dtype)
 
     if cond_mask is not None:
         cond_mask = cond_mask.to(device).unsqueeze(1)  # (B, 1, D, T)

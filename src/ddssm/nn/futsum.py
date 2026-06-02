@@ -76,7 +76,13 @@ class FutureSummary(nn.Module):
         _B, _T, D = observed_data.shape
         assert self.data_dim == D
 
-        x_aug = torch.cat([observed_data, t_emb], dim=-1)  # (B, T, D + E_t)
+        # Gate the time concat on the Python int (compile-time constant) rather
+        # than on tensor shape — keeps Inductor specialization clean when the
+        # absolute-time path is off (``emb_time_dim == 0``).
+        if self.emb_time_dim > 0:
+            x_aug = torch.cat([observed_data, t_emb], dim=-1)  # (B, T, D + E_t)
+        else:
+            x_aug = observed_data
         if observed_mask is not None:
             x_aug = torch.cat([x_aug, observed_mask], dim=-1)  # (B, T, D + E_t + D)
         if self.static_embed_dim > 0 and static_embed is not None:

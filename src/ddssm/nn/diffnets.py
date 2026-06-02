@@ -804,8 +804,6 @@ class ContextProducer(nn.Module):
         # z_prev: (B, d, j)
         B, H_seq, L = combined.shape
 
-        Bt, H_time, Lt = hist_time_emb.shape
-
         if self.skip_mask:
             if mask_embedded is None:
                 mask_embedded = torch.zeros(
@@ -816,16 +814,25 @@ class ContextProducer(nn.Module):
         else:
             assert mask_embedded is not None
             Bm, H_mask, Lm = mask_embedded.shape
-        assert B == Bm == Bt
-        assert L == Lm == Lt
+        assert B == Bm
+        assert L == Lm
         assert self.combined_len == L
 
         assert H_seq == self.combined_dim
         assert H_mask == self.mask_tot_dim
-        assert H_time == self.emb_time_dim
 
-        #  Base side info (Time and Mask) - varies over L, shared over H_seq
-        side_components_L = [hist_time_emb, mask_embedded]
+        # Branch on the Python int ``self.emb_time_dim > 0`` (compile-time
+        # constant for Dynamo) so the time channel drops out of the cat when
+        # the absolute-time path is off — no zero-channel tensor enters the
+        # compiled graph.
+        if self.emb_time_dim > 0:
+            Bt, H_time, Lt = hist_time_emb.shape
+            assert Bt == B
+            assert Lt == L
+            assert H_time == self.emb_time_dim
+            side_components_L = [hist_time_emb, mask_embedded]
+        else:
+            side_components_L = [mask_embedded]
         side_info_L = torch.cat(side_components_L, dim=1)  # (B, H_time + H_mask, L)
 
         # Expand across the spatial/feature dimension (d = H_seq)

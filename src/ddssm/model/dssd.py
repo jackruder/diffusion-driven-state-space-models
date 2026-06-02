@@ -66,7 +66,12 @@ class DDSSM_base(nn.Module):
         j: Number of history steps used by each module.
         data_dim: Observed data dimension D.
         latent_dim: Latent dimension d.
-        emb_time_dim: Time embedding dimension.
+        emb_time_dim: Time embedding dimension. Set to ``0`` to disable the
+            absolute-time conditioning path entirely (the default for the
+            regular-timestep regime; reserved for future irregular-timestep
+            relative-time conditioning when set ``> 0``). Every consumer
+            branches on this Python int so the time-conditioning ops drop
+            out of both eager and ``torch.compile`` graphs when off.
         covariate_dim: Dimension of time-varying covariates (0 = none).
         static_embed_dim: Per-feature categorical embedding size.
         num_classes_per_static: Vocabulary size per static categorical feature.

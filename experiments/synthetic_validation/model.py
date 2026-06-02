@@ -48,6 +48,10 @@ def build_synthval_model(
     data_dim: int = 1,
     latent_dim: int = 1,
     j: int = 1,
+    # Reserved for the future irregular-timestep / relative-time regime;
+    # gated off by ``use_time_embedding=False`` for the current uniform-grid
+    # regime (matches the init-centering factory default).
+    use_time_embedding: bool = False,
     emb_time_dim: int = 16,
     T_max: int = 32,
     hidden_dim: int = 32,
@@ -61,7 +65,10 @@ def build_synthval_model(
         data_dim: Observed channel count ``D``.
         latent_dim: Latent dimension ``d``.
         j: Latent history window.
-        emb_time_dim: Time-embedding width.
+        use_time_embedding: When ``False`` (default), force ``emb_time_dim=0``
+            and disable the absolute-time conditioning path.
+        emb_time_dim: Time-embedding width (consulted only when
+            ``use_time_embedding=True``).
         T_max: Max sequence length (must cover the data's ``T``); sizes the
             σ_data² buffer.
         hidden_dim: Width for the baseline / aux-posterior / encoder / decoder.
@@ -72,6 +79,8 @@ def build_synthval_model(
     Returns:
         An assembled :class:`~ddssm.model.dssd.DDSSM_base`.
     """
+    if not use_time_embedding:
+        emb_time_dim = 0
     # --- shared ingredients: built once, passed by reference ---
     baseline = ZeroBaseline(
         latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2

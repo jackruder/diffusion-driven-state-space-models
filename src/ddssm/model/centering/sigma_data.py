@@ -113,7 +113,6 @@ class SigmaDataBuffer(nn.Module):
     # ------------------------------------------------------------------
     # Update
     # ------------------------------------------------------------------
-    @torch.no_grad()
     def update(
         self,
         t_idx: int | torch.Tensor,
@@ -121,6 +120,15 @@ class SigmaDataBuffer(nn.Module):
         sigma_t2_batch: torch.Tensor,
     ) -> None:
         """Apply one EMA update for the timesteps in ``t_idx``.
+
+        σ_data is a TRAINING-only running statistic, so the update is a no-op
+        when ``frozen`` OR when autograd is disabled. Eval / inference passes run
+        under ``torch.no_grad``; mutating σ_data there corrupts the buffer and
+        inflates the eval ELBO's transition-KL term (the eval drifts σ_data
+        toward the eval-data residual over its forward passes). This gate must
+        live OUTSIDE any ``@torch.no_grad`` wrapper so it observes the *caller's*
+        grad state — hence the split into :meth:`_update_unchecked`. Regression:
+        ``tests/test_centering/test_sigma_data.py::test_update_is_noop_under_no_grad``.
 
         Args:
             t_idx: scalar or (n,) tensor of 1-based timestep indices.
@@ -132,9 +140,18 @@ class SigmaDataBuffer(nn.Module):
             sigma_t2_batch: ``(N, d)`` matching per-sample encoder
                 posterior variance.
         """
-        if self.frozen:
+        if self.frozen or not torch.is_grad_enabled():
             return
+        self._update_unchecked(t_idx, mu_hat_batch, sigma_t2_batch)
 
+    @torch.no_grad()
+    def _update_unchecked(
+        self,
+        t_idx: int | torch.Tensor,
+        mu_hat_batch: torch.Tensor,
+        sigma_t2_batch: torch.Tensor,
+    ) -> None:
+        """The EMA update body; assumes the caller already gated on frozen/grad."""
         idx = _coerce_t_idx(t_idx).to(self.sigma_data2.device)
         self._check_in_range(idx)
 
@@ -193,9 +210,15 @@ class SigmaDataBuffer(nn.Module):
         s2_blocks = sigma_t2_batch.view(n, per_t, d)
 
         avg_post_var = s2_blocks.mean(dim=1).sum(dim=1)  # (n,) = E[‖σ_t‖²] = E[Σ_d σ²_d]
-        # tr Var[μ̂_t] = sum_d Var_b[μ̂_{t,b,d}], using sample variance.
+        # tr Var[μ̂_t] = sum_d Var_b[μ̂_{t,b,d}]. Use Bessel-corrected
+        # (``unbiased=True``) so the EMA's steady-state target is the true
+        # marginal variance regardless of ``per_t``. The biased (1/per_t)
+        # estimator shifts the target by a factor ``(per_t − 1)/per_t``
+        # (~6% at per_t=16), making σ_data² depend on batch size. Fall
+        # back to zero when ``per_t == 1`` — a single sample carries no
+        # cross-sample dispersion information.
         if per_t > 1:
-            mu_var = mu_blocks.var(dim=1, unbiased=False).sum(dim=1)  # (n,)
+            mu_var = mu_blocks.var(dim=1, unbiased=True).sum(dim=1)  # (n,)
         else:
             mu_var = torch.zeros(n, device=mu_blocks.device, dtype=mu_blocks.dtype)
 
