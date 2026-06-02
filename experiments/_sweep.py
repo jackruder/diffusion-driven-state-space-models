@@ -75,6 +75,7 @@ class SweepSpace:
         return self
 
     def params(self) -> dict[str, str]:
+        """Return a copy of the accumulated ``hydra.sweeper.params`` dict."""
         return dict(self._params)
 
     def build(

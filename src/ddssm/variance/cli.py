@@ -18,24 +18,24 @@ Three modes, selected by CLI flags:
 
 from __future__ import annotations
 
-import json
-import logging
-import math
 import os
 import re
+import json
+import math
+import logging
 
+from PIL import Image, ImageDraw, ImageFont
 import hydra
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from hydra.core.hydra_config import HydraConfig
 from hydra_zen import instantiate
+from omegaconf import OmegaConf, DictConfig
 from matplotlib.colors import LinearSegmentedColormap
-from omegaconf import DictConfig, OmegaConf
-from PIL import Image, ImageDraw, ImageFont
+import matplotlib.pyplot as plt
+from hydra.core.hydra_config import HydraConfig
 
-from .._experiment_registry import register_experiments
-from .plots import PROBE_PLOT_REGISTRY, ProbePlotContext
+from ddssm.variance.plots import PROBE_PLOT_REGISTRY, ProbePlotContext
+from ddssm.experiment.registry import register_experiments
 
 register_experiments()
 

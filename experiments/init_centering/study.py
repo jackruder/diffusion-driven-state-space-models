@@ -1,4 +1,4 @@
-"""The init-centering ablation, declared as a library :class:`ddssm.study.Study`.
+"""The init-centering ablation, declared as a library :class:`ddssm.cluster.study.Study`.
 
 Two comparison axes — `cell` (the 12-point grid) × `dataset` (1d/mv) — cross into
 24 registered presets named ``init_<cell>__<dataset>``. The `cell` axis exposes
@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ddssm.study import Axis, Study, StudyPoint
 from ddssm.launch import PointLaunch, ResourceSpec, register_study
-from ddssm.stores import experiment_store
 from experiments._make import experiment
+from ddssm.cluster.study import Axis, Study, StudyPoint
+from ddssm.experiment.stores import experiment_store
 from experiments.init_centering.cells import Cell, iter_cells
 from experiments.init_centering.evals import PilotEval, PilotMOObjective
 from experiments.init_centering.model import SmokeModel

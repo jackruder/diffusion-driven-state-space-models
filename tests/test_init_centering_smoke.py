@@ -32,10 +32,10 @@ pytestmark = pytest.mark.slow
 
 
 def _get_experiment_cfg(name: str):
-    from ddssm._experiment_registry import register_experiments
+    from ddssm.experiment.registry import register_experiments
 
     register_experiments()  # puts repo root on sys.path + imports experiments
-    from ddssm.stores import store
+    from ddssm.experiment.stores import store
 
     for entry in store:
         if entry["group"] == "experiment" and entry["name"] == name:

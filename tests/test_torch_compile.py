@@ -11,7 +11,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from ddssm.torch_compile import maybe_compile
+from ddssm.nn.torch_compile import maybe_compile
 
 
 class _Producer(nn.Module):

@@ -28,6 +28,15 @@ dependencies = [
 # WandbLogger silently no-ops if the package is missing.
 wandb = ["wandb>=0.19"]
 
+# Documentation toolchain (Sphinx + autodoc). Install with `pip install -e .[docs]`,
+# then build with `sphinx-build -b html docs docs/_build/html` (see docs/README.md).
+docs = [
+    "sphinx>=8.1",
+    "furo>=2024.8",
+    "myst-parser>=4.0",
+    "sphinx-autodoc-typehints>=2.5",
+]
+
 [tool.pytest.ini_options]
 # Repo root on sys.path so the top-level ``experiments`` package (intentionally
 # outside ``src/``) imports during collection without relying on

@@ -16,12 +16,12 @@ must produce a baseline-trainable mask consistent with the chosen
 
 from __future__ import annotations
 
-import logging
 from types import SimpleNamespace
+import logging
 
 import pytest
 
-from ddssm.centering.baselines import (
+from ddssm.model.centering.baselines import (
     MLPBaseline,
     ZeroBaseline,
     LinearBaseline,

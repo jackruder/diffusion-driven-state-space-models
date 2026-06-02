@@ -40,6 +40,17 @@ def paper_latent(ds: AblationDataset) -> int:
 
 
 def dataset_by_label(label: str) -> AblationDataset:
+    """Look up an :class:`AblationDataset` by its axis label.
+
+    Args:
+        label: Short label such as ``"1d"`` or ``"mv"``.
+
+    Returns:
+        The matching :class:`AblationDataset`.
+
+    Raises:
+        KeyError: If no registered dataset has the given label.
+    """
     for ds in ABLATION_DATASETS:
         if ds.label == label:
             return ds

@@ -8,15 +8,15 @@ from functools import partial
 import torch
 import pytest
 
-from ddssm.diffnets import (
+from ddssm.nn.diffnets import (
     CSDIUnet,
     FeatureMixerConfig,
     DiffResidualBlockConfig,
 )
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.baselines import MLPBaseline, ZeroBaseline
-from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.transitions.diffusion import (
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.centering.baselines import MLPBaseline, ZeroBaseline
+from ddssm.model.centering.sigma_data import SigmaDataBuffer
+from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
     DiffusionScheduleConfig,
 )

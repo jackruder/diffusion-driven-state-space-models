@@ -13,15 +13,15 @@ from the CLI.
 
 from __future__ import annotations
 
-import json
-import logging
 import os
-from dataclasses import dataclass, field
+import json
 from typing import Any
+import logging
+from dataclasses import field, dataclass
 
 import torch
 
-from .metrics import EvalContext, METRIC_REGISTRY
+from ddssm.eval.metrics import METRIC_REGISTRY, EvalContext
 
 log = logging.getLogger(__name__)
 
@@ -67,8 +67,32 @@ def evaluate(
     checkpoint_path: str | None = None,
     csv_path: str | None = None,
 ) -> dict[str, Any]:
-    """Run every metric named in ``spec`` and write the result to disk."""
-    from ..checkpoint import prepare_model
+    """Run every metric named in ``spec`` and write the result to disk.
+
+    Loads ``checkpoint_path`` into the experiment's model, selects the
+    ``spec.split`` loader, walks ``spec.metrics``, merges their results,
+    and writes them to ``spec.output_filename`` under ``run_dir``. If a
+    W&B run can be resumed from ``run_dir``, the scalar results are also
+    logged under the ``eval/`` namespace (best-effort).
+
+    Args:
+        experiment: The built :class:`Experiment` (model + data module).
+        spec: Which metrics to compute, on which split, with defaults.
+        device: Device to load the model onto and run metrics on.
+        run_dir: Hydra run dir; the JSON is written here.
+        checkpoint_path: Checkpoint to load; ``None`` uses the model as
+            built (untrained weights).
+        csv_path: Path to a training ``metrics.csv`` for CSV-derived
+            metrics (e.g. ``loss_tail``).
+
+    Returns:
+        The merged metric-results dict (also persisted to disk).
+
+    Raises:
+        KeyError: If ``spec`` names a metric absent from
+            ``METRIC_REGISTRY``.
+    """
+    from ddssm.training.checkpoint import prepare_model
 
     model = prepare_model(
         experiment, checkpoint_path=checkpoint_path, device=device,
@@ -109,7 +133,7 @@ def evaluate(
     # training run under the ``eval/`` namespace and snapshot the JSON
     # as an artifact. Soft-fails so eval still returns the in-memory
     # dict even when W&B is unreachable.
-    from ..loggers import resume_run_from_dir
+    from ddssm.training.loggers import resume_run_from_dir
 
     wandb_mod = resume_run_from_dir(
         run_dir, getattr(experiment, "wandb_config", None),

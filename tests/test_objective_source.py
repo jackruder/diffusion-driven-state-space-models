@@ -204,8 +204,11 @@ def test_moo_objective_instantiates_and_reads(tmp_path: Path) -> None:
     import torch
     from hydra_zen import instantiate
 
-    from ddssm.builders import Objective as ObjectiveCfg, Objectives as ObjectivesCfg
     from ddssm.experiment import Objectives
+    from ddssm.experiment.builders import (
+        Objective as ObjectiveCfg,
+        Objectives as ObjectivesCfg,
+    )
 
     cfg = ObjectivesCfg(specs=[
         ObjectiveCfg(metric="m1", split="train", tail_frac=1.0, source="csv"),
@@ -238,7 +241,10 @@ def test_moo_objective_penalty_survives_instantiation(tmp_path: Path) -> None:
     import torch
     from hydra_zen import instantiate
 
-    from ddssm.builders import Objective as ObjectiveCfg, Objectives as ObjectivesCfg
+    from ddssm.experiment.builders import (
+        Objective as ObjectiveCfg,
+        Objectives as ObjectivesCfg,
+    )
 
     cfg = ObjectivesCfg(specs=[
         # json metric is absent from metrics.json → penalty kicks in.
@@ -317,8 +323,11 @@ def test_csv_tail_step_survives_instantiation(tmp_path: Path) -> None:
     """``penalty='csv_tail_step'`` survives the hydra-zen instantiate round-trip."""
     from hydra_zen import instantiate
 
-    from ddssm.builders import Objective as ObjectiveCfg, Objectives as ObjectivesCfg
     from ddssm.experiment import _as_objective_spec
+    from ddssm.experiment.builders import (
+        Objective as ObjectiveCfg,
+        Objectives as ObjectivesCfg,
+    )
 
     cfg = ObjectivesCfg(specs=[
         ObjectiveCfg(

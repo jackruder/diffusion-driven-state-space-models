@@ -9,38 +9,37 @@ handoff on the resumed stage.
 from __future__ import annotations
 
 import os
-from functools import partial
 from types import SimpleNamespace
 from typing import Any
+from functools import partial
 from unittest.mock import patch
 
-import pytest
 import torch
-from torch.utils.data import DataLoader, Dataset
+import pytest
+from torch.utils.data import Dataset, DataLoader
 
-from ddssm.aggregators import IdentityAggregator
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.handoff import CenteringHandoffConf
-from ddssm.checkpoint import Checkpoint
-from ddssm.combiners import CompoundCombiner
-from ddssm.decoder import GaussianDecoder
-from ddssm.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.dssd import DDSSM_base
-from ddssm.encoder import GaussianEncoder
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.futsum import GRUFutureSummary
-from ddssm.gaussians import GaussianHead
-from ddssm.stages import (
-    StageLrsConf,
-    StageOrchestrator,
-    StageSpecConf,
-    StageTrainableConf,
+from ddssm.nn.futsum import GRUFutureSummary
+from ddssm.model.dssd import DDSSM_base
+from ddssm.nn.fusions import ConcatLinearFusion
+from ddssm.nn.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
+from ddssm.nn.combiners import CompoundCombiner
+from ddssm.nn.gaussians import GaussianHead
+from ddssm.model.decoder import GaussianDecoder
+from ddssm.model.encoder import GaussianEncoder
+from ddssm.nn.dist_heads import GaussianDistHead
+from ddssm.nn.aggregators import IdentityAggregator
+from ddssm.training.train import DDSSMTrainer
+from ddssm.training.stages import (
     StagesConf,
+    StageLrsConf,
+    StageSpecConf,
+    StageOrchestrator,
+    StageTrainableConf,
 )
-from ddssm.train import DDSSMTrainer
-from ddssm.transitions.transitions import GaussianTransition
-
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.training.checkpoint import Checkpoint
+from ddssm.model.centering.handoff import CenteringHandoffConf
+from ddssm.model.transitions.transitions import GaussianTransition
 
 # ---------------------------------------------------------------------------
 # Mini-model trainer fixture (mirrors test_train_preempt.py)
@@ -242,7 +241,7 @@ def test_orchestrator_run_accepts_resume_from(tmp_path) -> None:
     orch = StageOrchestrator(trainer, cfg)
 
     # resume_from=None — both stages run, handoff fires on stage_2.
-    with patch("ddssm.stages.perform_centering_handoff") as mock_handoff:
+    with patch("ddssm.training.stages.perform_centering_handoff") as mock_handoff:
         orch.run(train_loader=object(), amp=False, resume_from=None)
     fit_prefixes = [c[1] for c in trainer.calls if c[0] == "fit"]
     assert fit_prefixes == ["stage_1", "stage_2"]
@@ -267,7 +266,7 @@ def test_orchestrator_resumes_into_stage_2_skips_stage_1_and_handoff(
     cfg = _two_stage_config()
     orch = StageOrchestrator(trainer, cfg)
 
-    with patch("ddssm.stages.perform_centering_handoff") as mock_handoff:
+    with patch("ddssm.training.stages.perform_centering_handoff") as mock_handoff:
         orch.run(train_loader=object(), amp=False, resume_from=ckpt_path)
 
     # Handoff MUST NOT have fired.
@@ -293,7 +292,7 @@ def test_orchestrator_resumes_into_stage_1_still_runs_stage_2_normally(
     cfg = _two_stage_config()
     orch = StageOrchestrator(trainer, cfg)
 
-    with patch("ddssm.stages.perform_centering_handoff") as mock_handoff:
+    with patch("ddssm.training.stages.perform_centering_handoff") as mock_handoff:
         orch.run(train_loader=object(), amp=False, resume_from=ckpt_path)
 
     fits = [c for c in trainer.calls if c[0] == "fit"]
@@ -323,7 +322,7 @@ def test_orchestrator_resume_with_no_stage_prefix_starts_stage_1(tmp_path) -> No
     cfg = _two_stage_config()
     orch = StageOrchestrator(trainer, cfg)
 
-    with patch("ddssm.stages.perform_centering_handoff") as mock_handoff:
+    with patch("ddssm.training.stages.perform_centering_handoff") as mock_handoff:
         orch.run(train_loader=object(), amp=False, resume_from=ckpt_path)
 
     fits = [c for c in trainer.calls if c[0] == "fit"]

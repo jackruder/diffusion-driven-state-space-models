@@ -12,13 +12,13 @@ from types import SimpleNamespace
 
 import torch
 
-from ddssm.losses import FullELBO, Loss, LossComponents
-from ddssm.stages import (
-    LambdaRampConf,
-    StageLrsConf,
-    StageOrchestrator,
-    StageSpecConf,
+from ddssm.model.losses import Loss, FullELBO, LossComponents
+from ddssm.training.stages import (
     StagesConf,
+    StageLrsConf,
+    StageSpecConf,
+    LambdaRampConf,
+    StageOrchestrator,
     StageTrainableConf,
 )
 

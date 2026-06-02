@@ -21,7 +21,7 @@ because they have no μ_p parameters to learn.  That removes 4 cells
 The ``global_ema`` tracking mode (single scalar EMA-tracked σ_data²)
 was dropped from the ablation — only ``fixed`` (σ_data² = 1) and
 ``per_t`` (time-varying buffer) are studied.  The underlying
-:class:`ddssm.centering.sigma_data.SigmaDataBuffer` still supports
+:class:`ddssm.model.centering.sigma_data.SigmaDataBuffer` still supports
 ``global_ema`` as a valid mode; it just isn't a cell in this grid.
 """
 
@@ -38,9 +38,8 @@ TRACKING_MODES: tuple[str, ...] = ("fixed", "per_t")
 # imports this single definition rather than mirroring it.
 _PARAM_FREE_FORMS: frozenset[str] = frozenset({"zero", "identity"})
 
-# The Phase-C pilot cell — also the default in
-# ``_build_init_centering_model``.  Reused by the V2-reduction test
-# and the Phase-D control presets.
+# The canonical cell — also the default in ``_build_init_centering_model``.
+# Reused by the V2-reduction test.
 CANONICAL_CELL: tuple[str, str, str] = ("mlp", "pinned", "per_t")
 
 

@@ -8,14 +8,14 @@ from typing import Any
 import torch
 import pytest
 
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.handoff import (
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.centering.handoff import (
     CenteringHandoffConf,
     perform_centering_handoff,
 )
-from ddssm.centering.baselines import MLPBaseline
-from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
+from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.centering.sigma_data import SigmaDataBuffer
+from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 B = 2
 D = 4

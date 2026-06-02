@@ -5,25 +5,25 @@ from functools import partial
 import torch
 import pytest
 
-from ddssm.dssd import DDSSM_base
-from ddssm.futsum import GRUFutureSummary
-from ddssm.decoder import GaussianDecoder
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.encoder import GaussianEncoder
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.diffnets import (
+from ddssm.nn.futsum import GRUFutureSummary
+from ddssm.model.dssd import DDSSM_base
+from ddssm.nn.fusions import ConcatLinearFusion
+from ddssm.nn.diffnets import (
     CSDIUnet,
     ContextProducer,
     FeatureMixerConfig,
     ResidualBlockConfig,
     DiffResidualBlockConfig,
 )
-from ddssm.combiners import CompoundCombiner
-from ddssm.gaussians import GaussianHead
-from ddssm.net_utils import get_side_info, time_embedding
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.aggregators import ContextProducerAggregator
-from ddssm.transitions.transitions import GaussianTransition
+from ddssm.nn.combiners import CompoundCombiner
+from ddssm.nn.gaussians import GaussianHead
+from ddssm.nn.net_utils import get_side_info, time_embedding
+from ddssm.model.decoder import GaussianDecoder
+from ddssm.model.encoder import GaussianEncoder
+from ddssm.nn.dist_heads import GaussianDistHead
+from ddssm.nn.aggregators import ContextProducerAggregator
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.transitions.transitions import GaussianTransition
 
 # ---------------------------------------------------------------------------
 # Shared tiny config (channels=8 to keep tests fast; nheads=4 divides 8)
@@ -235,10 +235,10 @@ def test_ddssm_forward(model):
 @pytest.mark.parametrize("agg_name", ["identity", "gru", "mlp", "attention", "context"])
 def test_ddssm_forward_with_each_aggregator(agg_name):
     """Every aggregator backbone produces a finite ELBO end-to-end."""
-    from ddssm.fusions import ConcatLinearFusion
-    from ddssm.combiners import CompoundCombiner
-    from ddssm.dist_heads import GaussianDistHead
-    from ddssm.aggregators import (
+    from ddssm.nn.fusions import ConcatLinearFusion
+    from ddssm.nn.combiners import CompoundCombiner
+    from ddssm.nn.dist_heads import GaussianDistHead
+    from ddssm.nn.aggregators import (
         GRUAggregator,
         MLPAggregator,
         IdentityAggregator,

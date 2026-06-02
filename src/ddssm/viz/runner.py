@@ -12,14 +12,14 @@ this file runs during training.
 
 from __future__ import annotations
 
-import logging
 import os
-from dataclasses import dataclass, field
 from typing import Any
+import logging
+from dataclasses import field, dataclass
 
 import torch
 
-from .plots import PLOT_REGISTRY, PlotContext
+from ddssm.viz.plots import PLOT_REGISTRY, PlotContext
 
 log = logging.getLogger(__name__)
 
@@ -48,8 +48,8 @@ class VizSpec:
         plots: List of :class:`PlotSpec` to produce in order.
         split: DataModule loader to draw from (``"train"`` / ``"val"`` / ``"test"``).
         num_samples: Forecast sample count for sample-based plots.
-        T_split: Forecast split index. ``None`` falls back to
-            ``data.metadata.forecast_split``.
+        T_split: Forecast split index. ``None`` falls back to the data
+            module default via ``data.metadata.forecast_split_or``.
     """
 
     # Annotated as ``list`` (no inner type) so OmegaConf's strict
@@ -70,8 +70,24 @@ def visualize(
     checkpoint_path: str | None = None,
     csv_path: str | None = None,
 ) -> list[str]:
-    """Run every plot named in ``spec`` and return the list of saved paths."""
-    from ..checkpoint import prepare_model
+    """Load a checkpoint, run every plot in ``spec``, and save PNGs.
+
+    Args:
+        experiment: The built :class:`~ddssm.experiment.Experiment`.
+        spec: Which plots to draw, the split to draw from, and defaults.
+        device: Torch device for the model forward passes.
+        run_dir: Output directory the PNGs are written under.
+        checkpoint_path: Checkpoint to load into the model. ``None`` uses
+            the experiment's default checkpoint resolution.
+        csv_path: Optional ``metrics.csv`` path for CSV-driven plots.
+
+    Returns:
+        Absolute paths of the saved PNGs, in spec order.
+
+    Raises:
+        KeyError: If a requested plot name is not in ``PLOT_REGISTRY``.
+    """
+    from ddssm.training.checkpoint import prepare_model
 
     model = prepare_model(
         experiment, checkpoint_path=checkpoint_path, device=device,
@@ -96,7 +112,7 @@ def visualize(
     # ``run_dir/.wandb_run_id`` and the experiment carries an enabled
     # ``wandb_config``, push each generated PNG to the original W&B run
     # so plots and training scalars live together.
-    from ..loggers import resume_run_from_dir
+    from ddssm.training.loggers import resume_run_from_dir
 
     wandb_mod = resume_run_from_dir(
         run_dir, getattr(experiment, "wandb_config", None),

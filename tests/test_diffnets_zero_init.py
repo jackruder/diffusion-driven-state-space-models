@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import torch
 
-from ddssm.diffnets import CSDIUnet, MLPCSDIUnet
+from ddssm.nn.diffnets import CSDIUnet, MLPCSDIUnet
 
 COMMON_KW = dict(
     output_len=1,

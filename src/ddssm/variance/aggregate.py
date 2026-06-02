@@ -8,6 +8,17 @@ import os
 
 
 def aggregate_summaries(runs_glob: str, out_dir: str) -> dict:
+    """Collect matching variance summaries into one markdown report.
+
+    Args:
+        runs_glob: Glob matching ``variance_summary.json`` files.
+        out_dir: Directory the ``report.md`` is written to (created if
+            missing).
+
+    Returns:
+        A dict with ``report_path`` and ``n_runs`` (number of summaries
+        included).
+    """
     os.makedirs(out_dir, exist_ok=True)
     files = sorted(glob.glob(runs_glob))
     rows = []

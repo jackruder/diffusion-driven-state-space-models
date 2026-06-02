@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 import pytest
 
-from ddssm.aux_posterior import AuxPosterior
+from ddssm.nn.aux_posterior import AuxPosterior
 
 B = 3
 D = 4

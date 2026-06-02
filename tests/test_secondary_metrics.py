@@ -5,14 +5,14 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-import pytest
 import torch
+import pytest
 
 from ddssm.eval.metrics import (
-    EvalContext,
     METRIC_REGISTRY,
-    eval_log_sigma_p2_collapse,
+    EvalContext,
     eval_q_aux_kl_trajectory,
+    eval_log_sigma_p2_collapse,
 )
 
 
@@ -107,9 +107,10 @@ def test_log_sigma_p2_collapse_unavailable_without_model() -> None:
 @pytest.mark.slow
 def test_log_sigma_p2_collapse_runs_on_smoke_model() -> None:
     """Snapshot shape + finiteness on a fresh init-centering smoke model."""
-    from ddssm._experiment_registry import register_experiments
     from hydra_zen import instantiate
-    from ddssm.stores import store
+
+    from ddssm.experiment.stores import store
+    from ddssm.experiment.registry import register_experiments
 
     register_experiments()
     cfg = store["experiment"]["experiment", "init_smoke_high_surface"]

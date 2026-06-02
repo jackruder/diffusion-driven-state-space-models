@@ -18,25 +18,41 @@ states. An ELBO objective jointly trains:
 
 ```
 src/ddssm/
-  conf/              # small library of reusable Hydra defaults (config.yaml, hydra/sweeper/, wandb/)
-  builders.py        # convenience hydra-zen builds() for ad-hoc Experiment assembly
-  dssd.py            # Core model: DDSSM_base (ELBO forward pass)
-  experiment.py      # Experiment composition root (data + model + trainer)
-  train.py           # DDSSMTrainer (fit / checkpoint helpers)
-  stages.py          # Multi-stage training orchestration (StageOrchestrator)
-  centering/         # Baseline (μ_p) heads + stage-1 → stage-2 centering handoff
-  encoder.py         # Variational encoder networks
-  decoder.py         # Decoder networks
-  transitions/       # Transition models (Gaussian, baseline-Gaussian, diffusion_v3)
-  diffnets.py        # CSDIUnet and related networks
-  net_utils.py       # Shared utilities (time embeddings, side info)
-  loggers.py         # CSV + TensorBoard + W&B logging helpers
-  eval_metrics.py    # MAE / CRPS-sum metrics + recon-divergence detection
-  eval/              # evaluation stage (runner + metric registry); CLI: python -m ddssm.evaluate
-  viz/               # visualisation stage (runner + plot registry); CLI: python -m ddssm.visualize
-  variance/          # variance probe stage (runner + metric/plot registries); CLI: python -m ddssm.variance
-  data/              # Dataset loaders (GluonTS, KDD, synthetic)
-  launch.py          # Study orchestrator; CLI: python -m ddssm.launch <study>
+  app.py             # main training entry point;     CLI: python -m ddssm.app
+  evaluate.py        # eval stage entry;              CLI: python -m ddssm.evaluate
+  visualize.py       # viz stage entry;               CLI: python -m ddssm.visualize
+  launch.py          # study orchestrator;            CLI: python -m ddssm.launch <study>
+  colocate.py        # multi-cell GPU packing;        CLI: python -m ddssm.colocate
+  launch_remaining.py# remaining-trial-budget helper (used by generated sbatch)
+
+  nn/                # reusable neural building blocks
+    net_utils.py     #   shared utilities (time embeddings, side info)
+    diffnets.py      #   CSDIUnet and related networks
+    gaussians.py     #   Gaussian distribution math
+    # aggregators / combiners / fusions / futsum / dist_heads / aux_posterior / torch_compile
+  model/             # the variational state-space model
+    dssd.py          #   DDSSM_base (ELBO forward pass)
+    encoder.py       #   variational encoder networks
+    decoder.py       #   decoder networks
+    losses.py        #   ELBO loss terms
+    transitions/     #   transition models (Gaussian, baseline-Gaussian, diffusion)
+    centering/       #   baseline (μ_p) heads + stage-1 → stage-2 centering handoff
+    likelihood/      #   IWAE / prob-flow / VHP likelihood estimators
+  training/          # training stack
+    train.py         #   DDSSMTrainer (fit / checkpoint helpers)
+    stages.py        #   multi-stage training orchestration (StageOrchestrator)
+    # train_utils / checkpoint / loggers
+  experiment/        # composition layer
+    experiment.py    #   Experiment composition root (data + model + trainer)
+    builders.py      #   convenience hydra-zen builds() for ad-hoc assembly
+    stores.py        #   hydra-zen store helpers
+    registry.py      #   register_experiments() (imports the experiments/ package)
+  cluster/           # SLURM/study orchestration internals (sbatch.py, study.py, report.py)
+  eval/              # evaluation stage (runner + metric registry, incl. eval_metrics.py)
+  viz/               # visualisation stage (runner + plot registry)
+  variance/          # variance-probe stage;          CLI: python -m ddssm.variance
+  data/              # dataset loaders (GluonTS, KDD, synthetic)
+  conf/              # reusable Hydra defaults (config.yaml, hydra/sweeper/, wandb/)
 
 experiments/         # named presets defined in Python (registered at import time)
   _make.py           # experiment(...) factory + run()/override() helpers
@@ -71,7 +87,7 @@ Two equivalent entry points:
   `sbatch` writes a one-job Slurm submit script (`#SBATCH --partition`,
   `--time`, `--gres=gpu:N`, …) that launches `python -m ddssm.app
   experiment=<name>`. Resources come from the experiment's `SBatch` field if
-  set, falling back to `src/ddssm/sbatch.py:DEFAULT_SBATCH`. CLI flags
+  set, falling back to `src/ddssm/cluster/sbatch.py:DEFAULT_SBATCH`. CLI flags
   (`--partition=...`, `--time=...`, `--mem=...`, `--gpus=...`, etc.) take the
   final say; they must come **before** `<name>`. Hydra-style overrides after
   `<name>` are baked into the generated script.
@@ -132,7 +148,7 @@ per-channel **time mixers** (`conv`/`gru`/`identity`) and **feature mixers**
 (`transformer`/`conv`/`identity`), with MLP context/U-Net variants as
 ablations. These are chosen **in Python** when the model is built (see
 `experiments/init_centering/model.py` and the `builds(...)` configs in
-`src/ddssm/builders.py`) rather than via CLI config groups: `conf/registry.py`
+`src/ddssm/experiment/builders.py`) rather than via CLI config groups: `conf/registry.py`
 declares `encoder`/`decoder`/`transition`/`unet`/… stores, but only the
 `experiment`, `data`, and `sweep` groups ship populated, so `experiment=…` and
 `+sweep=…` are the live CLI selectors.

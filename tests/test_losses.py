@@ -11,7 +11,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent))
 from test_dssd_stage1 import _make_batch, _make_vhp_model
 
-from ddssm.losses import Loss, FullELBO, LossComponents
+from ddssm.model.losses import Loss, FullELBO, LossComponents
 
 
 def test_full_elbo_assembles_recon_plus_lambda_rate_plus_anchors() -> None:

@@ -1,8 +1,10 @@
 """Objective + eval specs for the init-centering pilot Optuna sweep.
 
-The Phase-C pilot uses the five headline metric primitives from
-``init-experiment.org`` § Headline metrics (the ones Phase A landed)
-as the post-training eval surface.
+The eval surface (:data:`PilotEval`) is the five headline metric
+primitives from ``init-experiment.org`` § Headline metrics (the ones
+Phase A landed) plus two diagnostic secondary metrics and the
+relative-target wallclock diagnostic — see :data:`PilotEval` for the
+full breakdown.
 
 The default ``PilotObjective`` (legacy single-objective) optimises
 ``stage2_elbo_surrogate`` alone. ``PilotMOObjective`` is the
@@ -26,7 +28,7 @@ axis — see report.py.
 
 from __future__ import annotations
 
-from ddssm.builders import Eval, Objective, Objectives
+from ddssm.experiment.builders import Eval, Objective, Objectives
 
 # Legacy single-objective spec (still used by smoke tests and the
 # variance probe family). Read from ``metrics.json`` since the metric

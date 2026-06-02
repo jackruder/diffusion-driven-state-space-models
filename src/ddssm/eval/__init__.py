@@ -16,8 +16,8 @@ Train, evaluate, and visualize are independent stages; nothing in
 this module is called from training.
 """
 
-from .metrics import EvalContext, METRIC_REGISTRY, register_metric
-from .runner import EvalSpec, evaluate
+from ddssm.eval.runner import EvalSpec, evaluate
+from ddssm.eval.metrics import METRIC_REGISTRY, EvalContext, register_metric
 
 __all__ = [
     "EvalContext",

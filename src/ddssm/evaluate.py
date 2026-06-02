@@ -6,34 +6,34 @@ metrics declared on ``cfg.experiment.eval``, and writes a single
 
 Usage::
 
-    # Evaluate the most recent KDD run
-    python -m ddssm.evaluate experiment=kdd_gauss \\
+    # Evaluate the most recent run
+    python -m ddssm.evaluate experiment=init_smoke_high_surface \\
         +checkpoint=outputs/.../ckpt_latest.pth
 
     # Override which metrics to compute and on which split
-    python -m ddssm.evaluate experiment=kdd_gauss \\
+    python -m ddssm.evaluate experiment=init_smoke_high_surface \\
         +checkpoint=path/to/ckpt.pth \\
         experiment.eval.metrics='[mae, crps_sum, recon_mse]' \\
         experiment.eval.split=test
 
     # CSV-only metric (no checkpoint needed)
-    python -m ddssm.evaluate experiment=synthetic_gauss \\
+    python -m ddssm.evaluate experiment=init_smoke_simple \\
         +csv_path=outputs/.../metrics.csv \\
         experiment.eval.metrics='[loss_tail]'
 """
 
 from __future__ import annotations
 
-import logging
 import os
+import logging
 
 import hydra
 import torch
-from hydra.core.hydra_config import HydraConfig
 from hydra_zen import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf, DictConfig
+from hydra.core.hydra_config import HydraConfig
 
-from ._experiment_registry import register_experiments
+from ddssm.experiment.registry import register_experiments
 
 register_experiments()
 
@@ -42,6 +42,12 @@ log = logging.getLogger(__name__)
 
 @hydra.main(config_path="./conf", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
+    """Instantiate the experiment and run its evaluation stage.
+
+    Resolves ``+checkpoint`` / ``+csv_path`` overrides (made absolute
+    against the original cwd) and dispatches to
+    :meth:`Experiment.evaluate`.
+    """
     log.info("Resolved config:\n%s", OmegaConf.to_yaml(cfg, resolve=True))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

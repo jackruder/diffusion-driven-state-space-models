@@ -10,7 +10,17 @@ from ddssm.data.dataload import build_loaders_for_expt
 
 
 def parse_kdd_tsf(filepath: str) -> pd.DataFrame:
-    """Parses Monash .tsf KDD file and returns aligned multivariate DataFrame."""
+    """Parse a Monash ``.tsf`` KDD file into aligned multivariate frames.
+
+    Reads each series, aligns them to a shared hourly index from the
+    latest common start (dropping series starting on/after 2017-02-01),
+    and derives categorical codes for city/station/measurement.
+
+    Returns:
+        ``(df_multi, df_clean)`` where ``df_multi`` is the aligned
+        ``time × feature`` value frame and ``df_clean`` is the
+        per-feature metadata frame indexed to match ``df_multi`` columns.
+    """
     series_data = []
     with open(filepath, "r", encoding="utf-8") as f:
         data_started = False
@@ -93,6 +103,18 @@ def setup_kdd_loaders(
     device: torch.device | None = None,
     backend: str = "torch",
 ):
+    """Build KDD PM2.5 windowed loaders directly from a ``.tsf`` file.
+
+    Parses the file, derives temporal covariates (hour/dayofweek/month
+    in ``[-0.5, 0.5]``) and static city/station/measurement codes, sizes
+    the eval windows from ``eval_step_size``, and delegates to
+    :func:`build_loaders_for_expt` with ``L1=72``, ``L2=48``.
+
+    Returns:
+        ``(train_loader, val_loader, test_loader, (means, stds), meta)``
+        where ``meta`` carries feature/covariate names, static
+        covariates and their per-field cardinalities.
+    """
     df_multi, df_clean = parse_kdd_tsf(filepath)
 
     # Extract covariates

@@ -23,7 +23,7 @@ import math
 
 import torch
 
-from ddssm.likelihood import iwae_log_likelihood, solve_prob_flow_logdensity
+from ddssm.model.likelihood import iwae_log_likelihood, solve_prob_flow_logdensity
 
 # Scalar LGSSM:  z_1 ~ N(m0, P0);  z_t = a z_{t-1} + N(0, q);  x_t = z_t + N(0, r).
 A = 0.8

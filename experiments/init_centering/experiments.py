@@ -12,7 +12,7 @@ cell / High-surface-smoke cell):
   regulariser under Learnable, per-t σ_data EMA, multivariate
   observation lift. If this trains end-to-end, every grid cell does.
 
-The ablation grid itself is a first-class :class:`~ddssm.study.Study`
+The ablation grid itself is a first-class :class:`~ddssm.cluster.study.Study`
 (``experiments.init_centering.study.INIT_CENTERING_STUDY``): 12 cells × 2
 datasets = 24 registered presets named ``init_<cell>__<dataset>`` (e.g.
 ``init_mlp_pinned_per_t__1d``). Registration, launching (via
@@ -22,8 +22,8 @@ flow through that Study.
 
 from __future__ import annotations
 
-from ddssm.stores import experiment_store
 from experiments._make import experiment
+from ddssm.experiment.stores import experiment_store
 from experiments.init_centering.data import (
     NonlinBimodalLift1D,
     NonlinBimodalLiftMV,
@@ -107,6 +107,7 @@ experiment_store(init_smoke_high_surface, name="init_smoke_high_surface")
 # "operationally indistinguishable from 0" instead.
 #
 # The study's cell points are published to ``experiment_store`` by
-# ``register_study(..., into=experiment_store)`` in ``study.py`` — importing
-# ``INIT_CENTERING_STUDY`` above is what triggers it; no separate call here.
+# ``register_study(..., into=experiment_store)`` in ``study.py``. That runs at
+# import time when the package ``__init__`` imports the ``study`` submodule, so
+# this module needs no separate call.
 # ---------------------------------------------------------------------------

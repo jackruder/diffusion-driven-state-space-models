@@ -1,6 +1,6 @@
 r"""Compute how many trials a preemptive sweep still owes its target.
 
-Invoked from the bash preamble that ``ddssm.sbatch`` emits under
+Invoked from the bash preamble that ``ddssm.cluster.sbatch`` emits under
 ``PointLaunch.preemptive=True`` (ADR-0009):
 
     N_REMAINING=$(python -m ddssm.launch_remaining \\
@@ -99,7 +99,7 @@ def _reap_stale_running(study: optuna.Study) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Argparse entrypoint — prints the remaining count to stdout.
 
-    Flag names are baked into the sbatch preamble (see ``ddssm.sbatch``);
+    Flag names are baked into the sbatch preamble (see ``ddssm.cluster.sbatch``);
     do not rename without updating that emitter.
     """
     p = argparse.ArgumentParser(prog="python -m ddssm.launch_remaining")

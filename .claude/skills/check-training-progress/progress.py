@@ -35,6 +35,15 @@ from pathlib import Path
 
 
 def detect_layout(p: Path) -> str:
+    """Classify a path as one of the recognised run-output layouts.
+
+    Args:
+        p: Directory to inspect.
+
+    Returns:
+        One of ``MISSING``, ``SINGLE_RUN``, ``SWEEP``, ``MULTI_CELL``,
+        ``MULTI_SWEEP``, or ``EMPTY``.
+    """
     if not p.exists():
         return "MISSING"
     if (p / "metrics.csv").is_file():
@@ -78,6 +87,7 @@ def auto_pick_root(repo_root: Path) -> Path | None:
 
 
 def _safe_float(s: str) -> float | None:
+    """Parse a CSV cell to float, returning None for blank/non-finite/garbage."""
     if s == "" or s.lower() in {"nan", "inf", "-inf"}:
         return None
     try:
@@ -87,6 +97,15 @@ def _safe_float(s: str) -> float | None:
 
 
 def load_csv(p: Path, limit: int | None = None) -> tuple[list[str], list[dict[str, str]]]:
+    """Read a metrics CSV.
+
+    Args:
+        p: Path to the CSV file.
+        limit: If given, stop after this many data rows.
+
+    Returns:
+        ``(fieldnames, rows)`` where rows are dicts keyed by column name.
+    """
     with p.open() as f:
         reader = csv.DictReader(f)
         fields = reader.fieldnames or []
@@ -111,6 +130,19 @@ def group_columns(fields: list[str]) -> dict[str, list[str]]:
 
 
 def head_tail(rows: list[dict[str, str]], col: str, *, head_n: int = 20, tail_n: int = 20) -> dict[str, Any]:
+    """Summarise one column's head vs tail to gauge training direction.
+
+    Args:
+        rows: Parsed CSV rows.
+        col: Column name to summarise.
+        head_n: Number of leading finite values to average.
+        tail_n: Number of trailing finite values to average.
+
+    Returns:
+        Dict with finite-value count, NaN/Inf count, and (when any finite
+        values exist) head/tail means, their delta and relative delta, min,
+        max, and last value.
+    """
     vals: list[float] = []
     nans = 0
     for r in rows:
@@ -142,13 +174,22 @@ def head_tail(rows: list[dict[str, str]], col: str, *, head_n: int = 20, tail_n:
 
 
 def lambda_state(rows: list[dict[str, str]]) -> dict[str, Any] | None:
+    """Summarise the λ-warmup schedule from the ``optim/lambda`` column.
+
+    Args:
+        rows: Parsed CSV rows.
+
+    Returns:
+        Dict with first/last λ, whether warmup is complete (λ ≥ 0.99), and the
+        step at which λ first reached 0.99; or None if the column is absent or
+        the last value is unreadable.
+    """
     if not rows or "optim/lambda" not in rows[0]:
         return None
     last = _safe_float(rows[-1].get("optim/lambda", ""))
     first = _safe_float(rows[0].get("optim/lambda", ""))
     if last is None:
         return None
-    # When did lambda first cross 0.99?
     cross_step = None
     for r in rows:
         v = _safe_float(r.get("optim/lambda", ""))
@@ -163,6 +204,17 @@ def lambda_state(rows: list[dict[str, str]]) -> dict[str, Any] | None:
 
 
 def sigma_data_summary(rows: list[dict[str, str]], fields: list[str]) -> dict[str, Any] | None:
+    """Summarise the last-row per-t ``diag/sigma_data2`` spread.
+
+    Args:
+        rows: Parsed CSV rows.
+        fields: Column names, scanned for ``diag/sigma_data2/t=`` keys.
+
+    Returns:
+        Dict with the number of t-columns, mean/std/min/max over the final
+        row, and the drift of the mean from 1.0; or None if no such columns or
+        values exist.
+    """
     sd_cols = [c for c in fields if c.startswith("diag/sigma_data2/t=")]
     if not sd_cols or not rows:
         return None
@@ -183,6 +235,7 @@ def sigma_data_summary(rows: list[dict[str, str]], fields: list[str]) -> dict[st
 
 
 def is_actively_writing(p: Path, *, fresh_seconds: int = 300) -> bool:
+    """Return True if ``p`` was modified within the last ``fresh_seconds``."""
     try:
         return (time.time() - p.stat().st_mtime) < fresh_seconds
     except OSError:
@@ -206,6 +259,7 @@ PRIMARY_LOSS_COLS = (
 
 
 def report_single_run(run_dir: Path, *, head_n: int = 20, tail_n: int = 20) -> None:
+    """Print a single-run diagnostic block (losses, λ, σ_data², NaN scan)."""
     csv_path = run_dir / "metrics.csv"
     json_path = run_dir / "metrics.json"
     fields, rows = load_csv(csv_path)
@@ -332,6 +386,11 @@ def find_optuna_db_for(sweep_dir: Path, repo_root: Path) -> Path | None:
 
 
 def report_sweep(sweep_dir: Path, repo_root: Path, *, max_trials: int = 10, head_n: int = 20, tail_n: int = 20) -> None:
+    """Print a per-trial table for a Hydra-multirun sweep plus Optuna db state.
+
+    Joins the on-disk trial dirs with the matching Optuna sqlite db (if found)
+    and emits sweep-level red flags (loss increasing, σ_data² drift, λ stalled).
+    """
     trials = sorted(
         [c for c in sweep_dir.iterdir() if c.is_dir() and c.name.isdigit() and (c / "metrics.csv").is_file()],
         key=lambda p: int(p.name),
@@ -409,6 +468,7 @@ def report_sweep(sweep_dir: Path, repo_root: Path, *, max_trials: int = 10, head
 
 
 def _fmt(x: float | int | None, digits: int = 3) -> str:
+    """Format a number for the table: ``-`` for None, ints as-is, else %g."""
     if x is None:
         return "-"
     if isinstance(x, int):
@@ -420,6 +480,7 @@ def _fmt(x: float | int | None, digits: int = 3) -> str:
 
 
 def report_multi_cell(parent: Path, *, head_n: int = 20, tail_n: int = 20) -> None:
+    """Print one summary row per named cell under a multi-cell parent dir."""
     cells = sorted([c for c in parent.iterdir() if c.is_dir() and (c / "metrics.csv").is_file()])
     print(f"== MULTI_CELL  {parent}")
     print(f"   cells={len(cells)}")
@@ -455,6 +516,7 @@ def report_multi_cell(parent: Path, *, head_n: int = 20, tail_n: int = 20) -> No
 
 
 def report_multi_sweep(parent: Path, repo_root: Path) -> None:
+    """Print one row per child sweep dir (newest first) with Optuna db state."""
     children = sorted(
         [c for c in parent.iterdir() if c.is_dir() and any(
             g.name.isdigit() and (g / "metrics.csv").is_file() for g in c.iterdir() if c.is_dir()
@@ -477,6 +539,11 @@ def report_multi_sweep(parent: Path, repo_root: Path) -> None:
 
 
 def slurm_and_process_scan(repo_root: Path) -> None:
+    """Print SLURM queue, GPU usage, and local ddssm processes if tools exist.
+
+    Each probe (``squeue``/``nvidia-smi``/``pgrep``) is best-effort and silently
+    skipped when the tool is missing or times out.
+    """
     import subprocess
 
     # squeue (only if available + user has a job)
@@ -524,6 +591,10 @@ def slurm_and_process_scan(repo_root: Path) -> None:
 
 
 def find_repo_root(start: Path) -> Path:
+    """Walk up from ``start`` to the dir holding ``pyproject.toml`` + ``src/ddssm``.
+
+    Falls back to the resolved ``start`` if no such ancestor is found.
+    """
     p = start.resolve()
     while p != p.parent:
         if (p / "pyproject.toml").is_file() and (p / "src" / "ddssm").is_dir():
@@ -533,6 +604,12 @@ def find_repo_root(start: Path) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Detect the layout of the target path and print the matching report.
+
+    Returns:
+        Process exit code: 0 on success, 1 for empty/unrecognised layouts, 2
+        for a missing path or no discoverable target.
+    """
     ap = argparse.ArgumentParser(description="Auto-discover DDSSM run output and print structured diagnostics.")
     ap.add_argument("path", nargs="?", default=None, help="Run / sweep / parent dir (default: newest under runs/)")
     ap.add_argument("--head-rows", type=int, default=20)

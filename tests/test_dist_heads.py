@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from ddssm.dist_heads import GaussianDistHead
+from ddssm.nn.dist_heads import GaussianDistHead
 
 B = 3
 D = 4

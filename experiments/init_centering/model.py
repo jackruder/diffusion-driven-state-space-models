@@ -21,42 +21,42 @@ Default values reproduce the canonical cell from
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Literal
+import logging
 from functools import partial
 
 from hydra_zen import builds
 from omegaconf import MISSING
 
-from ddssm.dssd import DDSSM_base
-from ddssm.stores import model_store
-from ddssm.decoder import GaussianDecoder
-from ddssm.encoder import GaussianEncoder
-from ddssm.diffnets import (
+from ddssm.model.dssd import DDSSM_base
+from ddssm.nn.diffnets import (
     CSDIUnet,
     FeatureMixerConfig,
     DiffResidualBlockConfig,
 )
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.centering.baselines import (
+from ddssm.model.decoder import GaussianDecoder
+from ddssm.model.encoder import GaussianEncoder
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.experiment.stores import model_store
+from ddssm.model.centering.baselines import (
     MLPBaseline,
     BaseBaseline,
     ZeroBaseline,
     LinearBaseline,
     IdentityBaseline,
 )
-from ddssm.centering.sigma_data import SigmaDataBuffer
-from ddssm.transitions.diffusion import (
-    DiffusionTransition,
-    DiffusionScheduleConfig,
-)
-from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
+from ddssm.model.centering.sigma_data import SigmaDataBuffer
 
 # Forms that have no learnable μ_p parameters and therefore degenerate to
 # ``baseline_mode="pinned"`` regardless of user input. Single source of truth
 # lives in ``cells.py`` (the grid module) so the auto-clamp here and the
 # cell-enumeration there can't drift.
 from experiments.init_centering.cells import _PARAM_FREE_FORMS
+from ddssm.model.transitions.diffusion import (
+    DiffusionTransition,
+    DiffusionScheduleConfig,
+)
+from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 log = logging.getLogger(__name__)
 

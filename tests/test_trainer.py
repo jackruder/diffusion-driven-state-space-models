@@ -5,25 +5,25 @@ import torch
 import pytest
 from hydra_zen import builds, instantiate
 
-from ddssm.dssd import DDSSM_base
-from ddssm.train import DDSSMTrainer
-from ddssm.aux_posterior import AuxPosterior
-from ddssm.decoder import GaussianDecoder
-from ddssm.encoder import GaussianEncoder
-from ddssm.fusions import ConcatLinearFusion
-from ddssm.combiners import CompoundCombiner
-from ddssm.dist_heads import GaussianDistHead
-from ddssm.aggregators import IdentityAggregator
-from ddssm.transitions.transitions import GaussianTransition
+from ddssm.model.dssd import DDSSM_base
+from ddssm.nn.fusions import ConcatLinearFusion
+from ddssm.nn.combiners import CompoundCombiner
+from ddssm.model.decoder import GaussianDecoder
+from ddssm.model.encoder import GaussianEncoder
+from ddssm.nn.dist_heads import GaussianDistHead
+from ddssm.nn.aggregators import IdentityAggregator
+from ddssm.training.train import DDSSMTrainer
+from ddssm.nn.aux_posterior import AuxPosterior
+from ddssm.model.transitions.transitions import GaussianTransition
 
 DDSSMTrainerConf = builds(DDSSMTrainer, populate_full_signature=True)
 from types import SimpleNamespace
 
 from torch.utils.data import Dataset, DataLoader
 
-from ddssm.futsum import GRUFutureSummary
-from ddssm.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
-from ddssm.gaussians import GaussianHead
+from ddssm.nn.futsum import GRUFutureSummary
+from ddssm.nn.diffnets import ContextProducer, FeatureMixerConfig, ResidualBlockConfig
+from ddssm.nn.gaussians import GaussianHead
 
 J = 1
 DATA_DIM = 3
@@ -235,10 +235,10 @@ def test_log_train_step_records_optimized_loss_not_unweighted_elbo(
 
 def _make_model_with_baseline():
     """A tiny DDSSM_base with the model-v2 baseline + aux_posterior slots populated."""
-    from ddssm.aux_posterior import AuxPosterior
-    from ddssm.centering.baselines import MLPBaseline
-    from ddssm.centering.sigma_data import SigmaDataBuffer
-    from ddssm.transitions.baseline_gaussian import BaselineGaussianTransition
+    from ddssm.nn.aux_posterior import AuxPosterior
+    from ddssm.model.centering.baselines import MLPBaseline
+    from ddssm.model.centering.sigma_data import SigmaDataBuffer
+    from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
     base = make_small_model()
     baseline = MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=1)
@@ -254,7 +254,7 @@ def _make_model_with_baseline():
 
 def test_set_trainable_baseline_field_flips_requires_grad(tmp_path):
     """``StageTrainableConf.baseline=False`` flips ``model.baseline.parameters().requires_grad``."""
-    from ddssm.stages import StageTrainableConf
+    from ddssm.training.stages import StageTrainableConf
 
     model = _make_model_with_baseline()
     trainer = DDSSMTrainer(
@@ -273,7 +273,7 @@ def test_set_trainable_baseline_field_flips_requires_grad(tmp_path):
 
 def test_rebuild_optimizer_picks_up_baseline_params(tmp_path):
     """After ``_rebuild_optimizer`` the AdamW groups include baseline params."""
-    from ddssm.stages import StageLrsConf
+    from ddssm.training.stages import StageLrsConf
 
     model = _make_model_with_baseline()
     trainer = DDSSMTrainer(
@@ -292,7 +292,7 @@ def test_rebuild_optimizer_picks_up_baseline_params(tmp_path):
 
 def test_elbo_plateau_early_stop_triggers(small_model, tmp_path):
     """When the loss is flat, the early-stop spec terminates ``fit`` early."""
-    from ddssm.stages import EarlyStopSpec
+    from ddssm.training.stages import EarlyStopSpec
 
     trainer = DDSSMTrainer(
         model=small_model, device=torch.device("cpu"),
@@ -343,7 +343,7 @@ def test_validation_runs_under_ema_swap(small_model, tmp_path):
 
 def test_clip_grad_norm_bounds_global_grad_norm(small_model, tmp_path):
     """``hparams.clip_grad_norm`` scales gradients so the global L2 norm is bounded."""
-    from ddssm.dssd import DDSSMHyperParamsConf
+    from ddssm.model.dssd import DDSSMHyperParamsConf
 
     clip = 0.5
     trainer = DDSSMTrainer(

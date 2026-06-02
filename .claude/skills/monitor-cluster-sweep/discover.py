@@ -54,6 +54,11 @@ def split_jobname(name):
 
 
 def main():
+    """Group per-cell DBs into experiments, rank by activity, emit JSON.
+
+    Prints a human ranking to stderr and one ``__JSON__``-prefixed line listing
+    the discovered experiments (sorted by running jobs, then recency) to stdout.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--remote-dir", default="~/diffusion-driven-state-space-models")
     ap.add_argument("--days", type=int, default=3)

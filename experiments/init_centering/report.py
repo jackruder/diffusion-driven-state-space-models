@@ -1076,6 +1076,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point dispatching to the aggregate / plot / all subcommands.
+
+    Args:
+        argv: Optional argument vector; defaults to ``sys.argv`` when ``None``.
+
+    Returns:
+        Process exit code from the selected subcommand.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = _build_parser()
     args = parser.parse_args(argv)

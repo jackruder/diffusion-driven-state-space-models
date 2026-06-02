@@ -9,8 +9,8 @@ from __future__ import annotations
 import torch
 import pytest
 
-from ddssm.diffnets import FeatureMixerConfig, ResidualBlockConfig
-from ddssm.aggregators import (
+from ddssm.nn.diffnets import FeatureMixerConfig, ResidualBlockConfig
+from ddssm.nn.aggregators import (
     GRUAggregator,
     MLPAggregator,
     IdentityAggregator,

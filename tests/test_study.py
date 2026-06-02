@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
 import torch
+import pytest
 from hydra_zen import instantiate
 
-from ddssm.study import Axis, Study, StudyPoint
-from ddssm.launch import register_study, STUDY_REGISTRY
+from ddssm.launch import STUDY_REGISTRY, register_study
+from ddssm.cluster.study import Axis, Study, StudyPoint
 from experiments.init_centering.study import INIT_CENTERING_STUDY
 
 

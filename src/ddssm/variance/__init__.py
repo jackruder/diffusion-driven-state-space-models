@@ -1,13 +1,21 @@
 """Independent variance-probe stage."""
 
-from .metrics import PROBE_METRIC_REGISTRY, ProbeContext, register_probe_metric
-from .plots import PROBE_PLOT_REGISTRY, ProbePlotContext, register_probe_plot
-from .runner import (
+from ddssm.variance.plots import (
+    PROBE_PLOT_REGISTRY,
+    ProbePlotContext,
+    register_probe_plot,
+)
+from ddssm.variance.runner import (
     ProbeCell,
-    ProbeMetricSpec,
-    ProbePlotSpec,
     ProbeSpec,
+    ProbePlotSpec,
+    ProbeMetricSpec,
     variance,
+)
+from ddssm.variance.metrics import (
+    PROBE_METRIC_REGISTRY,
+    ProbeContext,
+    register_probe_metric,
 )
 
 __all__ = [

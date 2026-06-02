@@ -6,7 +6,7 @@ runner walks the names listed in :class:`EvalSpec.metrics`, looks them
 up here, and merges results into a single ``metrics.json``.
 
 The model-level building blocks (``mae_metrics``, ``crps_sum_metrics``)
-live in ``ddssm.eval_metrics`` and are reused here unchanged.
+live in ``ddssm.eval.eval_metrics`` and are reused here unchanged.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ..eval_metrics import mae_metrics, crps_sum_metrics
+from ddssm.eval.eval_metrics import mae_metrics, crps_sum_metrics
 
 
 @dataclass
@@ -199,7 +199,7 @@ def eval_recon_mse(ctx: EvalContext) -> Dict[str, Any]:
             _components, _metrics, stats = model(x, mask, t, train=False)
             zs = stats["zs"][:, 0]  # (B, d, T)
 
-            from ..net_utils import time_embedding
+            from ddssm.nn.net_utils import time_embedding
             te = time_embedding(t, model.emb_time_dim, device=device)
 
             T = x.shape[-1]
@@ -856,7 +856,7 @@ def eval_sigma_data_drift(
     comp1_per_t: dict[int, list[float]] = {}  # t -> list of E[||σ_t||^2]
     comp2_per_t: dict[int, list[float]] = {}  # t -> list of tr Var[μ̂_t]
 
-    from ..net_utils import time_embedding
+    from ddssm.nn.net_utils import time_embedding
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(ctx.loader):
@@ -1033,7 +1033,7 @@ def eval_log_sigma_p2_collapse(
     d = int(model.latent_dim)
     baseline = model.baseline
 
-    from ..net_utils import time_embedding
+    from ddssm.nn.net_utils import time_embedding
 
     # Accumulate per-(t, d) sums across batches.
     sums: dict[int, np.ndarray] = {}  # t -> (d,)
@@ -1128,7 +1128,7 @@ def eval_crps_sum_latent(
     """
     if ctx.model is None or ctx.loader is None or ctx.T_split is None:
         return {"crps_sum_latent_available": False}
-    from ..eval_metrics import crps_sum_latent_metrics
+    from ddssm.eval.eval_metrics import crps_sum_latent_metrics
 
     model = ctx.model
     device = ctx.device
@@ -1138,7 +1138,7 @@ def eval_crps_sum_latent(
     per_t_accum: list[torch.Tensor] = []
     n_batches = 0
 
-    from ..net_utils import time_embedding
+    from ddssm.nn.net_utils import time_embedding
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(ctx.loader):
@@ -1256,7 +1256,7 @@ def eval_gt_latent_jsd(
     """
     if ctx.model is None or ctx.loader is None:
         return {"gt_latent_jsd_available": False}
-    from .synthetic_kernels import KERNEL_REGISTRY
+    from ddssm.eval.synthetic_kernels import KERNEL_REGISTRY
 
     # Look up the data module's mode from the loader's dataset.
     mode = _infer_synthetic_mode(ctx.loader)

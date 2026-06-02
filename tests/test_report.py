@@ -6,7 +6,7 @@ import csv
 import json
 from pathlib import Path
 
-from ddssm.report import summarize_run, write_run_summary
+from ddssm.cluster.report import summarize_run, write_run_summary
 
 
 def _write_metrics(run_dir: Path) -> None:

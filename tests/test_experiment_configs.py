@@ -26,7 +26,7 @@ from hydra.core.global_hydra import GlobalHydra
 
 from ddssm.experiment import Experiment, ObjectiveSpec, TrainingScalars
 from ddssm.data.datamodule import DDSSMDataModule
-from ddssm._experiment_registry import register_experiments
+from ddssm.experiment.registry import register_experiments
 
 CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
 
@@ -65,10 +65,13 @@ def test_experiments_registered() -> None:
 
     Composition: 24 ablation-study points (12 cells × 2 datasets, named
     ``init_<cell>__<dataset>``) + 2 role-specific smokes
-    (``init_smoke_simple`` and ``init_smoke_high_surface``).
+    (``init_smoke_simple`` and ``init_smoke_high_surface``). Other families
+    (e.g. the docs ``synthetic_validation`` worked example) may register
+    additional presets, so we assert the init-centering count specifically
+    rather than the total.
     """
-    assert len(EXPERIMENTS) == 26, EXPERIMENTS
-    assert all(name.startswith("init_") for name in EXPERIMENTS), EXPERIMENTS
+    init_names = [name for name in EXPERIMENTS if name.startswith("init_")]
+    assert len(init_names) == 26, init_names
 
 
 @pytest.mark.parametrize("name", EXPERIMENTS)
@@ -87,10 +90,15 @@ def test_experiment_cli_compose(name: str) -> None:
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config", overrides=[f"experiment={name}"])
     assert cfg.experiment.training.steps > 0
-    # The init-centering preset builds DDSSM_base through a factory
-    # wrapper that wires shared baseline / aux instances.
+    # Each preset builds DDSSM_base through a factory wrapper that wires shared
+    # baseline / aux instances. The init-centering family uses
+    # ``_build_init_centering_model``; other families (e.g. synthetic_validation)
+    # supply their own factory — just assert a model + data target resolve.
     target = cfg.experiment.model._target_
-    assert target.endswith("_build_init_centering_model"), target
+    if name.startswith("init_"):
+        assert target.endswith("_build_init_centering_model"), target
+    else:
+        assert target, target
     assert cfg.experiment.data._target_
 
 

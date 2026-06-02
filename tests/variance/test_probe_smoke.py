@@ -15,7 +15,7 @@ import torch
 from hydra_zen import instantiate
 
 from ddssm.variance.runner import ProbeCell, ProbeSpec, ProbePlotSpec, variance
-from ddssm._experiment_registry import register_experiments
+from ddssm.experiment.registry import register_experiments
 
 register_experiments()
 

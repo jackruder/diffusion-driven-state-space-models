@@ -10,7 +10,7 @@ import torch
 import pytest
 import torch.nn as nn
 
-from ddssm.net_utils import get_side_info
+from ddssm.nn.net_utils import get_side_info
 
 B = 2
 T = 5

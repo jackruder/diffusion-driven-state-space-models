@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ddssm.loggers import WandbLogger
+from ddssm.training.loggers import WandbLogger
 
 
 @pytest.fixture
@@ -134,7 +134,7 @@ def test_persist_run_id_skipped_without_run_dir(fake_wandb):
 
 def test_resume_run_from_dir_happy_path(fake_wandb, tmp_path):
     """``resume_run_from_dir`` reinit-with-id when the dotfile is present."""
-    from ddssm.loggers import resume_run_from_dir
+    from ddssm.training.loggers import resume_run_from_dir
 
     (tmp_path / WandbLogger._RUN_ID_FILENAME).write_text("savedid42")
 
@@ -150,7 +150,7 @@ def test_resume_run_from_dir_happy_path(fake_wandb, tmp_path):
 
 
 def test_resume_run_from_dir_returns_none_when_disabled(fake_wandb, tmp_path):
-    from ddssm.loggers import resume_run_from_dir
+    from ddssm.training.loggers import resume_run_from_dir
 
     (tmp_path / WandbLogger._RUN_ID_FILENAME).write_text("x")
     assert resume_run_from_dir(str(tmp_path), None) is None
@@ -160,7 +160,7 @@ def test_resume_run_from_dir_returns_none_when_disabled(fake_wandb, tmp_path):
 
 def test_resume_run_from_dir_returns_none_without_dotfile(fake_wandb, tmp_path):
     """No persisted run-id → no resume (returns None)."""
-    from ddssm.loggers import resume_run_from_dir
+    from ddssm.training.loggers import resume_run_from_dir
 
     assert resume_run_from_dir(
         str(tmp_path), {"enabled": True, "project": "p"},

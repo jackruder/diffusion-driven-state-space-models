@@ -15,8 +15,8 @@ Train, evaluate, and visualize are independent stages; nothing here
 runs during training.
 """
 
-from .plots import PLOT_REGISTRY, PlotContext, register_plot
-from .runner import PlotSpec, VizSpec, visualize
+from ddssm.viz.plots import PLOT_REGISTRY, PlotContext, register_plot
+from ddssm.viz.runner import VizSpec, PlotSpec, visualize
 
 __all__ = [
     "PLOT_REGISTRY",

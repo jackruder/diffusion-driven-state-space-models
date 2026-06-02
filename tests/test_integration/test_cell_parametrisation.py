@@ -28,9 +28,12 @@ from types import SimpleNamespace
 import torch
 import pytest
 
-from ddssm.train import DDSSMTrainer
-from ddssm.stages import StageLrsConf
-from ddssm.centering.handoff import CenteringHandoffConf, perform_centering_handoff
+from ddssm.training.train import DDSSMTrainer
+from ddssm.training.stages import StageLrsConf
+from ddssm.model.centering.handoff import (
+    CenteringHandoffConf,
+    perform_centering_handoff,
+)
 from experiments.init_centering.model import _build_init_centering_model
 from experiments.init_centering.hparams import _build_init_centering_stages
 
