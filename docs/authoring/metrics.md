@@ -97,7 +97,7 @@ the trainer.
 
 ## In the worked example
 
-Each `synthval__*` preset wires
+Each `synthval__*` preset (built in `study.py`'s `_build`) wires
 `eval=Eval(metrics=["mae", "crps_sum", "stage2_elbo_surrogate"], split="val")`
 and a simple `objective=Objective(metric="loss/total", split="train",
 source="csv")` — enough to rank a dataset cell by its tail training ELBO and to

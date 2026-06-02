@@ -44,7 +44,7 @@ The family is three small files — read them alongside this guide:
 | File | Role |
 | ---- | ---- |
 | `experiments/synthetic_validation/model.py` | the hand-written model factory ({doc}`model`) |
-| `experiments/synthetic_validation/experiments.py` | the dataset loop + registration ({doc}`dataset`, {doc}`training`, {doc}`metrics`) |
+| `experiments/synthetic_validation/study.py` | the dataset axis + per-cell wiring + registration ({doc}`dataset`, {doc}`training`, {doc}`metrics`, {doc}`study`) |
 | `experiments/synthetic_validation/__init__.py` | import-time registration trigger |
 
 ## The seven steps
@@ -59,6 +59,7 @@ logging
 metrics
 sweeps
 visualization
+study
 ```
 
 0. {doc}`dataset` — pick (or define) the data.
@@ -68,3 +69,4 @@ visualization
 4. {doc}`metrics` — choose eval metrics and the Optuna objective.
 5. {doc}`sweeps` — define an Optuna search space.
 6. {doc}`visualization` — wire forecast/diagnostic plots.
+7. {doc}`study` — group presets into a launchable campaign.

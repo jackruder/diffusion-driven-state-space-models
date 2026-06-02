@@ -77,19 +77,24 @@ pass it as `experiment(data=...)`, or register it with
 
 ## In the worked example
 
-`experiments/synthetic_validation/experiments.py` loops over a `dict` of
-library presets and registers one experiment per dataset:
+`experiments/synthetic_validation/study.py` makes the **dataset** a comparison
+axis: a `dict` of library presets, one experiment per dataset. The per-dataset
+experiment is built by `_build(coords)`, which picks the preset for that
+coordinate:
 
 ```python
 from ddssm.data.presets import LGSSM, Bimodal, Harmonic
 
 DATASETS = {"harmonic": Harmonic, "lgssm": LGSSM, "bimodal": Bimodal}
-for tag, data in DATASETS.items():
-    exp = experiment(data=data, model=SynthValModel(data_dim=1, latent_dim=1, j=1), ...)
-    experiment_store(exp, name=f"synthval__{tag}")
+
+def _build(coords):
+    data = DATASETS[coords["dataset"]]
+    return experiment(data=data, model=SynthValModel(data_dim=1, latent_dim=1, j=1), ...)
 ```
 
-All three are `D=1, T=32`, so one model shape (`data_dim=1`) fits all. To add
-more, drop another `D=1` preset into `DATASETS` (e.g. `harmonic-noisy`); for a
-multivariate run you'd also bump the model's `data_dim`/`latent_dim`
+The axis (`Axis("dataset", list(DATASETS), key=...)`) crosses into one preset per
+dataset, `synthval__<tag>` — see {doc}`study` for how the axis becomes registered
+presets. All three are `D=1, T=32`, so one model shape (`data_dim=1`) fits all.
+To add more, drop another `D=1` preset into `DATASETS` (e.g. `harmonic-noisy`);
+for a multivariate run you'd also bump the model's `data_dim`/`latent_dim`
 ({doc}`model`).

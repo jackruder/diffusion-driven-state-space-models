@@ -81,16 +81,16 @@ and calls `fit()`. Resuming from a stage-N checkpoint skips earlier stages.
 
 ## In the worked example
 
-`synthetic_validation` reuses the init-centering stage builder `StagesB` (itself
-`builds(_build_init_centering_stages)` in `experiments/init_centering/hparams.py`
-— a good reference for hand-rolling a `StagesConf`) with small budgets, plus a
-shared `Hparams`/`Training`:
+`synthetic_validation` (in `study.py`'s `_build`) reuses the init-centering
+stage builder `StagesB` (itself `builds(_build_init_centering_stages)` in
+`experiments/init_centering/hparams.py` — a good reference for hand-rolling a
+`StagesConf`) with small budgets, plus a shared `Hparams`/`Training`:
 
 ```python
-_hparams = Hparams(S=1, batch_size=32, enc_lr=5e-4, dec_lr=5e-4, trans_lr=5e-4)
-_training = Training(steps=400, log_every=25, amp=True)  # steps ignored under stages,
+_HPARAMS = Hparams(S=1, batch_size=32, enc_lr=5e-4, dec_lr=5e-4, trans_lr=5e-4)
+_TRAINING = Training(steps=400, log_every=25, amp=True)  # steps ignored under stages,
                                                          # but kept > 0 (sanity convention)
-exp = experiment(..., hparams=_hparams, training=_training,
+exp = experiment(..., hparams=_HPARAMS, training=_TRAINING,
                  stages=StagesB(baseline_mode="pinned", n_pretrain=100, n_stage2=300))
 ```
 

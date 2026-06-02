@@ -6,4 +6,4 @@ registers the ``synthval__<dataset>`` presets into the hydra-zen ``experiment``
 store; the import is triggered from :mod:`experiments`.
 """
 
-from . import experiments  # noqa: F401  -- registers the synthval__* presets
+from . import study  # noqa: F401  -- registers the synthval study + synthval__* presets

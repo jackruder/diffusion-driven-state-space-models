@@ -6,7 +6,7 @@ build it by **writing a small factory function** that instantiates the parts and
 wires them together. This page covers the menu of choices and how to assemble
 them; the worked example is `experiments/synthetic_validation/model.py`.
 
-## Why a factory function (not nested configs, not `SmokeModel`)
+## Why a factory function
 
 Two constraints decide the shape of the code:
 
@@ -22,10 +22,7 @@ Two constraints decide the shape of the code:
 
 `experiments/init_centering/model.py:SmokeModel` is exactly such a factory
 (wrapping `_build_init_centering_model`), but it carries the init-centering
-ablation's knobs and scaling heuristics. **Write your own** instead — it's a
-dozen lines and you control every choice. Read `_build_init_centering_model` as
-the fuller reference.
-
+ablation's knobs and scaling heuristics. *
 ```{tip}
 {py:mod}`ddssm.experiment.builders` exposes a `builds(...)` config for every
 part (`DDSSM`, `Encoder`, `Decoder`, `DiffTransition`, `ZeroBaselineB`, `Unet`,
@@ -77,8 +74,7 @@ trains it under the R_μp anchor regularizer.
 `embedding_dim`) composes a per-channel **time mixer** (`conv`/`gru`/`identity`)
 × **feature mixer** (`transformer`/`conv`/`identity`) via `TimeMixerConfig` /
 `FeatureMixerConfig` inside a `DiffResidualBlockConfig`. `MLPCSDIUnet` is an MLP
-ablation. (At small latent dims, a `conv` feature mixer is the project default —
-see ADR-0003.)
+ablation. (At small latent dims, a `conv` feature mixer is the project default.)
 
 ### Encoder — `ddssm.model.encoder.GaussianEncoder`
 Composed from swappable slots:
