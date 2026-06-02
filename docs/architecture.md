@@ -14,7 +14,9 @@ src/ddssm/
   launch.py  colocate.py  launch_remaining.py
   nn/          # reusable neural building blocks (layers, embeddings, mixers)
   model/       # the variational SSM: dssd, encoder, decoder, losses
-    transitions/   centering/   likelihood/
+    transitions/   # including the diffusion implementation
+    centering/   # baseline centering
+    likelihood/  # likelihood computation tools
   training/    # trainer, multi-stage orchestration, checkpoint, loggers
   experiment/  # Experiment composition root + builders / stores / registry
   cluster/     # sbatch rendering, study points, reporting
@@ -70,7 +72,7 @@ full run definition:
 
 - `data` — a {py:class}`~ddssm.data.datamodule.DDSSMDataModule`
   (train/val/test loaders + a `batch_transform`).
-- `model` — the variational SSM ({py:class}`ddssm.model.dssd.DDSSM_base`).
+- `model` — the SSM ({py:class}`ddssm.model.dssd.DDSSM_base`).
 - `build_trainer` — a partial {py:class}`~ddssm.training.train.DDSSMTrainer`
   factory.
 - `training` — `TrainingScalars`: step budget, logging cadence, and the
@@ -93,14 +95,8 @@ its `model.py` composes the model from runtime classes directly.
 
 ## The model (`ddssm.model`)
 
-{py:class}`ddssm.model.dssd.DDSSM_base` is the ELBO model: an encoder
-`q_ϕ(z|x)`, decoder `p_θ(x|z)`, and a **pluggable** transition prior. The
-transition is either Gaussian
-({py:class}`~ddssm.model.transitions.transitions.GaussianTransition`, or the
-baseline-centering
-{py:class}`~ddssm.model.transitions.baseline_gaussian.BaselineGaussianTransition`)
-or a CSDI-style diffusion denoiser
-({py:class}`~ddssm.model.transitions.diffusion.DiffusionTransition`).
+{py:class}`ddssm.model.dssd.DDSSM_base` assembles the full model: an encoder
+`q_ϕ(z|x)`, decoder `p_θ(x|z)`, and a transition prior. 
 
 The encoder/decoder/transition networks are themselves composed from reusable
 mixers in {py:mod}`ddssm.nn` (per-channel time and feature mixers:

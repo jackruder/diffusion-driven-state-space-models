@@ -15,6 +15,7 @@ docstrings. For the modeling background and the preset table, see the top-level
 :caption: Contents
 
 architecture
+hydra
 api
 ```
 

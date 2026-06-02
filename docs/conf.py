@@ -55,6 +55,8 @@ intersphinx_mapping = {
 }
 
 myst_enable_extensions = ["colon_fence", "deflist"]
+# Generate anchors for h1-h3 so in-page links like [text](#a-heading) resolve.
+myst_heading_anchors = 3
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 
 templates_path = ["_templates"]
