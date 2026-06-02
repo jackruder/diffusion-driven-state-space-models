@@ -92,7 +92,8 @@ python -m ddssm.launch synthval --seeds 0 1 2   # replicate each point
 - `--dry-run` (default) prints sbatch; `--write-dir` writes scripts; `--submit`
   submits them; `--local` runs on this machine; `--seeds` replicates.
 - `--storage-url` points all cells at one shared Optuna DB (else per-cell SQLite
-  under `--storage-dir`).
+  under `--storage-dir`) — see {doc}`sweeps` → "Storage backends" for the
+  SQLite-vs-Postgres choice.
 
 ## The worked example
 

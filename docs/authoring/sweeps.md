@@ -66,6 +66,56 @@ override `hydra.sweeper.sampler.seed` **per worker** (else every worker draws
 identical trials).
 ```
 
+## Storage backends — SQLite vs Postgres
+
+Optuna persists a study in an **RDB** so trials can be added incrementally and
+many workers can collaborate. The choice of backend is purely a storage URL.
+
+**SQLite (default).** The sweeper preset
+(`src/ddssm/conf/hydra/sweeper/ddssm_optuna.yaml`) defaults to a per-study
+SQLite file under `runs/optuna/<study_name>.db`. SQLite is fine for a single
+node and a handful of workers. Over NFS it tolerates only ~8 concurrent workers
+per DB (lock contention) — the `plan-campaign` skill caps it there. The
+`optuna-dashboard sqlite:///path.db` UI reads it directly.
+
+**Postgres (many workers / shared study).** When you need more concurrency than
+NFS-SQLite allows, or you want **every cell of a study in one database**, point
+the storage at a Postgres server (`psycopg2-binary` is already a dependency).
+One server, reachable from every compute node; each cell is a distinct Optuna
+`study_name` within the same DB. Three entry points use it:
+
+```bash
+# 1. A single sweep — override the sweeper storage with a Postgres URL:
+python -m ddssm.app --multirun experiment=synthval__harmonic +sweep=my_sweep \
+    hydra.sweeper.n_trials=40 hydra.sweeper.study_name=synthval_lr \
+    hydra.sweeper.storage=postgresql://ddssm@dbhost:5432/ddssm
+
+# 2. A whole study — --storage-url puts all cells in one DB as distinct studies
+#    (the orchestrator initialises the schema once via Optuna's RDBStorage):
+python -m ddssm.launch <study> --storage-url postgresql://ddssm@dbhost:5432/ddssm \
+    --study-prefix round1 --write-dir runs/sbatch --submit
+
+# 3. Add trials to an existing shared-DB study (low per-cell concurrency for
+#    NSGA-II to evolve) — point ddssm.colocate at the SAME url + --study-prefix:
+python -m ddssm.colocate <study> --select dataset=mv \
+    --n-gpus 3 --workers-per-cell 2 --target 96 --sweep init_ablation_moo_r2 \
+    --storage-url postgresql://ddssm@dbhost:5432/ddssm --study-prefix round1
+```
+
+Setup is just "have a reachable Postgres DB and pass its URL" — create a
+database (e.g. `createdb ddssm`) on a host the nodes can reach, then use the
+`postgresql://user@host:port/db` URL everywhere. Inspect any backend with
+`optuna-dashboard <url>`.
+
+```{note}
+The `study_name` is the join key. To **resume or extend** a run, reuse the same
+`--storage-url` + `--study-prefix` (study launches) or `hydra.sweeper.study_name`
+(single sweeps); a new name starts a fresh study in the same DB. Preemptible
+launches compute the remaining budget against the existing COMPLETE trials in
+that study (`ddssm.launch_remaining`), so requeues converge to the target rather
+than over-running.
+```
+
 ## Reference example
 
 `experiments/init_centering/sweeps.py` builds three real spaces

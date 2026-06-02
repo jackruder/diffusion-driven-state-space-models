@@ -59,13 +59,39 @@ Key constructor args: `mode`, `D` (channels), `T` (length), `N_per_split`,
 `NonlinBimodalLift1D` (`nonlin_bimodal_lift_1d`), `NonlinBimodalLiftMV`
 (`nonlin_bimodal_lift_mv`).
 
-Because they're registered in the `data` group, you can swap the dataset baked
-into any preset from the CLI with `+data=NAME` (the `+` appends; see
-{doc}`../hydra`):
+### `+data=NAME` vs `experiment.data.X=V` — two different operations
+
+These look similar but do different things, and the `+data=` form trips people
+up. The distinction:
+
+- **`+data=bimodal` selects a whole config-group option.** `data` is a Hydra
+  *config group* (a menu of dataset presets), and selecting one swaps the
+  **entire** `experiment.data` subtree for that preset. You override a *field*
+  with a dotted path; you select a *group option* by the group name.
+- **`experiment.data.batch_size=64` overrides one field** of whatever dataset is
+  currently in the tree — it doesn't change which dataset you're using.
 
 ```bash
-python -m ddssm.app experiment=synthval__harmonic +data=bimodal
+python -m ddssm.app experiment=synthval__harmonic +data=bimodal            # swap the dataset
+python -m ddssm.app experiment=synthval__harmonic experiment.data.batch_size=64   # tweak a field
 ```
+
+Two things explain the exact syntax (both in `src/ddssm/experiment/stores.py`):
+
+1. **Why `+` and not `data=`?** Group selections that are *already in the
+   defaults list* are overridden bare (e.g. `wandb=enabled`). `data` is **not**
+   in `config.yaml`'s defaults — each experiment bakes its own dataset — so you
+   *append* the group with `+`. A bare `data=bimodal` errors: ``Could not
+   override 'data' … use +data=``.
+2. **Why does it land at `experiment.data` and not a top-level `data:`?** The
+   store is registered with `data_store = store(group="data",
+   package="experiment.data")`. The `package=` tells Hydra to merge the selected
+   option **into `experiment.data`**, replacing the dataset the preset baked in —
+   instead of writing an unread top-level `data:` key. So `+data=NAME` is exactly
+   "replace `experiment.data` with preset `NAME`"; you just can't write it as
+   `experiment.data=NAME` because that's a node path, not a group selector.
+
+(See {doc}`../hydra` → "Add vs. override" for the general `+` / `++` rules.)
 
 ## A custom dataset
 
