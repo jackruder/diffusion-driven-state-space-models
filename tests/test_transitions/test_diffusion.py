@@ -152,6 +152,35 @@ def test_transition_kl_runs_and_returns_finite() -> None:
     assert torch.isfinite(out["kl"])
 
 
+def test_transition_kl_does_not_mutate_sigma_data_under_no_grad() -> None:
+    """REGRESSION: an eval-mode (no_grad) ``transition_kl`` must NOT mutate σ_data.
+
+    σ_data is updated inside the forward; doing so during evaluation drifts the
+    buffer toward the eval data and inflates the eval ELBO's transition-KL term
+    (obj1) by ~2-4x — the bug this guards. With autograd enabled (training) the
+    same call DOES update σ_data.
+    """
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    transition = _make_diffusion(baseline)
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+    before = sigma_data.sigma_data2.clone()
+
+    with torch.no_grad():
+        transition.transition_kl(
+            enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
+            time_embed=time_embed, sigma_data=sigma_data,
+        )
+    assert torch.equal(sigma_data.sigma_data2, before), "eval forward mutated σ_data"
+
+    with torch.enable_grad():
+        transition.transition_kl(
+            enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
+            time_embed=time_embed, sigma_data=sigma_data,
+        )
+    assert not torch.equal(sigma_data.sigma_data2, before), "training forward left σ_data unchanged"
+
+
 @pytest.mark.slow
 def test_transition_kl_is_invariant_to_num_steps() -> None:
     """The ESM loss estimates an integral over τ — it must be ~invariant to the
