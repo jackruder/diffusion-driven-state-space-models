@@ -160,3 +160,50 @@ def test_update_rejects_mismatched_inputs() -> None:
             mu_hat_batch=torch.zeros(5, D),
             sigma_t2_batch=torch.zeros(5, D),
         )
+
+
+def test_update_is_noop_under_no_grad() -> None:
+    """REGRESSION: σ_data is a TRAINING-only running statistic.
+
+    Eval / inference forwards run under ``torch.no_grad`` while the diffusion /
+    baseline transitions update σ_data *inside* the forward. An unguarded update
+    let the eval pass drift σ_data toward the eval-data residual and inflate the
+    eval ELBO's transition-KL term (obj1) ~2-4x. ``update`` must be a no-op when
+    autograd is disabled, and still apply when it is enabled (training).
+    """
+    buf = SigmaDataBuffer(
+        T_max=T_MAX, tracking_mode="per_t", ema_decay=0.9, init_value=1.0
+    )
+    t_idx = torch.tensor([2, 4])
+    mu = torch.randn(12, D)
+    s2 = torch.rand(12, D)
+    before = buf.sigma_data2.clone()
+    step_before = buf.ema_step.clone()
+
+    with torch.no_grad():
+        buf.update(t_idx=t_idx, mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert torch.equal(buf.sigma_data2, before), "σ_data mutated under no_grad (eval)"
+    assert torch.equal(buf.ema_step, step_before)
+
+    # Positive control: with autograd enabled (training) the SAME update applies.
+    with torch.enable_grad():
+        buf.update(t_idx=t_idx, mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert not torch.equal(buf.sigma_data2, before), "σ_data did not update in training"
+    assert int(buf.ema_step[1]) == int(step_before[1]) + 1  # t=2 -> slot 1
+
+
+def test_update_no_grad_gate_covers_global_ema() -> None:
+    """The no_grad gate protects the ``global_ema`` branch too."""
+    buf = SigmaDataBuffer(
+        T_max=T_MAX, tracking_mode="global_ema", ema_decay=0.9, init_value=1.0
+    )
+    t_idx = torch.tensor([1, 3])
+    mu = torch.randn(8, D)
+    s2 = torch.rand(8, D)
+    before = buf.sigma_data2.clone()
+    with torch.no_grad():
+        buf.update(t_idx=t_idx, mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert torch.equal(buf.sigma_data2, before)
+    with torch.enable_grad():
+        buf.update(t_idx=t_idx, mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert not torch.equal(buf.sigma_data2, before)
