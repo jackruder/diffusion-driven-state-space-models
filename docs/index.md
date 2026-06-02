@@ -16,6 +16,7 @@ docstrings. For the modeling background and the preset table, see the top-level
 
 architecture
 hydra
+authoring/index
 api
 ```
 
@@ -24,7 +25,7 @@ api
 | You want to…                        | Start at                                   |
 | ----------------------------------- | ------------------------------------------ |
 | Understand how a run is assembled   | {doc}`architecture` → "Composition"        |
-| Add a new experiment preset         | `experiments/<family>/` (see `README.md`)  |
+| Add a new experiment preset         | {doc}`authoring/index`                     |
 | Find a class/function's signature   | {doc}`api`                                 |
 | Understand one subsystem            | the `README.md` inside that package dir    |
 

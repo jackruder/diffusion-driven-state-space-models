@@ -54,7 +54,7 @@ deliberately separate worlds:
 So when you write `experiment=init_smoke_high_surface`, Hydra is selecting an
 option that was registered from Python, not from a `conf/experiment/*.yaml`
 file. From the command line this is invisible — you still select and override it
-exactly like a YAML-defined group. (The bridge: on startup
+exactly like a YAML-defined group. (Under the hood: on startup
 {py:func}`ddssm.experiment.registry.register_experiments` imports the
 `experiments/` package, whose modules register presets into the hydra-zen
 `store`, which is then published to Hydra's `ConfigStore`.)
