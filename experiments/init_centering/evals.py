@@ -55,13 +55,17 @@ PilotMOObjective = Objectives(specs=[
 ])
 
 
-# Default ELBO target for the wallclock objective. Set to -100 for the
-# trans-KL-fix rerun: the a00f7a3 fix sums trans-KL over t instead of
-# averaging (x(T-j)=x31 larger), so the convergent ELBO drops from ~0 to the
-# -100..-600 band. -100 is a reachable-but-discriminating threshold once the
-# now-dominant trans-KL is driven down. Override via Hydra:
+# Default ELBO target for the wallclock objective: steps to ``loss/total <= target``.
+# WAS -100.0 (round2), which assumed the trans-KL fix would push convergent ELBO
+# into a NEGATIVE -100..-600 band. That premise was wrong: the observed convergent
+# ``loss/total`` stays POSITIVE (~50-330; the obj1 tail-mean band is ~174-257 across
+# cells), so ``<= -100`` was NEVER reached -> every trial took the csv_tail_step
+# penalty (~5000) -> obj0 collapsed to a flat ~5005-5500 and the MOO degenerated to
+# single-objective on obj1 (round2 +trials run, 2026-06-01). 250 sits mid-band,
+# so good configs cross it at genuinely different steps (a real speed axis) while
+# weak cells that never reach it keep the penalty. Override via Hydra:
 # ``experiment.eval.kwargs.wallclock_to_target.target_value=...``.
-PILOT_WALLCLOCK_TARGET: float = -100.0
+PILOT_WALLCLOCK_TARGET: float = 250.0
 
 
 # The five Phase-A headline metrics + two diagnostic secondary metrics
