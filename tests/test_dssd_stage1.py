@@ -207,17 +207,22 @@ def test_vhp_stage1_forward_produces_finite_loss() -> None:
 
 
 def test_vhp_stage1_r_sigma_p_active_with_lambda() -> None:
-    """When ``λ_σp > 0`` the regularizer contributes a non-zero metric."""
+    """When ``λ_σp > 0`` the regularizer contributes a non-zero metric.
+
+    Note: every ``LogvarHead`` starts at ``log σ_p² ≡ 0`` (var=I), so
+    ``mean(log σ_p²)² = 0`` at init and the regularizer trivially
+    short-circuits to 0.  To observe wiring we displace ``var_bias_raw``
+    so logvar is non-zero, then assert the metric is non-zero.
+    """
     model = _make_vhp_model(lambda_sigma_p=1.0)
+    with torch.no_grad():
+        model.stage1_transition.baseline.logvar_head.var_bias_raw.add_(1.0)
     batch = _make_batch(B=2, T=5)
     _, metrics, _ = model(
         batch["observed_data"],
         batch["observation_mask"],
         batch["timepoints"],
     )
-    # Generic baseline + λ > 0 ⇒ regularizer typically > 0 (mean log σ_p² != 0
-    # in expectation).  Just check it isn't *exactly* zero (the λ=0 path
-    # would short-circuit to 0).
     assert metrics["loss/rate/trans/r_sigma_p"] != 0.0
 
 

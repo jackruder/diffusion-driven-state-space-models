@@ -84,6 +84,64 @@ class GaussianStats(TypedDict, total=False):
     # e.g., 'base_logqs': torch.Tensor  # if you track flow base log density
 
 
+class LogvarHead(nn.Module):
+    """Numerically-safe log-variance head.
+
+    Parameterises ``log σ²`` as ``log(softplus(W·x + b + var_bias_raw) + var_min)``
+    with ``W`` and ``b`` zero-initialised and ``var_bias_raw`` chosen so that
+    the initial log-variance equals ``init_logvar`` (default 0 → σ² = I).
+    Output is then clamped to ``[clamp_logvar_min, clamp_logvar_max]`` for
+    downstream KL / log-prob stability.
+
+    This is the single canonical way to emit log-variance in the codebase —
+    never project to log-variance with a raw ``nn.Linear``: a raw projection
+    starts log σ² at a Kaiming-random value (often ±1–2 → σ² ∈ [0.1, 7])
+    and can briefly hit ±20 before the clamp catches it, NaN-ing the KL.
+    The :class:`GaussianHead` mean+logvar pair uses this internally (via its
+    duplicated ``var_head_raw`` / ``var_bias_raw`` attributes for state-dict
+    back-compat); standalone logvar emitters (baselines, aux posterior) hold
+    a :class:`LogvarHead` directly.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        init_logvar: float = 0.0,
+        var_min: float = 1e-6,
+        clamp_logvar_min: float = -9.0,
+        clamp_logvar_max: float = 6.0,
+    ) -> None:
+        super().__init__()
+        self.in_features = int(in_features)
+        self.out_features = int(out_features)
+        self.var_min = float(var_min)
+        self.clamp_logvar_min = float(clamp_logvar_min)
+        self.clamp_logvar_max = float(clamp_logvar_max)
+        self.init_logvar = float(init_logvar)
+
+        self.var_head_raw = nn.Linear(in_features, out_features)
+        nn.init.zeros_(self.var_head_raw.weight)
+        nn.init.zeros_(self.var_head_raw.bias)
+
+        init_var = float(math.exp(self.init_logvar))
+        v_soft = float(max(init_var - self.var_min, 1e-6))
+        raw0 = float(softplus_inv(v_soft).item())
+        self.var_bias_raw = nn.Parameter(
+            torch.full((out_features,), raw0, dtype=torch.float32)
+        )
+
+    def global_logvar_unclamped(self) -> torch.Tensor:
+        """Input-independent ``log σ²`` (from the learnable bias only)."""
+        var = F.softplus(self.var_bias_raw) + self.var_min
+        return var.log()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        raw = self.var_head_raw(x) + self.var_bias_raw
+        logvar = logvar_from_raw(raw, self.var_min)
+        return logvar.clamp(self.clamp_logvar_min, self.clamp_logvar_max)
+
+
 class GaussianHead(nn.Module):
     """Takes a feature vector and outputs mean and log-variance for a
     Gaussian distribution, with numerical stability guarantees.

@@ -145,6 +145,48 @@ def test_snapshot_is_disjoint_and_frozen(j: int) -> None:
 
 
 @pytest.mark.parametrize("j", J_VALUES)
+def test_parametric_baseline_mu_head_bias_is_zero_at_init(j: int) -> None:
+    """``LinearBaseline`` / ``MLPBaseline`` zero ``mu_head.bias`` at init.
+
+    Matches the ``GaussianHead.mu_head`` convention (xavier-uniform weight,
+    zero bias): μ_p(0) = 0 exactly. Under typical-scale z_hist μ_p is a
+    small projection that the model can grow during training. (Going
+    further and zeroing ``mu_head.weight`` too — i.e. μ_p ≡ 0 for *any*
+    z_hist — landed the score-net log-likelihood in a config where dopri5
+    is pathologically slow on the integration tests.)
+    """
+    linear = LinearBaseline(latent_dim=D, j=j)
+    mlp = MLPBaseline(latent_dim=D, j=j, hidden_dim=8, n_layers=2)
+    for baseline in (linear, mlp):
+        assert torch.allclose(
+            baseline.mu_head.bias, torch.zeros_like(baseline.mu_head.bias)
+        )
+    # LinearBaseline composes only mu_head(z_hist_flat); with bias=0 the
+    # output at z_hist=0 is exactly zero. MLPBaseline runs z_hist through a
+    # backbone with its own (non-zero) Kaiming biases first, so
+    # μ_p(z_hist=0) is generically non-zero even though mu_head.bias=0 —
+    # the bias-only contract is the meaningful one for the parametric forms.
+    z_zero = torch.zeros(B, D, j)
+    assert torch.allclose(linear.mean(z_zero), torch.zeros_like(linear.mean(z_zero)))
+
+
+@pytest.mark.parametrize("j", J_VALUES)
+def test_baselines_init_logvar_is_zero(j: int) -> None:
+    """At init every baseline emits ``log σ_p² ≈ 0`` (σ_p² = I).
+
+    Guards the contract that ``LogvarHead`` anchors the initial
+    log-variance — important so ``r_sigma_p_loss`` starts at zero and
+    so stage-1 KL is not warped by random head init.
+    """
+    z_hist = torch.randn(B, D, j)
+    for baseline in _all_forms(latent_dim=D, j=j):
+        _, logvar = baseline.mean_and_logvar(z_hist)
+        assert torch.allclose(logvar, torch.zeros_like(logvar), atol=1e-5), (
+            f"{type(baseline).__name__}: init logvar {logvar.abs().max().item()=}"
+        )
+
+
+@pytest.mark.parametrize("j", J_VALUES)
 def test_baselines_reject_wrong_shape(j: int) -> None:
     """Inputs with the wrong shape are rejected."""
     for baseline in _all_forms(latent_dim=D, j=j):

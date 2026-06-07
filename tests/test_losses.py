@@ -124,11 +124,18 @@ def test_full_elbo_reproduces_pre_refactor_loss() -> None:
     at ``λ=1.0``. The value was recaptured after commit a00f7a3 (#2:
     encoder logvars are now clamped in-place in ``enc_stats`` so the
     downstream init/KL terms see the clamped values), which legitimately
-    shifts the stage-1 ELBO by ~0.25%.
+    shifts the stage-1 ELBO by ~0.25%; then recaptured again when the
+    baseline σ_p head moved from raw ``nn.Linear`` to :class:`LogvarHead`
+    (init logvar anchored at 0 → σ_p² = I), which shifts the stage-1
+    ELBO by ~1.1% on this fixture; then recaptured again when
+    ``LinearBaseline`` / ``MLPBaseline``'s ``mu_head`` adopted the
+    ``GaussianHead.mu_head`` convention (xavier-uniform weight + zero
+    bias) so μ_p(0)=0 — shifting the loss by ~0.7% on the MLP-baseline
+    fixture.
     """
     LAMBDA_SIGMA_P = 0.01
     LAMBDA_MU_P = 0.0
-    EXPECTED_LOSS = 22.75912094116211  # recaptured post-a00f7a3 (clamp writeback)
+    EXPECTED_LOSS = 22.52261734008789  # recaptured post-mu_head xavier+zero-bias
 
     torch.manual_seed(0)
     model = _make_vhp_model(lambda_sigma_p=LAMBDA_SIGMA_P)
