@@ -261,7 +261,11 @@ class DDSSMTrainer:
         # tolerate trainer construction in worker threads (e.g. notebooks,
         # parallel test runners).
         self._preempt_pending: bool = False
-        for _sig in (signal.SIGUSR1, signal.SIGTERM):
+        # SIGUSR1 is POSIX-only; guard with hasattr so Windows doesn't crash.
+        _preempt_sigs = [signal.SIGTERM]
+        if hasattr(signal, "SIGUSR1"):
+            _preempt_sigs.append(signal.SIGUSR1)
+        for _sig in _preempt_sigs:
             try:
                 signal.signal(_sig, self._handle_preempt_signal)
             except (ValueError, OSError):
