@@ -1,0 +1,642 @@
+#+TITLE: Encoder design for DDSSM: the amortized smoother conditional
+#+AUTHOR:
+#+OPTIONS: toc:2 num:t
+
+
+* Overview / TL;DR
+
+The encoder amortizes the *smoother conditional* $q_\phi(z_t\mid z_{t-1},x_{t:T})
+= \mathcal N(\mu_t,\boldsymbol\sigma_t^2)$. The Gaussian here is a /variational
+output form/, *not* an assumption about the SSM: the generative transition is a
+diffusion and the emission a decoder, so the true noise — hence the true
+conditional — can be arbitrary / nonparametric and non-Gaussian.
+
+*The exact, general structure (any noise).* By Bayes and the Markov graph
+(no Gaussianity used anywhere):
+\[
+\boxed{\;
+p(z_t\mid z_{t-1},x_{t:T})\;\propto\;
+\underbrace{p(z_t\mid z_{t-1})}_{\text{transition (prediction)}}\;\cdot\;
+\underbrace{p(x_{t:T}\mid z_t)}_{\text{backward (evidence) message}}
+\;}
+\]
+and, taking $\nabla_{z_t}\log$ (the normalizer is independent of $z_t$):
+\[
+\boxed{\;
+\nabla\log p(z_t\mid z_{t-1},x_{t:T})
+= \underbrace{\nabla\log p(z_t\mid z_{t-1})}_{\text{transition score}}
++ \underbrace{\nabla\log p(x_{t:T}\mid z_t)}_{\text{evidence score}}.
+\;}
+\]
+The /posterior score is the sum of the transition score and the future-evidence
+score/. The first term is exactly what the generative diffusion already learns,
+$s_\psi(z_t,\tau{\to}0,z_{t-1})\approx\nabla\log p_\psi^{\mathrm{sde}}(z_t\mid z_{t-1})$
+(modulo the $\tau{\to}0$ boundary). So the true posterior is "the score the
+diffusion already models, plus an evidence correction." /This/ — not any
+Gaussian gain formula — is the true form.
+
+*The Gaussian encoder is a Laplace / concentration approximation to that*
+(Section [[*Why a Gaussian encoder when nothing else is Gaussian]]), exact only in the
+linear-Gaussian (Kalman) limit (Section [[*The linear-Gaussian limit: the (extended) Kalman smoother]]).
+
+*Recommended encoder: identity-framed blend* ([[*The encoder (identity-framed blend)]]). Frame the
+mean on the previous latent and correct it by a /z-free evidence estimate/ through
+a /learned gate/; fix the posterior-std scale $\sigma_0=1$:
+\[
+\boxed{\;
+\mu_t = z_{t-1} + K_t\odot(m_t^b - z_{t-1}),\qquad
+K_t=\mathrm{sigmoid}(W_K U + b_K),\qquad
+\log\boldsymbol\sigma_t = W_\sigma U + b_\sigma\ \ (\sigma_0{=}1).
+\;}
+\]
+$m_t^b$ is the z-free evidence mean (from a coordinate-queried backbone $E$); $U$ is
+a state-conditioned feature (it sees $z_{t-1}$ and the evidence); the gate
+$K_t\in(0,1)^D$ interpolates "stay at $z_{t-1}$" and "go to the evidence." It is the
+/blend/ form with the /identity/ baseline. Three benefits, all free:
+
+- /Cleanest conditioning./ Identity $\Rightarrow F_p=I$, so the recurrent Jacobian is
+  $J_t=(I-K_t)+(\partial K_t)(m_t^b-z_{t-1})$ — a contraction toward $0$, with /no
+  learned dynamics map that could expand/.
+- /Zero-init handoff./ $b_K\ll0$, $b_\sigma=0\Rightarrow q\approx\mathcal N(z_{t-1},I)$
+  (the random-walk prior); KL$\,\approx0$ at the stage-1$\to$2 handoff.
+- /Unit-variance convention./ Fixing $\sigma_0=1$ pressures the latent's increments
+  to $\approx$ unit scale — what EDM's $\sigma_{\mathrm{data}}\approx1$ calibration
+  wants.
+
+*Why identity is the default* ([[*The baseline knob: identity vs a learned baseline]]). A learned
+baseline $\mu_p$ is mostly an /efficiency/ gain, not a capability one — the
+conditional diffusion (and, under strong evidence, $m_t^b$) already represent any
+drift. Identity is /free/ (parameter-free; strictly better than the /zero/ baseline
+$=$ model the increment) and avoids the Linear/MLP baseline's parameters,
+pretraining, pinned/learnable/anchor knobs, and the state-conditional
+$\boldsymbol\sigma_p$ machinery. Opt into a Linear (then MLP) baseline only when you
+/measure/ you need it. The previously-debated encoders are the endpoints:
+
+- *C* (current): /zero/ baseline, gate folded into a free combiner; recurrent
+  Jacobian unpinned ($\rho^{t-s}$ blow-up).
+- *A* $\approx$ /this/: /identity/ baseline — but the /blend/ form with z-free
+  evidence and a gate adds the $(I-K_t)$ damping and the clean init that bare A
+  lacked.
+- /Linear / MLP $\mu_p$/: opt-in upgrades, justified only by a predictable
+  structured drift ([[*The baseline knob: identity vs a learned baseline]]).
+
+* The object to amortize: the smoother conditional
+
+** Why a conditional, not a marginal
+
+The optimal variational posterior for our Markov SSM factorizes as
+\[
+q_\phi(z_{1:T}\mid x) = q_\phi(z_1\mid x)\prod_{t=2}^T q_\phi(z_t\mid z_{t-1},x_{t:T}),
+\]
+(used throughout [[file:model-v2.org::*Model][model-v2]], made exact in the ELBO by the marginalization lemma in
+[[file:model-v2.org::*ELBO modifications][ELBO modifications]]). The encoder models the /conditional kernel/ of the posterior
+Markov chain — /not/ the smoother marginal $p(z_t\mid x_{1:T})$. The conditioning
+set is $x_{t:T}$: by the Markov structure, given $z_{t-1}$ the past $x_{1:t-1}$ is
+d-separated from $z_t$, so $p(z_t\mid z_{t-1},x_{1:T})=p(z_t\mid z_{t-1},x_{t:T})$;
+the realized $z_{t-1}$ is the sufficient statistic for the entire past.
+
+This distinction will matter twice below: the marginal smoother (RTS) is /not/
+the right object to copy, and conditioning on $z_{t-1}$ is precisely what makes a
+Gaussian encoder defensible ([[*Temporal conditioning tightens the target]]).
+
+** The general factorization (exact, any noise)
+
+By Bayes, using $x_{t:T}\perp z_{t-1}\mid z_t$ (future observations are downstream
+of $z_t$):
+\[
+p(z_t\mid z_{t-1},x_{t:T})
+\;\propto\; p(z_t\mid z_{t-1})\;p(x_{t:T}\mid z_t)
+\;=\; \underbrace{p(z_t\mid z_{t-1})}_{\text{forward / transition}}\;\times\;
+\underbrace{\beta_t(z_t)}_{\text{backward message}},
+\]
+$\beta_t(z_t):=p(x_{t:T}\mid z_t)$. /No distributional assumption is made/: this is
+the Krishnan "two-channel fusion" (prediction $\otimes$ evidence) for an
+arbitrary transition and emission. It holds verbatim when $p(z_t\mid z_{t-1})$ is
+your diffusion transition.
+
+** Score-additive form (exact, any noise)
+
+Taking $\nabla_{z_t}\log$ of the factorization,
+\[
+\nabla\log p(z_t\mid z_{t-1},x_{t:T})
+= \nabla\log p(z_t\mid z_{t-1}) + \nabla\log\beta_t(z_t).
+\]
+Two reasons this is the right level to think at:
+
+1. /It is exact for any noise/ — the gain formula of the LG limit is just the
+   special case where both terms are /linear/ in $z_t$ (so "adding scores"
+   becomes "a gain on means"); see [[*The linear-Gaussian limit: the (extended) Kalman smoother]].
+2. /The transition score is already modeled/: it is the $\tau{\to}0$ limit of the
+   generative score net $s_\psi(\cdot,\tau,z_{t-1})$. The posterior thus equals
+   "diffusion score $+$ evidence score." (A /tempting/ deeper design — have the
+   encoder emit a learned evidence score added to $s_\psi$ — would make the
+   encoder marginal non-Gaussian and forfeit the closed-form ESM target $s_q$ of
+   [[file:model-v2.org::*Closed-form target score][model-v2]]; we therefore keep the encoder Gaussian and only /borrow/ this
+   structure as inductive bias.)
+
+** The backward message and the future-aware backbone
+
+$\beta_t$ obeys a backward recursion ($T\to 1$):
+\[
+\beta_t(z_t) = p(x_t\mid z_t)\int p(z_{t+1}\mid z_t)\,\beta_{t+1}(z_{t+1})\,dz_{t+1}.
+\]
+For /general/ noise this message is an arbitrary function of $z_t$ (not Gaussian).
+This recursion is /why the backbone $h_t$ must be future-aware/
+(bidirectional / backward-causal): $h_t$ is the amortized stand-in for $\beta_t$,
+the sufficient summary of $x_{t:T}$. In the LG limit $\beta_t$ collapses to a
+Gaussian information pair $(\nu_t,\Omega_t)$; in general $h_t$ carries whatever
+finite summary the architecture affords, and the evidence head reads it.
+
+* Why a Gaussian encoder when nothing else is Gaussian
+
+The SSM is non-Gaussian, yet we output $q_\phi=\mathcal N(\mu_t,\boldsymbol\sigma_t^2)$.
+This is justified as an approximation, plus required by our machinery.
+
+** Laplace / concentration view
+
+Write the true conditional as $p(z_t\mid z_{t-1},x_{t:T})\propto e^{\ell(z_t)}$,
+\[
+\ell(z_t) = \log p(z_t\mid z_{t-1}) + \log\beta_t(z_t).
+\]
+A second-order expansion of $\ell$ about its mode $z_t^\star$ gives the Laplace
+approximation $\mathcal N\bigl(z_t^\star,\,[-\nabla^2\ell(z_t^\star)]^{-1}\bigr)$;
+the Gaussian encoder amortizes (a variational version of) this pair. The error is
+controlled by the third- and higher-order derivatives of $\ell$ relative to its
+curvature — /small whenever the conditional is concentrated and unimodal/. The
+EKS is exactly this approximation with the two factors linearized (linearization
+makes them Gaussian, hence $\ell$ quadratic, hence Laplace exact). So "Gaussian
+encoder" and "EKS" are the same modeling assumption at different fidelity, not
+two separate leaps.
+
+(VI with $\mathrm{KL}[q\Vert p]$, which the ELBO uses, is mode-seeking rather than
+curvature-matching, so the learned $\boldsymbol\sigma_t$ may be modestly
+under-dispersed relative to Laplace; the justification — concentration plus
+unimodality — is the same.)
+
+** Temporal conditioning tightens the target
+
+Conditioning on the realized $z_{t-1}$ is what buys the concentration. By the law
+of total variance,
+\[
+\mathbb E_{z_{t-1}}\!\bigl[\mathrm{Var}[z_t\mid z_{t-1},x_{1:T}]\bigr]
+= \mathrm{Var}[z_t\mid x_{1:T}] - \mathrm{Var}_{z_{t-1}}\!\bigl(\mathbb E[z_t\mid z_{t-1},x_{1:T}]\bigr)
+\;\le\; \mathrm{Var}[z_t\mid x_{1:T}],
+\]
+so the conditional is /tighter on average than the smoothing marginal/
+$p(z_t\mid x_{1:T})$, by exactly the spread of the conditional mean. The
+transition $p(z_t\mid z_{t-1})$ is itself usually concentrated (process noise
+$\ll$ marginal spread). A tighter, more concentrated target is better
+approximated by a Gaussian — so the /structured temporal/ posterior is a
+/friendlier/ setting for a Gaussian than a static VAE's marginal posterior. This
+is the answer to the model-v2 question of whether $q$-Gaussian is better
+justified in the temporal context ([[file:model-v2.org::*ESM Formulation][ESM Formulation]] TODO): yes, because each
+factor need only be locally Gaussian around a $z_{t-1}$-pinned mode.
+
+** Failure mode: multimodal transitions
+
+The honest caveat: a diffusion transition /can/ be genuinely multimodal
+(bifurcations, mixed regimes), and a non-injective emission can make $\beta_t$
+multimodal in $z_t$. Then the product is multimodal, a Gaussian $q$ cannot
+represent it, and the ELBO gap is real and irreducible by training. For
+deterministic-/chaotic/ dynamics with small stochastic forcing — our target
+regime — the transition is sharply unimodal around $f(z_{t-1})$ and the Gaussian
+encoder is sound. Diagnose with posterior-predictive checks / multimodality of
+residuals if in doubt.
+
+** It is also required by the ESM machinery
+
+Independently of approximation quality, the closed-form ESM target score $s_q$
+([[file:model-v2.org::*Closed-form target score][Closed-form target score]]) exists /because/ $q$ is Gaussian (a Gaussian convolved
+with the linear diffusion kernel stays Gaussian). A non-Gaussian encoder would
+force denoising-score-matching (LSGM-style) and reintroduce the variance we are
+trying to remove. So Gaussian-$q$ is both an approximation we argue is good and
+the price of the closed-form target.
+
+* The linear-Gaussian limit: the (extended) Kalman smoother
+
+This section is the /special case/ that motivates the gain parameterization — and
+answers "what is the form of an EKS?" — but is *not* the model. Linear-Gaussian
+(or linearized) SSM:
+\[
+z_t = f(z_{t-1}) + w_t,\quad w_t\sim\mathcal N(0,Q),\qquad
+x_t = e(z_t) + v_t,\quad v_t\sim\mathcal N(0,R),
+\]
+with Jacobians $F_t=\partial f/\partial z|_{z_{t-1}}$, $H_t=\partial e/\partial z$.
+Marks: $\;^-$ prediction, no mark filter, $\;^s$ smoother.
+
+** EKF / EKS reference (the marginal)
+
+/EKF predict:/ $m_t^- = f(m_{t-1})$, $P_t^- = F_t P_{t-1}F_t^\top + Q$. /Update:/
+$y_t = x_t - e(m_t^-)$, $S_t = H_t P_t^- H_t^\top + R$,
+$K_t^{\mathrm{ekf}} = P_t^- H_t^\top S_t^{-1}$, $m_t = m_t^- + K_t^{\mathrm{ekf}}y_t$,
+$P_t = (I-K_t^{\mathrm{ekf}}H_t)P_t^-$.
+
+/RTS smoother/ ($t=T-1,\dots,1$): $G_t = P_t F_{t+1}^\top(P_{t+1}^-)^{-1}$,
+$m_t^s = m_t + G_t(m_{t+1}^s - m_{t+1}^-)$,
+$P_t^s = P_t + G_t(P_{t+1}^s - P_{t+1}^-)G_t^\top$. This is the marginal
+$p(z_t\mid x_{1:T})$ — /not/ the encoder's object ([[*Why a conditional, not a marginal]]).
+
+** The conditional in the LG limit (the gain form)
+
+Specialize the general factorization with /both/ factors Gaussian:
+$p(z_t\mid z_{t-1})=\mathcal N(f(z_{t-1}),Q)$ and $\beta_t=\mathcal N(m_t^b,P_t^b)$.
+The product is Gaussian (verified equal to the information-form combination
+numerically), with the /gain form/
+\[
+K_t = Q(Q+P_t^b)^{-1},\qquad
+\mu_t = f(z_{t-1}) + K_t\bigl(m_t^b - f(z_{t-1})\bigr),\qquad
+\Sigma_t = (I-K_t)Q,
+\]
+equivalently $\Sigma_t^{-1}=Q^{-1}+\Omega_t$, $\mu_t=\Sigma_t(Q^{-1}f(z_{t-1})+\nu_t)$.
+The gain $K_t\in[0,I]$ interpolates prediction ($K_t{=}0$, no evidence) and
+evidence ($K_t{=}I$). /This is the score-additive identity made concrete/: linear
+scores $\Rightarrow$ precisions add $\Rightarrow$ a gain on means. In the diagonal
+case this gain is a /logistic gate of log-precisions/,
+\[
+K_{t,d}=\frac{\sigma_{p,d}^2}{\sigma_{p,d}^2+P_{t,d}^b}
+=\mathrm{sigmoid}\!\bigl(\log\sigma_{p,d}^2-\log P_{t,d}^b\bigr),
+\]
+i.e. a /logistic gate of log-precisions/ — the shape a /learned-baseline/ encoder's
+gate generalizes (with $\log\sigma_p^2$ as a feature). Under the /identity/ default
+($\sigma_0{=}1$, $\log\sigma_p^2{=}0$) this feature drops out and the gate degenerates
+to $\mathrm{sigmoid}(W_K U+b_K)$ ([[*The encoder (identity-framed blend)]]).
+
+Note the prediction $f(z_{t-1})$ is /exact/ even here (we condition on the
+realized $z_{t-1}$, so there is no linearization of $f$ around an uncertain
+previous state). The "extended" approximation enters /only/ through forcing
+$\beta_t$ Gaussian.
+
+** What the limit does and doesn't tell us
+
+- /Does:/ it supplies the /shape/ of a good Gaussian parameterization — center on
+  the prediction, correct by a gated evidence term — and the limiting values
+  ($K_t{=}0\Rightarrow q{=}$prior).
+- /Doesn't:/ the closed forms $K_t=Q(Q+P^b)^{-1}$, $\Sigma_t=(I-K_t)Q$, and the
+  exact Jacobian $J_t=(I-K_t)F_t$ are LG-only. In your non-Gaussian model the
+  true conditional has none of these in closed form. So we do /not/ freeze the gate
+  to the Gaussian formula — we /learn/ it and earn the conditioning benefits by
+  /construction/ (next section).
+
+* The encoder (identity-framed blend)
+
+** Architecture
+
+Identity baseline ($\mu_p=z_{t-1}$) and fixed posterior-std scale $\sigma_0=1$, so
+/no prior heads are needed/. The *evidence backbone reads $h_t$ only* (coordinate
+query) and produces a /z-free/ evidence mean $m_t^b$; a /state-conditioned/ feature
+$U$ (which sees $z_{t-1}$ and the evidence) drives the gate and std:
+\begin{align}
+m_t^b &= \text{z-free evidence mean (from } E;\ \text{see [[*What to build]])}, \\
+K_t &= \mathrm{sigmoid}(W_K U + b_K)\ \in(0,1)^D, \\
+\mu_t &= z_{t-1} + K_t\odot(m_t^b - z_{t-1}) \;=\; (1-K_t)\odot z_{t-1} + K_t\odot m_t^b, \\
+\log\boldsymbol\sigma_t &= W_\sigma U + b_\sigma,
+\end{align}
+\[
+z_t = \mu_t + \boldsymbol\sigma_t\odot\eta_t,\quad \eta_t\sim\mathcal N(0,I),
+\]
+with $b_K\ll0$ (gate closed) and $b_\sigma=0$ ($\sigma_0=1$) at init, so
+$q\approx\mathcal N(z_{t-1},I)$ — the random-walk prior — at the handoff.
+
+This is the blend ([[*Blend vs scale (decided: blend)]]) specialized to $\mu_p=z_{t-1}$,
+$\boldsymbol\sigma_p=1$. The general gain form's prior-confidence feature
+$\alpha\odot\log\boldsymbol\sigma_p^2$ and variance frame $\tfrac12\ell_p$ both
+/vanish/ here ($\ell_p=\log1=0$) — that is why the gate reduces to
+$\mathrm{sigmoid}(W_K U+b_K)$ and the std to $W_\sigma U+b_\sigma$. The gate still
+sees $z_{t-1}$, through $U$; only the evidence /estimate/ $m_t^b$ must be z-free
+(next).
+
+** Properties (all hold for arbitrary noise — they are construction facts)
+
+*Cleanest recurrent Jacobian.* With $\mu_p=z_{t-1}$ ($F_p=I$) and $m_t^b$ z-free,
+\[
+J_t = \frac{\partial\mu_t}{\partial z_{t-1}}
+= \underbrace{(I-K_t)}_{\text{contraction}}
+\;+\; \underbrace{(\partial K_t/\partial z_{t-1})\odot(m_t^b-z_{t-1})}_{\text{gain-sensitivity, controlled}}.
+\]
+The dominant term is a per-dim contraction ($K_t\in(0,1)^D\Rightarrow\|I-K_t\|\le1$),
+vanishing where the future is informative ($K_t\to1$). There is /no learned $F_p$
+to expand/ — the conditioning worry that motivated $\mu_p$ for chaotic latents is
+gone. The second term ($\partial K_t/\partial z$ via $U$'s state-dependence) is
+bounded and $\approx0$ at init. (Why z-free $m_t^b$: a z-dependent evidence
+read-out would add $K_t\,\partial m_t^b/\partial z$ and lose the damping —
+[[*Blend vs scale (decided: blend)]].)
+
+*Zero-init handoff.* $b_K\ll0,\,b_\sigma=0\Rightarrow\mu_t\approx z_{t-1}$,
+$\boldsymbol\sigma_t=1$, i.e. $q\approx\mathcal N(z_{t-1},I)$ — the stage-1
+random-walk prior — so the transition KL starts $\approx0$ (the $O(K_t)$ offset is
+negligible).
+
+*Interpretability.* $K_t$ reads as "trust the future evidence vs. persist," per
+dimension.
+
+** Sampling algorithm (encoder draw $z\sim q_\phi(\cdot\mid x)$)
+
+#+begin_src text
+h_{1:T} = Backbone(x_{1:T})                       # parallel, future-aware (amortized β_t)
+η_1 ~ N(0,I); (μ_1,σ_1) from h_1;  z_1 = μ_1 + σ_1 ⊙ η_1
+for t = 2 .. T:                                   # SEQUENTIAL (μ_t needs realized z_{t-1})
+    m_b      = EvidenceMean(E)                    # z-free (coordinate-queried backbone)
+    U        = StateHead(z_{t-1}, h_t)            # state-conditioned feature
+    K_t      = sigmoid(W_K U + b_K)               # gate ∈ (0,1)^D; b_K ≪ 0 init
+    μ_t      = z_{t-1} + K_t ⊙ (m_b − z_{t-1})    # identity frame + gated innovation
+    log σ_t  = W_σ U + b_σ                        # b_σ = 0 → σ_t = 1 at init
+    η_t ~ N(0,I);  z_t = μ_t + σ_t ⊙ η_t
+return z_{1:T}
+#+end_src
+
+Latency $\Theta(T)$ sequential — identical to A/C.
+
+* The baseline knob: identity vs a learned baseline
+
+The mean frame $\mu_t=\mu_p(z_{t-1})+(\text{gated evidence})$ leaves $\mu_p$ a free
+choice — the model-v2 /Baseline-form/ knob ([[file:model-v2.org::*Baseline-form variants][Baseline-form variants]]): Zero, Identity,
+Linear, MLP. We default to *Identity*; the rest are opt-in. (All forms span the
+/same reachable Gaussian family/ — with $m_t^b$ free the blend reaches any mean —
+so this is about conditioning, init, and inductive bias, not expressiveness.)
+
+** Why identity, not a learned $\mu_p$
+
+It is /not/ about representability: the conditional diffusion
+$p_\psi(z_t\mid z_{t-1})$ learns any drift (the $\mu_p$-degeneracy: shift $\mu_p$ by
+$\Delta$ and the diffusion residual by $-\Delta$ — same model), and under strong
+evidence the z-free $m_t^b$ carries it too. A learned $\mu_p$ buys /efficiency/
+(smaller residual, $\sigma_{\mathrm{data}}$ at the noise rather than the signal
+scale, better init) and /weak-evidence robustness/ (where $K_t\to0$, $\mu_t\to\mu_p$,
+so a good prediction matters) — not capability.
+
+Against that, identity is:
+- /Free over Zero./ $\mu_p=z_{t-1}$ has no parameters and strictly beats Zero
+  (modeling the increment $z_t-z_{t-1}$ beats modeling $z_t$ from scratch for any
+  persistent latent), with the cleanest conditioning $J_t=(I-K_t)$
+  ([[*The encoder (identity-framed blend)]]).
+- /Free of bookkeeping./ It deletes the $\mu_p$ MLP and its stage-1 pretraining,
+  the pinned/learnable/anchor knobs ($\lambda_{\mu_p}$, the anchor regularizer), the
+  shared-vs-own-copy choice, and the state-conditional $\boldsymbol\sigma_p$ head
+  with its log-variance regularizer ($\lambda_{\sigma_p}$) — each a hyperparameter
+  and a failure surface. (It also makes model-v2's "$\boldsymbol\sigma_p$ discarded
+  after handoff" /true again/: with $\sigma_0=1$ fixed there is no
+  $\boldsymbol\sigma_p$ head in stage 2.)
+
+So a learned $\mu_p$ trades a pile of error-prone machinery for a regime-dependent
+efficiency gain. Start at identity; earn $\mu_p$.
+
+** When to upgrade (and to what)
+
+Add a baseline only when you /see the symptom/: $\sigma_{\mathrm{data}}$ sitting at
+signal scale, poor samples on clean-drift data, or weak-evidence/forecasting tasks
+where the prediction must carry the step. Diagnose by the spectral norm $\|F_p\|$ of
+the learned drift and the increment statistics $\mathbb E\|z_t-z_{t-1}\|$ vs
+$\mathbb E\|z_t\|$ (small structured increment $\to$ identity; large structured
+increment $\to$ baseline).
+
+When you do, reach for *Linear* ($Az_{t-1}+b$) before *MLP*: it captures the cases
+that actually need a baseline — rotation (oscillation), advection/propagation — with
+a single matrix and none of the MLP's pretraining fragility. MLP only if Linear
+demonstrably leaves structure on the table. (The value of an /expressive/ $\mu_p$
+also /shrinks with multimodality/: a point can only capture the mean, which for a
+multimodal conditional is a low-density valley.)
+
+*Per-dataset prior* (predicted /Baseline-form/ ablation outcomes):
+- *EEG* — oscillatory, a structured rotation far from identity $\Rightarrow$ Linear
+  (MLP only if nonlinear). The increment is large and /predictable/, so a baseline
+  absorbs it cheaply.
+- *Video, Traffic, Wildfire* — persistence-dominated, the unpredictable part
+  multimodal $\Rightarrow$ Identity (try Linear for traffic/wildfire propagation).
+  The increment is small or unpredictable, so a point $\mu_p$ is a poor summary; let
+  the diffusion $+$ evidence carry it.
+
+It is the /latent/ transition (not the observable) and $\Delta t$ that decide:
+coarse $\Delta t$ / compressed latents enlarge increments (toward a baseline), fine
+$\Delta t$ shrinks them (toward identity). Measure, don't assume.
+
+** Endpoints: A and C
+
+- *C* (current) $=$ /Zero/ baseline with a free combiner: $J_t$ unpinned,
+  $\|\prod_r J_r\|\sim\rho^{t-s}$ if $\rho>1$ — the original $\phi$-gradient blow-up.
+- *A* $=$ /Identity/ baseline. Bare A ($\mu_t=z_{t-1}+g_\phi$, free $g_\phi$) tames
+  $J_t\approx I$ but mis-centers under real drift; /our/ identity encoder is A in
+  /blend/ form (z-free $m_t^b$ $+$ gate), which adds the $(I-K_t)$ damping and the
+  $q\approx\mathcal N(z_{t-1},I)$ init.
+- The /Baseline-mode/ knob ([[file:model-v2.org::*Baseline-mode variants][Baseline-mode variants]]) — pinned vs. learnable-with-anchor,
+  shared vs. own-copy — only bites once $\mu_p$ has parameters; for Identity it is
+  degenerate (pinned). ($\psi$-gradients are benign throughout — the score net at
+  step $t$ sees only the realized pair $(z_{t-1},z_t)$.)
+
+* Why the gain form dominates
+
+** Gradient conditioning (a construction fact, not a Gaussian claim)
+
+Reparametrize ($\eta$ fixed); since $\mu_t$ reads the realized $z_{t-1}$,
+\[
+\frac{dz_t}{d\phi}=\sum_{s\le t}\Bigl(\prod_{r=s+1}^t J_r\Bigr)\frac{\partial z_s}{\partial\phi}\Big|_{\text{local}},
+\qquad J_r=(I-K_r) + (\partial K_r/\partial z_{r-1})\odot(m_r^b-z_{r-1})
+\]
+(identity baseline, $F_p=I$). The dominant term is the gate contracting toward $0$,
+so the through-time product stays controlled /whatever the SSM noise is/ (the
+gain-sensitivity term is small — [[*Properties (all hold for arbitrary noise — they are construction facts)][Properties]]). This is the real fix for C's
+blow-up; it does not rely on the conditional being Gaussian (only on how we wrote
+$\mu_t$).
+
+** Initialization and inductive bias
+
+Gate-closed init $\Rightarrow q\approx\mathcal N(z_{t-1},I)$ (KL $\approx0$),
+recurrence at $J_t=I$ — the best-conditioned start. The inductive bias is "/persist
+(stay at $z_{t-1}$), then correct by evidence/" — the random-walk frame made
+well-conditioned by the gate, without C's unanchored freedom. Variance is free with
+$\sigma_0=1$ ([[*Variance: free vs coupled]]); the gate drives only the mean, where the
+conditioning benefit lives.
+
+** Relation to the true (non-Gaussian) conditional
+
+The encoder targets the /general/ conditional $\propto p(z_t\mid z_{t-1})\beta_t$,
+of which the gain form is the LG-limit exact case and, away from it, a
+well-conditioned Gaussian /inductive bias/. It inherits the right qualitative
+structure (prediction $+$ gated evidence, evidence-vanishing at init) without
+pretending the closed-form gain is the truth.
+
+* Design knobs and open questions
+
+** Blend vs scale (decided: blend)
+
+The mean correction has two algebraically identical writings ($\delta_t=m_t^b-z_{t-1}$):
+/scale/ $\mu_t=z_{t-1}+K_t\odot\delta_t$ and /blend/ $\mu_t=(1-K_t)z_{t-1}+K_t\odot m_t^b$.
+Under the identity baseline ($F_p=I$) they diverge once the evidence read-out is
+constrained:
+- *Blend, $m_t^b$ z-free* (coordinate-queried, never $z$): the innovation's
+  $-K_t z_{t-1}$ damps the recurrence,
+  \(J_t=(I-K_t)+(\partial K_t/\partial z_{t-1})(m_t^b-z_{t-1})\) — a contraction
+  /below/ $I$; where the future is informative ($K_t\to1$), $z_{t-1}$-sensitivity
+  $\to0$ (the smoother property).
+- *Scale, $\delta_t$ z-dependent*: \(J_t=I+\partial(K_t\odot\delta_t)/\partial z_{t-1}\)
+  — pinned at $\approx I$, and the free correction can push it /above/ $I$; evidence
+  cannot shut the recurrence off.
+(At $K_t\to1$: $\|J_{\mathrm{blend}}\|\to0$ vs $\|J_{\mathrm{scale}}\|\gtrsim1$.)
+
+*Decision: blend with z-free $m_t^b$.* It lets informative evidence contract the
+recurrence below the identity ($J_t\to0$ as $K_t\to1$) — valuable whenever the
+future disambiguates the state, and a safety margin even if the latent dynamics turn
+out expansive; scale can only hold at $\approx I$ or worse. Only the evidence
+/estimate/ $m_t^b$ is z-free; the gate $K_t$ still sees $z_{t-1}$ (via $U$). Cost: a
+separate coordinate-queried evidence trunk ($E$ in [[*What to build]]). /When scale is
+fine:/ if the evidence is weak everywhere ($K_t\approx0$, both $\approx I$), the
+single state-conditioned feature suffices and is cheaper.
+
+** Diagonal vs full gain
+
+The gate is diagonal (a per-dim sigmoid, $K_t=\mathrm{sigmoid}(W_K U+b_K)$), so
+$K_t\in(0,1)^D$ automatically. Three reasons not to go full:
+1. /Closed-form pipeline./ A full gate (full $\Sigma=(I-K_t)Q$ under coupling)
+   breaks the per-dim ESM/EDM closed forms ([[file:model-v2.org::*Closed-form target score][Closed-form target score]]): the target score
+   would need a matrix inverse and the EDM constants are per-dim. The diagonal
+   posterior is the load-bearing commitment; the diagonal gate is its consistent
+   expression.
+2. /Redundant for the mean./ $m_t^b$ already mixes dimensions (a free head on
+   $h_t$), so a full gate buys no reachable-mean expressiveness — cross-dim
+   structure lives in $m_t^b$, the gate only sets per-dim trust.
+3. /Validity./ A diagonal sigmoid gate is automatically a contraction
+   $0\prec K_t\prec I$; a naively-parameterized full gate (elementwise sigmoid on a
+   matrix) need not be — e.g. $K=\bigl(\begin{smallmatrix}0&.9\\.9&0\end{smallmatrix}\bigr)$
+   has $\|I-K\|=1.9>1$, so the damping is lost; enforcing $0\preceq K\preceq I$ for
+   a full matrix needs an expensive eigen/Cholesky parameterization.
+/Honest caveat:/ the exact LG gain $Q(Q+P^b)^{-1}$ is full (the backward message
+couples dims through the dynamics), so diagonal $K_t$ /is/ an approximation — but
+exactly the mean-field one already made by the diagonal posterior. /Open:/
+low-rank-plus-diagonal $P_t^b$ (hence $K_t$) if cross-dim smoothing matters,
+paired with free variance.
+
+** Variance: free vs coupled
+
+With the identity baseline we use /free/ variance
+$\log\boldsymbol\sigma_t=W_\sigma U+b_\sigma$, $b_\sigma=0$ so $\sigma_0=1$ at init —
+no Gaussian variance law imposed; the data sets the per-state / per-$t$ spread
+through $W_\sigma U$. The /coupled/ law
+$\boldsymbol\sigma_t^2=(1-K_t)\boldsymbol\sigma_p^2$ (precision addition) needs a
+$\boldsymbol\sigma_p$ head, i.e. it is only available if you opt into a Linear/MLP
+baseline ([[*The baseline knob: identity vs a learned baseline]]); even then it is an ablation, since
+the gated /mean/ blend is robust off the LG limit but the variance /law/ $(1-K_t)$
+is Gaussian-specific.
+
+** Should the gain see the previous latent?
+
+Yes — through $U$. The evidence /estimate/ $m_t^b$ is z-free (d-separation: $\beta_t$
+does not depend on $z_{t-1}$), which is what gives the damping. The /gate/
+$K_t=\mathrm{sigmoid}(W_K U+b_K)$ reads the state-conditioned feature $U$ (evidence
+$+$ lifted $z_{t-1}$), so it /does/ see $z_{t-1}$ — it sets /how much/ evidence to
+trust and /where to look/. (Under the identity baseline with $\sigma_0=1$ the
+general gain form's prior-log-variance feature $\alpha\odot\ell_p$ is $0$ and drops
+out; the gate's $z$-dependence is entirely through $U$.) This enters only the
+controlled $\partial K_t$ Jacobian term, never the dominant $(I-K_t)$
+([[*Properties (all hold for arbitrary noise — they are construction facts)][Properties]]).
+
+** Relation to model-v2
+
+See [[*The baseline knob: identity vs a learned baseline]] for the mapping to model-v2's
+/Baseline-form/ ([[file:model-v2.org::*Baseline-form variants][Baseline-form variants]]) and /Baseline-mode/ ([[file:model-v2.org::*Baseline-mode variants][Baseline-mode variants]])
+knobs — both degenerate (parameter-free, pinned) under the identity default, and
+live only if you opt into a Linear/MLP baseline.
+
+* Side-by-side comparison
+
+|-------------------------------+-----------------------------+-----------------------------+------------------------------|
+| Property                      | *C* (current)               | *A* (bare)                  | *Identity blend* (this doc)  |
+|-------------------------------+-----------------------------+-----------------------------+------------------------------|
+| family / expressiveness       | Markov Gaussian             | same (reparam)              | same (reparam)               |
+| sampling / throughput         | sequential $\Theta(T)$      | sequential $\Theta(T)$      | sequential $\Theta(T)$       |
+| ELBO / ESM target             | clean KL / closed form      | identical                   | identical                    |
+| prediction baseline           | $0$ (free)                  | $z_{t-1}$                   | $z_{t-1}$ (identity)         |
+| recurrent $J_t$               | unpinned ($\rho^{t-s}$)     | $\approx I$ (free $g_\phi$) | $(I-K_t)$ (contraction)      |
+| $\phi$-gradient variance      | high (the problem)          | tamed, but mis-centers      | tamed; evidence-contractible |
+| $\psi$-gradient               | benign                      | benign                      | benign                       |
+| init                          | data-informed, far from prior | random walk               | $q\approx\mathcal N(z_{t-1},I)$, KL $\approx0$ |
+| variance                      | free                        | free                        | free, $\sigma_0{=}1$         |
+| structure vs true conditional | unanchored                  | re-biased frame             | identity frame $+$ z-free gated evidence |
+| interpretable gain            | no                          | no                          | yes ($K_t$ = trust vs persist) |
+| extra params / hyperparams    | combiner                    | $g_\phi$                    | none beyond the backbone     |
+|-------------------------------+-----------------------------+-----------------------------+------------------------------|
+
+* What to build
+
+A concrete grid-free realization (transformer evidence-gathering, per-site
+read-outs): the *identity-framed blend* with a *z-free evidence estimate* and fixed
+$\sigma_0=1$. Latents live on $N$ sites with coordinates $P$; observations are
+summarized by $h_t$ at coordinates $Q$. /No prior heads/ — $\mu_p=z_{t-1}$,
+$\sigma_0=1$.
+
+#+begin_src text
+# 1. z-FREE evidence trunk E -> m^b   (NO state in the query => ∂m^b/∂z = 0 => damping)
+E = γ(P)                                      # [N,C]  query = coordinates only
+for l = 1..L_e:
+    E += MHCrossAttn(query=E, key/value = h_t + γ(Q))   # z-free evidence gather [N,C]
+    E += Mix(E)                                         # spatial mixing
+    # pre-LayerNorm each sub-block
+m_b = W_m E + b_m                            # evidence mean m^b   (z-FREE)
+
+# 2. STATE-CONDITIONED head -> gate, std   (query sees z; full attention power)
+U = E + MLP_lift(z_{t-1})                     # seed query with state
+for l = 1..L_u:
+    U += MHCrossAttn(query=U, key/value = h_t + γ(Q))   # state-conditioned evidence gather
+    U += Mix(U)
+K_t = sigmoid(W_K U + b_K)                    # gate ∈ (0,1)^D; b_K ≪ 0 init (gate closed)
+s_t = W_σ U + b_σ                            # log-std; b_σ = 0 init  (σ_0 = 1)
+
+# 3. IDENTITY-framed blend, then sample
+μ_t   = z_{t-1} + K_t ⊙ (m_b − z_{t-1})       # = (1−K_t)⊙z_{t-1} + K_t⊙m_b;  ≈ z_{t-1} at init
+σ_t   = exp(s_t)                              # = 1 at init
+z_t   = μ_t + σ_t ⊙ η_t
+#+end_src
+
+Key points:
+- /Identity frame, $\sigma_0=1$./ $\mu_t$ centers on $z_{t-1}$; $\sigma_t$ starts at
+  $1$. Gate closed at init ($b_K\ll0$) $\Rightarrow q\approx\mathcal N(z_{t-1},I)$ —
+  the random-walk prior — so KL$\,\approx0$ at handoff. No $\mu_p$ /
+  $\boldsymbol\sigma_p$ heads, and no prior-variance gate feature (it is $0$).
+- /z-free $m_t^b$ $\Rightarrow$ damping./ $m_t^b$ reads the coordinate-queried trunk
+  $E$ (never $z$), so $\partial m_t^b/\partial z=0$ and
+  $J_t=(I-K_t)+(\partial K_t/\partial z_{t-1})(m_t^b-z_{t-1})$ — a contraction below
+  $I$, $\to0$ where the future is informative ([[*Blend vs scale (decided: blend)]]).
+- /Gate/std keep full state-conditioned attention./ $K_t,s_t$ read $U$ — a full
+  $L_u$-block $\mathrm{MHCrossAttn}(\mathrm{query}{=}U)$ stack built on $E$ — so the
+  state controls /how much/ to trust evidence /and where to look/; only $m_t^b$'s
+  trunk is z-free. The two query streams share the keys/values $h_t+\gamma(Q)$.
+- /Free variance./ $s_t=W_\sigma U+b_\sigma$ — unconstrained, $\sigma_0=1$ at init
+  ([[*Variance: free vs coupled]]).
+- /Downstream unchanged./ ELBO, the closed-form ESM target $s_q$, and EDM
+  preconditioning all consume $(\mu_t,\boldsymbol\sigma_t)$ as before.
+  $\sigma_{\mathrm{data}}$ (the increment spread, for EDM) is tracked/fixed
+  separately and is /not/ $\sigma_0$.
+- /Opt-in baseline./ To add a Linear/MLP $\mu_p$ (e.g. EEG), replace the identity
+  frame $z_{t-1}$ with $\mu_p(z_{t-1})$ and reinstate the prior-log-variance gate
+  feature $\alpha\odot\ell_p$; see [[*The baseline knob: identity vs a learned baseline]].
+
+** Mix: default site self-attention
+
+$\mathrm{Mix}:(\mathbb R^{N\times C},P)\to\mathbb R^{N\times C}$ couples the $N$ latent
+sites among themselves — the cross-attention only links sites to /observations/,
+whereas $\mathrm{Mix}$ links sites to /each other/ (it is the latent-field operator).
+The default is a pre-LN transformer block over sites, made coordinate-aware through
+$\gamma(P)$:
+\[
+\mathrm{Mix}(U) = U + \mathrm{MHSelfAttn}\!\bigl(q{=}\mathrm{LN}(U)+\gamma(P),\ k{=}\mathrm{LN}(U)+\gamma(P),\ v{=}\mathrm{LN}(U)\bigr),
+\]
+followed by a feed-forward residual $U\leftarrow U+\mathrm{FFN}(\mathrm{LN}(U))$. It is
+permutation-equivariant, coordinate-aware (positions enter only via $\gamma(P)$), and
+handles variable $N$ — the /same/ block works on any point set (grid, mesh, graph
+nodes, channels). Cost $O(N^2C)$ per block; for large $N$ swap a sub-quadratic
+$\mathrm{Mix}$ (windowed/axial attention, a Perceiver $N\!\to\!M\!\to\!N$ bottleneck,
+or k-NN graph attention) behind the same interface. In the z-free trunk $E$,
+$\mathrm{Mix}$ reads only $(E,P)$ — no state — so $m_t^b$ stays z-free.
+
+* Resolution: shared-baseline centering (legacy anchor)
+:PROPERTIES:
+:CUSTOM_ID: resolution-shared-baseline-centering
+:END:
+
+(Retained as the cross-reference target from [[file:model-v2.org::*Baseline Centering][model-v2 Baseline Centering]].) The
+shared-baseline recommendation — framing the encoder mean on a /learned/ $\mu_p$
+shared with the prior — is now the *opt-in upgrade*, not the default
+([[*The baseline knob: identity vs a learned baseline]]). The default frames on the /identity/
+baseline $\mu_p=z_{t-1}$ (with $\sigma_0=1$): parameter-free, cleanest conditioning,
+and none of the $\mu_p$/$\boldsymbol\sigma_p$ bookkeeping. A learned $\mu_p$ (Linear,
+then MLP) is justified only by a predictable structured drift; when used, the
+shared-$\mu_p$ argument (the KL collapses to the innovation; $\mu_p$ cancels; init KL
+zero) is the [[*Properties (all hold for arbitrary noise — they are construction facts)][Properties]] argument with $\mu_p$ in place of $z_{t-1}$.

@@ -842,6 +842,21 @@ any of the four; substitute the chosen form into \(μ_p\) and proceed.
    is the variant the development is written around; we use \(μ_p\) for it
    generically.
 
+   /Implementation caveat (residual, small-init)./ Parameterize the MLP head
+   *residually*, \(μ_p(z_{t-1}) = z_{t-1} + \mathrm{MLP}(z_{t-1})\), with the
+   final layer initialized near zero, so \(μ_p \approx z_{t-1}\) (Identity /
+   random walk) at the start of stage 1 and the network /learns the nonlinear
+   drift as a correction/ — the Euler-integration view, and the analog of the
+   zero-init residual head \(g_φ\) on the encoder side
+   ([[file:encoder-options-A-C.org::#resolution-shared-baseline-centering][encoder gain-structured combiner]]).
+   A freely-initialized (non-residual) MLP can place \(μ_p\) far from the data
+   on the first step, throwing the centered target
+   \(\hat{z}_t = \tilde{z}_t - μ_p\) to a large, ill-scaled value and making
+   stage-1 pretraining fragile; the residual small-init form starts the centered
+   coordinate system at the data and is numerically safe. The same recipe
+   specializes the Linear form to \(A \approx I,\ b \approx 0\) (init at random
+   walk).
+
 Variants 1 and 2 are parameter-free, so the /Baseline-mode variants/ knob
 (pinned vs.\ learnable + prior) is degenerate for them — only "pinned"
 applies. Variants 3 and 4 admit both modes.
