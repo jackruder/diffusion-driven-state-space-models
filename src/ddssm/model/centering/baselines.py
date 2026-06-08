@@ -32,20 +32,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
-# Default clamp bounds for raw ``log σ_p²`` outputs from baseline heads.
-# Without these guards a single Linear layer can emit logvar≈±20, producing
-# var≈exp(±20) which NaNs the downstream KL / log-prob.  The clamp RANGE matches
-# the encoder's ``GaussianHead`` (-9, 6); note the parameterization differs —
-# these heads emit logvar as a raw Linear output, whereas ``GaussianHead`` uses
-# softplus + an ``init_logvar`` bias so it starts anchored near var≈1.  Here the
-# init variance is just whatever default Linear init produces (the R_σp
-# regularizer pulls it toward 0 during stage 1).
-_LOGVAR_MIN: float = -9.0
-_LOGVAR_MAX: float = 6.0
-
-
-def _clamp_logvar(logvar: torch.Tensor) -> torch.Tensor:
-    return logvar.clamp(min=_LOGVAR_MIN, max=_LOGVAR_MAX)
+from ddssm.nn.gaussians import LogvarHead
 
 
 class BaseBaseline(nn.Module, metaclass=abc.ABCMeta):
@@ -112,27 +99,38 @@ def _validate_z_hist(z_hist: torch.Tensor, latent_dim: int, j: int) -> None:
 
 
 class _StateConditionalSigmaHead(nn.Module):
-    """Small MLP head producing per-dim ``log σ_p²`` from ``z_hist``.
+    """Small MLP body + :class:`LogvarHead` producing per-dim ``log σ_p²``.
 
     Used by the parameter-free baseline forms (Zero, Identity) so that
     σ_p remains state-conditional per ``model-v2.org`` § State-conditional
-    prior variance.
+    prior variance.  Output starts at ``init_logvar`` (default 0 → σ_p² = I)
+    regardless of the input, matching ``GaussianHead``'s convention.
     """
 
     def __init__(
-        self, latent_dim: int, j: int, hidden_dim: int, n_layers: int
+        self,
+        latent_dim: int,
+        j: int,
+        hidden_dim: int,
+        n_layers: int,
+        init_logvar: float = 0.0,
     ) -> None:
         super().__init__()
         in_dim = latent_dim * j
-        layers: list[nn.Module] = [nn.Linear(in_dim, hidden_dim), nn.SiLU()]
+        body: list[nn.Module] = [nn.Linear(in_dim, hidden_dim), nn.SiLU()]
         for _ in range(max(0, n_layers - 1)):
-            layers.extend([nn.Linear(hidden_dim, hidden_dim), nn.SiLU()])
-        layers.append(nn.Linear(hidden_dim, latent_dim))
-        self.body = nn.Sequential(*layers)
+            body.extend([nn.Linear(hidden_dim, hidden_dim), nn.SiLU()])
+        self.body = nn.Sequential(*body)
+        self.logvar_head = LogvarHead(
+            in_features=hidden_dim,
+            out_features=latent_dim,
+            init_logvar=init_logvar,
+        )
 
     def forward(self, z_hist: torch.Tensor) -> torch.Tensor:
         B = z_hist.shape[0]
-        return _clamp_logvar(self.body(z_hist.reshape(B, -1)))
+        h = self.body(z_hist.reshape(B, -1))
+        return self.logvar_head(h)
 
 
 # ---------------------------------------------------------------------------
@@ -149,12 +147,13 @@ class ZeroBaseline(BaseBaseline):
         j: int,
         hidden_dim: int = 32,
         n_layers: int = 2,
+        init_logvar: float = 0.0,
     ) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.j = int(j)
         self.sigma_head = _StateConditionalSigmaHead(
-            self.latent_dim, self.j, hidden_dim, n_layers
+            self.latent_dim, self.j, hidden_dim, n_layers, init_logvar=init_logvar
         )
 
     def mean(self, z_hist: torch.Tensor) -> torch.Tensor:
@@ -187,12 +186,13 @@ class IdentityBaseline(BaseBaseline):
         j: int,
         hidden_dim: int = 32,
         n_layers: int = 2,
+        init_logvar: float = 0.0,
     ) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.j = int(j)
         self.sigma_head = _StateConditionalSigmaHead(
-            self.latent_dim, self.j, hidden_dim, n_layers
+            self.latent_dim, self.j, hidden_dim, n_layers, init_logvar=init_logvar
         )
 
     def mean(self, z_hist: torch.Tensor) -> torch.Tensor:
@@ -216,13 +216,26 @@ class LinearBaseline(BaseBaseline):
     linear projections (DKF "two-headed" convention).
     """
 
-    def __init__(self, latent_dim: int, j: int) -> None:
+    def __init__(
+        self, latent_dim: int, j: int, init_logvar: float = 0.0
+    ) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.j = int(j)
         in_dim = self.latent_dim * self.j
         self.mu_head = nn.Linear(in_dim, self.latent_dim)
-        self.logvar_head = nn.Linear(in_dim, self.latent_dim)
+        # Match GaussianHead.mu_head convention: xavier-uniform weight (small)
+        # + zero bias. At z_hist=0 ⇒ μ_p=0; under typical-scale z_hist μ_p is
+        # a small projection that the model can grow. Going further and
+        # zeroing the weight too lands the score-net likelihood in a config
+        # where dopri5 is pathologically slow on the integration tests.
+        nn.init.xavier_uniform_(self.mu_head.weight, gain=0.5)
+        nn.init.zeros_(self.mu_head.bias)
+        self.logvar_head = LogvarHead(
+            in_features=in_dim,
+            out_features=self.latent_dim,
+            init_logvar=init_logvar,
+        )
 
     def _flatten(self, z_hist: torch.Tensor) -> torch.Tensor:
         return z_hist.reshape(z_hist.shape[0], -1)
@@ -236,7 +249,7 @@ class LinearBaseline(BaseBaseline):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         flat = self._flatten(z_hist)
-        return self.mu_head(flat), _clamp_logvar(self.logvar_head(flat))
+        return self.mu_head(flat), self.logvar_head(flat)
 
 
 class MLPBaseline(BaseBaseline):
@@ -255,6 +268,7 @@ class MLPBaseline(BaseBaseline):
         j: int,
         hidden_dim: int = 64,
         n_layers: int = 2,
+        init_logvar: float = 0.0,
     ) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
@@ -269,7 +283,14 @@ class MLPBaseline(BaseBaseline):
         self.backbone = nn.Sequential(*body)
 
         self.mu_head = nn.Linear(self.hidden_dim, self.latent_dim)
-        self.logvar_head = nn.Linear(self.hidden_dim, self.latent_dim)
+        # Same convention as GaussianHead.mu_head — see LinearBaseline above.
+        nn.init.xavier_uniform_(self.mu_head.weight, gain=0.5)
+        nn.init.zeros_(self.mu_head.bias)
+        self.logvar_head = LogvarHead(
+            in_features=self.hidden_dim,
+            out_features=self.latent_dim,
+            init_logvar=init_logvar,
+        )
 
     def _hidden(self, z_hist: torch.Tensor) -> torch.Tensor:
         return self.backbone(z_hist.reshape(z_hist.shape[0], -1))
@@ -283,4 +304,4 @@ class MLPBaseline(BaseBaseline):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         h = self._hidden(z_hist)
-        return self.mu_head(h), _clamp_logvar(self.logvar_head(h))
+        return self.mu_head(h), self.logvar_head(h)

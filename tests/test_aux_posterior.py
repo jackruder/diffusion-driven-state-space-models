@@ -72,6 +72,19 @@ def test_aux_posterior_kl_grows_with_drift() -> None:
     assert kl2 > kl0
 
 
+@pytest.mark.parametrize("j", [1, 2, 3])
+def test_aux_posterior_init_logvar_is_zero(j: int) -> None:
+    """At init ``q_Φ``'s log-variance is anchored at 0 (σ² = I).
+
+    Guarantees ``KL[q_Φ || N(0, I)]`` reduces to ``0.5·E ‖μ‖²`` at the
+    start of training — the logvar contribution is exactly zero.
+    """
+    aux = AuxPosterior(latent_dim=D, j=j)
+    z_init = torch.randn(B, D, j)
+    _, aux_logvar = aux(z_init)
+    assert torch.allclose(aux_logvar, torch.zeros_like(aux_logvar), atol=1e-5)
+
+
 def test_aux_posterior_rejects_bad_shape() -> None:
     """Inputs with the wrong rank or shape are rejected."""
     aux = AuxPosterior(latent_dim=D, j=2)

@@ -33,21 +33,23 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
-# Clamp bounds for the raw ``logvar`` output of the q_Φ head. Matches the
-# encoder ``GaussianHead`` and ``centering.baselines`` convention; without
-# the guard a single Linear layer can emit logvar≈±20 and NaN the KL.
-_LOGVAR_MIN: float = -9.0
-_LOGVAR_MAX: float = 6.0
+from ddssm.nn.gaussians import LogvarHead
 
 
 class AuxPosterior(nn.Module):
     """Diagonal-Gaussian amortised posterior ``q_Φ(z_{-j+1:0} | z_{1:j})``.
+
+    Shared MLP body, separate ``mu_head`` (``nn.Linear``) and
+    :class:`LogvarHead` so the initial log-variance is anchored at
+    ``init_logvar`` (default 0 → σ² = I, matching the prior).
 
     Args:
         latent_dim: Latent dimension ``d`` of each auxiliary z.
         j: Latent history length / number of aux latents.
         hidden_dim: Hidden layer width of the small MLP body.
         n_layers: Number of hidden layers in the MLP body.
+        init_logvar: Initial log-variance the :class:`LogvarHead` is
+            anchored to (default 0 → KL against N(0, I) starts at 0).
     """
 
     def __init__(
@@ -56,6 +58,7 @@ class AuxPosterior(nn.Module):
         j: int,
         hidden_dim: int = 64,
         n_layers: int = 2,
+        init_logvar: float = 0.0,
     ) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
@@ -64,13 +67,19 @@ class AuxPosterior(nn.Module):
         self.n_layers = int(n_layers)
 
         in_dim = self.latent_dim * self.j
-        out_dim = 2 * self.latent_dim * self.j  # mu + logvar
+        out_dim = self.latent_dim * self.j
 
         layers: list[nn.Module] = [nn.Linear(in_dim, self.hidden_dim), nn.SiLU()]
         for _ in range(max(0, self.n_layers - 1)):
             layers.extend([nn.Linear(self.hidden_dim, self.hidden_dim), nn.SiLU()])
-        layers.append(nn.Linear(self.hidden_dim, out_dim))
         self.body = nn.Sequential(*layers)
+
+        self.mu_head = nn.Linear(self.hidden_dim, out_dim)
+        self.logvar_head = LogvarHead(
+            in_features=self.hidden_dim,
+            out_features=out_dim,
+            init_logvar=init_logvar,
+        )
 
     def forward(self, z_init: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute ``q_Φ(z_{-j+1:0} | z_{1:j})`` parameters.
@@ -92,10 +101,9 @@ class AuxPosterior(nn.Module):
                 f"{self.j}); got (B, {d}, {j})"
             )
 
-        h = self.body(z_init.reshape(B, d * j))  # (B, 2*d*j)
-        aux_mu, aux_logvar = h.chunk(2, dim=-1)
-        aux_mu = aux_mu.view(B, d, j)
-        aux_logvar = aux_logvar.view(B, d, j).clamp(min=_LOGVAR_MIN, max=_LOGVAR_MAX)
+        h = self.body(z_init.reshape(B, d * j))  # (B, hidden_dim)
+        aux_mu = self.mu_head(h).view(B, d, j)
+        aux_logvar = self.logvar_head(h).view(B, d, j)
         return aux_mu, aux_logvar
 
     def sample(

@@ -12,14 +12,12 @@ D = 3
 
 
 def test_r_sigma_p_zero_at_unit_variance() -> None:
-    """``R_σp`` is zero when ``log σ_p² ≡ 0`` (σ_p ≡ 1)."""
+    """``R_σp`` is zero when ``log σ_p² ≡ 0`` (σ_p ≡ 1).
+
+    A fresh baseline already satisfies this — every ``LogvarHead``
+    starts at ``init_logvar=0`` (var=I) by construction.
+    """
     baseline = IdentityBaseline(latent_dim=D, j=1)
-    # Manually zero the sigma_head's output by zeroing its final layer.
-    for layer in reversed(list(baseline.sigma_head.body)):
-        if isinstance(layer, torch.nn.Linear):
-            torch.nn.init.zeros_(layer.weight)
-            torch.nn.init.zeros_(layer.bias)
-            break
     z_hist = torch.randn(B, D, 1)
     val = r_sigma_p_loss(baseline, z_hist, lambda_sigma_p=1.0)
     assert torch.isclose(val, torch.tensor(0.0), atol=1e-6)
@@ -37,9 +35,10 @@ def test_r_sigma_p_grows_with_lambda() -> None:
     """``R_σp`` scales linearly with λ_σp."""
     torch.manual_seed(0)
     baseline = MLPBaseline(latent_dim=D, j=1, hidden_dim=8, n_layers=2)
-    # Force a non-trivial mean(log σ_p²) by editing the logvar head's bias.
+    # Force a non-trivial mean(log σ_p²) by inflating the LogvarHead's
+    # learnable bias (which directly shifts the global logvar).
     with torch.no_grad():
-        baseline.logvar_head.bias.fill_(1.0)
+        baseline.logvar_head.var_bias_raw.fill_(2.0)
     z_hist = torch.randn(B, D, 1)
     val_lo = r_sigma_p_loss(baseline, z_hist, lambda_sigma_p=1.0)
     val_hi = r_sigma_p_loss(baseline, z_hist, lambda_sigma_p=4.0)
