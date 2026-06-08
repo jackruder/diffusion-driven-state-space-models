@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from ddssm.model.centering.baselines import MLPBaseline, IdentityBaseline
+from ddssm.model.centering.baselines import MLPBaseline, PersistenceBaseline
 from ddssm.model.centering.regularizers import r_mu_p_loss, r_sigma_p_loss
 
 B = 4
@@ -17,7 +17,7 @@ def test_r_sigma_p_zero_at_unit_variance() -> None:
     A fresh baseline already satisfies this — every ``LogvarHead``
     starts at ``init_logvar=0`` (var=I) by construction.
     """
-    baseline = IdentityBaseline(latent_dim=D, j=1)
+    baseline = PersistenceBaseline(latent_dim=D, j=1)
     z_hist = torch.randn(B, D, 1)
     val = r_sigma_p_loss(baseline, z_hist, lambda_sigma_p=1.0)
     assert torch.isclose(val, torch.tensor(0.0), atol=1e-6)

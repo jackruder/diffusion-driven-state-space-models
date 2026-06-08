@@ -36,7 +36,7 @@ from ddssm.model.centering.baselines import (
     BaseBaseline,
     ZeroBaseline,
     LinearBaseline,
-    IdentityBaseline,
+    PersistenceBaseline,
 )
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import (
@@ -130,8 +130,8 @@ def _make_baseline(form: str) -> BaseBaseline:
     """Construct one of the four baseline forms by name."""
     if form == "zero":
         return ZeroBaseline(latent_dim=LATENT_DIM, j=J)
-    if form == "identity":
-        return IdentityBaseline(latent_dim=LATENT_DIM, j=J)
+    if form == "persistence":
+        return PersistenceBaseline(latent_dim=LATENT_DIM, j=J)
     if form == "linear":
         return LinearBaseline(latent_dim=LATENT_DIM, j=J)
     if form == "mlp":

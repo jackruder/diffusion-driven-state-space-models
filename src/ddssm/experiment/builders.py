@@ -70,7 +70,7 @@ from ddssm.model.centering.baselines import (
     MLPBaseline,
     ZeroBaseline,
     LinearBaseline,
-    IdentityBaseline,
+    PersistenceBaseline,
 )
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import (
@@ -322,8 +322,8 @@ ZeroBaselineB = builds(
     populate_full_signature=True,
     latent_dim=MISSING, j=MISSING,
 )
-IdentityBaselineB = builds(
-    IdentityBaseline,
+PersistenceBaselineB = builds(
+    PersistenceBaseline,
     populate_full_signature=True,
     latent_dim=MISSING, j=MISSING,
 )
@@ -445,7 +445,7 @@ __all__ = [
     "Encoder", "Decoder",
     "GaussTransition",
     # Model-v2 baseline-centering builders
-    "ZeroBaselineB", "IdentityBaselineB", "LinearBaselineB", "MLPBaselineB",
+    "ZeroBaselineB", "PersistenceBaselineB", "LinearBaselineB", "MLPBaselineB",
     "AuxPosteriorB", "SigmaDataBufferB",
     "BaselineGaussTransition", "DiffTransition", "CenteringHandoff",
     # Data modules

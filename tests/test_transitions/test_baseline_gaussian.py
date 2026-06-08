@@ -13,7 +13,7 @@ from ddssm.model.centering.baselines import (
     MLPBaseline,
     BaseBaseline,
     ZeroBaseline,
-    IdentityBaseline,
+    PersistenceBaseline,
 )
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
@@ -283,7 +283,7 @@ def test_transition_kl_init_updates_sigma_data_at_init_slots() -> None:
 def test_transition_kl_init_grad_flows_to_aux_posterior() -> None:
     """The init term is differentiable w.r.t. the aux posterior."""
     j = 1
-    baseline = IdentityBaseline(latent_dim=D, j=j)
+    baseline = PersistenceBaseline(latent_dim=D, j=j)
     transition = _make_transition(baseline, j=j)
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
     zs, enc_stats, time_embed, _ = _make_enc_stats(j)

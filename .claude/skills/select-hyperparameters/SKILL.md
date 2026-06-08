@@ -104,7 +104,7 @@ If hand-off: pass the YAML to the next skill/turn verbatim. Do **not** write any
 
 <conventions>
 - Hparam field names live in `src/ddssm/builders.py` (`Hparams`, `Training`) and in `experiments/<family>/hparams.py`. Match the existing names exactly.
-- Don't fabricate variants — if `src/ddssm/builders.py` only exports `ZeroBaseline`, `IdentityBaseline`, `LinearBaseline`, `MLPBaseline`, then those are the four choices; don't invent a fifth.
+- Don't fabricate variants — if `src/ddssm/builders.py` only exports `ZeroBaseline`, `PersistenceBaseline`, `LinearBaseline`, `MLPBaseline`, then those are the four choices; don't invent a fifth.
 - When the user references an ADR (e.g. "per ADR-0002"), preserve that reference in `notes:` on the spec.
 - Use `<unset>` for skipped fields, not `null` — the downstream builder distinguishes "I want the default" from "user explicitly skipped".
 </conventions>

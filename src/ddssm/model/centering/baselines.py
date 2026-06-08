@@ -1,8 +1,11 @@
 """Baseline μ_p(z_{t-1}) head with state-conditional σ_p sibling.
 
 Per ``model-v2.org`` § Baseline-form variants, the centering function
-``μ_p(z_{t-1})`` admits four parametric families (Zero, Identity,
-Linear, MLP).  Per § State-conditional prior variance, the stage-1
+``μ_p(z_{t-1})`` admits four parametric families (Zero, Persistence,
+Linear, MLP).  ("Persistence" was previously called "Identity"; renamed
+because at j>1 it's the persistence/last-value baseline, not the
+identity-on-the-window — see docs/adr/0010-persistence-baseline-rename.md.)
+Per § State-conditional prior variance, the stage-1
 Gaussian transition prior is
 ``N(μ_p(z_{t-1}), diag(σ_p²(z_{t-1})))`` — so a sibling
 state-conditional ``σ_p`` head exists alongside ``μ_p`` and (for the
@@ -101,7 +104,7 @@ def _validate_z_hist(z_hist: torch.Tensor, latent_dim: int, j: int) -> None:
 class _StateConditionalSigmaHead(nn.Module):
     """Small MLP body + :class:`LogvarHead` producing per-dim ``log σ_p²``.
 
-    Used by the parameter-free baseline forms (Zero, Identity) so that
+    Used by the parameter-free baseline forms (Zero, Persistence) so that
     σ_p remains state-conditional per ``model-v2.org`` § State-conditional
     prior variance.  Output starts at ``init_logvar`` (default 0 → σ_p² = I)
     regardless of the input, matching ``GaussianHead``'s convention.
@@ -173,11 +176,17 @@ class ZeroBaseline(BaseBaseline):
         return mu, logvar
 
 
-class IdentityBaseline(BaseBaseline):
-    """``μ_p(z_{t-1}) = z_{t-1}`` (GenCast-style random walk).
+class PersistenceBaseline(BaseBaseline):
+    """``μ_p(z_{t-1}) = z_hist[..., -1]`` — the persistence (last-value-carried-forward) baseline.
 
-    For ``j > 1`` we take ``z_hist[..., -1]``, i.e. the most recent
-    history slot.  σ_p comes from a small state-conditional MLP head.
+    At j=1 this is equivalently ``μ_p(z_{t-1}) = z_{t-1}`` and was originally
+    called "identity". At j>1, however, taking ``z_hist[..., -1]`` selects the
+    most-recent slot of the window — it is NOT the identity map on the window
+    (the input is `(B, d, j)` and the output is `(B, d)`); it is the standard
+    *persistence* / no-change forecast. See
+    docs/adr/0010-persistence-baseline-rename.md for the rename rationale.
+
+    σ_p comes from a small state-conditional MLP head.
     """
 
     def __init__(

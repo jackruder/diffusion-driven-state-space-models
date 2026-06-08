@@ -32,7 +32,7 @@ from ddssm.model.centering.baselines import (
     MLPBaseline,
     ZeroBaseline,
     LinearBaseline,
-    IdentityBaseline,
+    PersistenceBaseline,
 )
 from experiments.init_centering.cells import (
     BASELINE_FORMS,
@@ -70,7 +70,7 @@ def test_iter_cells_yields_exactly_12_distinct_triples() -> None:
     assert len(set(cells)) == 12
     # Spot-check the math: 2 param-free baselines × pinned-only × 2 tracking
     # + 2 parametric baselines × 2 modes × 2 tracking = 4 + 8.
-    pinned_only = [c for c in cells if c[0] in {"zero", "identity"}]
+    pinned_only = [c for c in cells if c[0] in {"zero", "persistence"}]
     assert len(pinned_only) == 4
     assert all(c[1] == "pinned" for c in pinned_only)
 
@@ -143,7 +143,7 @@ def test_cell_axes_propagate_through_hydra(form, mode, tracking) -> None:
     "form,expected_baseline_cls",
     [
         ("zero", ZeroBaseline),
-        ("identity", IdentityBaseline),
+        ("persistence", PersistenceBaseline),
         ("linear", LinearBaseline),
         ("mlp", MLPBaseline),
     ],

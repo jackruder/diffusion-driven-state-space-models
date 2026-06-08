@@ -40,7 +40,7 @@ Pluggable transition priors implementing the `BaseTransition` interface
 
 ### `centering/`
 Baseline-centering machinery (model-v2). `BaseBaseline` and its forms
-(`ZeroBaseline`, `IdentityBaseline`, `LinearBaseline`, `MLPBaseline`) provide the
+(`ZeroBaseline`, `PersistenceBaseline`, `LinearBaseline`, `MLPBaseline`) provide the
 centering head `μ_p(z_{t-1})` with a sibling state-conditional `σ_p`;
 `SigmaDataBuffer` is the EMA buffer tracking the per-step centered-residual
 variance `σ_data²(t)`; `r_mu_p_loss` / `r_sigma_p_loss` are the centering
