@@ -10,11 +10,12 @@ is imported first; ``init_centering`` is the live model-v2 family;
 from . import (
     datasets,  # noqa: F401  -- registers library dataset presets
     init_centering,  # noqa: F401  -- model-v2 VHP / centering family
+    lorenz,  # noqa: F401  -- Lorenz 63 attractor family
     synthetic_validation,  # noqa: F401  -- authoring-guide worked-example family
 )
 from ._make import run, to_yaml, override, from_yaml, save_yaml, experiment
 
 __all__ = [
     "experiment", "run", "to_yaml", "save_yaml", "from_yaml", "override",
-    "datasets", "init_centering", "synthetic_validation",
+    "datasets", "init_centering", "lorenz", "synthetic_validation",
 ]

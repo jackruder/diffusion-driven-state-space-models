@@ -407,6 +407,65 @@ class SyntheticDataset(Dataset):
                 z[:, :, t] = 0.9 * z[:, :, t - 1] + 0.1 * t_noise
             data = z
 
+        elif self.mode == "lorenz":
+            # Lorenz 63 system: dx/dt = σ(y-x), dy/dt = x(ρ-z)-y, dz/dt = xy-βz
+            # Standard chaotic parameters; two-lobe attractor with Hausdorff
+            # dimension ~2.06. RK4 at dt=0.05 gives ~3 Lyapunov times per T=64
+            # sequence, so most trajectories contain 1-3 lobe-switching events —
+            # the regime where the Gaussian baseline fails and the diffusion
+            # transition is needed. RK4 is used instead of Euler because Lorenz
+            # can diverge with Euler from off-attractor starting points.
+            assert self.D == 3, (
+                f"lorenz mode requires D=3 (x, y, z); got D={self.D}. "
+                f"Pass D=3 to the data module."
+            )
+            sigma_l, rho_l, beta_l = 10.0, 28.0, 8.0 / 3.0
+            dt = 0.05
+            n_burnin = 200  # ~10 Lyapunov times; ensures all ICs reach the attractor
+
+            def _lorenz_deriv(s: torch.Tensor) -> torch.Tensor:
+                xc, yc, zc = s[:, 0], s[:, 1], s[:, 2]
+                return torch.stack([
+                    sigma_l * (yc - xc),
+                    xc * (rho_l - zc) - yc,
+                    xc * yc - beta_l * zc,
+                ], dim=1)
+
+            def _rk4_step(s: torch.Tensor) -> torch.Tensor:
+                k1 = _lorenz_deriv(s)
+                k2 = _lorenz_deriv(s + 0.5 * dt * k1)
+                k3 = _lorenz_deriv(s + 0.5 * dt * k2)
+                k4 = _lorenz_deriv(s + dt * k3)
+                return s + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+            # Initialize inside the attractor bounding box to avoid the large
+            # derivatives near z=0 that cause Euler-style divergence.
+            state = torch.stack([
+                torch.empty(self.N_total).uniform_(-15.0, 15.0),   # x
+                torch.empty(self.N_total).uniform_(-20.0, 20.0),   # y
+                torch.empty(self.N_total).uniform_(5.0, 45.0),     # z > 0
+            ], dim=1)
+            for _ in range(n_burnin):
+                state = _rk4_step(state)
+
+            # Record T steps after burn-in.
+            trajectory = torch.zeros(self.N_total, 3, self.T)
+            for t in range(self.T):
+                trajectory[:, :, t] = state
+                state = _rk4_step(state)
+
+            # Per-channel z-score normalization so all three channels have
+            # comparable scale for the encoder/decoder (raw z ranges [0,50],
+            # raw x,y range [-20,20] — a 2.5× variance mismatch).
+            chan_mean = trajectory.mean(dim=(0, 2), keepdim=True)   # (1, 3, 1)
+            chan_std = trajectory.std(dim=(0, 2), keepdim=True).clamp(min=1e-6)
+            trajectory = (trajectory - chan_mean) / chan_std
+
+            # Small Gaussian observation noise (σ=0.1 in standardized units,
+            # SNR≈10) makes posterior inference non-trivial without swamping
+            # the lobe-switching signal.
+            data = trajectory + 0.1 * torch.randn_like(trajectory)
+
         return data
 
     def __len__(self):

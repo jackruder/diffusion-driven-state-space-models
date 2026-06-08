@@ -25,6 +25,7 @@ from ddssm.data.presets import (
     NonlinBimodalLiftMV,
 )
 from ddssm.experiment.stores import data_store
+from experiments.lorenz.data import LorenzDirect
 
 data_store(LGSSM, name="lgssm")
 data_store(Harmonic, name="harmonic")
@@ -33,3 +34,4 @@ data_store(BimodalNoisy, name="bimodal_noisy")
 data_store(Robot2D, name="robot2d")
 data_store(NonlinBimodalLift1D, name="nonlin_bimodal_lift_1d")
 data_store(NonlinBimodalLiftMV, name="nonlin_bimodal_lift_mv")
+data_store(LorenzDirect, name="lorenz")
