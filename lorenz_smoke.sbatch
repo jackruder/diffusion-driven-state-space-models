@@ -10,9 +10,13 @@
 #SBATCH --output=runs/lorenz_smoke/slurm-%j.out
 
 set -euo pipefail
+
+NETID=${1:?'Usage: sbatch lorenz_smoke.sbatch <netID>  (e.g. q58r662)'}
+shift  # remove netID from $@ so it is not forwarded to python as a Hydra override
+
 cd "$SLURM_SUBMIT_DIR"
 
 module load Python/3.13.5-GCCcore-14.3.0 CUDA/13.0.0 tools/uv/0.9.22
-source /home/z89p425/diffusion-driven-state-space-models/.venv/bin/activate
+source /home/${NETID}/diffusion-driven-state-space-models/.venv/bin/activate
 
 exec python -m ddssm.app experiment=lorenz_smoke "$@"
