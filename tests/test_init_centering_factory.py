@@ -6,7 +6,7 @@ grid:
 
 * the three cell axes round-trip into the resulting :class:`DDSSM_base`,
 * the auto-degenerate clamp turns ``baseline_mode="learnable"`` into
-  ``"pinned"`` for parameter-free baseline forms (zero / identity),
+  ``"pinned"`` for parameter-free baseline forms (zero / persistence),
 * the default ``anchor_lambda`` depends on ``baseline_mode``.
 
 All cells must build without error and the assembled stages factory
@@ -25,7 +25,7 @@ from ddssm.model.centering.baselines import (
     MLPBaseline,
     ZeroBaseline,
     LinearBaseline,
-    IdentityBaseline,
+    PersistenceBaseline,
 )
 from experiments.init_centering.cells import iter_cells
 from experiments.init_centering.model import _build_init_centering_model
@@ -56,7 +56,7 @@ def test_all_cells_build(baseline_form, baseline_mode, tracking_mode) -> None:
     "form,expected_cls",
     [
         ("zero", ZeroBaseline),
-        ("identity", IdentityBaseline),
+        ("persistence", PersistenceBaseline),
         ("linear", LinearBaseline),
         ("mlp", MLPBaseline),
     ],
@@ -71,9 +71,9 @@ def test_baseline_form_dispatch(form, expected_cls) -> None:
     assert isinstance(model.baseline, expected_cls)
 
 
-@pytest.mark.parametrize("form", ["zero", "identity"])
+@pytest.mark.parametrize("form", ["zero", "persistence"])
 def test_param_free_forms_autoclamp_learnable_to_pinned(form, caplog) -> None:
-    """``zero`` and ``identity`` clamp ``baseline_mode='learnable'`` to ``'pinned'``."""
+    """``zero`` and ``persistence`` clamp ``baseline_mode='learnable'`` to ``'pinned'``."""
     with caplog.at_level(
         logging.WARNING, logger="experiments.init_centering.model"
     ):

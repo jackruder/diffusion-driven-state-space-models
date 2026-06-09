@@ -1018,7 +1018,7 @@ def eval_log_sigma_p2_collapse(
 
     Requires ``model.baseline`` with a ``mean_and_logvar`` head (all
     four baseline forms provide it, including the parameter-free
-    Zero/Identity via their state-conditional σ_p head).
+    Zero/Persistence via their state-conditional σ_p head).
     """
     if (
         ctx.model is None

@@ -123,8 +123,8 @@ The shipped presets are the `init_centering` family: two smoke configs
 (`init_smoke_simple`, `init_smoke_high_surface`) plus an ablation grid named
 `init_<form>_<mode>_<tracking>__<dataset>`, where
 
-- **form** ∈ `zero`, `identity`, `linear`, `mlp` (the baseline μ_p head)
-- **mode** ∈ `pinned`, `learnable` (auto-pinned for the param-free `zero`/`identity` forms)
+- **form** ∈ `zero`, `persistence`, `linear`, `mlp` (the baseline μ_p head; `persistence` was previously called `identity` — see [ADR-0010](./docs/adr/0010-persistence-baseline-rename.md))
+- **mode** ∈ `pinned`, `learnable` (auto-pinned for the param-free `zero`/`persistence` forms)
 - **tracking** ∈ `fixed`, `per_t`
 - **dataset** ∈ `1d` (nonlinear-bimodal-lift, D=1), `mv` (D=8)
 

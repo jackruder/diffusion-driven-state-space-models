@@ -10,9 +10,9 @@ across the handoff (per ``model-v2.org`` § Generative baseline /
 The factory is parametric over the three ablation-grid axes from
 ``init-experiment.org`` § Composition with the ablation grid:
 
-* ``baseline_form`` ∈ {zero, identity, linear, mlp}
+* ``baseline_form`` ∈ {zero, persistence, linear, mlp}
 * ``baseline_mode`` ∈ {pinned, learnable}  (auto-clamped to pinned
-  for the parameter-free zero/identity forms)
+  for the parameter-free zero/persistence forms)
 * ``tracking_mode`` ∈ {fixed, global_ema, per_t}
 
 Default values reproduce the canonical cell from
@@ -43,7 +43,7 @@ from ddssm.model.centering.baselines import (
     BaseBaseline,
     ZeroBaseline,
     LinearBaseline,
-    IdentityBaseline,
+    PersistenceBaseline,
 )
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 
@@ -75,8 +75,8 @@ def _build_baseline(
             latent_dim=latent_dim, j=j,
             hidden_dim=hidden_dim, n_layers=n_layers,
         )
-    if baseline_form == "identity":
-        return IdentityBaseline(
+    if baseline_form == "persistence":
+        return PersistenceBaseline(
             latent_dim=latent_dim, j=j,
             hidden_dim=hidden_dim, n_layers=n_layers,
         )
@@ -88,7 +88,7 @@ def _build_baseline(
             hidden_dim=hidden_dim, n_layers=n_layers,
         )
     raise ValueError(
-        f"baseline_form must be one of (zero, identity, linear, mlp); "
+        f"baseline_form must be one of (zero, persistence, linear, mlp); "
         f"got {baseline_form!r}"
     )
 
@@ -96,7 +96,7 @@ def _build_baseline(
 def _build_init_centering_model(
     *,
     # --- Cell axes (the three grid dimensions) ---
-    baseline_form: Literal["zero", "identity", "linear", "mlp"] = "mlp",
+    baseline_form: Literal["zero", "persistence", "linear", "mlp"] = "mlp",
     baseline_mode: Literal["pinned", "learnable"] = "pinned",
     tracking_mode: Literal["fixed", "global_ema", "per_t"] = "per_t",
     # --- Shape ---
@@ -142,7 +142,7 @@ def _build_init_centering_model(
     single knob.
 
     Auto-degeneracy: if ``baseline_form`` is one of the parameter-free
-    forms (``zero`` / ``identity``) and ``baseline_mode`` is
+    forms (``zero`` / ``persistence``) and ``baseline_mode`` is
     ``"learnable"``, the mode is clamped to ``"pinned"`` and a warning
     is emitted.  This avoids crashing under Optuna overrides that
     happen to sample the degenerate region.

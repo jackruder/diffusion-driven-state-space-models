@@ -12,7 +12,7 @@ Two role-specific smoke presets are the canonical entry points
 
 Both smokes wire the parametric factory introduced in Phase B
 (``_build_init_centering_model``): a shared :class:`BaseBaseline`
-(zero / identity / linear / MLP) between the stage-1
+(zero / persistence / linear / MLP) between the stage-1
 ``BaselineGaussian`` transition and the stage-2 ``DiffusionTransition``
 transition, plus :class:`AuxPosterior` for the VHP-via-diffusion init
 term, :class:`SigmaDataBuffer` in the requested tracking mode, and a

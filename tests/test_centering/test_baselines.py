@@ -10,7 +10,7 @@ from ddssm.model.centering.baselines import (
     BaseBaseline,
     ZeroBaseline,
     LinearBaseline,
-    IdentityBaseline,
+    PersistenceBaseline,
 )
 
 B = 4
@@ -21,7 +21,7 @@ J_VALUES = [1, 2]
 def _all_forms(latent_dim: int, j: int) -> list[BaseBaseline]:
     return [
         ZeroBaseline(latent_dim=latent_dim, j=j),
-        IdentityBaseline(latent_dim=latent_dim, j=j),
+        PersistenceBaseline(latent_dim=latent_dim, j=j),
         LinearBaseline(latent_dim=latent_dim, j=j),
         MLPBaseline(latent_dim=latent_dim, j=j, hidden_dim=8, n_layers=2),
     ]
@@ -56,10 +56,10 @@ def test_zero_baseline_mean_is_zero(j: int) -> None:
 
 
 @pytest.mark.parametrize("j", J_VALUES)
-def test_identity_baseline_mean_is_last_slot(j: int) -> None:
-    """IdentityBaseline.mean returns z_hist[..., -1] (random-walk prior)."""
+def test_persistence_baseline_mean_is_last_slot(j: int) -> None:
+    """PersistenceBaseline.mean returns z_hist[..., -1] (random-walk prior at j=1; persistence at j>1)."""
     z_hist = torch.randn(B, D, j)
-    baseline = IdentityBaseline(latent_dim=D, j=j)
+    baseline = PersistenceBaseline(latent_dim=D, j=j)
     mu = baseline.mean(z_hist)
     assert torch.equal(mu, z_hist[..., -1])
 
@@ -132,10 +132,10 @@ def test_snapshot_is_disjoint_and_frozen(j: int) -> None:
         # If the snapshot were sharing parameters, these would match;
         # they should differ for parametric baselines.
         if any(p.numel() > 0 for p in baseline.parameters()):
-            # MLPBaseline / LinearBaseline / IdentityBaseline (has
+            # MLPBaseline / LinearBaseline / PersistenceBaseline (has
             # sigma_head params) / ZeroBaseline (has sigma_head params)
             # — at least the σ side has parameters everywhere.
-            # mean() may not differ on Zero (μ=0 always) or Identity
+            # mean() may not differ on Zero (μ=0 always) or Persistence
             # (μ=z_hist[..., -1] always) — only the σ part has params.
             # So we test on mean_and_logvar's logvar output instead for
             # those forms.

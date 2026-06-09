@@ -2,7 +2,7 @@
 
 This package collects the modules introduced by ``model-v2.org``'s
 "Baseline Centering" section: a deterministic baseline ``μ_p(z_{t-1})``
-(four forms — Zero / Identity / Linear / MLP), an EMA buffer tracking
+(four forms — Zero / Persistence / Linear / MLP), an EMA buffer tracking
 the per-step centered-residual variance ``σ_data²(t)``, regularizers
 on ``log σ_p²`` and the baseline-anchor, and the stage-1 → stage-2
 handoff.
@@ -25,7 +25,7 @@ from ddssm.model.centering.baselines import (
     BaseBaseline,
     ZeroBaseline,
     LinearBaseline,
-    IdentityBaseline,
+    PersistenceBaseline,
 )
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.centering.regularizers import r_mu_p_loss, r_sigma_p_loss
@@ -33,9 +33,9 @@ from ddssm.model.centering.regularizers import r_mu_p_loss, r_sigma_p_loss
 __all__ = [
     "BaseBaseline",
     "CenteringHandoffConf",
-    "IdentityBaseline",
     "LinearBaseline",
     "MLPBaseline",
+    "PersistenceBaseline",
     "SigmaDataBuffer",
     "ZeroBaseline",
     "perform_centering_handoff",

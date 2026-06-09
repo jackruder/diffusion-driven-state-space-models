@@ -37,14 +37,14 @@ from ddssm.model.centering.handoff import (
 from experiments.init_centering.model import _build_init_centering_model
 from experiments.init_centering.hparams import _build_init_centering_stages
 
-_BASELINE_FORMS = ("zero", "identity", "linear", "mlp")
+_BASELINE_FORMS = ("zero", "persistence", "linear", "mlp")
 _TRACKING_MODES = ("fixed", "global_ema", "per_t")
 
 
 def _cells():
     cells = []
     for form in _BASELINE_FORMS:
-        modes = ("pinned",) if form in ("zero", "identity") else ("pinned", "learnable")
+        modes = ("pinned",) if form in ("zero", "persistence") else ("pinned", "learnable")
         for mode in modes:
             for tm in _TRACKING_MODES:
                 cells.append((form, mode, tm))
@@ -86,7 +86,7 @@ def test_cell_handoff_produces_consistent_baseline_freeze(
 
     # The orchestrator would then apply the stage-2 trainable mask.  When
     # the user-requested mode is "learnable" but the factory clamped it to
-    # "pinned" (zero / identity forms), the stages factory still emits the
+    # "pinned" (zero / persistence forms), the stages factory still emits the
     # *user's* mode and the declarative mask sets ``baseline=True``.  In
     # that case the handoff's imperative freeze (run above) takes priority
     # and keeps baseline params frozen, demonstrating the "belt-and-
@@ -95,7 +95,7 @@ def test_cell_handoff_produces_consistent_baseline_freeze(
 
     baseline_params = list(model.baseline.parameters())
     if not baseline_params:
-        # Pure zero/identity have no learnable μ_p params; nothing to check.
+        # Pure zero/persistence have no learnable μ_p params; nothing to check.
         return
 
     if actual_mode == "pinned":

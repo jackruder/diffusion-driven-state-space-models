@@ -8,13 +8,13 @@ grid definition lives in exactly one place.
 
 The grid is the product
 
-    baseline_form  ∈ {zero, identity, linear, mlp}
+    baseline_form  ∈ {zero, persistence, linear, mlp}
     baseline_mode  ∈ {pinned, learnable}
     tracking_mode  ∈ {fixed, per_t}
 
 with the auto-degenerate clamp from
 ``experiments/init_centering/model.py:_PARAM_FREE_FORMS``: parameter-
-free baselines (``zero``, ``identity``) drop the ``learnable`` mode
+free baselines (``zero``, ``persistence``) drop the ``learnable`` mode
 because they have no μ_p parameters to learn.  That removes 4 cells
 (2 forms × 1 mode × 2 tracking) and yields 12 distinct triples.
 
@@ -29,14 +29,14 @@ from __future__ import annotations
 
 from typing import Iterator, NamedTuple
 
-BASELINE_FORMS: tuple[str, ...] = ("zero", "identity", "linear", "mlp")
+BASELINE_FORMS: tuple[str, ...] = ("zero", "persistence", "linear", "mlp")
 BASELINE_MODES: tuple[str, ...] = ("pinned", "learnable")
 TRACKING_MODES: tuple[str, ...] = ("fixed", "per_t")
 
 # Forms with no learnable μ_p parameters — they drop the ``learnable`` mode
 # both here (cell enumeration) and in ``model.py`` (the auto-clamp), which
 # imports this single definition rather than mirroring it.
-_PARAM_FREE_FORMS: frozenset[str] = frozenset({"zero", "identity"})
+_PARAM_FREE_FORMS: frozenset[str] = frozenset({"zero", "persistence"})
 
 # The canonical cell — also the default in ``_build_init_centering_model``.
 # Reused by the V2-reduction test.

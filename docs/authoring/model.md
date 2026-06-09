@@ -52,7 +52,7 @@ recipe.
 | Class | μ_p | Has params? |
 | ----- | --- | ----------- |
 | `ZeroBaseline` | ≡ 0 | σ_p MLP only |
-| `IdentityBaseline` | `z_{t-1}` | σ_p MLP only |
+| `PersistenceBaseline` | `z_hist[..., -1]` | σ_p MLP only |
 | `LinearBaseline` | `A·z_hist + b` | yes |
 | `MLPBaseline` | MLP | yes |
 

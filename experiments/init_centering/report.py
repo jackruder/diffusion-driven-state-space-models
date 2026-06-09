@@ -715,7 +715,7 @@ def _records_by_axes(
     return out
 
 
-_BASELINE_FORMS = ("zero", "identity", "linear", "mlp")
+_BASELINE_FORMS = ("zero", "persistence", "linear", "mlp")
 _BASELINE_MODES = ("pinned", "learnable")
 _TRACKING_MODES = ("fixed", "per_t")
 
@@ -726,9 +726,9 @@ def plot_baseline_form_ablation(
     """Baseline-form ablation: ``stage2_elbo_surrogate`` by form, faceted by (mode, tracking).
 
     One subplot per (mode, tracking) cell; x-axis is the four baseline
-    forms (zero/identity/linear/mlp). Reveals whether residual
-    decomposition (identity vs zero), parametric baseline (linear vs
-    identity), and nonlinear capacity (mlp vs linear) help —
+    forms (zero/persistence/linear/mlp). Reveals whether residual
+    decomposition (persistence vs zero), parametric baseline (linear vs
+    persistence), and nonlinear capacity (mlp vs linear) help —
     init-experiment.org § Pairwise-comparison stories, *Baseline form*.
     """
     plt = _import_matplotlib()
@@ -749,7 +749,7 @@ def plot_baseline_form_ablation(
             for form in _BASELINE_FORMS:
                 # Pinned-only cells: skip the (param-free, learnable) entry
                 # since it auto-degenerates and the data lives under pinned.
-                lookup_mode = "pinned" if form in ("zero", "identity") and mode == "learnable" else mode
+                lookup_mode = "pinned" if form in ("zero", "persistence") and mode == "learnable" else mode
                 rec = by_axes.get((form, lookup_mode, tracking))
                 if rec is None or rec.stage2_elbo_surrogate is None:
                     continue
@@ -834,7 +834,7 @@ def plot_tracking_mode_ablation(
     panels: list[tuple[str, str]] = []
     for form in _BASELINE_FORMS:
         for mode in _BASELINE_MODES:
-            if form in ("zero", "identity") and mode == "learnable":
+            if form in ("zero", "persistence") and mode == "learnable":
                 continue
             panels.append((form, mode))
 

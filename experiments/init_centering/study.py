@@ -75,7 +75,7 @@ _UNSAFE_ACCOUNT = "--account=group-michaelwojnowicz"
 
 
 # Non-headline cells routed to the b6000 (Blackwell, 96 GB) GPUs. The two
-# ``pinned`` cells (identity/zero) were moved here off A40: the A40 nodes have
+# ``pinned`` cells (persistence/zero) were moved here off A40: the A40 nodes have
 # only 32 CPU for BOTH GPUs (16/GPU), so they can't be un-starved, whereas b6000
 # is ~4x faster AND well-fed at 2 CPU/worker. Each cell takes 2 GPUs, so these 5
 # cells (10 GPUs) oversubscribe the 6 b6000s and time-share them via the queue —
@@ -86,7 +86,7 @@ _B6000_CELLS = frozenset(
         "init_mlp_learnable_per_t",
         "init_linear_learnable_per_t",
         "init_linear_pinned_per_t",
-        "init_identity_pinned_per_t",
+        "init_persistence_pinned_per_t",
         "init_zero_pinned_per_t",
     }
 )

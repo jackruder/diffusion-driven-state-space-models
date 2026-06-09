@@ -111,10 +111,14 @@ preconditioning. Three modes: **fixed** (snapshot at stage-2 start),
 (independent per-timestep EMA).
 
 **Baseline form** / **mode**:
-- _Form_: which `μ_p` head — `zero`, `identity`, `linear`, `mlp`.
+- _Form_: which `μ_p` head — `zero`, `persistence`, `linear`, `mlp`.
+  (`persistence` was previously called `identity`; renamed because at
+  j>1 it's the persistence/last-value baseline `μ_p = z_hist[..., -1]`,
+  not the identity-on-the-window — see
+  [docs/adr/0010-persistence-baseline-rename.md](./docs/adr/0010-persistence-baseline-rename.md).)
 - _Mode_: `pinned` (frozen at handoff) vs `learnable` (updated under
   the `r_mu_p` anchor regulariser, default λ = 1e-2).
-Parameter-free forms (`zero`, `identity`) **auto-degenerate** to
+Parameter-free forms (`zero`, `persistence`) **auto-degenerate** to
 pinned regardless of the requested mode.
 
 **Stage-2 ELBO surrogate**:

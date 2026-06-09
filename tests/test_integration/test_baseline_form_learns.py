@@ -1,6 +1,6 @@
 """Math claim: parametric baselines (Linear, MLP) actually learn during stage 1.
 
-For Zero / Identity baselines, μ_p has no trainable parameters of its
+For Zero / Persistence baselines, μ_p has no trainable parameters of its
 own beyond the σ_p head.  For Linear / MLP, μ_p IS parametric, and
 stage-1 training should move its parameters off initialisation
 toward whatever μ_p ≈ E[μ_t | z_{t-1}] gives best ELBO.
@@ -64,13 +64,13 @@ def test_parametric_baseline_param_norm_moves_in_stage1(baseline_form: str) -> N
     )
 
 
-@pytest.mark.parametrize("baseline_form", ["zero", "identity"])
+@pytest.mark.parametrize("baseline_form", ["zero", "persistence"])
 def test_parameter_free_baseline_mean_params_dont_exist(baseline_form: str) -> None:
-    """Zero / Identity have no μ_p parameters (only σ_p head)."""
+    """Zero / Persistence have no μ_p parameters (only σ_p head)."""
     model = make_vhp_model(baseline_form=baseline_form)
     # The σ_p head still has parameters, but the μ_p head must not.
     # Check by inspecting the baseline's named children: Zero and
-    # Identity should expose only ``sigma_head`` parameters.
+    # Persistence should expose only ``sigma_head`` parameters.
     mu_p_param_count = 0
     for name, p in model.baseline.named_parameters():
         if "sigma" not in name.lower():
