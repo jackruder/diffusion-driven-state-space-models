@@ -92,6 +92,67 @@ LorenzStagesLowLr = builds(
     populate_full_signature=True,
 )
 
+def _build_lorenz_stages_sweep(
+    n_pretrain: int = 800,
+    n_stage2: int = 2000,
+    stage2_trans_lr: float = 3e-4,
+    base_lr: float = LR,
+    dec_mult: float = 1.0,
+    trans_mult: float = 1.0,
+    stage_1_warmup_frac: float = 0.25,
+    stage_2_warmup_frac: float = 0.10,
+) -> StagesConf:
+    """Stage builder for Lorenz Optuna sweeps — exposes all HPO-relevant knobs."""
+    stages = _build_init_centering_stages(
+        n_pretrain=n_pretrain,
+        n_stage2=n_stage2,
+        base_lr=base_lr,
+        dec_mult=dec_mult,
+        trans_mult=trans_mult,
+        stage_1_warmup_frac=stage_1_warmup_frac,
+        stage_2_warmup_frac=stage_2_warmup_frac,
+    )
+    assert stages.stage_2 is not None
+    new_lrs = replace(stages.stage_2.lrs, trans_lr=stage2_trans_lr)
+    stages.stage_2 = replace(stages.stage_2, lrs=new_lrs)
+    return stages
+
+
+LorenzStagesSweep = builds(_build_lorenz_stages_sweep, populate_full_signature=True)
+
+
+def _build_lorenz_stages_sweep_frozen_enc(
+    n_pretrain: int = 800,
+    n_stage2: int = 2000,
+    stage2_trans_lr: float = 3e-4,
+    base_lr: float = LR,
+    dec_mult: float = 1.0,
+    trans_mult: float = 1.0,
+    stage_1_warmup_frac: float = 0.25,
+    stage_2_warmup_frac: float = 0.10,
+) -> StagesConf:
+    """Like _build_lorenz_stages_sweep but with encoder frozen in stage 2."""
+    stages = _build_lorenz_stages_sweep(
+        n_pretrain=n_pretrain,
+        n_stage2=n_stage2,
+        stage2_trans_lr=stage2_trans_lr,
+        base_lr=base_lr,
+        dec_mult=dec_mult,
+        trans_mult=trans_mult,
+        stage_1_warmup_frac=stage_1_warmup_frac,
+        stage_2_warmup_frac=stage_2_warmup_frac,
+    )
+    assert stages.stage_2 is not None
+    stages.stage_2.trainable.encoder = False
+    return stages
+
+
+LorenzStagesSweepFrozenEnc = builds(
+    _build_lorenz_stages_sweep_frozen_enc,
+    populate_full_signature=True,
+)
+
+
 # Keep LR accessible for callers that want to derive stage2_trans_lr relative
 # to the base (e.g. stage2_trans_lr = LR / 5).
 __all__ = [
@@ -102,5 +163,9 @@ __all__ = [
     "LorenzStagesFrozenEnc",
     "LorenzStagesLongStage2",
     "LorenzStagesLowLr",
+    "LorenzStagesSweep",
+    "LorenzStagesSweepFrozenEnc",
     "Training800",
+    "_build_lorenz_stages_sweep",
+    "_build_lorenz_stages_sweep_frozen_enc",
 ]
