@@ -12,7 +12,7 @@
 # differently and correctly.
 #
 # Env (all optional except as noted):
-#   HOST          ssh target            (default z89p425@tempest-login.msu.montana.edu)
+#   HOST          ssh target            (default: CLUSTER_HOST from .claude/cluster.local.env)
 #   REMOTE_DIR    project dir on cluster (default ~/diffusion-driven-state-space-models)
 #   STUDY_PREFIX  which experiment to show. If unset, discover + auto-pick the
 #                 most-active and print the ranked alternatives.
@@ -24,12 +24,15 @@
 # Exit codes: 2 bad args/empty, 3 cluster unreachable (VPN down).
 
 set -uo pipefail
-HOST=${HOST:-z89p425@tempest-login.msu.montana.edu}
-REMOTE_DIR=${REMOTE_DIR:-'~/diffusion-driven-state-space-models'}
-TARGET=${TARGET:-128}
-PORT=${PORT:-8080}
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT=${REPO_ROOT:-$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}
+# Source per-user cluster config (git-ignored). See .claude/cluster.local.env.template.
+_ENV_FILE="$REPO_ROOT/.claude/cluster.local.env"
+if [ -f "$_ENV_FILE" ]; then source "$_ENV_FILE"; fi
+HOST=${HOST:-${CLUSTER_HOST:-YOUR_NETID@tempest-login.msu.montana.edu}}
+REMOTE_DIR=${REMOTE_DIR:-${CLUSTER_REMOTE_DIR:-'~/diffusion-driven-state-space-models'}}
+TARGET=${TARGET:-128}
+PORT=${PORT:-8080}
 PULL_DIR=${PULL_DIR:-"$REPO_ROOT/runs/optuna_pull"}
 PROFILE_DIR="$SKILL_DIR/profiles"
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=15"
