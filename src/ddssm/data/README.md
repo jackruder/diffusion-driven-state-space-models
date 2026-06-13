@@ -14,23 +14,23 @@ windows with real masks, KDD); both route through `parse_batch`.
 ## Files
 
 - `datamodule.py` — the `DDSSMDataModule` ABC, the `DataMetadata` dataclass, and
-  the concrete modules: `SyntheticDataModule` (sequence), `KDDDataModule`
-  (windowed; loads a preprocessed `.pt` payload), and `NullDataModule`
+  the concrete modules: `SyntheticDataModule` (sequence) and `NullDataModule`
   (`train_loader()` returns `None`, so the experiment skips `trainer.fit` — used
-  for smoke tests / interactive use).
-- `dataload.py` — GluonTS-based loading utilities: sliding-window
-  Dataset/loaders, `parse_batch` batch parsing, z-score scaling, and
-  `build_loaders_for_expt` (shared train/val/test builder). GluonTS imports are
-  guarded so the module degrades when GluonTS is absent.
+  for smoke tests / interactive use), plus `WindowedSeriesDataModule` — the
+  windowed base that turns a `series_list` (+ optional dynamic / static
+  covariates) into windowed loaders via `build_loaders_for_expt` — and its
+  subclasses `KDDDataModule` (KDD Cup 2018 PM2.5; loads a preprocessed `.pt`
+  payload) and `GluonTSDataModule` (lazily fetches a named GluonTS repository
+  dataset: solar / electricity / traffic / taxi / wiki).
+- `dataload.py` — windowing utilities: sliding-window Dataset/loaders,
+  `parse_batch` batch parsing, z-score scaling, and `build_loaders_for_expt`
+  (shared train/val/test builder, `"torch"` or `"gluonts"` backend). GluonTS
+  imports are guarded so the module degrades when GluonTS is absent.
 - `synthetic.py` — `SyntheticDataset` plus the closed-form synthetic generators
-  (IID, LGSSM, harmonic, bimodal, nonlinear-bimodal-lift 1-D and multivariate);
-  also defines the NLBL constants shared with `ddssm.eval.synthetic_kernels`.
-- `kdd.py` — KDD Cup 2018 PM2.5 loading from Monash `.tsf` files
-  (`parse_kdd_tsf`); builds loaders via `build_loaders_for_expt`. (Note: the
-  `KDDDataModule` class itself lives in `datamodule.py`.)
-- `gluonts.py` — GluonTS repository dataset loaders (solar, electricity,
-  traffic, taxi, wiki) with per-dataset window/length defaults.
-- `presets.py` — reusable `SyntheticDataModule` configs (LGSSM, Harmonic,
-  Bimodal, NLBL 1-D/MV, …) built on the fly; registered into the Hydra
-  `data_store` by `experiments.datasets`.
+  (IID, LGSSM, harmonic, bimodal, nonlinear-bimodal-lift 1-D and multivariate,
+  henon-lift); also defines the NLBL constants shared with
+  `ddssm.eval.synthetic_kernels`.
+- `presets.py` — reusable DataModule configs registered into the Hydra
+  `data_store` by `experiments.datasets`: synthetic (LGSSM, Harmonic, Bimodal,
+  NLBL 1-D/MV, …), GluonTS (solar / electricity / …), and KDD payloads.
 - `__init__.py` — package marker.

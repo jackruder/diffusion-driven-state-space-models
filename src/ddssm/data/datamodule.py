@@ -3,19 +3,20 @@
 A ``DataModule`` exposes train/val/test ``DataLoader`` objects plus a
 ``DataMetadata`` block that the experiment uses to wire the model's shape
 kwargs (``data_dim``, ``covariate_dim``, ``T``, ``use_observation_mask``).
-This replaces the ad-hoc mix of ``SyntheticDataset`` (single split) and
-``setup_kdd_loaders`` (returns three loaders + a meta dict).
+Every dataset — synthetic, GluonTS repository, KDD — is one of these, so the
+experiment/eval/viz stages consume a single interface.
 
 Two batch formats are advertised so the experiment can pick the right
 ``batch_transform``:
 
 * ``"sequence"``: items are full ``(D, T)`` sequences with all-ones masks
-  (synthetic data). ``parse_batch``'s native-torch branch is the right
-  transform.
+  (``SyntheticDataModule``). ``parse_batch``'s native-torch branch is the
+  right transform.
 * ``"windowed"``: items are ``(D, L1+L2)`` past/future windows with real
-  observation masks and optional covariates (KDD). Same ``parse_batch``
-  branch handles them because :class:`_GroupedWindowDataset` already emits
-  the canonical model-ready dict.
+  observation masks and optional covariates — the ``WindowedSeriesDataModule``
+  family (``KDDDataModule``, ``GluonTSDataModule``). Same ``parse_batch``
+  branch handles them because :class:`_GroupedWindowDataset` already emits the
+  canonical model-ready dict.
 """
 
 from __future__ import annotations
@@ -211,63 +212,52 @@ class SyntheticDataModule(DDSSMDataModule):
         )
 
 
-class KDDDataModule(DDSSMDataModule):
-    """Windowed-format DataModule for the KDD Cup 2018 PM2.5 dataset.
+class WindowedSeriesDataModule(DDSSMDataModule):
+    """Base for windowed-format DataModules built from a ``series_list``.
 
-    Loads a preprocessed ``.pt`` payload produced by
-    ``scripts/experiments/kdd/preprocess_kdd.py``. The payload is a dict
-    with at least ``series_list`` (a list of pandas Series, one per
-    feature). Optional ``covariates_list`` and ``static_covariates``
-    (when present) are forwarded to :func:`build_loaders_for_expt`; if
-    absent, default temporal covariates (hour/dayofweek/month, normalized
-    to [-0.5, 0.5]) are derived from the shared time index.
-
-    Args:
-        filepath: Path to the preprocessed ``.pt`` payload. Defaults to
-            ``data/kdd.pt`` which is tracked via Git LFS in this repo.
-        L1, L2: Past / future window lengths.
-        eval_step_size: Stride between consecutive eval windows.
-        batch_size: Train / val / test batch size.
-        num_train_batches_per_epoch: ``None`` walks every train window;
-            otherwise samples a fixed number of batches per epoch.
-        train_instances_per_series: Used by the GluonTS backend only.
-        normalize: Per-series z-score using train-tail statistics.
-        backend: ``"torch"`` (windowed Dataset) or ``"gluonts"`` (gluonts
-            ``InstanceSplitter`` pipeline). Default is ``"torch"`` because
-            it produces the canonical model-ready dict directly.
+    Subclasses implement :meth:`_load_series` (per-feature series + optional
+    dynamic / static covariates) and set the window-spec attributes (``L1``,
+    ``L2``, ``test_windows``, ``val_windows`` and the loader knobs). The base
+    lazily windows them via
+    :func:`~ddssm.data.dataload.build_loaders_for_expt` and publishes the three
+    loaders plus a :class:`DataMetadata` block (``forecast_split = L1``).
     """
 
     batch_format: BatchFormat = "windowed"
     batch_transform = staticmethod(parse_batch)
 
-    def __init__(
-        self,
-        filepath: str = "data/kdd.pt",
-        L1: int = 72,
-        L2: int = 48,
-        eval_step_size: int = 24,
-        batch_size: int = 64,
-        num_train_batches_per_epoch: int | None = None,
-        train_instances_per_series: float = 32.0,
-        normalize: bool = True,
-        backend: str = "torch",
-        use_observation_mask: bool = True,
-    ):
-        self.filepath = filepath
-        self.L1 = L1
-        self.L2 = L2
-        self.eval_step_size = eval_step_size
-        self.batch_size = batch_size
-        self.num_train_batches_per_epoch = num_train_batches_per_epoch
-        self.train_instances_per_series = train_instances_per_series
-        self.normalize = normalize
-        self.backend = backend
+    # Loader knobs — subclasses override in __init__.
+    L1: int = 72
+    L2: int = 48
+    test_windows: int = 5
+    val_windows: int = 5
+    eval_step_size: int | None = None
+    batch_size: int = 64
+    normalize: bool = True
+    num_train_batches_per_epoch: int | None = None
+    train_instances_per_series: float = 64.0
+    backend: str = "torch"
+
+    def __init__(self, use_observation_mask: bool = True) -> None:
         self._use_observation_mask = use_observation_mask
         self._built = False
         self._train_loader: DataLoader | None = None
         self._val_loader: DataLoader | None = None
         self._test_loader: DataLoader | None = None
         self._metadata: DataMetadata | None = None
+
+    @abc.abstractmethod
+    def _load_series(
+        self,
+    ) -> tuple[list[pd.Series], list[np.ndarray] | None, np.ndarray | None]:
+        """Return ``(series_list, covariates_list, static_covariates)``.
+
+        ``covariates_list`` is per-series ``(V, T)`` dynamic covariates or
+        ``None``; ``static_covariates`` is ``(D, V_static)`` categorical codes
+        or ``None``. Subclasses may set loader knobs (e.g. data-derived
+        ``train_instances_per_series``) here before returning.
+        """
+        ...
 
     @staticmethod
     def _default_temporal_covariates(index: pd.Index) -> np.ndarray:
@@ -281,23 +271,10 @@ class KDDDataModule(DDSSMDataModule):
         if self._built:
             return
 
-        payload = torch.load(self.filepath, weights_only=False, map_location="cpu")
-        if not isinstance(payload, dict) or "series_list" not in payload:
-            raise ValueError(
-                f"KDDDataModule: payload at {self.filepath!r} must be a dict "
-                f"with a 'series_list' key (list of pandas Series)."
-            )
-        series_list: list[pd.Series] = payload["series_list"]
+        series_list, covariates_list, static_covariates = self._load_series()
         D = len(series_list)
-        T = min(len(s) for s in series_list)
-
-        covariates_list = payload.get("covariates_list", None)
-        if covariates_list is None:
-            cov = self._default_temporal_covariates(series_list[0].index)
-            covariates_list = [cov.copy() for _ in range(D)]
         covariate_dim = covariates_list[0].shape[0] if covariates_list else 0
 
-        static_covariates = payload.get("static_covariates", None)
         static_cardinalities: tuple[int, ...] = ()
         if static_covariates is not None:
             arr = (
@@ -305,23 +282,17 @@ class KDDDataModule(DDSSMDataModule):
                 if isinstance(static_covariates, torch.Tensor)
                 else np.asarray(static_covariates)
             )
-            static_cardinalities = tuple(int(arr[:, j].max()) + 1 for j in range(arr.shape[1]))
+            static_cardinalities = tuple(
+                int(arr[:, j].max()) + 1 for j in range(arr.shape[1])
+            )
             static_covariates = arr
-
-        if self.eval_step_size == 1:
-            test_windows, val_windows = 697, 625
-        elif self.eval_step_size == 24:
-            test_windows, val_windows = 29, 27
-        else:
-            test_windows = 744 // 48
-            val_windows = 672 // 48
 
         train_loader, val_loader, test_loader, (means, stds) = build_loaders_for_expt(
             series_list=series_list,
             L1=self.L1,
             L2=self.L2,
-            test_windows=test_windows,
-            val_windows=val_windows,
+            test_windows=self.test_windows,
+            val_windows=self.val_windows,
             batch_size=self.batch_size,
             normalize=self.normalize,
             num_train_batches_per_epoch=self.num_train_batches_per_epoch,
@@ -369,11 +340,194 @@ class KDDDataModule(DDSSMDataModule):
         return self._metadata
 
 
+class KDDDataModule(WindowedSeriesDataModule):
+    """Windowed-format DataModule for the KDD Cup 2018 PM2.5 dataset.
+
+    Loads a preprocessed ``.pt`` payload produced by
+    ``scripts/experiments/kdd/preprocess_kdd.py``. The payload is a dict
+    with at least ``series_list`` (a list of pandas Series, one per
+    feature). Optional ``covariates_list`` and ``static_covariates``
+    (when present) are forwarded to :func:`build_loaders_for_expt`; if
+    absent, default temporal covariates (hour/dayofweek/month, normalized
+    to [-0.5, 0.5]) are derived from the shared time index.
+
+    Args:
+        filepath: Path to the preprocessed ``.pt`` payload. Defaults to
+            ``data/kdd.pt`` which is tracked via Git LFS in this repo.
+        L1, L2: Past / future window lengths.
+        eval_step_size: Stride between consecutive eval windows.
+        batch_size: Train / val / test batch size.
+        num_train_batches_per_epoch: ``None`` walks every train window;
+            otherwise samples a fixed number of batches per epoch.
+        train_instances_per_series: Used by the GluonTS backend only.
+        normalize: Per-series z-score using train-tail statistics.
+        backend: ``"torch"`` (windowed Dataset) or ``"gluonts"`` (gluonts
+            ``InstanceSplitter`` pipeline). Default is ``"torch"`` because
+            it produces the canonical model-ready dict directly.
+    """
+
+    batch_format: BatchFormat = "windowed"
+    batch_transform = staticmethod(parse_batch)
+
+    def __init__(
+        self,
+        filepath: str = "data/kdd.pt",
+        L1: int = 72,
+        L2: int = 48,
+        eval_step_size: int = 24,
+        batch_size: int = 64,
+        num_train_batches_per_epoch: int | None = None,
+        train_instances_per_series: float = 32.0,
+        normalize: bool = True,
+        backend: str = "torch",
+        use_observation_mask: bool = True,
+    ):
+        super().__init__(use_observation_mask=use_observation_mask)
+        self.filepath = filepath
+        self.L1 = L1
+        self.L2 = L2
+        self.eval_step_size = eval_step_size
+        self.batch_size = batch_size
+        self.num_train_batches_per_epoch = num_train_batches_per_epoch
+        self.train_instances_per_series = train_instances_per_series
+        self.normalize = normalize
+        self.backend = backend
+        # Eval-window counts follow the stride (independent of the data).
+        if eval_step_size == 1:
+            self.test_windows, self.val_windows = 697, 625
+        elif eval_step_size == 24:
+            self.test_windows, self.val_windows = 29, 27
+        else:
+            self.test_windows, self.val_windows = 744 // 48, 672 // 48
+
+    def _load_series(self):
+        payload = torch.load(self.filepath, weights_only=False, map_location="cpu")
+        if not isinstance(payload, dict) or "series_list" not in payload:
+            raise ValueError(
+                f"KDDDataModule: payload at {self.filepath!r} must be a dict "
+                f"with a 'series_list' key (list of pandas Series)."
+            )
+        series_list: list[pd.Series] = payload["series_list"]
+        covariates_list = payload.get("covariates_list", None)
+        if covariates_list is None:
+            cov = self._default_temporal_covariates(series_list[0].index)
+            covariates_list = [cov.copy() for _ in range(len(series_list))]
+        static_covariates = payload.get("static_covariates", None)
+        return series_list, covariates_list, static_covariates
+
+
+class GluonTSDataModule(WindowedSeriesDataModule):
+    """Windowed DataModule for a GluonTS repository dataset.
+
+    Lazily fetches a named dataset (``solar`` / ``electricity`` / ``traffic`` /
+    ``taxi`` / ``wiki``) from the GluonTS repository into a per-series list, then
+    windows it like any other :class:`WindowedSeriesDataModule`. The fetch is
+    deferred to first loader access (never at import), so construction is cheap
+    and network-free. No dynamic/static covariates are attached.
+    """
+
+    SPECS = {
+        "solar": dict(L1=168, L2=24, test_windows=7, val_windows=5),
+        "electricity": dict(L1=168, L2=24, test_windows=7, val_windows=5),
+        "traffic": dict(L1=168, L2=24, test_windows=7, val_windows=5),
+        "taxi": dict(L1=48, L2=24, test_windows=56, val_windows=5),
+        "wiki": dict(L1=90, L2=30, test_windows=5, val_windows=5),
+    }
+    REPO_NAMES = {
+        "solar": "solar-energy",
+        "electricity": "electricity",
+        "traffic": "traffic",
+        "taxi": "taxi_30min",
+        "wiki": "wiki-rolling_nips",
+    }
+    EXPECTED_K = {
+        "solar": 137, "electricity": 370, "traffic": 963,
+        "taxi": 1214, "wiki": 2000,
+    }
+
+    def __init__(
+        self,
+        name: str = "solar",
+        batch_size: int = 64,
+        normalize: bool = True,
+        num_train_batches_per_epoch: int | None = None,
+        train_instances_per_series: float | None = None,
+        backend: str = "torch",
+        force_fresh_repo: bool = False,
+        use_observation_mask: bool = True,
+    ):
+        if name not in self.SPECS:
+            raise ValueError(
+                f"Unknown GluonTS dataset {name!r}; known: {sorted(self.SPECS)}"
+            )
+        super().__init__(use_observation_mask=use_observation_mask)
+        self.name = name
+        spec = self.SPECS[name]
+        self.L1, self.L2 = spec["L1"], spec["L2"]
+        self.test_windows, self.val_windows = spec["test_windows"], spec["val_windows"]
+        self.batch_size = batch_size
+        self.normalize = normalize
+        self.num_train_batches_per_epoch = num_train_batches_per_epoch
+        # ``None`` ⇒ derive from available train windows in ``_load_series``.
+        self.train_instances_per_series = train_instances_per_series
+        self.backend = backend
+        self.force_fresh_repo = force_fresh_repo
+
+    @staticmethod
+    def _period_to_timestamp(x):
+        return x.to_timestamp() if hasattr(x, "to_timestamp") else x
+
+    def _load_series(self):
+        from gluonts.dataset.repository.datasets import get_dataset
+
+        repo = get_dataset(self.REPO_NAMES[self.name], regenerate=self.force_fresh_repo)
+        freq = repo.metadata.freq
+        expected_k = self.EXPECTED_K[self.name]
+        unique: dict = {}
+        seen: set = set()
+        idx = 0
+        for entry in repo.test:
+            item_id = entry.get("item_id", None)
+            key = item_id if item_id is not None else idx
+            if key in seen:
+                if item_id is None:
+                    idx += 1
+                continue
+            start = self._period_to_timestamp(entry["start"])
+            target = entry["target"].astype("float32")
+            unique[key] = pd.Series(
+                target,
+                index=pd.date_range(start=start, periods=len(target), freq=freq),
+            )
+            seen.add(key)
+            if item_id is None:
+                idx += 1
+            if expected_k is not None and len(unique) >= expected_k:
+                break
+
+        series_list = list(unique.values())
+        # Derive loader intensity from the available train windows (historical
+        # gluonts.py defaults) when the caller didn't pin them.
+        K = len(series_list)
+        T_total = min(len(s) for s in series_list)
+        T_train = T_total - (self.val_windows + self.test_windows) * self.L2
+        windows_per_series = max(0, T_train - (self.L1 + self.L2) + 1)
+        if self.train_instances_per_series is None:
+            self.train_instances_per_series = float(windows_per_series)
+        if self.num_train_batches_per_epoch is None:
+            self.num_train_batches_per_epoch = int(
+                (K * windows_per_series + self.batch_size - 1) // self.batch_size
+            )
+        return series_list, None, None
+
+
 __all__ = [
     "BatchFormat",
     "DataMetadata",
     "DDSSMDataModule",
     "NullDataModule",
     "SyntheticDataModule",
+    "WindowedSeriesDataModule",
     "KDDDataModule",
+    "GluonTSDataModule",
 ]
