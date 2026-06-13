@@ -4,7 +4,7 @@ q_ϕ(z_{1:T} | x_{1:T}, u_{1:T}).
 """
 
 import abc
-from typing import Dict, Tuple, Callable, Optional
+from typing import Tuple, Literal, Callable, Optional
 from functools import partial
 
 import torch
@@ -12,13 +12,13 @@ import torch.nn as nn
 
 from ddssm.nn.futsum import FutureSummary, GRUFutureSummary
 from ddssm.nn.fusions import ConcatLinearFusion
-from ddssm.nn.diffnets import ContextProducer
+from ddssm.nn.diffnets import (
+    ContextProducer as ContextProducer,  # re-exported (see transitions.py)
+    )
 from ddssm.nn.combiners import CompoundCombiner, BaseEncoderCombiner
 from ddssm.nn.gaussians import (
-    GaussianHead,
+    GaussianHead as GaussianHead,  # re-exported (see transitions.py / decoder.py)
     GaussianStats,
-    gaussian_entropy,
-    gaussian_log_prob,
 )
 from ddssm.nn.net_utils import hist_abs_time_tokens
 from ddssm.nn.dist_heads import BaseDistHead, GaussianDistHead
@@ -129,6 +129,7 @@ class GaussianEncoder(BaseEncoder):
         combiner: Callable[..., BaseEncoderCombiner] | None = None,
         dist_head: Callable[..., BaseDistHead] | None = None,
         fut_summary: Callable[..., FutureSummary] | None = None,
+        mu_mode: Literal["free", "additive"] = "additive",
     ) -> None:
         super().__init__()
         if combiner is None:
@@ -153,6 +154,9 @@ class GaussianEncoder(BaseEncoder):
         self.fut_mask_emb_dim = fut_mask_emb_dim
         self.pad_mask_emb_dim = pad_mask_emb_dim
         self.use_mask = use_mask
+        if mu_mode not in ("free", "additive"):
+            raise ValueError(f"mu_mode must be 'free' or 'additive'; got {mu_mode!r}")
+        self.mu_mode = mu_mode
         self.eps = 1e-8
 
         # -- static categorical embeddings info --
@@ -285,8 +289,13 @@ class GaussianEncoder(BaseEncoder):
             static_context=static_context,
         )
 
-        # Distribution head: features -> (z, logq, step_params)
-        z_t, logq_t, step_params = self.dist_head(features)
+        # Distribution head: features -> (z, logq, step_params). Optional
+        # persistence frame (μ = z_{t-1} + free μ); the anchor is the most-recent
+        # *real* lag (zero at t=1, where pad_mask_hist[...,-1]=0).
+        mean_offset = None
+        if self.mu_mode == "additive":
+            mean_offset = pad_mask_hist[:, -1:] * z_prev_full[..., -1]  # (B, d)
+        z_t, logq_t, step_params = self.dist_head(features, mean_offset=mean_offset)
         return z_t, logq_t, step_params
 
     def sample_paths(

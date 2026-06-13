@@ -139,6 +139,10 @@ def test_full_elbo_reproduces_pre_refactor_loss() -> None:
 
     torch.manual_seed(0)
     model = _make_vhp_model(lambda_sigma_p=LAMBDA_SIGMA_P)
+    # GaussianEncoder now defaults to mu_mode="additive" (the persistence frame).
+    # This ADR-0004 guard locks the FullELBO *formula* against a fixed pre-refactor
+    # probe, which used the free encoder; pin it back so the reference stays valid.
+    model.encoder.mu_mode = "free"
     batch = _make_batch(B=2, T=5)
     torch.manual_seed(42)
     components, _metrics, _stats = model(

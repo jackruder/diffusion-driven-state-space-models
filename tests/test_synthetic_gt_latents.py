@@ -118,6 +118,56 @@ def test_nonlinear_bimodal_lift_mv_rejects_wrong_obs_dim() -> None:
         )
 
 
+def test_henon_lift_exposes_2d_gt_latent() -> None:
+    """The chaotic Hénon-lift mode exposes a 2-D latent and an 8-D observation."""
+    from ddssm.data.synthetic import HENON_LATENT_D, HENON_OBS_D
+
+    ds = SyntheticDataset(
+        mode="henon-lift",
+        split="val",
+        N_per_split=4,
+        T=8,
+        D=HENON_OBS_D,
+        dataset_seed=0,
+        expose_gt_latents=True,
+    )
+    item = ds[0]
+    assert "gt_latent" in item
+    assert item["gt_latent"].shape == (HENON_LATENT_D, 8)
+    assert item["observed_data"].shape == (HENON_OBS_D, 8)
+
+
+def test_henon_lift_rejects_wrong_obs_dim() -> None:
+    """Hénon-lift enforces D == HENON_OBS_D (the lift target)."""
+    import pytest
+
+    with pytest.raises(AssertionError, match="henon-lift"):
+        SyntheticDataset(
+            mode="henon-lift", split="val", N_per_split=2, T=4, D=3, dataset_seed=0,
+        )
+
+
+def test_henon_lift_latent_stays_bounded() -> None:
+    """Chaos safety: the clamped map + small process noise must never let a
+    trajectory escape to the divergent region (which would blow up the lift
+    and the per-dim standardisation). The whole latent path stays finite and
+    O(1) after standardisation."""
+    from ddssm.data.synthetic import HENON_OBS_D
+
+    ds = SyntheticDataset(
+        mode="henon-lift",
+        split="train",
+        N_per_split=128,
+        T=64,
+        D=HENON_OBS_D,
+        dataset_seed=1,
+        expose_gt_latents=True,
+    )
+    z = ds.gt_latents
+    assert torch.isfinite(z).all()
+    assert z.abs().max().item() < 12.0  # standardised ⇒ no divergent spikes
+
+
 def test_data_module_threads_flag_to_dataset() -> None:
     """``SyntheticDataModule(expose_gt_latents=True)`` propagates the flag."""
     dm = SyntheticDataModule(

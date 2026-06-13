@@ -848,7 +848,7 @@ any of the four; substitute the chosen form into \(μ_p\) and proceed.
    random walk) at the start of stage 1 and the network /learns the nonlinear
    drift as a correction/ — the Euler-integration view, and the analog of the
    zero-init residual head \(g_φ\) on the encoder side
-   ([[file:encoder-options-A-C.org::#resolution-shared-baseline-centering][encoder gain-structured combiner]]).
+   (the encoder's additive persistence frame, ~mu_mode="additive"~).
    A freely-initialized (non-residual) MLP can place \(μ_p\) far from the data
    on the first step, throwing the centered target
    \(\hat{z}_t = \tilde{z}_t - μ_p\) to a large, ill-scaled value and making

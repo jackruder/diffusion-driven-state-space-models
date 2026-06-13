@@ -12,14 +12,12 @@ reparameterized Gaussian sampling and supports closed-form entropy.
 from __future__ import annotations
 
 import abc
-from typing import Optional
 
 import torch
 import torch.nn as nn
 
 from ddssm.nn.gaussians import (
     GaussianHead,
-    GaussianStats,
     gaussian_entropy,
     gaussian_log_prob,
 )
@@ -111,8 +109,11 @@ class GaussianDistHead(BaseDistHead):
     def forward(
         self,
         x: torch.Tensor,
+        mean_offset: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, dict]:
         mu, logvar = self.gauss_head(x)  # (B, d), (B, d)
+        if mean_offset is not None:  # persistence frame: μ = z_{t-1} + free μ
+            mu = mu + mean_offset
         sigma = (0.5 * logvar).exp()
         eps = torch.randn_like(mu)
         z = mu + sigma * eps
