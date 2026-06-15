@@ -41,6 +41,7 @@ class SyntheticDataset(Dataset):
         seed: int = 42,
         dataset_seed: int = 1234,
         expose_gt_latents: bool = False,
+        expose_clean_data: bool = False,
     ):
         """Generate the population and keep the slice for ``split``.
 
@@ -60,6 +61,12 @@ class SyntheticDataset(Dataset):
                 registered closed-form transition kernel in
                 :mod:`ddssm.eval.synthetic_kernels`. Today: ``lgssm``,
                 ``nonlinear-bimodal-lift``, ``nonlinear-bimodal-lift-mv``.
+            expose_clean_data: When True, ``__getitem__`` returns a
+                ``clean_data`` field with the noise-free observation-space
+                trajectory (before observation noise is added). Distinct
+                from ``gt_latent`` (which is model-latent-space, dim d);
+                ``clean_data`` is observation-space (dim D). Supported for
+                modes that add explicit observation noise: ``lorenz``.
         """
         self.mode = mode
         self.split = split
@@ -67,9 +74,12 @@ class SyntheticDataset(Dataset):
         self.T = T
         self.D = D
         self.expose_gt_latents = bool(expose_gt_latents)
+        self.expose_clean_data = bool(expose_clean_data)
         # Populated by _generate_data when the mode supports it.
         self._all_gt_latents: torch.Tensor | None = None
         self.gt_latents: torch.Tensor | None = None
+        self._all_clean: torch.Tensor | None = None
+        self.clean_data: torch.Tensor | None = None
 
         self.N_total = 3 * N_per_split
         all_data = self._generate_data(dataset_seed)
@@ -78,19 +88,26 @@ class SyntheticDataset(Dataset):
             self.data = all_data[:N_per_split]
             if self._all_gt_latents is not None:
                 self.gt_latents = self._all_gt_latents[:N_per_split]
+            if self._all_clean is not None:
+                self.clean_data = self._all_clean[:N_per_split]
         elif split == "val":
             self.data = all_data[N_per_split : 2 * N_per_split]
             if self._all_gt_latents is not None:
                 self.gt_latents = self._all_gt_latents[N_per_split : 2 * N_per_split]
+            if self._all_clean is not None:
+                self.clean_data = self._all_clean[N_per_split : 2 * N_per_split]
         elif split == "test":
             self.data = all_data[2 * N_per_split : 3 * N_per_split]
             if self._all_gt_latents is not None:
                 self.gt_latents = self._all_gt_latents[2 * N_per_split : 3 * N_per_split]
+            if self._all_clean is not None:
+                self.clean_data = self._all_clean[2 * N_per_split : 3 * N_per_split]
         else:
             raise ValueError(f"Unknown split: {split}")
 
-        # Free the full tensor; the per-split slice is what we keep.
+        # Free the full tensors; the per-split slices are what we keep.
         self._all_gt_latents = None
+        self._all_clean = None
 
         self.N = len(self.data)
 
@@ -461,6 +478,12 @@ class SyntheticDataset(Dataset):
             chan_std = trajectory.std(dim=(0, 2), keepdim=True).clamp(min=1e-6)
             trajectory = (trajectory - chan_mean) / chan_std
 
+            # Store the clean (noise-free) trajectory before adding noise so
+            # the denoising eval can score against it. No extra RNG calls,
+            # so generated data remains bit-identical when the flag is off.
+            if self.expose_clean_data:
+                self._all_clean = trajectory.clone()
+
             # Small Gaussian observation noise (σ=0.1 in standardized units,
             # SNR≈10) makes posterior inference non-trivial without swamping
             # the lobe-switching signal.
@@ -475,8 +498,10 @@ class SyntheticDataset(Dataset):
         """Return one model-ready item.
 
         Keys: ``observed_data`` (D, T), ``observation_mask`` (D, T,
-        all ones), ``timepoints`` (T,), and ``gt_latent`` (D, T) when
-        ``expose_gt_latents`` is set and the mode supports it.
+        all ones), ``timepoints`` (T,), ``gt_latent`` (d, T) when
+        ``expose_gt_latents`` is set and the mode supports it, and
+        ``clean_data`` (D, T) when ``expose_clean_data`` is set and the
+        mode supports it (currently: ``lorenz``).
         """
         full_seq = self.data[idx]  # (D, T)
 
@@ -489,6 +514,8 @@ class SyntheticDataset(Dataset):
         }
         if self.expose_gt_latents and self.gt_latents is not None:
             item["gt_latent"] = self.gt_latents[idx]
+        if self.expose_clean_data and self.clean_data is not None:
+            item["clean_data"] = self.clean_data[idx]
         return item
 
 

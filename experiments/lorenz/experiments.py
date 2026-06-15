@@ -34,6 +34,7 @@ from experiments._make import experiment
 from ddssm.experiment.stores import experiment_store
 from experiments.init_centering.model import SmokeModel
 from experiments.lorenz.data import LorenzDirect
+from experiments.lorenz.evals import LorenzViz, LorenzForecastEval
 from experiments.lorenz.hparams import (
     LorenzHparams,
     LorenzStages,
@@ -59,6 +60,8 @@ lorenz_smoke = experiment(
     hparams=LorenzHparams,
     training=Training800,
     stages=LorenzStages,
+    eval=LorenzForecastEval,
+    viz=LorenzViz,
 )
 experiment_store(lorenz_smoke, name="lorenz_smoke")
 
@@ -68,6 +71,8 @@ lorenz_gaussian_full = experiment(
     hparams=LorenzHparams,
     training=Training800,
     stages=LorenzStagesGaussianOnly,
+    eval=LorenzForecastEval,
+    viz=LorenzViz,
 )
 experiment_store(lorenz_gaussian_full, name="lorenz_gaussian_full")
 
@@ -77,6 +82,8 @@ lorenz_frozen_enc = experiment(
     hparams=LorenzHparams,
     training=Training800,
     stages=LorenzStagesFrozenEnc,
+    eval=LorenzForecastEval,
+    viz=LorenzViz,
 )
 experiment_store(lorenz_frozen_enc, name="lorenz_frozen_enc")
 
@@ -86,6 +93,8 @@ lorenz_long_stage2 = experiment(
     hparams=LorenzHparams,
     training=Training800,
     stages=LorenzStagesLongStage2,
+    eval=LorenzForecastEval,
+    viz=LorenzViz,
 )
 experiment_store(lorenz_long_stage2, name="lorenz_long_stage2")
 
@@ -95,5 +104,7 @@ lorenz_low_lr = experiment(
     hparams=LorenzHparams,
     training=Training800,
     stages=LorenzStagesLowLr,
+    eval=LorenzForecastEval,
+    viz=LorenzViz,
 )
 experiment_store(lorenz_low_lr, name="lorenz_low_lr")

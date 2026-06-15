@@ -15,6 +15,7 @@ LorenzDirect = Synthetic(
     T=64,
     N_per_split=1024,
     batch_size=16,
+    expose_clean_data=True,
 )
 
 __all__ = ["LorenzDirect"]

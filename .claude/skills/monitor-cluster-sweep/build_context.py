@@ -71,7 +71,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--remote-dir", default="~/diffusion-driven-state-space-models")
     ap.add_argument("--study-prefix", required=True)
-    ap.add_argument("--suffix", default="__mv")
+    ap.add_argument("--suffix", default="")
     args = ap.parse_args()
     remote = os.path.expanduser(args.remote_dir)
 
@@ -79,8 +79,13 @@ def main():
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     # pick a representative cell DB + a trial dir with resolved_config.yaml
-    dbs = sorted(glob.glob(os.path.join(
-        remote, "optuna", f"{args.study_prefix}_*{args.suffix}.db")))
+    # Search runs/optuna/ first (ddssm.launch default), then optuna/ (legacy).
+    dbs = []
+    for _subdir in ("runs/optuna", "optuna"):
+        dbs = sorted(glob.glob(os.path.join(
+            remote, _subdir, f"{args.study_prefix}_*{args.suffix}.db")))
+        if dbs:
+            break
     if not dbs:
         print(f"FATAL: no DBs match {args.study_prefix}_*{args.suffix}.db", file=sys.stderr)
         raise SystemExit(2)

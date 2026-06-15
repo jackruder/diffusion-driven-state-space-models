@@ -19,6 +19,9 @@ this module is called from training.
 from ddssm.eval.runner import EvalSpec, evaluate
 from ddssm.eval.metrics import METRIC_REGISTRY, EvalContext, register_metric
 
+# Imported for registration side effects: populates METRIC_REGISTRY.
+import ddssm.eval.regime  # noqa: E402, F401
+
 __all__ = [
     "EvalContext",
     "EvalSpec",

@@ -65,8 +65,11 @@ def main():
     args = ap.parse_args()
     remote = os.path.expanduser(args.remote_dir)
     user = os.environ.get("USER", "")
-    db_dir = os.path.join(remote, "optuna")
-    dbs = {os.path.basename(p)[:-3]: p for p in glob.glob(os.path.join(db_dir, "*.db"))}
+    dbs = {}
+    for _subdir in ("runs/optuna", "optuna"):
+        _found = {os.path.basename(p)[:-3]: p
+                  for p in glob.glob(os.path.join(remote, _subdir, "*.db"))}
+        dbs.update(_found)
 
     exps = defaultdict(lambda: {"cells": set(), "running": 0, "pending": 0,
                                 "suffix": "", "mtime": 0.0})
