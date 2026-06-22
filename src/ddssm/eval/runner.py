@@ -99,7 +99,8 @@ def evaluate(
     )
 
     loader = experiment.data.loader(spec.split)
-    T_split = experiment.data.metadata.forecast_split_or(spec.T_split)
+    metadata = experiment.data.metadata
+    T_split = metadata.forecast_split_or(spec.T_split)
 
     ctx = EvalContext(
         model=model,
@@ -110,6 +111,10 @@ def evaluate(
         T_split=T_split,
         num_samples=int(spec.num_samples),
         run_dir=run_dir,
+        # De-normalize obs-space metrics back to the original scale (CSDI
+        # convention). ``None`` for un-normalized (synthetic) data → no-op.
+        means=getattr(metadata, "means", None),
+        stds=getattr(metadata, "stds", None),
     )
 
     results: dict[str, Any] = {}

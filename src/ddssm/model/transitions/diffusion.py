@@ -42,6 +42,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from ddssm.nn.diffnets import CSDIUnet
 from ddssm.nn.gaussians import GaussianStats
@@ -204,6 +205,12 @@ class DiffusionScheduleConfig:
     k_sampling_mode: str = "adaptive_is"
     pk_gamma: float = 1.0
     pk_floor: float = 1e-12
+    # Timesteps processed per score-net call in ``transition_kl`` (the per-t ESM
+    # losses are independent → chunking is pure batching, loss-invariant). With
+    # gradient checkpointing the retained memory is one chunk's d²-attention, so
+    # larger chunks = fewer/faster calls; tune to the memory budget. ``None`` ⇒ 1
+    # (per-timestep: minimal memory, slowest).
+    time_chunk_size: int | None = None
 
 
 @dataclass
@@ -264,6 +271,7 @@ class DiffusionTransition(BaseTransition):
         covariate_dim: int = 0,
         unet: Callable[..., CSDIUnet] | None = None,
         schedule: DiffusionScheduleConfig | None = None,
+        grad_checkpoint: bool = False,
         sampling_schedule: "DiffusionSamplingScheduleConfig | None" = None,
         emb_feature_dim: int | None = None,
         sampler: str = "edm",
@@ -276,6 +284,11 @@ class DiffusionTransition(BaseTransition):
         edm_sigma_min_rel: float | None = None,
     ) -> None:
         super().__init__()
+        # Gradient-checkpoint the score-net call in the per-chunk ESM loss. The
+        # score-net's d²-attention activations are otherwise retained across all
+        # T−j timestep chunks (kl_sum accumulates), which is the latent=512
+        # memory long-pole; checkpointing recomputes them in backward instead.
+        self.grad_checkpoint = bool(grad_checkpoint)
         if int(baseline.latent_dim) != int(latent_dim):
             raise ValueError(
                 f"baseline.latent_dim={baseline.latent_dim} != latent_dim={latent_dim}"
@@ -566,7 +579,12 @@ class DiffusionTransition(BaseTransition):
             _z_target_flat,
             z_hist_flat,   # (N, d, j)
             ctx,
-        ) in self._iter_window_chunks(zs, time_embed, covariates=covariates):
+        ) in self._iter_window_chunks(
+            zs,
+            time_embed,
+            time_chunk_size=self.schedule.time_chunk_size,
+            covariates=covariates,
+        ):
             N = B_ * S_ * chunk_len
             # Slice encoder stats for the chunk's targets.
             mu_t_flat = (
@@ -1033,7 +1051,27 @@ class DiffusionTransition(BaseTransition):
                 wtilde_full / p_k_at_sample.clamp_min(eps_dtype)
             ).detach()
 
-            F_pred = self.diffmodel(latent_w, side_w, c_noise_flat)  # (N*kc, d, 1)
+            if (
+                self.grad_checkpoint
+                and self.training
+                and torch.is_grad_enabled()
+                and not return_per_sample
+            ):
+                # Recompute the score-net (and its d²-attention activations) in
+                # backward instead of retaining it across every timestep chunk.
+                # use_reentrant=False is the torch.compile-compatible variant; the
+                # score-net is deterministic given inputs (RNG is the multinomial/
+                # randn above), so no RNG-state handling is needed here.
+                F_pred = checkpoint(
+                    self.diffmodel,
+                    latent_w,
+                    side_w,
+                    c_noise_flat,
+                    use_reentrant=False,
+                    preserve_rng_state=False,
+                )  # (N*kc, d, 1)
+            else:
+                F_pred = self.diffmodel(latent_w, side_w, c_noise_flat)  # (N*kc, d, 1)
             F_pred = F_pred.squeeze(-1)
             F_tgt_flat = F_target.permute(0, 2, 1).reshape(N * kc, d)
 

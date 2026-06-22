@@ -9,6 +9,7 @@ from functools import partial
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from ddssm.nn.futsum import FutureSummary, GRUFutureSummary
 from ddssm.nn.fusions import ConcatLinearFusion
@@ -23,7 +24,7 @@ from ddssm.nn.gaussians import (
 from ddssm.nn.net_utils import hist_abs_time_tokens
 from ddssm.nn.dist_heads import BaseDistHead, GaussianDistHead
 from ddssm.nn.aggregators import ContextProducerAggregator
-from ddssm.nn.torch_compile import maybe_compile
+from ddssm.nn.torch_compile import maybe_compile, maybe_compile_fn
 
 
 class BaseEncoder(nn.Module, metaclass=abc.ABCMeta):
@@ -130,8 +131,13 @@ class GaussianEncoder(BaseEncoder):
         dist_head: Callable[..., BaseDistHead] | None = None,
         fut_summary: Callable[..., FutureSummary] | None = None,
         mu_mode: Literal["free", "additive"] = "additive",
+        grad_checkpoint: bool = False,
     ) -> None:
         super().__init__()
+        # Gradient-checkpoint the future-summary (its one-shot O(B·T²) attention
+        # is the encoder's largest activation at long histories). Recomputed in
+        # backward instead of retained.
+        self.grad_checkpoint = bool(grad_checkpoint)
         if combiner is None:
             combiner = partial(
                 CompoundCombiner,
@@ -196,6 +202,14 @@ class GaussianEncoder(BaseEncoder):
         )
 
         self.fut_sum_module = maybe_compile(self.fut_sum_module, dynamic=True)
+        # Compile the per-step body of the autoregressive ``sample_paths`` loop —
+        # it's the launch-bound bottleneck (~670 tiny ops/iter × T). Fuses the
+        # combiner + dist_head into one graph per iteration. dynamic=True because
+        # the latent-history length grows over the first j steps. Off-cluster (no
+        # working triton) this falls back to eager; on the cluster it's ~1.3×.
+        self._forward_with_stats = maybe_compile_fn(
+            self._forward_with_stats, dynamic=True
+        )
 
     @property
     def is_gaussian_family(self) -> bool:
@@ -320,12 +334,25 @@ class GaussianEncoder(BaseEncoder):
                 [h_time_embed, covariates.permute(0, 2, 1)], dim=-1
             )
 
-        h = self.fut_sum_module(  # __call__ so the in-place torch.compile fires
-            observed_data=observed_data.permute(0, 2, 1),  # (B, T, D)
-            observed_mask=cond_mask.permute(0, 2, 1) if cond_mask is not None else None,
-            t_emb=h_time_embed,
-            static_embed=static_embed,
-        )  # (B, T, C_summary)
+        obs_perm = observed_data.permute(0, 2, 1)  # (B, T, D)
+        mask_perm = cond_mask.permute(0, 2, 1) if cond_mask is not None else None
+        if self.grad_checkpoint and self.training and torch.is_grad_enabled():
+            h = checkpoint(
+                self.fut_sum_module,
+                obs_perm,
+                mask_perm,
+                h_time_embed,
+                static_embed,
+                use_reentrant=False,
+                preserve_rng_state=False,
+            )  # (B, T, C_summary)
+        else:
+            h = self.fut_sum_module(  # __call__ so the in-place torch.compile fires
+                observed_data=obs_perm,
+                observed_mask=mask_perm,
+                t_emb=h_time_embed,
+                static_embed=static_embed,
+            )  # (B, T, C_summary)
 
         # expand these to S paths
         BS = B * S

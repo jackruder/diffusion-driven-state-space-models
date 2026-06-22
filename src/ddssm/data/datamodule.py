@@ -433,12 +433,17 @@ class GluonTSDataModule(WindowedSeriesDataModule):
         "taxi": dict(L1=48, L2=24, test_windows=56, val_windows=5),
         "wiki": dict(L1=90, L2=30, test_windows=5, val_windows=5),
     }
+    # GP-copula NIPS repository keys (the CSDI / TimeGrad benchmark variants).
+    # NOT the bare ``solar-energy`` / ``electricity`` / ``traffic`` keys — those
+    # resolve to the LSTNet single-series datasets (electricity=321, traffic=862
+    # series), a different protocol. ``taxi_30min`` and the ``*_nips`` keys carry
+    # the per-series rolling format with ``feat_static_cat`` = series id.
     REPO_NAMES = {
-        "solar": "solar-energy",
-        "electricity": "electricity",
-        "traffic": "traffic",
+        "solar": "solar_nips",
+        "electricity": "electricity_nips",
+        "traffic": "traffic_nips",
         "taxi": "taxi_30min",
-        "wiki": "wiki-rolling_nips",
+        "wiki": "wiki2000_nips",
     }
     EXPECTED_K = {
         "solar": 137, "electricity": 370, "traffic": 963,
@@ -483,29 +488,36 @@ class GluonTSDataModule(WindowedSeriesDataModule):
         repo = get_dataset(self.REPO_NAMES[self.name], regenerate=self.force_fresh_repo)
         freq = repo.metadata.freq
         expected_k = self.EXPECTED_K[self.name]
-        unique: dict = {}
-        seen: set = set()
-        idx = 0
+
+        # GP-copula NIPS datasets expose ``num_series × rolling_evaluations``
+        # test entries. The real series id is ``feat_static_cat[0] = cat %
+        # num_series``; ``item_id = cat`` is globally unique (so it can't dedup).
+        # Group by series id and keep the *longest* target per series (the last
+        # rolling window = the full series), which ``build_loaders_for_expt``
+        # then windows itself. Longest-wins is order-independent.
+        longest: dict[int, pd.Series] = {}
         for entry in repo.test:
-            item_id = entry.get("item_id", None)
-            key = item_id if item_id is not None else idx
-            if key in seen:
-                if item_id is None:
-                    idx += 1
+            fsc = entry.get("feat_static_cat", None)
+            if fsc is not None:
+                series_id = int(np.asarray(fsc).reshape(-1)[0])
+            else:
+                series_id = int(entry.get("item_id", len(longest)))
+            target = entry["target"].astype("float32")
+            prev = longest.get(series_id)
+            if prev is not None and len(prev) >= len(target):
                 continue
             start = self._period_to_timestamp(entry["start"])
-            target = entry["target"].astype("float32")
-            unique[key] = pd.Series(
+            longest[series_id] = pd.Series(
                 target,
                 index=pd.date_range(start=start, periods=len(target), freq=freq),
             )
-            seen.add(key)
-            if item_id is None:
-                idx += 1
-            if expected_k is not None and len(unique) >= expected_k:
-                break
 
-        series_list = list(unique.values())
+        series_list = [longest[k] for k in sorted(longest)]
+        if expected_k is not None and len(series_list) != expected_k:
+            raise ValueError(
+                f"GluonTSDataModule[{self.name!r}]: expected {expected_k} series "
+                f"from repo {self.REPO_NAMES[self.name]!r}, got {len(series_list)}."
+            )
         # Derive loader intensity from the available train windows (historical
         # gluonts.py defaults) when the caller didn't pin them.
         K = len(series_list)

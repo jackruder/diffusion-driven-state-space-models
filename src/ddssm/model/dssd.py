@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from ddssm.model.losses import LossComponents
 from ddssm.nn.net_utils import (
@@ -117,9 +118,18 @@ class DDSSM_base(nn.Module):
         baseline_mode: str = "pinned",
         sigma_data: SigmaDataBuffer | None = None,
         stage1_transition: BaseTransition | None = None,
+        # Reconstruction-loss vectorization knobs. The per-t decode is NOT
+        # autoregressive (each x_t depends only on the sampled latent window),
+        # so it batches over time exactly like the diffusion ESM loss.
+        # ``recon_time_chunk`` = timesteps per batched decoder call (``None`` ⇒
+        # all T at once); ``recon_grad_checkpoint`` checkpoints each chunk.
+        recon_time_chunk: int | None = None,
+        recon_grad_checkpoint: bool = False,
     ) -> None:
         super().__init__()
 
+        self._recon_time_chunk = recon_time_chunk
+        self._recon_grad_checkpoint = bool(recon_grad_checkpoint)
         self.j = j
         self.data_dim = data_dim
         self.latent_dim = latent_dim
@@ -257,92 +267,106 @@ class DDSSM_base(nn.Module):
         if observation_mask is None:
             observation_mask = torch.ones_like(observed_data, device=device)
         assert observation_mask is not None
+        BS = B * S
+        j = self.j
+
+        # Flatten the S dimension into the batch.
+        zs_flat = zs.reshape(BS, d, T)
+        obs_flat = observed_data.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, D, T)
+        mask_flat = (
+            observation_mask.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, D, T)
+        )
+        time_flat = time_embed.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, T, -1)
+        cov_flat = (
+            covariates.unsqueeze(1).expand(-1, S, -1, -1)
+            .reshape(BS, covariates.shape[1], T)
+            if covariates is not None else None
+        )
+        static_flat = (
+            static_embed.unsqueeze(1).expand(-1, S, -1, -1)
+            .reshape(BS, D, static_embed.shape[2])
+            if static_embed is not None else None
+        )
+
+        # Per-t decode uses window z_{t-j+1:t} (length j). The per-t losses are
+        # independent given the sampled latent path, so — exactly like the
+        # diffusion ESM loss — we batch them over time CHUNKS rather than looping
+        # 192× (the launch-bound bottleneck). Pre-pad the path with j-1 left
+        # zeros and unfold: window[t] = [z_{t-j+1}, …, z_t], left-zero-padded for
+        # t<j-1, IDENTICAL to the decoder's internal k<j pad (so the loss is
+        # unchanged). (BS, d, T, j).
+        if j > 1:
+            pad = torch.zeros(BS, d, j - 1, device=device, dtype=zs_flat.dtype)
+            zs_pad = torch.cat([pad, zs_flat], dim=-1)
+        else:
+            zs_pad = zs_flat
+        windows = zs_pad.unfold(dimension=-1, size=j, step=1)  # (BS, d, T, j)
 
         total_neg_logp = torch.zeros((), device=device, dtype=dtype)
         total_obs = torch.zeros((), device=device, dtype=dtype)
-
-        # For calibration
         res2_sum = torch.zeros((), device=device, dtype=dtype)
         sigma2_sum = torch.zeros((), device=device, dtype=dtype)
 
-        # Vectorize S dimension
-        # zs: (B, S, d, T) -> (B*S, d, T)
-        zs_flat = zs.reshape(B * S, d, T)
-
-        # Expand data to match: (B, D, T) -> (B, S, D, T) -> (B*S, D, T)
-        obs_flat = observed_data.unsqueeze(1).expand(-1, S, -1, -1).reshape(B * S, D, T)
-        mask_flat = (
-            observation_mask.unsqueeze(1).expand(-1, S, -1, -1).reshape(B * S, D, T)
+        # Default = 1 (per-t): byte-identical to the legacy loop, including the
+        # decoder-dropout RNG pattern (one call per t). Families that want the
+        # speedup opt in via ``recon_time_chunk`` AND a deterministic decoder
+        # (dropout=0) — required for both batch-invariance and the checkpoint.
+        chunk = self._recon_time_chunk
+        chunk = 1 if chunk is None else max(1, min(int(chunk), T))
+        do_ckpt = (
+            self._recon_grad_checkpoint and self.training and torch.is_grad_enabled()
         )
 
-        # Expand time embeddings: (B, T, E) -> (B*S, T, E)
-        time_flat = time_embed.unsqueeze(1).expand(-1, S, -1, -1).reshape(B * S, T, -1)
-
-        if covariates is not None:
-            V = covariates.shape[1]
-            covariates_flat = (
-                covariates.unsqueeze(1).expand(-1, S, -1, -1).reshape(B * S, V, T)
+        for t0 in range(0, T, chunk):
+            t1 = min(t0 + chunk, T)
+            cl = t1 - t0
+            N = BS * cl
+            # Stack the chunk's timesteps into the batch (row = bs*cl + c).
+            x_c = obs_flat[:, :, t0:t1].permute(0, 2, 1).reshape(N, D)
+            m_c = mask_flat[:, :, t0:t1].permute(0, 2, 1).reshape(N, D)
+            zh_c = windows[:, :, t0:t1, :].permute(0, 2, 1, 3).reshape(N, d, j)
+            tidx = (
+                torch.arange(t0, t1, device=device, dtype=torch.long)
+                .view(1, cl).expand(BS, cl).reshape(N)
             )
-        else:
-            covariates_flat = None
-
-        if static_embed is not None:
-            # static_embed is (B, D, E_s) -> expand to (B*S, D, E_s)
-            V_s = static_embed.shape[2]
-            static_flat = (
-                static_embed.unsqueeze(1).expand(-1, S, -1, -1).reshape(B * S, D, V_s)
+            te_c = (
+                time_flat.unsqueeze(1).expand(BS, cl, T, -1)
+                .reshape(N, T, time_flat.shape[-1])
             )
-        else:
-            static_flat = None
-
-        for t in range(T):
-            # Slice current step for all B*S
-            x_t = obs_flat[:, :, t]  # (BS, D)
-            m_t = mask_flat[:, :, t]  # (BS, D)
-            t_idx = torch.full((B * S,), t, device=device, dtype=torch.long)
-
-            # Slice history for all B*S
-            # Note: This preserves logic of passing 0..t+1
-            z_hist = zs_flat[:, :, : t + 1]  # (BS, d, k)
-            if z_hist.shape[-1] > self.j:
-                z_hist = z_hist[..., -self.j :]
-
-            # Single Decoder Call (Vectorized over S)
-            logp_t, mu_x, logvar_x, obs_count_t = self.decoder.log_likelihood(
-                x_t=x_t,
-                z_hist=z_hist,
-                time_embed=time_flat,
-                time_idx=t_idx,
-                observation_mask_t=m_t,
-                covariates=covariates_flat,
-                static_embed=static_flat,
+            cov_c = (
+                cov_flat.unsqueeze(1).expand(BS, cl, -1, -1)
+                .reshape(N, cov_flat.shape[1], T)
+                if cov_flat is not None else None
+            )
+            st_c = (
+                static_flat.unsqueeze(1).expand(BS, cl, -1, -1)
+                .reshape(N, D, static_flat.shape[2])
+                if static_flat is not None else None
             )
 
-            # Reshape back to (B, S) for averaging
-            # logp_t: (BS,) -> (B, S)
-            logp_paths = logp_t.view(B, S)
-            obs_paths = obs_count_t.view(B, S)
+            def _decode(x_c, zh_c, te_c, tidx, m_c, cov_c, st_c):
+                return self.decoder.log_likelihood(
+                    x_t=x_c, z_hist=zh_c, time_embed=te_c, time_idx=tidx,
+                    observation_mask_t=m_c, covariates=cov_c, static_embed=st_c,
+                )
 
-            # mu_x: (BS, D) -> (B, S, D) -> permute to (S, B, D) to match original logic
-            mu_paths = mu_x.view(B, S, D).permute(1, 0, 2)  # (S, B, D)
-            logvar_paths = logvar_x.view(B, S, D).permute(1, 0, 2)  # (S, B, D)
+            if do_ckpt:
+                logp, mu_x, logvar_x, obs_c = checkpoint(
+                    _decode, x_c, zh_c, te_c, tidx, m_c, cov_c, st_c,
+                    use_reentrant=False, preserve_rng_state=False,
+                )
+            else:
+                logp, mu_x, logvar_x, obs_c = _decode(
+                    x_c, zh_c, te_c, tidx, m_c, cov_c, st_c
+                )
 
-            mean_logp_b = logp_paths.mean(dim=1)  # (B,)
-            mean_obs_b = obs_paths.mean(dim=1)  # (B,)
-
-            total_neg_logp = total_neg_logp - mean_logp_b.sum()
-            total_obs = total_obs + mean_obs_b.sum()
-
-            # calibration accumulators over all S equally
-            # x_t is (BS, D) -> view (B, S, D) -> permute (S, B, D)
-            x_t_sb = x_t.view(B, S, D).permute(1, 0, 2)
-            m_t_sb = m_t.view(B, S, D).permute(1, 0, 2)
-
-            resid2 = (x_t_sb - mu_paths).pow(2)  # (S, B, D)
-            sigma2 = logvar_paths.exp().clamp_min(1e-6)  # (S, B, D)
-
-            res2_sum = res2_sum + (resid2 * m_t_sb).sum()
-            sigma2_sum = sigma2_sum + (sigma2 * m_t_sb).sum()
+            # Accumulate: mean over S, sum over (B, chunk) — same as the per-t loop.
+            total_neg_logp = total_neg_logp - logp.view(B, S, cl).mean(dim=1).sum()
+            total_obs = total_obs + obs_c.view(B, S, cl).mean(dim=1).sum()
+            resid2 = (x_c - mu_x).pow(2)
+            sigma2 = logvar_x.exp().clamp_min(1e-6)
+            res2_sum = res2_sum + (resid2 * m_c).sum()
+            sigma2_sum = sigma2_sum + (sigma2 * m_c).sum()
 
         total_obs = total_obs.clamp_min(1.0)
 

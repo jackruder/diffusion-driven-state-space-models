@@ -133,13 +133,17 @@ def Conv1d_with_init(in_channels, out_channels, kernel_size):
     return conv
 
 
-def get_torch_trans(heads=8, layers=1, channels=64):
+def get_torch_trans(heads=8, layers=1, channels=64, dropout: float = 0.1):
     """Build a batch-first GELU :class:`nn.TransformerEncoder`.
 
     Args:
         heads: Number of attention heads.
         layers: Number of encoder layers.
         channels: Model dimension (``d_model``).
+        dropout: Attention/FFN dropout (PyTorch's layer default, 0.1). Callers
+            that gradient-checkpoint this module must pass ``0.0`` — a stochastic
+            forward breaks the deterministic recompute (and adds estimator noise
+            to a score-net's ESM target).
 
     Returns:
         The configured ``nn.TransformerEncoder``.
@@ -150,6 +154,7 @@ def get_torch_trans(heads=8, layers=1, channels=64):
         dim_feedforward=64,
         activation="gelu",
         batch_first=True,
+        dropout=dropout,
     )
     return nn.TransformerEncoder(encoder_layer, num_layers=layers)
 

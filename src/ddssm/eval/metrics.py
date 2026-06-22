@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ddssm.eval.eval_metrics import mae_metrics, crps_sum_metrics
+from ddssm.eval.eval_metrics import mae_metrics, rmse_metrics, crps_sum_metrics
 
 
 @dataclass
@@ -40,6 +40,12 @@ class EvalContext:
     T_split: int | None = None
     num_samples: int = 1
     run_dir: str | None = None
+    # Per-series z-score stats ``(D,)`` for de-normalizing forecasts back to the
+    # original data scale before obs-space metrics (CSDI's calc_quantile_CRPS
+    # de-normalizes; per-series scaling makes the channel-sum non-comparable
+    # otherwise). ``None`` ⇒ data was not normalized (e.g. synthetic) → no-op.
+    means: torch.Tensor | None = None
+    stds: torch.Tensor | None = None
 
 
 MetricFn = Callable[[EvalContext], Dict[str, Any]]
@@ -78,6 +84,14 @@ def _iter_forecast_batches(ctx: EvalContext):
     L1 = int(ctx.T_split)
     transform = ctx.batch_transform
 
+    # De-normalize forecasts back to the original data scale (CSDI convention),
+    # so obs-space metrics are comparable to published tables. ``(D,)`` per-series
+    # stats broadcast over (B[,S],D,L2).
+    denorm = ctx.means is not None and ctx.stds is not None
+    if denorm:
+        mean_d = ctx.means.to(device).reshape(1, -1, 1)   # (1, D, 1)
+        std_d = ctx.stds.to(device).reshape(1, -1, 1)
+
     with torch.no_grad():
         for batch in ctx.loader:
             if transform is not None:
@@ -109,7 +123,12 @@ def _iter_forecast_batches(ctx: EvalContext):
                 static_covariates=static_cov,
                 num_samples=int(ctx.num_samples),
             )
-            yield out["pred_samples"], out["pred_mean"], y_future
+            pred_samples, pred_mean = out["pred_samples"], out["pred_mean"]
+            if denorm:
+                pred_samples = pred_samples * std_d.unsqueeze(1) + mean_d.unsqueeze(1)
+                pred_mean = pred_mean * std_d + mean_d
+                y_future = y_future * std_d + mean_d
+            yield pred_samples, pred_mean, y_future
 
 
 @register_metric("energy_score")
@@ -156,6 +175,22 @@ def eval_mae(ctx: EvalContext) -> Dict[str, Any]:
     return {
         "mae": float(np.mean(g_acc)),
         "mae_per_t": np.mean(np.stack(t_acc, axis=0), axis=0).tolist(),
+    }
+
+
+@register_metric("rmse")
+def eval_rmse(ctx: EvalContext) -> Dict[str, Any]:
+    """Root mean squared error of the forecast mean against the true future."""
+    g_acc, t_acc = [], []
+    for _, pred_mean, y_future in _iter_forecast_batches(ctx):
+        g, t = rmse_metrics(pred_mean, y_future)
+        g_acc.append(float(g.item()))
+        t_acc.append(t.detach().cpu().numpy())
+    if not g_acc:
+        return {"rmse": float("nan"), "rmse_per_t": []}
+    return {
+        "rmse": float(np.mean(g_acc)),
+        "rmse_per_t": np.mean(np.stack(t_acc, axis=0), axis=0).tolist(),
     }
 
 

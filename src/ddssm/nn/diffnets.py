@@ -172,10 +172,12 @@ class FeatureLayer(nn.Module):
 class TransformerFeatureLayer(FeatureLayer):
     """Feature mixer running a Transformer encoder over the ``d`` axis."""
 
-    def __init__(self, channels: int, nheads: int = 8, layers: int = 1):
+    def __init__(
+        self, channels: int, nheads: int = 8, layers: int = 1, dropout: float = 0.1
+    ):
         super().__init__()
         self.layer = get_torch_trans(
-            heads=nheads, layers=layers, channels=channels
+            heads=nheads, layers=layers, channels=channels, dropout=dropout
         )
 
     def forward(
@@ -238,10 +240,10 @@ def build_time_layer(time_type: str, channels: int, kernel_size: int = 3, gru_la
     raise ValueError(f"Unknown time_type: {time_type!r}. Choose from 'conv', 'gru', 'identity'.")
 
 
-def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_layers: int = 1) -> FeatureLayer:
+def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_layers: int = 1, dropout: float = 0.1) -> FeatureLayer:
     """Factory: create a FeatureLayer from a type string and shared ``channels``."""
     if feature_type == "transformer":
-        return TransformerFeatureLayer(channels, nheads=nheads, layers=n_layers)
+        return TransformerFeatureLayer(channels, nheads=nheads, layers=n_layers, dropout=dropout)
     if feature_type == "conv":
         return ConvFeatureLayer(channels)
     if feature_type == "identity":
@@ -265,6 +267,8 @@ class FeatureMixerConfig:
     type: str = "transformer"
     nheads: int = 8
     n_layers: int = 1
+    # Set 0.0 when the score-net is gradient-checkpointed (deterministic forward).
+    dropout: float = 0.1
 
 
 def _default_context_feature_mixer_config() -> FeatureMixerConfig:
@@ -493,6 +497,7 @@ class CSDIUnet(nn.Module):
                         channels,
                         nheads=residual_block.feature.nheads,
                         n_layers=residual_block.feature.n_layers,
+                        dropout=residual_block.feature.dropout,
                     ),
                 )
                 for _ in range(self.n_layers)
@@ -775,6 +780,7 @@ class ContextProducer(nn.Module):
                         channels,
                         nheads=residual_block.feature.nheads,
                         n_layers=residual_block.feature.n_layers,
+                        dropout=residual_block.feature.dropout,
                     ),
                 )
             )
