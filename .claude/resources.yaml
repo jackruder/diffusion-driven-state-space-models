@@ -66,7 +66,7 @@ profiles:
     storage:
       runs_dir: ~/diffusion-driven-state-space-models/runs
       scratch: ~/diffusion-driven-state-space-models/scratch
-      optuna_db_dir: ~/diffusion-driven-state-space-models/optuna
+      optuna_db_dir: ~/diffusion-driven-state-space-models/runs/optuna
       shared_fs: true                         # confirmed: cluster FS visible across nodes
     notes:
       - "Use for high-value single-experiment runs; not the right pool for big sweeps."
@@ -99,7 +99,7 @@ profiles:
     storage:
       runs_dir: ~/diffusion-driven-state-space-models/runs
       scratch: ~/diffusion-driven-state-space-models/scratch
-      optuna_db_dir: ~/diffusion-driven-state-space-models/optuna
+      optuna_db_dir: ~/diffusion-driven-state-space-models/runs/optuna
       shared_fs: true
     notes:
       - "Confirmed (2026-05-27): gpupriority gives exactly 1 A100 + 1 A40, both"
@@ -134,7 +134,7 @@ profiles:
     storage:
       runs_dir: ~/diffusion-driven-state-space-models/runs
       scratch: ~/diffusion-driven-state-space-models/scratch
-      optuna_db_dir: ~/diffusion-driven-state-space-models/optuna
+      optuna_db_dir: ~/diffusion-driven-state-space-models/runs/optuna
       shared_fs: true
     notes:
       - "Canonical A40 pool per the user (2026-05-27): A40 sweeps run here."
