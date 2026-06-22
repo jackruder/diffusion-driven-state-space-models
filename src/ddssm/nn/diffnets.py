@@ -30,9 +30,14 @@ class SmallTimeConv(nn.Module):
     residual no-op when ``L == 1``.
     """
 
-    def __init__(self, channels: int, k: int = 3, dilation: int = 1):
+    def __init__(self, channels: int, k: int = 3, dilation: int = 1, causal: bool = False):
         super().__init__()
-        pad = dilation * (k // 2)
+        # Causal: left-pad by dilation·(k-1) and use padding=0 in the conv so output[t]
+        # depends only on input[≤t] (no peeking ahead). nn.Conv1d's `padding=` is
+        # symmetric-only, so the asymmetric pad must be an explicit F.pad in forward.
+        self.causal = causal
+        self.causal_pad = dilation * (k - 1)
+        pad = 0 if causal else dilation * (k // 2)
         self.dw = nn.Conv1d(
             channels,
             channels,
@@ -51,7 +56,8 @@ class SmallTimeConv(nn.Module):
     def forward(self, y: torch.Tensor) -> torch.Tensor:
         if y.size(-1) <= 1:  # L==1 guard
             return y
-        h = F.silu(self.dw(y))
+        x = F.pad(y, (self.causal_pad, 0)) if self.causal else y
+        h = F.silu(self.dw(x))
         h = self.pw(h)
         return y + h
 
@@ -60,10 +66,10 @@ class SmallTimeConv(nn.Module):
 class SmallTimeConvStack(nn.Module):
     """Two stacked :class:`SmallTimeConv` blocks with dilation 1 then 2."""
 
-    def __init__(self, channels: int):
+    def __init__(self, channels: int, causal: bool = False):
         super().__init__()
-        self.m1 = SmallTimeConv(channels, k=3, dilation=1)
-        self.m2 = SmallTimeConv(channels, k=3, dilation=2)
+        self.m1 = SmallTimeConv(channels, k=3, dilation=1, causal=causal)
+        self.m2 = SmallTimeConv(channels, k=3, dilation=2, causal=causal)
 
     def forward(self, y: torch.Tensor) -> torch.Tensor:
         return self.m2(self.m1(y))
@@ -108,11 +114,15 @@ class TimeLayer(nn.Module):
 
 
 class ConvTimeLayer(TimeLayer):
-    """Time mixer using a :class:`SmallTimeConvStack` over the ``L`` axis."""
+    """Time mixer using a :class:`SmallTimeConvStack` over the ``L`` axis.
 
-    def __init__(self, channels: int, kernel_size: int = 3):
+    ``causal=True`` switches the conv to left-only padding, so output[t] depends only
+    on input[≤t] — required for the AR-flow encoder's strict-causality guarantee.
+    """
+
+    def __init__(self, channels: int, kernel_size: int = 3, causal: bool = False):
         super().__init__()
-        self.layer = SmallTimeConvStack(channels)
+        self.layer = SmallTimeConvStack(channels, causal=causal)
 
     def forward(
         self, x_flat: torch.Tensor, base_shape: tuple[int, int, int, int]
@@ -156,6 +166,39 @@ class GRUTimeLayer(TimeLayer):
         y, _ = self.layer(y)
 
         # (B*d, L, C) -> (B, d, L, C) -> (B, C, d, L) -> (B, C, d*L)
+        y = y.reshape(B, d, L, C).permute(0, 3, 1, 2).reshape(B, C, d * L)
+        return y
+
+
+class CausalTransformerTimeLayer(TimeLayer):
+    """Time mixer: a forward-time CAUSAL Transformer over the ``L`` axis (per ``d`` site).
+
+    Position ``t`` attends only to ``≤ t`` via ``mask = triu(diagonal=1)`` applied to the
+    FORWARD-time stream (NO reversal, unlike ``TransformerFutureSummary``). Combined with
+    the AR-flow's right-shift of η this gives output[t] ⟂ η_{≥t}. ``dropout=0`` keeps the
+    gradient-checkpoint recompute deterministic.
+    """
+
+    def __init__(
+        self, channels: int, nheads: int = 8, layers: int = 1, dropout: float = 0.0
+    ):
+        super().__init__()
+        self.layer = get_torch_trans(
+            heads=nheads, layers=layers, channels=channels, dropout=dropout
+        )
+
+    def forward(
+        self, x_flat: torch.Tensor, base_shape: tuple[int, int, int, int]
+    ) -> torch.Tensor:
+        B, C, d, L = base_shape
+        if L <= 1:
+            return x_flat
+        # (B, C, d, L) -> (B*d, L, C): sequence = time L, model-dim = C, batch = B*d.
+        y = x_flat.view(B, C, d, L).permute(0, 2, 3, 1).reshape(B * d, L, C)
+        mask = torch.triu(
+            torch.ones(L, L, device=y.device, dtype=torch.bool), diagonal=1
+        )
+        y = self.layer(y, mask=mask)
         y = y.reshape(B, d, L, C).permute(0, 3, 1, 2).reshape(B, C, d * L)
         return y
 

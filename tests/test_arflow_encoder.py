@@ -1,0 +1,337 @@
+"""Tests for the parallel AR-flow-on-noise encoder (``ARFlowEncoder``).
+
+Built up alongside the implementation as TDD vertical slices (see the plan).
+"""
+
+from __future__ import annotations
+
+from functools import partial
+
+import pytest
+import torch
+import torch.nn as nn
+
+from ddssm.model.encoder import ARFlowEncoder, arflow_cumsum
+from ddssm.nn.futsum import TransformerFutureSummary
+
+
+def make_encoder(
+    *,
+    data_dim: int = 12,
+    latent_dim: int = 8,
+    hidden_dim: int = 16,
+    channels: int = 8,
+    nheads: int = 4,
+    backbone: str = "transformer",
+    covariate_dim: int = 0,
+    static_covariate_dim: int = 0,
+    grad_checkpoint: bool = False,
+) -> ARFlowEncoder:
+    return ARFlowEncoder(
+        data_dim=data_dim,
+        latent_dim=latent_dim,
+        j=1,
+        emb_time_dim=0,
+        use_mask=False,
+        hidden_dim=hidden_dim,
+        covariate_dim=covariate_dim,
+        static_covariate_dim=static_covariate_dim,
+        channels=channels,
+        causal_layers=2,
+        nheads=nheads,
+        backbone=backbone,
+        fut_summary=partial(
+            TransformerFutureSummary,
+            summary_dim=hidden_dim,
+            nheads=nheads,
+            transformer_layers=1,
+        ),
+        grad_checkpoint=grad_checkpoint,
+    )
+
+
+# ---- Slice 1: drop-in contract --------------------------------------------
+
+
+def test_contract_shapes_and_family() -> None:
+    B, D, T, S, d = 2, 12, 5, 3, 8
+    enc = make_encoder(data_dim=D, latent_dim=d, hidden_dim=16)
+    obs = torch.randn(B, D, T)
+    te = torch.zeros(B, T, 0)
+
+    zs, logqs, stats = enc.sample_paths(obs, te, S=S)
+
+    assert zs.shape == (B, S, d, T)
+    assert logqs.shape == (B, S, T)
+    assert set(stats.keys()) == {"mus", "logvars"}
+    assert stats["mus"].shape == (B, S, d, T)
+    assert stats["logvars"].shape == (B, S, d, T)
+    assert enc.is_gaussian_family is True
+    assert torch.isfinite(zs).all() and torch.isfinite(logqs).all()
+
+
+def test_sample_paths_default_S_is_one() -> None:
+    B, D, T, d = 2, 12, 4, 8
+    enc = make_encoder(data_dim=D, latent_dim=d, hidden_dim=16)
+    zs, logqs, stats = enc.sample_paths(torch.randn(B, D, T), torch.zeros(B, T, 0))
+    assert zs.shape == (B, 1, d, T)
+    assert logqs.shape == (B, 1, T)
+
+
+# ---- Slice 2: additive flow + consistency ---------------------------------
+
+
+def test_arflow_cumsum_identities() -> None:
+    from ddssm.model.encoder import arflow_cumsum, _shift_right_time
+
+    BS, d, T = 4, 8, 6
+    g = torch.randn(BS, d, T)
+    logvar = torch.randn(BS, d, T) * 0.3
+    eta = torch.randn(BS, d, T)
+    z, mus, lv = arflow_cumsum(g, eta, logvar, -7.0, 6.0)
+    sigma = (0.5 * lv).exp()
+
+    # cumsum of the increment, z_0 = 0
+    assert torch.allclose(z, torch.cumsum(g + sigma * eta, dim=-1), atol=1e-6)
+    # μ_t = z_{t-1} + g_t, and the first step μ_1 = g_1 (z_0 = 0)
+    assert torch.allclose(mus, _shift_right_time(z) + g, atol=1e-6)
+    assert torch.allclose(mus[..., 0], g[..., 0], atol=1e-6)
+    # reparam residual z_t − μ_t = σ_t⊙η_t
+    assert torch.allclose(z - mus, sigma * eta, atol=1e-6)
+    # THE σ_data / ESM invariant: mu_hat = μ_t − z_{t-1} = g_t (the residual the
+    # diffusion denoises) — NOT z_t. So σ_data tracks Var[g]+E[σ²], not Var[z_t].
+    assert torch.allclose(mus[..., 1:] - z[..., :-1], g[..., 1:], atol=1e-6)
+
+
+def test_logq_self_consistency() -> None:
+    from ddssm.nn.gaussians import gaussian_log_prob
+
+    B, D, T, S, d = 2, 12, 5, 3, 8
+    enc = make_encoder(data_dim=D, latent_dim=d, hidden_dim=16)
+    zs, logqs, stats = enc.sample_paths(torch.randn(B, D, T), torch.zeros(B, T, 0), S=S)
+    recomputed = gaussian_log_prob(
+        zs.permute(0, 1, 3, 2),
+        stats["mus"].permute(0, 1, 3, 2),
+        stats["logvars"].permute(0, 1, 3, 2),
+    )  # (B, S, T)
+    assert torch.allclose(recomputed, logqs, atol=1e-5)
+
+
+def test_persistence_baseline_matches_z_prev() -> None:
+    # The transition forms mu_hat = mus − PersistenceBaseline.mean(z_hist) and relies
+    # on it being the innovation g. That holds iff the baseline's z_{t-1} (from
+    # unfolding zs) equals the encoder's z_prev = shift_right(zs). Pin the off-by-one.
+    from ddssm.model.centering.baselines import PersistenceBaseline
+    from ddssm.model.encoder import _shift_right_time
+
+    B, S, d, T, j = 2, 2, 8, 6, 1
+    enc = make_encoder(latent_dim=d, hidden_dim=16)
+    zs, _, _ = enc.sample_paths(torch.randn(B, 12, T), torch.zeros(B, T, 0), S=S)
+    baseline = PersistenceBaseline(latent_dim=d, j=j)
+    z_prev = _shift_right_time(zs)  # z_prev[..., t] = zs[..., t-1]
+    for t in range(j, T):
+        z_hist = zs[..., t - j : t].reshape(-1, d, j)  # (N, d, j)
+        mu_p = baseline.mean(z_hist).reshape(B, S, d)
+        assert torch.allclose(mu_p, z_prev[..., t], atol=1e-6), f"t={t}"
+
+
+# ---- Slice 3 + 5: strict causality (both backbones) -----------------------
+
+
+def _live_encoder(backbone: str, d: int = 4, T: int = 6) -> ARFlowEncoder:
+    enc = make_encoder(
+        latent_dim=d, hidden_dim=16, channels=8, nheads=4, backbone=backbone
+    )
+    # Randomize the zero-init head so g/σ actually depend on η — zero-init would make
+    # ∂μ/∂η structurally zero and mask an anti-causal wiring (Agent-4's blind spot).
+    nn.init.normal_(enc.causal_net.head.weight, std=0.5)
+    nn.init.normal_(enc.causal_net.head.bias, std=0.5)
+    enc.eval()
+    return enc
+
+
+@pytest.mark.parametrize("backbone", ["conv", "transformer"])
+def test_strict_causality_probe(backbone: str) -> None:
+    d, T = 4, 6
+    enc = _live_encoder(backbone, d=d, T=T)
+    h = torch.randn(1, T, enc.summary_dim)
+    eta = torch.randn(1, d, T, requires_grad=True)
+    g, logvar = enc.causal_net(eta, h)
+    _, mus, _ = arflow_cumsum(
+        g, eta, logvar, enc.clamp_logvar_min, enc.clamp_logvar_max
+    )
+
+    def grad_wrt_eta(scalar: torch.Tensor) -> torch.Tensor:
+        if eta.grad is not None:
+            eta.grad = None
+        scalar.backward(retain_graph=True)
+        return eta.grad.clone()
+
+    for s in range(T):
+        # μ_s and logσ²_s must NOT depend on η_{≥s} (the Gaussian-conditional claim
+        # is about both the mean AND the variance).
+        for tensor, name in ((g, "g"), (logvar, "logvar"), (mus, "mu")):
+            grad = grad_wrt_eta(tensor[..., s].sum())
+            assert grad[..., s:].abs().max() < 1e-6, f"{name} leaks η≥{s} ({backbone})"
+        # …and it must actually USE η_{<s} (path alive, not dead-zeroed).
+        if s >= 1:
+            grad = grad_wrt_eta(g[..., s].sum())
+            assert grad[..., :s].abs().max() > 1e-7, f"g_{s} dead path ({backbone})"
+
+
+@pytest.mark.parametrize("backbone", ["conv", "transformer"])
+def test_causality_finite_difference(backbone: str) -> None:
+    d, T, t_pert = 4, 6, 2
+    enc = _live_encoder(backbone, d=d, T=T)
+    h = torch.randn(1, T, enc.summary_dim)
+    with torch.no_grad():
+        eta0 = torch.randn(1, d, T)
+        g0, lv0 = enc.causal_net(eta0, h)
+        _, mus0, _ = arflow_cumsum(
+            g0, eta0, lv0, enc.clamp_logvar_min, enc.clamp_logvar_max
+        )
+        eta1 = eta0.clone()
+        eta1[..., 0, t_pert] += 1.0
+        g1, lv1 = enc.causal_net(eta1, h)
+        _, mus1, _ = arflow_cumsum(
+            g1, eta1, lv1, enc.clamp_logvar_min, enc.clamp_logvar_max
+        )
+    # μ_{≤t_pert} unchanged (they depend only on η_{<s} ∌ η_{t_pert}); μ_{>t_pert} must move.
+    assert torch.allclose(mus0[..., : t_pert + 1], mus1[..., : t_pert + 1], atol=1e-6)
+    assert (mus0[..., t_pert + 1 :] - mus1[..., t_pert + 1 :]).abs().max() > 1e-6
+
+
+# ---- Slice 4: feature mixer + h_t side-info + parallelism ------------------
+
+
+@pytest.mark.parametrize("backbone", ["conv", "transformer"])
+def test_h_affects_g(backbone: str) -> None:
+    # The per-position h_t side-info must actually steer g (otherwise the evidence is
+    # ignored). With η fixed, two different h → different g.
+    enc = _live_encoder(backbone, d=4, T=6)
+    eta = torch.randn(1, 4, 6)
+    h1 = torch.randn(1, 6, enc.summary_dim)
+    h2 = torch.randn(1, 6, enc.summary_dim)
+    g1, _ = enc.causal_net(eta, h1)
+    g2, _ = enc.causal_net(eta, h2)
+    assert (g1 - g2).abs().max() > 1e-6
+
+
+def test_covariates_reach_summary() -> None:
+    # dssd passes `covariates` into sample_paths and gluonts carries temporal covariates;
+    # they must reach the future-summary (else h silently drops them).
+    B, D, T, V, d = 2, 12, 5, 3, 4
+    enc = make_encoder(data_dim=D, latent_dim=d, hidden_dim=16, covariate_dim=V)
+    nn.init.normal_(enc.causal_net.head.weight, std=0.5)
+    nn.init.normal_(enc.causal_net.head.bias, std=0.5)
+    enc.eval()
+    obs, te = torch.randn(B, D, T), torch.zeros(B, T, 0)
+    cov0, cov1 = torch.zeros(B, V, T), torch.randn(B, V, T)
+    torch.manual_seed(0)
+    zs0, _, _ = enc.sample_paths(obs, te, covariates=cov0)
+    torch.manual_seed(0)
+    zs1, _, _ = enc.sample_paths(obs, te, covariates=cov1)
+    assert (zs0 - zs1).abs().max() > 1e-6
+
+
+def test_single_parallel_forward() -> None:
+    # The whole point: one parallel pass over all T, not a per-step Python loop.
+    enc = make_encoder(latent_dim=4, hidden_dim=16)
+    calls = {"n": 0}
+    enc.causal_net.register_forward_hook(
+        lambda *a: calls.__setitem__("n", calls["n"] + 1)
+    )
+    enc.sample_paths(torch.randn(2, 12, 32), torch.zeros(2, 32, 0), S=2)
+    assert calls["n"] == 1
+
+
+# ---- Slice 6: identity-baseline guard -------------------------------------
+
+
+def test_identity_baseline_guard() -> None:
+    from ddssm.model.dssd import _require_persistence_baseline
+    from ddssm.model.centering.baselines import PersistenceBaseline, ZeroBaseline
+
+    enc = make_encoder(latent_dim=4, hidden_dim=16)
+    assert enc.requires_persistence_baseline is True
+    # persistence/identity is accepted
+    _require_persistence_baseline(enc, PersistenceBaseline(latent_dim=4, j=1))
+    # any other baseline (or None) is rejected — the additive frame would mis-center
+    with pytest.raises(NotImplementedError):
+        _require_persistence_baseline(
+            enc, ZeroBaseline(latent_dim=4, j=1, hidden_dim=8, n_layers=2)
+        )
+    with pytest.raises(NotImplementedError):
+        _require_persistence_baseline(enc, None)
+
+
+# ---- Slice 7: closed-form entropy matches MC ------------------------------
+
+
+def test_entropy_closed_form_matches_mc() -> None:
+    d, T, j = 4, 5, 1
+    enc = make_encoder(latent_dim=d, hidden_dim=16, channels=8, nheads=4)
+    # small random head so logvar varies (zero-init would make this trivially constant)
+    nn.init.normal_(enc.causal_net.head.weight, std=0.2)
+    nn.init.normal_(enc.causal_net.head.bias, std=0.2)
+    enc.eval()
+    _, logqs, stats = enc.sample_paths(
+        torch.randn(1, 12, T), torch.zeros(1, T, 0), S=6000
+    )
+    closed = enc.entropy_transition(stats, j)
+    mc = enc.mc_entropy_transition(logqs, j)
+    assert torch.allclose(closed, mc, rtol=0.05, atol=0.05), (closed.item(), mc.item())
+
+
+# ---- Slice 8: end-to-end ELBO + σ_data residual tracking -------------------
+
+
+def test_end_to_end_arflow_elbo_and_sigma_data() -> None:
+    import math
+
+    from experiments.gluonts_forecast.model import build_gluonts_model
+
+    torch.manual_seed(0)
+    B, D, T, latent = 2, 12, 6, 8
+    model = build_gluonts_model(
+        data_dim=D,
+        latent_dim=latent,
+        T_max=T,
+        nheads=4,
+        channels=16,
+        summary_layers=1,
+        diffusion_layers=2,
+        num_steps=4,
+        grad_checkpoint=False,
+        sigma_data_ema_decay=0.0,  # one update lands exactly on the batch estimate
+        encoder_type="arflow",
+    )
+    assert isinstance(model.encoder, ARFlowEncoder)
+    # Pin a known residual scale: logvar bias = log 4 → σ² = 4 (g stays 0; head weight=0),
+    # so the σ_data estimate E[σ²]+Var[g] = 4 is a definite value to check against.
+    with torch.no_grad():
+        model.encoder.causal_net.head.bias[1] = math.log(4.0)
+    model.train()  # σ_data updates are training-only
+
+    x = torch.randn(B, D, T)
+    mask = torch.ones(B, D, T)
+    timepoints = torch.arange(T).unsqueeze(0).expand(B, -1)
+    components, metrics, _ = model(
+        observed_data=x, observation_mask=mask, timepoints=timepoints
+    )
+    loss = components.total()
+    assert torch.isfinite(loss), loss
+    loss.backward()
+    # gradient flows back through the cumsum to the encoder (the zero-init head moves
+    # first; the deeper blocks unlock once it's non-zero).
+    hgrad = model.encoder.causal_net.head.weight.grad
+    assert hgrad is not None and torch.isfinite(hgrad).all() and hgrad.abs().sum() > 0
+
+    # σ_data tracks the RESIDUAL variance E[σ²]+Var[g] = 4 + 0, and is FLAT in t — NOT the
+    # random-walk Var[z_t] ∝ t (a mus = z_t off-by-one) nor a 2× over-count. Slot 0 is the
+    # VHP-walk init step (t=1), whose mu_hat folds in the aux-posterior variance — a
+    # transition-owned quantity, excluded here.
+    sd2 = model.sigma_data.sigma_data2.detach()
+    main = sd2[1:]
+    assert torch.allclose(main, torch.full_like(main, 4.0), atol=0.1), main
+    assert (main.max() - main.min()).item() < 0.1  # flat in t

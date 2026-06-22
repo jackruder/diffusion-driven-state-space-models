@@ -9,17 +9,24 @@ from functools import partial
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from ddssm.nn.futsum import FutureSummary, GRUFutureSummary
 from ddssm.nn.fusions import ConcatLinearFusion
 from ddssm.nn.diffnets import (
     ContextProducer as ContextProducer,  # re-exported (see transitions.py)
+    ConvTimeLayer,
+    CausalTransformerTimeLayer,
+    ResidualBlock,
+    build_feature_layer,
     )
 from ddssm.nn.combiners import CompoundCombiner, BaseEncoderCombiner
 from ddssm.nn.gaussians import (
     GaussianHead as GaussianHead,  # re-exported (see transitions.py / decoder.py)
     GaussianStats,
+    gaussian_log_prob,
+    gaussian_entropy,
 )
 from ddssm.nn.net_utils import hist_abs_time_tokens
 from ddssm.nn.dist_heads import BaseDistHead, GaussianDistHead
@@ -454,3 +461,260 @@ class GaussianEncoder(BaseEncoder):
 
     def entropy_init(self, stats: dict, steps: int) -> torch.Tensor:
         return self.dist_head.entropy_init(stats, steps)
+
+
+def _shift_right_time(x: torch.Tensor) -> torch.Tensor:
+    """Shift along the last (time) axis by 1: prepend a zero column, drop the last.
+
+    Maps a forward-time signal ``x_t`` to ``x_{t-1}`` with ``x_0 = 0`` — used both to
+    feed the CausalNoiseNet only the *strict* noise prefix ``η_{<t}`` and to read the
+    persistence anchor ``z_{t-1}`` out of the cumsum.
+    """
+    return torch.cat([x.new_zeros(*x.shape[:-1], 1), x[..., :-1]], dim=-1)
+
+
+def arflow_cumsum(g, eta, logvar, clamp_logvar_min, clamp_logvar_max):
+    """Additive/persistence flow over the noise. All tensors ``(..., d, T)``.
+
+    ``z_t = z_{t-1} + g_t + σ_t⊙η_t`` (cumsum of the increment, ``z_0 = 0``);
+    ``μ_t = z_{t-1} + g_t`` is the per-step conditional mean — the persistence anchor
+    PLUS the innovation, so the transition's ``mu_hat = μ_t − z_{t-1} = g_t`` is the
+    residual the diffusion denoises, and σ_data tracks ``Var[g]+E[σ²]`` not ``Var[z_t]``.
+
+    Returns ``(z, mus, logvar_clamped)``.
+    """
+    logvar = logvar.clamp(clamp_logvar_min, clamp_logvar_max)
+    sigma = (0.5 * logvar).exp()
+    incr = g + sigma * eta
+    z = torch.cumsum(incr, dim=-1)
+    mus = _shift_right_time(z) + g
+    return z, mus, logvar
+
+
+class CausalNoiseNet(nn.Module):
+    """Causal, parallel net producing ``(g, logσ²)`` from ``η_{<t}`` and ``h_t``.
+
+    CSDI ``(BS, C, d, T)`` representation: a ``1→C`` lift, ``L`` causal CSDI-style blocks
+    (causal time mixer over T + feature mixer over d + per-position ``h_t`` as additive
+    side-info), a noise skip, and a zero-init head (so ``g≈0, σ≈1`` at init).
+    """
+
+    def __init__(
+        self,
+        latent_dim: int,
+        summary_dim: int,
+        channels: int = 64,
+        causal_layers: int = 2,
+        nheads: int = 8,
+        backbone: str = "transformer",
+    ) -> None:
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.summary_dim = summary_dim
+        self.channels = channels
+        self.nheads = nheads
+        self.backbone = backbone
+
+        # 1 → C lift over the (d, T) grid (ContextProducer.input_projection pattern).
+        self.input_projection = nn.Conv1d(1, channels, kernel_size=1)
+        nn.init.kaiming_normal_(self.input_projection.weight, nonlinearity="relu")
+        nn.init.zeros_(self.input_projection.bias)
+
+        def _make_time_layer() -> nn.Module:
+            if backbone == "conv":
+                return ConvTimeLayer(channels, causal=True)
+            if backbone == "transformer":
+                return CausalTransformerTimeLayer(channels, nheads=nheads, dropout=0.0)
+            raise ValueError(
+                f"backbone must be 'conv' or 'transformer'; got {backbone!r}"
+            )
+
+        # L causal CSDI blocks (ResidualBlock body ~verbatim): causal time mixer + feature
+        # mixer over d + h_t as additive side-info (cond_projection). dropout=0 throughout.
+        self.blocks = nn.ModuleList(
+            ResidualBlock(
+                side_dim=summary_dim,
+                channels=channels,
+                time_layer=_make_time_layer(),
+                feature_layer=build_feature_layer(
+                    "transformer", channels, nheads=nheads, n_layers=1, dropout=0.0
+                ),
+            )
+            for _ in range(causal_layers)
+        )
+
+        # Head: C → 2 channels (g, logσ²). Zero-init weight AND bias so g≈0, logσ²≈0
+        # (σ≈1) at init → the stage-1→2 handoff starts at q ≈ N(z_{t-1}, I), KL ≈ 0.
+        self.head = nn.Conv1d(channels, 2, kernel_size=1)
+        nn.init.zeros_(self.head.weight)
+        nn.init.zeros_(self.head.bias)
+
+    def forward(self, eta, h):
+        """``eta`` ``(BS, d, T)``; ``h`` ``(BS, T, summary_dim)`` → ``(g, logσ²)`` ``(BS, d, T)``."""
+        BS, d, T = eta.shape
+        eta_shifted = _shift_right_time(eta)  # strictly η_{<t}
+        x0 = torch.relu(
+            self.input_projection(eta_shifted.reshape(BS, 1, d * T))
+        ).reshape(BS, self.channels, d, T)
+
+        # h_t as additive side-info, broadcast over the d sites → (BS, summary_dim, d, T).
+        side_info = h.permute(0, 2, 1).unsqueeze(2).expand(-1, -1, d, -1)
+
+        x = x0
+        skips = []
+        for blk in self.blocks:
+            x, skip = blk(x, side_info)
+            skips.append(skip)
+        x = torch.stack(skips, dim=0).sum(0) / (len(self.blocks) ** 0.5)
+
+        # Noise skip: give the head direct access to the (lifted) recent noise.
+        x = x + x0
+
+        out = self.head(x.reshape(BS, self.channels, d * T)).reshape(BS, 2, d, T)
+        return out[:, 0], out[:, 1]
+
+
+class ARFlowEncoder(BaseEncoder):
+    """Parallel autoregressive-flow encoder over pre-sampled noise (drop-in for ``GaussianEncoder``).
+
+    Pushes forward a pre-sampled noise field ``η`` through an additive/persistence flow:
+    ``z_t = μ_t + σ_t⊙η_t``, ``μ_t = z_{t-1} + g_φ(η_{<t}, h_t)`` with ``z_{t-1}`` a parallel
+    cumsum (``z_0=0``). Because ``η`` is drawn up front and ``g_φ`` is causal in ``η_{<t}``,
+    all ``t`` compute in one parallel pass — no per-step loop. Identity/persistence-baseline
+    only; the additive frame hard-codes ``μ_p = z_{t-1}``.
+    """
+
+    def __init__(
+        self,
+        data_dim: int,
+        latent_dim: int,
+        j: int,
+        emb_time_dim: int,
+        use_mask: bool,
+        hidden_dim: int = 64,
+        covariate_dim: int = 0,
+        static_covariate_dim: int = 0,
+        fut_summary: Callable[..., FutureSummary] | None = None,
+        channels: int = 64,
+        causal_layers: int = 2,
+        nheads: int = 8,
+        backbone: Literal["conv", "transformer"] = "transformer",
+        clamp_logvar_min: float = -7.0,
+        clamp_logvar_max: float = 7.0,
+        grad_checkpoint: bool = False,
+    ) -> None:
+        super().__init__()
+        self.grad_checkpoint = bool(grad_checkpoint)
+        if fut_summary is None:
+            fut_summary = partial(GRUFutureSummary, summary_dim=64, num_layers=2)
+
+        self.data_dim = data_dim
+        self.latent_dim = latent_dim
+        self.j = j
+        self.emb_time_dim = emb_time_dim
+        self.covariate_dim = covariate_dim
+        self.use_mask = use_mask
+        self.hidden_dim = hidden_dim
+        self.clamp_logvar_min = clamp_logvar_min
+        self.clamp_logvar_max = clamp_logvar_max
+        self.total_static_dim = static_covariate_dim
+        # ARFlow assumes the persistence/identity baseline (μ_p = z_{t-1}); flag it so the
+        # composition root (DDSSM_base) can reject a mismatched baseline.
+        self.requires_persistence_baseline = True
+
+        # Future summary — covariates folded into emb_time_dim exactly as GaussianEncoder
+        # (encoder.py); static categoricals go straight to the summary (no combiner).
+        self.fut_sum_module = fut_summary(
+            data_dim=data_dim,
+            emb_time_dim=emb_time_dim + covariate_dim,
+            use_mask=use_mask,
+            static_embed_dim=self.total_static_dim,
+        )
+        self.summary_dim = self.fut_sum_module.summary_dim
+
+        self.causal_net = CausalNoiseNet(
+            latent_dim=latent_dim,
+            summary_dim=self.summary_dim,
+            channels=channels,
+            causal_layers=causal_layers,
+            nheads=nheads,
+            backbone=backbone,
+        )
+
+        self.fut_sum_module = maybe_compile(self.fut_sum_module, dynamic=True)
+        self.causal_net = maybe_compile(self.causal_net, dynamic=True)
+
+    @property
+    def is_gaussian_family(self) -> bool:
+        return True
+
+    def sample_paths(
+        self,
+        observed_data: torch.Tensor,  # (B, D, T)
+        time_embed: torch.Tensor,  # (B, T, E_t)
+        S: int = 1,
+        cond_mask: Optional[torch.Tensor] = None,
+        covariates: Optional[torch.Tensor] = None,
+        static_embed: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
+        device = observed_data.device
+        dtype = observed_data.dtype
+        B, D, T = observed_data.shape
+        d = self.latent_dim
+
+        # Future summary h_t (parallel). Covariates ride in via the time-embed concat,
+        # exactly as GaussianEncoder — skip this and h drops them.
+        h_time_embed = time_embed
+        if covariates is not None:
+            h_time_embed = torch.cat(
+                [h_time_embed, covariates.permute(0, 2, 1)], dim=-1
+            )
+        obs_perm = observed_data.permute(0, 2, 1)  # (B, T, D)
+        mask_perm = cond_mask.permute(0, 2, 1) if cond_mask is not None else None
+        if self.grad_checkpoint and self.training and torch.is_grad_enabled():
+            h = checkpoint(
+                self.fut_sum_module,
+                obs_perm,
+                mask_perm,
+                h_time_embed,
+                static_embed,
+                use_reentrant=False,
+                preserve_rng_state=False,
+            )  # (B, T, summary_dim)
+        else:
+            h = self.fut_sum_module(  # __call__ so the in-place torch.compile fires
+                observed_data=obs_perm,
+                observed_mask=mask_perm,
+                t_emb=h_time_embed,
+                static_embed=static_embed,
+            )
+
+        # Expand to S paths and draw η ONCE, per (B·S) path (not shared across S, so
+        # forecast samples with S>1 differ).
+        BS = B * S
+        h_expanded = h.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, T, -1)
+        eta = torch.randn(BS, d, T, device=device, dtype=dtype)
+
+        g, logvar = self.causal_net(eta, h_expanded)  # (BS, d, T)
+        z, mus, logvar = arflow_cumsum(
+            g, eta, logvar, self.clamp_logvar_min, self.clamp_logvar_max
+        )
+
+        # Per-step log q (sum over d): permute (BS, d, T) → (BS, T, d).
+        logq = gaussian_log_prob(
+            z.permute(0, 2, 1), mus.permute(0, 2, 1), logvar.permute(0, 2, 1)
+        )  # (BS, T)
+
+        zs = z.view(B, S, d, T)
+        logqs = logq.view(B, S, T)
+        stats: dict = {
+            "mus": mus.view(B, S, d, T),
+            "logvars": logvar.view(B, S, d, T),
+        }
+        return zs, logqs, stats
+
+    def entropy_transition(self, stats: dict, j: int) -> torch.Tensor:
+        return gaussian_entropy(stats["logvars"][..., j:]).mean()
+
+    def entropy_init(self, stats: dict, steps: int) -> torch.Tensor:
+        return gaussian_entropy(stats["logvars"][..., :steps]).mean()

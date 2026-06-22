@@ -33,7 +33,7 @@ from ddssm.nn.diffnets import (
 )
 from ddssm.nn.futsum import TransformerFutureSummary
 from ddssm.model.decoder import GaussianDecoder
-from ddssm.model.encoder import GaussianEncoder
+from ddssm.model.encoder import GaussianEncoder, ARFlowEncoder
 from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.experiment.stores import model_store
 from ddssm.model.centering.baselines import PersistenceBaseline
@@ -57,6 +57,9 @@ def build_gluonts_model(
     num_steps: int = 128,
     nheads: int = 8,
     summary_layers: int = 2,
+    # "gaussian" = the settled sequential encoder; "arflow" = the parallel
+    # AR-flow-on-noise drop-in (opt-in; flip the default only past the slice-9 gate).
+    encoder_type: str = "gaussian",
     # Timesteps per score-net call in the ESM loss. With checkpointing the peak
     # is one chunk's d²-attention (~time_chunk·B·nheads·latent²), so this trades
     # training speed against memory — 16 keeps the worst corner (latent=512,
@@ -110,17 +113,29 @@ def build_gluonts_model(
         T_max=T_max, unet=unet, schedule=schedule, grad_checkpoint=grad_checkpoint,
     )
 
-    encoder = GaussianEncoder(
-        data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
-        use_mask=False, hidden_dim=width, mu_mode="additive",
-        fut_summary=partial(
-            TransformerFutureSummary,
-            summary_dim=width,
-            nheads=nheads,
-            transformer_layers=summary_layers,
-        ),
-        grad_checkpoint=grad_checkpoint,
+    fut_summary = partial(
+        TransformerFutureSummary, summary_dim=width, nheads=nheads,
+        transformer_layers=summary_layers,
     )
+    if encoder_type == "gaussian":
+        encoder = GaussianEncoder(
+            data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
+            use_mask=False, hidden_dim=width, mu_mode="additive",
+            fut_summary=fut_summary, grad_checkpoint=grad_checkpoint,
+        )
+    elif encoder_type == "arflow":
+        # Head logvar clamp pinned to the DDSSM_base default [-7, 7] (dssd.py:130-131)
+        # so the in-encoder logq matches the KL's re-clamped logvars (dssd.py:697).
+        encoder = ARFlowEncoder(
+            data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
+            use_mask=False, hidden_dim=width, fut_summary=fut_summary,
+            channels=channels, causal_layers=2, nheads=nheads, backbone="transformer",
+            clamp_logvar_min=-7.0, clamp_logvar_max=7.0, grad_checkpoint=grad_checkpoint,
+        )
+    else:
+        raise ValueError(
+            f"encoder_type must be 'gaussian' or 'arflow'; got {encoder_type!r}"
+        )
     decoder = GaussianDecoder(
         data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
         hidden_dim=width,

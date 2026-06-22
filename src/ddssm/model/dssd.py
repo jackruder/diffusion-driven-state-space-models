@@ -21,7 +21,7 @@ from ddssm.model.encoder import (
     BaseEncoder,
 )
 from ddssm.nn.aux_posterior import AuxPosterior
-from ddssm.model.centering.baselines import BaseBaseline
+from ddssm.model.centering.baselines import BaseBaseline, PersistenceBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.centering.regularizers import r_mu_p_loss, r_sigma_p_loss
 from ddssm.model.transitions.transitions import BaseTransition
@@ -46,6 +46,25 @@ class ProbeBatch:
             "time_embed": self.time_embed,
             "covariates": self.covariates,
         }
+
+
+def _require_persistence_baseline(encoder: nn.Module, baseline) -> None:
+    """Reject a baseline mismatch for encoders that hard-code the persistence frame.
+
+    An encoder may set ``requires_persistence_baseline = True`` to declare its posterior
+    mean is framed on ``μ_p = z_{t-1}`` (e.g. ``ARFlowEncoder``'s additive cumsum, where
+    the transition's ``mu_hat = mus − μ_p`` is the innovation only when ``μ_p`` is
+    persistence). Composing it with any other baseline silently corrupts the ESM target
+    and σ_data, so raise instead.
+    """
+    if not getattr(encoder, "requires_persistence_baseline", False):
+        return
+    if not isinstance(baseline, PersistenceBaseline):
+        got = type(baseline).__name__ if baseline is not None else "None"
+        raise NotImplementedError(
+            f"{type(encoder).__name__} requires a PersistenceBaseline (its frame "
+            f"hard-codes μ_p = z_{{t-1}}); got {got}."
+        )
 
 
 @final
@@ -174,6 +193,7 @@ class DDSSM_base(nn.Module):
         # --- model-v2 slots ---
         self.aux_posterior: AuxPosterior | None = aux_posterior
         self.baseline: BaseBaseline | None = baseline
+        _require_persistence_baseline(encoder, baseline)
         self.baseline_anchor: BaseBaseline | None = baseline_anchor
         self.baseline_mode: str = baseline_mode
         self.sigma_data: SigmaDataBuffer | None = sigma_data
