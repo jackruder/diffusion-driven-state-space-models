@@ -61,7 +61,12 @@ from ddssm.nn.aggregators import (
     ContextProducerAggregator,
 )
 from ddssm.training.train import DDSSMTrainer
-from ddssm.data.datamodule import KDDDataModule, NullDataModule, SyntheticDataModule
+from ddssm.data.datamodule import (
+    KDDDataModule,
+    NullDataModule,
+    GluonTSDataModule,
+    SyntheticDataModule,
+)
 from ddssm.training.stages import StageTrainableConf
 from ddssm.variance.runner import ProbeCell, ProbeSpec, ProbePlotSpec, ProbeMetricSpec
 from ddssm.nn.aux_posterior import AuxPosterior
@@ -373,6 +378,7 @@ CenteringHandoff = builds(CenteringHandoffConf, populate_full_signature=True)
 
 Synthetic = builds(SyntheticDataModule, populate_full_signature=True)
 KDD = builds(KDDDataModule, populate_full_signature=True)
+GluonTS = builds(GluonTSDataModule, populate_full_signature=True)
 Null = builds(NullDataModule, populate_full_signature=True)
 
 
@@ -449,7 +455,7 @@ __all__ = [
     "AuxPosteriorB", "SigmaDataBufferB",
     "BaselineGaussTransition", "DiffTransition", "CenteringHandoff",
     # Data modules
-    "Synthetic", "KDD", "Null",
+    "Synthetic", "KDD", "GluonTS", "Null",
     # Model + training
     "DDSSM", "Hparams",
     "Trainable", "Training", "Objective", "Objectives", "SBatch",

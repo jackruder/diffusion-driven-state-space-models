@@ -13,12 +13,15 @@ import os
 import torch
 import pytest
 
+from ddssm.data.dataload import parse_batch
 from ddssm.data.datamodule import (
     DataMetadata,
     KDDDataModule,
     NullDataModule,
     DDSSMDataModule,
+    GluonTSDataModule,
     SyntheticDataModule,
+    WindowedSeriesDataModule,
 )
 
 
@@ -85,6 +88,53 @@ def test_kdd_datamodule_smoke():
     meta = dm.metadata
     assert meta.data_dim > 0
     assert meta.T == dm.L1 + dm.L2
+
+
+def test_kdd_is_windowed_series_subclass():
+    """KDD now rides the shared windowed base; construction stays lazy."""
+    dm = KDDDataModule(filepath="data/kdd.pt")
+    assert isinstance(dm, WindowedSeriesDataModule)
+    assert dm.batch_format == "windowed"
+    assert dm.batch_transform is parse_batch
+    assert dm._built is False  # no payload load on __init__
+
+
+def test_gluonts_datamodule_contract_is_network_free():
+    """Constructing a GluonTSDataModule must NOT fetch (lazy); it satisfies the
+    windowed contract with the per-dataset window spec from SPECS."""
+    dm = GluonTSDataModule(name="solar")
+    assert isinstance(dm, DDSSMDataModule)
+    assert isinstance(dm, WindowedSeriesDataModule)
+    assert dm.batch_format == "windowed"
+    assert dm.batch_transform is parse_batch
+    assert (dm.L1, dm.L2, dm.test_windows) == (168, 24, 7)
+    assert dm._built is False  # nothing fetched yet
+
+
+def test_gluonts_datamodule_rejects_unknown_name():
+    with pytest.raises(ValueError, match="Unknown GluonTS dataset"):
+        GluonTSDataModule(name="not-a-dataset")
+
+
+def test_data_presets_instantiate_to_datamodules():
+    """The registered Hydra preset configs build the right DataModule types."""
+    from hydra_zen import instantiate
+
+    from ddssm.data import presets
+
+    assert isinstance(instantiate(presets.Solar), GluonTSDataModule)
+    assert isinstance(instantiate(presets.Wiki), GluonTSDataModule)
+    assert isinstance(instantiate(presets.KDDFull), KDDDataModule)
+    assert isinstance(instantiate(presets.KDDStation), KDDDataModule)
+
+
+@pytest.mark.skip(reason="GluonTS repo fetch is network/cache-heavy; run manually")
+def test_gluonts_datamodule_fetches_and_windows():
+    dm = GluonTSDataModule(name="solar", batch_size=2)
+    batch = next(iter(dm.train_loader()))
+    _assert_canonical_batch(batch, expect_covariates=False)
+    assert dm.metadata.data_dim == 137
+    assert dm.metadata.T == dm.L1 + dm.L2
 
 
 def test_datamodule_abc_membership():

@@ -44,6 +44,35 @@ runs across one data split, never trains. Current members: **eval**,
 Each has its own Hydra entry point, registry, and context object.
 _Avoid_: Pipeline, post-processing step.
 
+**Persistence frame**:
+The `GaussianEncoder`'s additive posterior-mean form `μ_t = z_{t-1} + g`,
+where `g` is the encoder's free per-step emission (the combiner →
+`GaussianDistHead` output) and `z_{t-1}` is the most-recent *realised* latent
+(zero at `t = 1`; uses only the most-recent lag regardless of `j`). Selected by
+`mu_mode="additive"`, the **default** (`mu_mode="free"` recovers the legacy
+`μ_t = g`). The frame anchors the recurrent Jacobian near `I` (stability) and
+fits multimodal data better than free emission on the aggregator backbone — see
+`docs/encoder-ablation-findings.md`. Independent of the transition's
+`baseline_form`, which centers the *prior* mean, not the posterior's.
+
+**Dynamical covariates**:
+Time-varying exogenous side info that influences latent dynamics
+(holidays, weather, regime flags). Carries domain signal; fed to the encoder
+alongside the observations. The live preset uses `covariate_dim = 0`.
+_Avoid_: "covariates" without qualifier — ambiguous between dynamical
+and static.
+
+**Time embedding**:
+Positional encoding of the absolute step index, used for irregular-grid
+datasets where adjacent timesteps may be unevenly spaced. Carries no domain
+signal — pure position. The live preset runs with `emb_time_dim = 0`.
+_Avoid_: "time covariate" — conflates with dynamical covariates.
+
+**Static covariates**:
+Series-level metadata invariant within a single sequence (asset
+category, geographic region). Projected once and broadcast across `t`.
+_Avoid_: "covariates" without qualifier.
+
 ### Init-centering ablation
 
 **Cell**:

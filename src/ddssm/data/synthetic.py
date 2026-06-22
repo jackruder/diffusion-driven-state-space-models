@@ -21,6 +21,23 @@ NLBL_MV_OBS_D = 8
 NLBL_MV_HIDDEN_DIM = 16
 NLBL_MV_A_SEED = 12345
 
+# Chaotic variant (``henon-lift``): a deterministic Hénon-map latent
+# (d = 2, a = 1.4, b = 0.3 — the classic chaotic regime) plus small process
+# noise, standardised per-dim, lifted via a tanh-MLP to ``D = HENON_OBS_D``.
+# Sensitive-dependence / deterministic chaos is a stress test distinct from
+# the noise-driven multimodality of the bimodal-lift family. The map state is
+# clamped to a bounding box so process noise can't kick a trajectory off the
+# attractor into the divergent region.
+HENON_A = 1.4
+HENON_B = 0.3
+HENON_LATENT_D = 2
+HENON_OBS_D = 8
+HENON_HIDDEN_DIM = 16
+HENON_SIGMA_Z = 0.01
+HENON_SIGMA_X = 0.1
+HENON_BURN_IN = 100
+HENON_A_SEED = 23456
+
 
 class SyntheticDataset(Dataset):
     """Sequence dataset of synthetically generated time series.
@@ -423,6 +440,49 @@ class SyntheticDataset(Dataset):
 
                 z[:, :, t] = 0.9 * z[:, :, t - 1] + 0.1 * t_noise
             data = z
+
+        elif self.mode == "henon-lift":
+            # Deterministic Hénon map (chaotic) latent d=2, lifted to D via a
+            # tanh-MLP. x_t = 1 - a x_{t-1}^2 + y_{t-1}; y_t = b x_{t-1}.
+            assert self.D == HENON_OBS_D, (
+                f"henon-lift expects D={HENON_OBS_D}; got D={self.D}"
+            )
+            latent_d = HENON_LATENT_D
+            data = torch.zeros(self.N_total, self.D, self.T)
+
+            # Random ICs near the origin (in the attractor's basin); burn in.
+            x = torch.rand(self.N_total) * 0.2 - 0.1
+            y = torch.rand(self.N_total) * 0.2 - 0.1
+            for _ in range(HENON_BURN_IN):
+                x, y = (1.0 - HENON_A * x * x + y).clamp(-2.0, 2.0), HENON_B * x
+
+            z = torch.zeros(self.N_total, latent_d, self.T)
+            z[:, 0, 0], z[:, 1, 0] = x, y
+            for t in range(1, self.T):
+                xp, yp = z[:, 0, t - 1], z[:, 1, t - 1]
+                xn = 1.0 - HENON_A * xp * xp + yp + HENON_SIGMA_Z * torch.randn(self.N_total)
+                yn = HENON_B * xp + HENON_SIGMA_Z * torch.randn(self.N_total)
+                z[:, 0, t] = xn.clamp(-2.0, 2.0)
+                z[:, 1, t] = yn.clamp(-1.0, 1.0)
+
+            # Standardise each dim so the lift + unit-variance prior are sane.
+            z = (z - z.mean(dim=(0, 2), keepdim=True)) / (
+                z.std(dim=(0, 2), keepdim=True) + 1e-6
+            )
+
+            # tanh-MLP lift sampled once from a fixed seed.
+            g_lift = torch.Generator().manual_seed(HENON_A_SEED)
+            W1 = torch.randn(HENON_HIDDEN_DIM, latent_d, generator=g_lift)
+            b1 = torch.randn(HENON_HIDDEN_DIM, generator=g_lift)
+            W2 = torch.randn(self.D, HENON_HIDDEN_DIM, generator=g_lift)
+            b2 = torch.randn(self.D, generator=g_lift)
+            for t in range(self.T):
+                h_t = torch.tanh(z[:, :, t] @ W1.t() + b1)
+                x_t = h_t @ W2.t() + b2
+                data[:, :, t] = x_t + HENON_SIGMA_X * torch.randn(self.N_total, self.D)
+
+            if self.expose_gt_latents:
+                self._all_gt_latents = z
 
         elif self.mode == "lorenz":
             # Lorenz 63 system: dx/dt = σ(y-x), dy/dt = x(ρ-z)-y, dz/dt = xy-βz

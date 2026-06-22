@@ -23,6 +23,21 @@ def test_gaussian_dist_head_forward_shape():
     assert step_params["logvar"].shape == (B, D)
 
 
+def test_gaussian_dist_head_mean_offset_shifts_mu():
+    """mean_offset adds the persistence frame: μ = free-μ + offset (exactly), with
+    σ and the sampling noise unchanged. Backs the GaussianEncoder additive frame."""
+    head = GaussianDistHead(in_features=IN, latent_dim=D)
+    x = torch.randn(B, IN)
+    offset = torch.randn(B, D)
+    torch.manual_seed(0)
+    z0, _, p0 = head(x)
+    torch.manual_seed(0)
+    z1, _, p1 = head(x, mean_offset=offset)
+    assert torch.allclose(p1["mu"], p0["mu"] + offset, atol=1e-6)
+    assert torch.allclose(p1["logvar"], p0["logvar"], atol=1e-6)
+    assert torch.allclose(z1, z0 + offset, atol=1e-6)  # same eps, shifted mean
+
+
 def test_gaussian_dist_head_stack_stats():
     head = GaussianDistHead(in_features=IN, latent_dim=D)
     T = 5

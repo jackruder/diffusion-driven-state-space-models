@@ -225,3 +225,7 @@ runs/
 # Sphinx docs build artifacts
 docs/_build/
 docs/_autosummary/
+
+# direnv + Claude Code agent worktrees (local, not project assets)
+.direnv/
+.claude/worktrees/

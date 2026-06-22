@@ -7,15 +7,6 @@ lobe-switching events per trajectory on average.
 
 from __future__ import annotations
 
-from ddssm.experiment.builders import Synthetic
-
-LorenzDirect = Synthetic(
-    mode="lorenz",
-    D=3,
-    T=64,
-    N_per_split=1024,
-    batch_size=16,
-    expose_clean_data=True,
-)
+from ddssm.data.presets import LorenzDirect
 
 __all__ = ["LorenzDirect"]
