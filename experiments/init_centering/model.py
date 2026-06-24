@@ -96,7 +96,13 @@ def _build_baseline(
 def _build_init_centering_model(
     *,
     # --- Cell axes (the three grid dimensions) ---
-    baseline_form: Literal["zero", "persistence", "linear", "mlp"] = "mlp",
+    # baseline_form default is "persistence" rather than "mlp":
+    # ``z_t ≈ z_{t-1}`` is the simplest dynamics-capable prior, has
+    # no learnable mean params (so baseline_mode auto-clamps to
+    # pinned), and is the right inductive bias for smooth latent
+    # trajectories. ``mlp`` is still the canonical "high surface"
+    # cell — the ablation grid passes baseline_form explicitly.
+    baseline_form: Literal["zero", "persistence", "linear", "mlp"] = "persistence",
     baseline_mode: Literal["pinned", "learnable"] = "pinned",
     tracking_mode: Literal["fixed", "global_ema", "per_t"] = "per_t",
     # --- Shape ---
@@ -208,18 +214,15 @@ def _build_init_centering_model(
             feature=FeatureMixerConfig(type="conv", n_layers=1)
         ),
     )
+    # ``k_sampling_mode`` defaults to ``"lsgm_is"`` on
+    # ``DiffusionScheduleConfig`` — the LSGM importance-sampling
+    # distribution from model-v2.org § Importance Sampling
+    # (p_k ∝ (β / (1 − α²))^γ, with the unbiasing reweight in
+    # ``_esm_chunk_loss``). No override needed here.
     schedule = DiffusionScheduleConfig(
         S_k=diffusion_S_k,
         k_chunk=diffusion_k_chunk,
         num_steps=diffusion_num_steps,
-        # LSGM-style importance sampling per model-v2.org § Importance
-        # Sampling: p_k ∝ (β / (1 - α²))^γ focuses MC samples on the
-        # noisy τ timesteps where the ESM loss has higher variance.
-        # ``pk_gamma=1.0`` (the DiffusionScheduleConfig default)
-        # leaves the distribution at its base shape; the IS reweighting
-        # in ``_esm_chunk_loss`` divides by ``K · p_k`` so the loss is
-        # an unbiased estimator regardless of the sampling distribution.
-        k_sampling_mode="lsgm_is",
     )
     stage2_transition = DiffusionTransition(
         baseline=baseline,

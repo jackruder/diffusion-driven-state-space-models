@@ -78,14 +78,22 @@ class DiffusionScheduleConfig:
     beta_max: float = 20.0
     tau_min: float = 1e-3
     # Importance-sampling mode for noise-level selection:
+    # - ``"esm_is"``: p_k ∝ s/(1+s²)², the analytically optimal IS
+    #   density for the centered ESM loss with Gaussian targets at
+    #   σ_data ≈ 1. Peaks at s = 1/√3 and suppresses low-noise τ
+    #   where the loss is small. Default since it concentrates MC
+    #   mass at the τ where the loss can discriminate informative
+    #   vs trivial encoders (empirically breaks the posterior-
+    #   collapse attractor on small-data overfits — see the
+    #   ``sin_overfit`` write-up).
     # - ``"lsgm_is"``: p_k ∝ β/(1−α²), concentrates on noisy τ where
-    #   the centered ESM loss is loud.
-    # - ``"esm_is"``: p_k ∝ s/(1+s²)², optimal for Gaussian targets
-    #   with σ_data ≈ 1. Peaks at s = 1/√3 and suppresses low noise.
-    # - ``"uniform"``: flat p_k, preserved for the variance probe.
+    #   the centered ESM loss is loud. Useful when σ_data drifts
+    #   away from 1 (esm_is is calibrated to σ_data ≈ 1).
+    # - ``"uniform"``: flat p_k, preserved for the variance probe
+    #   and as a baseline.
     # IS reweighting in ``_esm_chunk_loss`` keeps the estimator
     # unbiased regardless of mode.
-    k_sampling_mode: str = "lsgm_is"
+    k_sampling_mode: str = "esm_is"
     pk_gamma: float = 1.0
     pk_floor: float = 1e-12
 

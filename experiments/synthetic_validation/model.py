@@ -16,8 +16,13 @@ reference. (``ddssm.experiment.builders`` exposes per-slot ``builds`` configs;
 
 The architecture here is deliberately minimal and fixed:
 
-* baseline: :class:`ZeroBaseline` (μ_p ≡ 0; σ_p from a small MLP), frozen.
-* σ_data²: :class:`SigmaDataBuffer` in ``"fixed"`` tracking mode.
+* baseline: ``PersistenceBaseline`` by default (μ_p = z_{t-1}; σ_p
+  from a small MLP), frozen. Override with ``baseline_form="zero"``
+  for the legacy ZeroBaseline behaviour.
+* σ_data²: :class:`SigmaDataBuffer` using the library default
+  (``"per_t"``) — each timestep tracks its own running EMA so the
+  centered-ESM target preconditioning stays calibrated as the
+  encoder's residual distribution evolves through stage 2.
 * stage-1 transition: closed-form Gaussian centered on the baseline.
 * stage-2 transition: centered diffusion with a small conv-mixer ``CSDIUnet``.
 * encoder/decoder: the default :class:`GaussianEncoder` / :class:`GaussianDecoder`.
@@ -37,7 +42,37 @@ from ddssm.nn.diffnets import CSDIUnet, FeatureMixerConfig, DiffResidualBlockCon
 from ddssm.model.decoder import GaussianDecoder
 from ddssm.model.encoder import GaussianEncoder
 from ddssm.nn.aux_posterior import AuxPosterior
-from ddssm.model.centering.baselines import ZeroBaseline
+from typing import Literal
+
+from ddssm.model.centering.baselines import (
+    BaseBaseline,
+    LinearBaseline,
+    MLPBaseline,
+    PersistenceBaseline,
+    ZeroBaseline,
+)
+
+
+def _make_baseline(
+    form: str, *, latent_dim: int, j: int, hidden_dim: int
+) -> BaseBaseline:
+    if form == "zero":
+        return ZeroBaseline(
+            latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2,
+        )
+    if form == "persistence":
+        return PersistenceBaseline(
+            latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2,
+        )
+    if form == "linear":
+        return LinearBaseline(latent_dim=latent_dim, j=j)
+    if form == "mlp":
+        return MLPBaseline(
+            latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2,
+        )
+    raise ValueError(
+        f"baseline_form must be one of zero/persistence/linear/mlp; got {form!r}"
+    )
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import DiffusionTransition, DiffusionScheduleConfig
 from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
@@ -58,6 +93,20 @@ def build_synthval_model(
     channels: int = 32,
     diffusion_layers: int = 2,
     diffusion_num_steps: int = 64,
+    # Stage-2 ESM/EDM schedule knobs. ``k_sampling_mode`` defaults
+    # to ``"esm_is"`` on ``DiffusionScheduleConfig`` (the loss-aware
+    # optimal IS density); the parameter is plumbed through so
+    # ablations can flip to ``"uniform"`` or ``"lsgm_is"`` if needed.
+    # ``S_k=1`` matches the dataclass default — bump it up for
+    # tighter per-step gradient estimates on small-data overfits.
+    diffusion_k_sampling_mode: str = "esm_is",
+    diffusion_S_k: int = 1,
+    # Baseline form for the shared centering head. Persistence
+    # (``μ_p = z_{t-1}``) is the library default since it's the
+    # simplest dynamics-capable prior. Use ``"zero"`` for the legacy
+    # stationary-prior behaviour, ``"mlp"`` / ``"linear"`` for richer
+    # parametric baselines.
+    baseline_form: Literal["zero", "persistence", "linear", "mlp"] = "persistence",
 ) -> DDSSM_base:
     """Compose a minimal DDSSM model from runtime parts.
 
@@ -82,13 +131,16 @@ def build_synthval_model(
     if not use_time_embedding:
         emb_time_dim = 0
     # --- shared ingredients: built once, passed by reference ---
-    baseline = ZeroBaseline(
-        latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2
+    baseline = _make_baseline(
+        baseline_form, latent_dim=latent_dim, j=j, hidden_dim=hidden_dim,
     )
     aux_posterior = AuxPosterior(
         latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2
     )
-    sigma_data = SigmaDataBuffer(T_max=T_max, tracking_mode="fixed", init_value=1.0)
+    # tracking_mode defaults to "per_t" on SigmaDataBuffer — keeps the
+    # per-timestep variance tracking through stage 2 so the centered-ESM
+    # target stays calibrated as the encoder evolves.
+    sigma_data = SigmaDataBuffer(T_max=T_max, init_value=1.0)
 
     # --- stage-1 transition: closed-form Gaussian centered on the baseline ---
     stage1_transition = BaselineGaussianTransition(
@@ -112,7 +164,11 @@ def build_synthval_model(
         emb_time_dim=emb_time_dim,
         T_max=T_max,
         unet=unet,
-        schedule=DiffusionScheduleConfig(num_steps=diffusion_num_steps),
+        schedule=DiffusionScheduleConfig(
+            num_steps=diffusion_num_steps,
+            k_sampling_mode=diffusion_k_sampling_mode,
+            S_k=diffusion_S_k,
+        ),
     )
 
     encoder = GaussianEncoder(
@@ -123,6 +179,16 @@ def build_synthval_model(
         data_dim=data_dim, latent_dim=latent_dim, j=j,
         emb_time_dim=emb_time_dim, hidden_dim=hidden_dim,
     )
+
+    # Pre-allocate ``baseline_anchor`` so the state_dict has the same
+    # keys before and after the centering handoff. Under
+    # ``baseline_mode="pinned"`` the anchor is never read by the loss
+    # (see ``DDSSM_base.forward``: the r_mu_p term only fires when
+    # ``baseline_mode == "learnable"``), so this is a state-dict-shape
+    # alignment knob, nothing more. Without it, ``ddssm.visualize`` /
+    # ``ddssm.evaluate`` fail to load a post-handoff checkpoint with
+    # "Unexpected key(s) in state_dict: baseline_anchor.*".
+    baseline_anchor = baseline.snapshot()
 
     return DDSSM_base(
         encoder=encoder,
@@ -135,6 +201,7 @@ def build_synthval_model(
         use_observation_mask=False,
         aux_posterior=aux_posterior,  # mandatory: owns the init-state term
         baseline=baseline,
+        baseline_anchor=baseline_anchor,
         baseline_mode="pinned",  # μ_p frozen
         sigma_data=sigma_data,
         stage1_transition=stage1_transition,
