@@ -36,6 +36,11 @@ def _p_k_for_mode(transition: torch.nn.Module, mode: str) -> torch.Tensor:
         if gamma != 1.0:
             proposal = proposal.pow(gamma)
         p_k = proposal / proposal.sum().clamp_min(eps)
+    elif mode == "esm_is":
+        from ddssm.model.transitions.diffusion import _esm_is_density
+
+        gfloor = float(getattr(transition, "gfloor", 1e-12))
+        p_k = _esm_is_density(transition.sigma_tilde, floor=gfloor)
     else:
         raise ValueError(f"Unsupported k_sampling_mode {mode!r}.")
     return p_k
@@ -249,7 +254,7 @@ def run_probe(
                         out["L_p"].backward()
                         g = _grad_vector(trans.diffmodel)
                         g_norm = float(g.norm().item())
-                        per_k_cell_grads[(cell.objective, cell.k_sampling_mode, int(k))].append(
+                        per_k_cell_grads[cell.objective, cell.k_sampling_mode, int(k)].append(
                             g.cpu().numpy()
                         )
                         per_sample = out["L_p_per_sample"].detach().cpu().numpy()

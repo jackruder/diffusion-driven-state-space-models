@@ -88,7 +88,7 @@ def test_constructor_rejects_baseline_with_wrong_dim() -> None:
 
 
 def test_constructor_zero_inits_final_layer() -> None:
-    """diffusion builds its CSDIUnet with ``zero_init_output=True``."""
+    """Diffusion builds its CSDIUnet with ``zero_init_output=True``."""
     transition = _make_diffusion(MLPBaseline(latent_dim=D, j=J))
     # CSDIUnet's final layer is ``output_projection2``.
     w = transition.diffmodel.output_projection2.weight.detach()
@@ -437,6 +437,7 @@ def test_log_prob_hutchinson_matches_exact_for_diagonal_jacobian() -> None:
     assert hutch_logp.shape == (B,)
     assert torch.allclose(hutch_logp, exact_logp, atol=1e-4, rtol=1e-4)
 
+
 def test_transition_kl_updates_sigma_data_per_t() -> None:
     """``transition_kl`` updates buffer slots for every visited t."""
     j = J
@@ -638,3 +639,206 @@ def test_sample_clamps_sigma_data_beyond_horizon() -> None:
         z = transition.sample(z_hist=z_hist, S=1, ctx=ctx)  # must NOT raise
     assert torch.isfinite(z).all()
     assert int(spy.call_args[0][0]) == T_MAX  # clamped to the last trained slot
+
+
+# ---------------------------------------------------------------------------
+# esm_is importance sampling — Group A: distribution properties
+# ---------------------------------------------------------------------------
+
+
+def _esm_is_schedule(num_steps: int = 20, **kw) -> DiffusionScheduleConfig:
+    return DiffusionScheduleConfig(
+        S_k=1, k_chunk=1, num_steps=num_steps,
+        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        k_sampling_mode="esm_is", **kw,
+    )
+
+
+def test_esm_is_p_k_sums_to_one() -> None:
+    """p_k is a valid PMF: sums to 1, all entries non-negative."""
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule()
+    )
+    assert torch.allclose(transition.p_k.sum(), torch.tensor(1.0), atol=1e-6)
+    assert (transition.p_k >= 0).all()
+
+
+def test_esm_is_p_k_peaks_near_one_over_sqrt3() -> None:
+    """Peak of p*(s) ∝ s/(1+s²)² is at s = 1/√3 ≈ 0.577."""
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule(num_steps=200)
+    )
+    k_peak = transition.p_k.argmax()
+    s_peak = float(transition.sigma_tilde[k_peak])
+    assert abs(s_peak - 1.0 / math.sqrt(3)) < 0.15
+
+
+def test_esm_is_cdf_mass_below_01_is_small() -> None:
+    """Only ~1% of IS mass should lie below σ̃ = 0.1."""
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule(num_steps=500)
+    )
+    mask_low = transition.sigma_tilde <= 0.1
+    mass_low = float(transition.p_k[mask_low].sum())
+    assert mass_low < 0.05
+
+
+def test_esm_is_cdf_median_near_s1() -> None:
+    """The CDF median (50% mass) is near s = 1."""
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule(num_steps=500)
+    )
+    cdf = transition.p_k.cumsum(dim=0)
+    idx_median = (cdf >= 0.5).nonzero(as_tuple=True)[0][0]
+    s_median = float(transition.sigma_tilde[idx_median])
+    assert abs(s_median - 1.0) < 0.3
+
+
+@pytest.mark.parametrize("num_steps", [20, 100, 500])
+def test_esm_is_formula_matches_sigma_tilde(num_steps: int) -> None:
+    """p_k matches the analytic formula recomputed from the σ̃ buffer."""
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule(num_steps=num_steps)
+    )
+    s = transition.sigma_tilde
+    expected = s / (1.0 + s * s).pow(2)
+    expected = expected.clamp_min(1e-12)
+    expected = expected / expected.sum()
+    assert torch.allclose(transition.p_k, expected, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# esm_is — Group B: training integration
+# ---------------------------------------------------------------------------
+
+
+def test_esm_is_transition_kl_runs_and_returns_finite() -> None:
+    """transition_kl produces a finite scalar loss under esm_is."""
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    transition = _make_diffusion(baseline, schedule=_esm_is_schedule())
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+    out = transition.transition_kl(
+        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
+        time_embed=time_embed, sigma_data=sigma_data,
+    )
+    assert torch.isfinite(out["kl"])
+
+
+def test_esm_is_transition_kl_gradients_flow() -> None:
+    """Backward through the esm_is loss produces nonzero diffmodel gradients."""
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    transition = _make_diffusion(baseline, schedule=_esm_is_schedule())
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+    out = transition.transition_kl(
+        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
+        time_embed=time_embed, sigma_data=sigma_data,
+    )
+    out["kl"].backward()
+    grads = [p.grad for p in transition.diffmodel.parameters() if p.grad is not None]
+    assert len(grads) > 0
+    assert any(g.abs().max() > 0 for g in grads)
+
+
+@pytest.mark.slow
+def test_esm_is_transition_kl_is_invariant_to_num_steps() -> None:
+    """ESM loss under esm_is is grid-invariant (not scaling with num_steps)."""
+    def _sched(K: int) -> DiffusionScheduleConfig:
+        return DiffusionScheduleConfig(
+            S_k=2048, k_chunk=256, num_steps=K,
+            beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+            k_sampling_mode="esm_is",
+        )
+
+    baseline = ZeroBaseline(latent_dim=D, j=J)
+    t_coarse = _make_diffusion(baseline, schedule=_sched(10))
+    t_fine = _make_diffusion(baseline, schedule=_sched(20))
+    t_fine.diffmodel.load_state_dict(t_coarse.diffmodel.state_dict())
+    t_fine.embed_layer.load_state_dict(t_coarse.embed_layer.state_dict())
+
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+
+    def _kl(tr) -> float:
+        torch.manual_seed(1)
+        sd = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+        return float(
+            tr.transition_kl(
+                enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
+                time_embed=time_embed, sigma_data=sd,
+            )["kl"].detach()
+        )
+
+    kl_coarse = _kl(t_coarse)
+    kl_fine = _kl(t_fine)
+    assert kl_coarse > 0 and kl_fine > 0
+    rel = abs(kl_coarse - kl_fine) / kl_fine
+    assert rel < 0.5, f"ESM loss scales with num_steps: {kl_coarse=} {kl_fine=}"
+
+
+# ---------------------------------------------------------------------------
+# esm_is — Group C: cross-mode comparison
+# ---------------------------------------------------------------------------
+
+
+def test_esm_is_concentrates_more_in_informative_range() -> None:
+    """esm_is puts >70% of mass in [0.3, 3.0] and more than lsgm_is."""
+    sched_esm = _esm_is_schedule(num_steps=200)
+    sched_lsgm = DiffusionScheduleConfig(
+        S_k=1, k_chunk=1, num_steps=200,
+        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        k_sampling_mode="lsgm_is",
+    )
+    t_esm = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_esm)
+    t_lsgm = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_lsgm)
+
+    mask = (t_esm.sigma_tilde >= 0.3) & (t_esm.sigma_tilde <= 3.0)
+    mass_esm = float(t_esm.p_k[mask].sum())
+    mass_lsgm = float(t_lsgm.p_k[mask].sum())
+    assert mass_esm > 0.70
+    assert mass_esm > mass_lsgm
+
+
+def test_esm_is_deprioritizes_low_noise() -> None:
+    """esm_is puts less mass below σ̃ = 0.1 than lsgm_is."""
+    sched_esm = _esm_is_schedule(num_steps=200)
+    sched_lsgm = DiffusionScheduleConfig(
+        S_k=1, k_chunk=1, num_steps=200,
+        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        k_sampling_mode="lsgm_is",
+    )
+    t_esm = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_esm)
+    t_lsgm = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_lsgm)
+
+    mask_low = t_esm.sigma_tilde <= 0.1
+    mass_esm = float(t_esm.p_k[mask_low].sum())
+    mass_lsgm = float(t_lsgm.p_k[mask_low].sum())
+    assert mass_esm < mass_lsgm
+
+
+def test_esm_is_constructor_rejects_unknown_mode() -> None:
+    """Unknown k_sampling_mode still raises ValueError."""
+    with pytest.raises(ValueError, match="esm_is"):
+        _make_diffusion(
+            ZeroBaseline(latent_dim=D, j=J),
+            schedule=DiffusionScheduleConfig(
+                S_k=1, k_chunk=1, num_steps=20,
+                k_sampling_mode="bogus",
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# esm_is — Group D: variance probe compatibility
+# ---------------------------------------------------------------------------
+
+
+def test_probe_p_k_for_mode_esm_is_matches_buffer() -> None:
+    """_p_k_for_mode reconstructs the same p_k that the constructor built."""
+    from ddssm.variance.probe import _p_k_for_mode
+
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule()
+    )
+    reconstructed = _p_k_for_mode(transition, "esm_is")
+    assert torch.allclose(reconstructed, transition.p_k, atol=1e-6)

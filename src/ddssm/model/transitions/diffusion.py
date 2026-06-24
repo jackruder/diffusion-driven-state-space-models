@@ -53,6 +53,15 @@ from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.transitions import BaseTransition
 
 
+def _esm_is_density(
+    sigma_tilde: torch.Tensor, floor: float = 1e-12,
+) -> torch.Tensor:
+    """Optimal IS density for Gaussian-target ESM: p(s) ∝ s/(1+s²)²."""
+    s = sigma_tilde.to(torch.float32)
+    raw = (s / (1.0 + s * s).pow(2)).clamp_min(floor)
+    return raw / raw.sum()
+
+
 @dataclass
 class DiffusionScheduleConfig:
     """VP-SDE schedule configuration for :class:`DiffusionTransition`.
@@ -68,7 +77,15 @@ class DiffusionScheduleConfig:
     beta_min: float = 0.1
     beta_max: float = 20.0
     tau_min: float = 1e-3
-    k_sampling_mode: str = "uniform"
+    # Importance-sampling mode for noise-level selection:
+    # - ``"lsgm_is"``: p_k ∝ β/(1−α²), concentrates on noisy τ where
+    #   the centered ESM loss is loud.
+    # - ``"esm_is"``: p_k ∝ s/(1+s²)², optimal for Gaussian targets
+    #   with σ_data ≈ 1. Peaks at s = 1/√3 and suppresses low noise.
+    # - ``"uniform"``: flat p_k, preserved for the variance probe.
+    # IS reweighting in ``_esm_chunk_loss`` keeps the estimator
+    # unbiased regardless of mode.
+    k_sampling_mode: str = "lsgm_is"
     pk_gamma: float = 1.0
     pk_floor: float = 1e-12
 
@@ -214,13 +231,16 @@ class DiffusionTransition(BaseTransition):
             if self.gamma != 1.0:
                 p_k = p_k.pow(self.gamma)
             p_k = p_k / p_k.sum()
+        elif ismode == "esm_is":
+            p_k = _esm_is_density(sigma_tilde, floor=self.gfloor)
         elif ismode == "uniform":
             p_k = torch.full(
                 (self.num_steps,), 1.0 / self.num_steps, dtype=torch.float32
             )
         else:
             raise ValueError(
-                f"Unknown k_sampling_mode={ismode!r}; expected 'uniform' or 'lsgm_is'"
+                f"Unknown k_sampling_mode={ismode!r}; "
+                f"expected 'uniform', 'lsgm_is', or 'esm_is'"
             )
         self.register_buffer("p_k", p_k)
         self.k_sampling_mode = ismode
