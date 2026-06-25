@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def time_embedding(pos: torch.Tensor, d_model: int = 128, device: torch.device = "cpu"):
@@ -133,30 +134,157 @@ def Conv1d_with_init(in_channels, out_channels, kernel_size):
     return conv
 
 
+def _precompute_rope_freqs(
+    head_dim: int, max_len: int, theta: float = 10000.0
+) -> torch.Tensor:
+    """Precompute RoPE complex exponentials for up to ``max_len`` positions."""
+    freqs = 1.0 / (
+        theta
+        ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim)
+    )
+    t = torch.arange(max_len, dtype=torch.float32)
+    angles = torch.outer(t, freqs)
+    return torch.polar(torch.ones_like(angles), angles)
+
+
+def _apply_rope(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    """Apply rotary position embeddings.
+
+    Args:
+        x: ``(B, T, nheads, head_dim)`` query or key tensor.
+        freqs_cis: ``(max_len, head_dim // 2)`` complex rotation factors.
+    """
+    B, T, H, D = x.shape
+    xf = x.float().reshape(B, T, H, D // 2, 2).contiguous()
+    x_c = torch.view_as_complex(xf)
+    fc = freqs_cis[:T].unsqueeze(0).unsqueeze(2)
+    return torch.view_as_real(x_c * fc).reshape(B, T, H, D).to(x.dtype)
+
+
+class TransformerBlock(nn.Module):
+    """Pre-norm transformer block: RMSNorm, SwiGLU FFN, direct SDPA, optional RoPE."""
+
+    def __init__(
+        self,
+        d_model: int,
+        nheads: int,
+        dim_feedforward: int = 64,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        assert d_model % nheads == 0
+        self.nheads = nheads
+        self.head_dim = d_model // nheads
+        self.norm1 = nn.RMSNorm(d_model)
+        self.norm2 = nn.RMSNorm(d_model)
+        self.qkv_proj = nn.Linear(d_model, 3 * d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+        self.w_gate = nn.Linear(d_model, dim_feedforward, bias=False)
+        self.w_up = nn.Linear(d_model, dim_feedforward, bias=False)
+        self.w_down = nn.Linear(dim_feedforward, d_model, bias=False)
+        self._ff_drop = nn.Dropout(dropout)
+        self._attn_drop_p = dropout
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        freqs_cis: torch.Tensor | None = None,
+        is_causal: bool = False,
+    ) -> torch.Tensor:
+        B, T, C = x.shape
+        h = self.norm1(x)
+        qkv = self.qkv_proj(h).reshape(B, T, 3, self.nheads, self.head_dim)
+        q, k, v = qkv.unbind(2)
+        if freqs_cis is not None:
+            q = _apply_rope(q, freqs_cis)
+            k = _apply_rope(k, freqs_cis)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+        y = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=is_causal,
+            dropout_p=self._attn_drop_p if self.training else 0.0,
+        )
+        y = y.transpose(1, 2).reshape(B, T, C)
+        x = x + self.out_proj(y)
+        h2 = self.norm2(x)
+        x = x + self._ff_drop(
+            self.w_down(F.silu(self.w_gate(h2)) * self.w_up(h2))
+        )
+        return x
+
+
+class TransformerEncoder(nn.Module):
+    """Stack of :class:`TransformerBlock` with optional RoPE and causal masking.
+
+    Replaces ``nn.TransformerEncoder`` with RMSNorm, SwiGLU, and direct SDPA
+    (bypasses the MHA slow-path during training).
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        nheads: int,
+        num_layers: int = 1,
+        dim_feedforward: int = 64,
+        dropout: float = 0.0,
+        max_len: int = 512,
+        causal: bool = False,
+        rope: bool = False,
+    ):
+        super().__init__()
+        head_dim = d_model // nheads
+        if head_dim % 8 != 0:
+            raise ValueError(
+                f"head_dim={head_dim} (d_model={d_model} / nheads={nheads}) "
+                f"must be a multiple of 8 for SDPA backend compatibility"
+            )
+        self.causal = causal
+        self.layers = nn.ModuleList(
+            TransformerBlock(d_model, nheads, dim_feedforward, dropout)
+            for _ in range(num_layers)
+        )
+        if rope:
+            self.register_buffer(
+                "freqs_cis",
+                _precompute_rope_freqs(head_dim, max_len),
+                persistent=False,
+            )
+        else:
+            self.freqs_cis = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        fc = self.freqs_cis
+        for layer in self.layers:
+            x = layer(x, freqs_cis=fc, is_causal=self.causal)
+        return x
+
+
 def get_torch_trans(heads=8, layers=1, channels=64, dropout: float = 0.1):
-    """Build a batch-first GELU :class:`nn.TransformerEncoder`.
+    """Build a :class:`TransformerEncoder` (RMSNorm, SwiGLU, direct SDPA).
 
     Args:
         heads: Number of attention heads.
         layers: Number of encoder layers.
-        channels: Model dimension (``d_model``).
-        dropout: Attention/FFN dropout (PyTorch's layer default, 0.1). Callers
-            that gradient-checkpoint this module must pass ``0.0`` — a stochastic
-            forward breaks the deterministic recompute (and adds estimator noise
-            to a score-net's ESM target).
+        channels: Model dimension (``d_model``). ``channels // heads`` must be
+            a multiple of 8 for SDPA backend compatibility.
+        dropout: Attention/FFN dropout. Callers that gradient-checkpoint this
+            module must pass ``0.0`` — a stochastic forward breaks the
+            deterministic recompute.
 
     Returns:
-        The configured ``nn.TransformerEncoder``.
+        The configured :class:`TransformerEncoder`.
     """
-    encoder_layer = nn.TransformerEncoderLayer(
+    return TransformerEncoder(
         d_model=channels,
-        nhead=heads,
+        nheads=heads,
+        num_layers=layers,
         dim_feedforward=64,
-        activation="gelu",
-        batch_first=True,
         dropout=dropout,
     )
-    return nn.TransformerEncoder(encoder_layer, num_layers=layers)
 
 
 def softplus_inv(x: torch.Tensor | float) -> torch.Tensor:

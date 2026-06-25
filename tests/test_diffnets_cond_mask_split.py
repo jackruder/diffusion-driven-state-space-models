@@ -37,8 +37,11 @@ def _unet(side_dim: int, *, latent_dim: int = 2, history_len: int = 2) -> CSDIUn
         latent_dim=latent_dim,
         latent_history_len=history_len,
         side_dim=side_dim,
-        channels=8,
+        channels=16,
         n_layers=1,
+        residual_block=DiffResidualBlockConfig(
+            feature=FeatureMixerConfig(nheads=2, n_layers=1)
+        ),
     )
 
 
@@ -136,11 +139,11 @@ def test_transition_wires_cond_mask_channel() -> None:
         T_max=10,
         unet=partial(
             CSDIUnet,
-            channels=8,
+            channels=16,
             n_layers=1,
-            embedding_dim=8,
+            embedding_dim=16,
             residual_block=DiffResidualBlockConfig(
-                feature=FeatureMixerConfig(nheads=4, n_layers=1)
+                feature=FeatureMixerConfig(nheads=2, n_layers=1)
             ),
         ),
         schedule=DiffusionScheduleConfig(

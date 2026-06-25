@@ -50,14 +50,14 @@ def _make_diffusion(time_chunk_size: int | None = None) -> DiffusionTransition:
         T_max=T_MAX,
         unet=partial(
             CSDIUnet,
-            channels=8,
+            channels=16,
             n_layers=2,
-            embedding_dim=8,
+            embedding_dim=16,
             residual_block=DiffResidualBlockConfig(
                 # dropout=0.0 mirrors the gluonts score-net: the checkpoint uses
                 # preserve_rng_state=False, which is only correct for a
                 # deterministic forward.
-                feature=FeatureMixerConfig(type="transformer", nheads=4, n_layers=1, dropout=0.0)
+                feature=FeatureMixerConfig(type="transformer", nheads=2, n_layers=1, dropout=0.0)
             ),
         ),
         schedule=DiffusionScheduleConfig(
@@ -173,7 +173,7 @@ def test_encoder_grad_checkpoint_equivalence() -> None:
             fut_summary=partial(
                 TransformerFutureSummary,
                 summary_dim=16,
-                nheads=4,
+                nheads=2,
                 transformer_layers=1,
             ),
         )

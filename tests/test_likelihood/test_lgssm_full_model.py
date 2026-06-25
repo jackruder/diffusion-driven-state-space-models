@@ -68,8 +68,8 @@ from tests.test_likelihood.test_lgssm_integration import (
 )
 
 EMB_TIME = 8
-CHANNELS = 8
-NHEADS = 4
+CHANNELS = 16
+NHEADS = 2
 T_MAX = 10
 
 

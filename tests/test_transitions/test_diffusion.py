@@ -28,8 +28,8 @@ T = 5
 J = 1
 EMB_TIME = 8
 T_MAX = 10
-CHANNELS = 8
-NHEADS = 4
+CHANNELS = 16
+NHEADS = 2
 
 
 def _tiny_unet():

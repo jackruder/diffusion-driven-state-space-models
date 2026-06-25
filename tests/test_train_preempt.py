@@ -38,8 +38,8 @@ J = 1
 DATA_DIM = 3
 LATENT_DIM = 2
 EMB_TIME = 8
-CHANNELS = 8
-NHEADS = 4
+CHANNELS = 16
+NHEADS = 2
 
 _CTX = partial(
     ContextProducer,

@@ -26,15 +26,15 @@ from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.model.transitions.transitions import GaussianTransition
 
 # ---------------------------------------------------------------------------
-# Shared tiny config (channels=8 to keep tests fast; nheads=4 divides 8)
+# Shared tiny config (channels=16, nheads=2: head_dim=8 for SDPA compat)
 # ---------------------------------------------------------------------------
 
 J = 2
 DATA_DIM = 3
 LATENT_DIM = 4
 EMB_TIME = 8
-CHANNELS = 8
-NHEADS = 4
+CHANNELS = 16
+NHEADS = 2
 
 # Small architectural configs reused across tests
 _CTX = partial(

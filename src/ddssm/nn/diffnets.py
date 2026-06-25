@@ -18,6 +18,7 @@ import torch.nn.functional as F
 
 from ddssm.nn.net_utils import (
     Conv1d_with_init,
+    TransformerEncoder,
     get_torch_trans,
 )
 
@@ -173,18 +174,25 @@ class GRUTimeLayer(TimeLayer):
 class CausalTransformerTimeLayer(TimeLayer):
     """Time mixer: a forward-time CAUSAL Transformer over the ``L`` axis (per ``d`` site).
 
-    Position ``t`` attends only to ``≤ t`` via ``mask = triu(diagonal=1)`` applied to the
-    FORWARD-time stream (NO reversal, unlike ``TransformerFutureSummary``). Combined with
-    the AR-flow's right-shift of η this gives output[t] ⟂ η_{≥t}. ``dropout=0`` keeps the
-    gradient-checkpoint recompute deterministic.
+    Uses RoPE for temporal ordering and pre-norm for numerical stability under
+    bf16 autocast. Position ``t`` attends only to ``≤ t`` via SDPA's native causal
+    mode. Combined with the AR-flow's right-shift of η this gives
+    output[t] ⟂ η_{≥t}. ``dropout=0`` keeps the gradient-checkpoint recompute
+    deterministic.
     """
 
     def __init__(
         self, channels: int, nheads: int = 8, layers: int = 1, dropout: float = 0.0
     ):
         super().__init__()
-        self.layer = get_torch_trans(
-            heads=nheads, layers=layers, channels=channels, dropout=dropout
+        self.layer = TransformerEncoder(
+            d_model=channels,
+            nheads=nheads,
+            num_layers=layers,
+            dim_feedforward=64,
+            dropout=dropout,
+            causal=True,
+            rope=True,
         )
 
     def forward(
@@ -193,12 +201,8 @@ class CausalTransformerTimeLayer(TimeLayer):
         B, C, d, L = base_shape
         if L <= 1:
             return x_flat
-        # (B, C, d, L) -> (B*d, L, C): sequence = time L, model-dim = C, batch = B*d.
         y = x_flat.view(B, C, d, L).permute(0, 2, 3, 1).reshape(B * d, L, C)
-        mask = torch.triu(
-            torch.ones(L, L, device=y.device, dtype=torch.bool), diagonal=1
-        )
-        y = self.layer(y, mask=mask)
+        y = self.layer(y)
         y = y.reshape(B, d, L, C).permute(0, 3, 1, 2).reshape(B, C, d * L)
         return y
 
@@ -308,7 +312,7 @@ class FeatureMixerConfig:
     """Config for feature-mixing layers used inside residual blocks."""
 
     type: str = "transformer"
-    nheads: int = 8
+    nheads: int = 1
     n_layers: int = 1
     # Set 0.0 when the score-net is gradient-checkpointed (deterministic forward).
     dropout: float = 0.1

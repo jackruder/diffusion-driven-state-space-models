@@ -135,7 +135,7 @@ def test_full_elbo_reproduces_pre_refactor_loss() -> None:
     """
     LAMBDA_SIGMA_P = 0.01
     LAMBDA_MU_P = 0.0
-    EXPECTED_LOSS = 22.52261734008789  # recaptured post-mu_head xavier+zero-bias
+    EXPECTED_LOSS = 20.757253646850586  # recaptured: custom TransformerBlock (RMSNorm + SwiGLU)
 
     torch.manual_seed(0)
     model = _make_vhp_model(lambda_sigma_p=LAMBDA_SIGMA_P)

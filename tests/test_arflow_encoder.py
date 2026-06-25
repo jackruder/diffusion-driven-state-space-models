@@ -20,8 +20,8 @@ def make_encoder(
     data_dim: int = 12,
     latent_dim: int = 8,
     hidden_dim: int = 16,
-    channels: int = 8,
-    nheads: int = 4,
+    channels: int = 16,
+    nheads: int = 2,
     backbone: str = "transformer",
     covariate_dim: int = 0,
     static_covariate_dim: int = 0,
@@ -76,6 +76,25 @@ def test_sample_paths_default_S_is_one() -> None:
     zs, logqs, stats = enc.sample_paths(torch.randn(B, D, T), torch.zeros(B, T, 0))
     assert zs.shape == (B, 1, d, T)
     assert logqs.shape == (B, 1, T)
+
+
+# ---- Slice A+B: strong data path (backbone-input + head-concat) -----------
+
+
+def test_data_influences_latent_mean_at_init() -> None:
+    # The A+B data path + small-nonzero head init on the data branch must make the
+    # latent mean depend on the observed data AT INIT. The old zero-init head gave
+    # g=0 → mus = shift_right(cumsum(ση)) → purely noise-driven, data-independent →
+    # no foothold for recon to grow the signal (the collapse).
+    torch.manual_seed(0)
+    B, D, T, d = 2, 12, 6, 8
+    enc = make_encoder(data_dim=D, latent_dim=d, hidden_dim=16)
+    obs = torch.randn(B, D, T, requires_grad=True)
+    te = torch.zeros(B, T, 0)
+    _zs, _lq, stats = enc.sample_paths(obs, te, S=1)
+    stats["mus"].sum().backward()
+    assert obs.grad is not None
+    assert obs.grad.abs().max() > 0.0  # data reaches the latent mean at init
 
 
 # ---- Slice 2: additive flow + consistency ---------------------------------
@@ -140,7 +159,7 @@ def test_persistence_baseline_matches_z_prev() -> None:
 
 def _live_encoder(backbone: str, d: int = 4, T: int = 6) -> ARFlowEncoder:
     enc = make_encoder(
-        latent_dim=d, hidden_dim=16, channels=8, nheads=4, backbone=backbone
+        latent_dim=d, hidden_dim=16, channels=16, nheads=2, backbone=backbone
     )
     # Randomize the zero-init head so g/σ actually depend on η — zero-init would make
     # ∂μ/∂η structurally zero and mask an anti-causal wiring (Agent-4's blind spot).
@@ -270,7 +289,7 @@ def test_identity_baseline_guard() -> None:
 
 def test_entropy_closed_form_matches_mc() -> None:
     d, T, j = 4, 5, 1
-    enc = make_encoder(latent_dim=d, hidden_dim=16, channels=8, nheads=4)
+    enc = make_encoder(latent_dim=d, hidden_dim=16, channels=16, nheads=2)
     # small random head so logvar varies (zero-init would make this trivially constant)
     nn.init.normal_(enc.causal_net.head.weight, std=0.2)
     nn.init.normal_(enc.causal_net.head.bias, std=0.2)
@@ -287,8 +306,6 @@ def test_entropy_closed_form_matches_mc() -> None:
 
 
 def test_end_to_end_arflow_elbo_and_sigma_data() -> None:
-    import math
-
     from experiments.gluonts_forecast.model import build_gluonts_model
 
     torch.manual_seed(0)
@@ -297,7 +314,7 @@ def test_end_to_end_arflow_elbo_and_sigma_data() -> None:
         data_dim=D,
         latent_dim=latent,
         T_max=T,
-        nheads=4,
+        nheads=2,
         channels=16,
         summary_layers=1,
         diffusion_layers=2,
@@ -307,10 +324,6 @@ def test_end_to_end_arflow_elbo_and_sigma_data() -> None:
         encoder_type="arflow",
     )
     assert isinstance(model.encoder, ARFlowEncoder)
-    # Pin a known residual scale: logvar bias = log 4 → σ² = 4 (g stays 0; head weight=0),
-    # so the σ_data estimate E[σ²]+Var[g] = 4 is a definite value to check against.
-    with torch.no_grad():
-        model.encoder.causal_net.head.bias[1] = math.log(4.0)
     model.train()  # σ_data updates are training-only
 
     x = torch.randn(B, D, T)
@@ -322,16 +335,16 @@ def test_end_to_end_arflow_elbo_and_sigma_data() -> None:
     loss = components.total()
     assert torch.isfinite(loss), loss
     loss.backward()
-    # gradient flows back through the cumsum to the encoder (the zero-init head moves
-    # first; the deeper blocks unlock once it's non-zero).
+    # Gradient reaches the encoder's IAF (μ, logσ²) head.
     hgrad = model.encoder.causal_net.head.weight.grad
     assert hgrad is not None and torch.isfinite(hgrad).all() and hgrad.abs().sum() > 0
 
-    # σ_data tracks the RESIDUAL variance E[σ²]+Var[g] = 4 + 0, and is FLAT in t — NOT the
-    # random-walk Var[z_t] ∝ t (a mus = z_t off-by-one) nor a 2× over-count. Slot 0 is the
-    # VHP-walk init step (t=1), whose mu_hat folds in the aux-posterior variance — a
-    # transition-owned quantity, excluded here.
+    # σ_data tracks the IAF residual Var[μ_t − z_{t-1}] + E[σ²]. Since z_t = μ_t + σ_t·η_t is
+    # NOT accumulated (no cumsum), the residual stays BOUNDED and roughly flat in t — the
+    # whole point vs the random-walk Var[z_t] ∝ t. Slot 0 (t=1) folds in the VHP-init aux
+    # variance, excluded here.
     sd2 = model.sigma_data.sigma_data2.detach()
     main = sd2[1:]
-    assert torch.allclose(main, torch.full_like(main, 4.0), atol=0.1), main
-    assert (main.max() - main.min()).item() < 0.1  # flat in t
+    assert torch.isfinite(main).all() and (main > 0).all()
+    assert (main < 50).all()  # bounded — no ∝t random-walk blow-up
+    assert (main.max() / main.min()).item() < 6.0  # roughly flat in t

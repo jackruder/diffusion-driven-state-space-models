@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import torch
 
-from ddssm.nn.diffnets import CSDIUnet, MLPCSDIUnet
+from ddssm.nn.diffnets import (
+    CSDIUnet,
+    DiffResidualBlockConfig,
+    FeatureMixerConfig,
+    MLPCSDIUnet,
+)
+
+_RB = DiffResidualBlockConfig(feature=FeatureMixerConfig(nheads=2, n_layers=1))
 
 COMMON_KW = dict(
     output_len=1,
@@ -17,6 +24,7 @@ COMMON_KW = dict(
     latent_dim=4,
     latent_history_len=1,
     side_dim=3,
+    residual_block=_RB,
 )
 
 

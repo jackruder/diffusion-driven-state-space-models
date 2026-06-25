@@ -57,6 +57,14 @@ def build_gluonts_model(
     num_steps: int = 128,
     nheads: int = 8,
     summary_layers: int = 2,
+    # Diffusion IS mode for noise-level selection: "lsgm_is" (default), "uniform",
+    # or "esm_is" (p_k ∝ s/(1+s²)², peaks at σ̃≈0.6).
+    k_sampling_mode: str = "lsgm_is",
+    # Floor on the IS density p_k. The default 1e-12 lets esm_is assign p_k~1e-7 to
+    # extreme noise levels, so the unbiased 1/(K·p_k) reweighting can hit ~2e5× and
+    # explode when such a level is (rarely) sampled. Raise to ~1e-3 to bound the
+    # weight (still unbiased — sampling & reweighting share the floored p_k).
+    pk_floor: float = 1e-12,
     # "gaussian" = the settled sequential encoder; "arflow" = the parallel
     # AR-flow-on-noise drop-in (opt-in; flip the default only past the slice-9 gate).
     encoder_type: str = "gaussian",
@@ -67,6 +75,15 @@ def build_gluonts_model(
     time_chunk: int = 16,
     tracking_mode: str = "per_t",
     sigma_data_ema_decay: float = 0.997,
+    # ARFlow-only: σ init via the logσ²-head bias (σ=exp(½·bias)). 0 → σ=1 (init at prior).
+    arflow_init_logvar_bias: float = 0.0,
+    # ARFlow-only: True → IAF (conditioner sees the noise history; μ,σ condition on the
+    # realized path). False → deterministic causal encoder (μ,σ = f(h), z_hist amortized).
+    arflow_stochastic_state: bool = True,
+    # ARFlow encoder capacity, DECOUPLED from the transition's `channels` so the encoder
+    # gets more punch without inflating the diffusion (vs the already-swept gaussian).
+    arflow_channels: int | None = None,  # None → = channels; must be ÷ nheads
+    arflow_causal_layers: int = 2,
     grad_checkpoint: bool = True,
 ) -> DDSSM_base:
     """Build a gluonts-forecast DDSSM (persistence-pinned, additive encoder)."""
@@ -105,8 +122,8 @@ def build_gluonts_model(
         ),
     )
     schedule = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=num_steps, k_sampling_mode="lsgm_is",
-        time_chunk_size=time_chunk,
+        S_k=1, k_chunk=1, num_steps=num_steps, k_sampling_mode=k_sampling_mode,
+        time_chunk_size=time_chunk, pk_floor=pk_floor,
     )
     stage2_transition = DiffusionTransition(
         baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
@@ -129,8 +146,11 @@ def build_gluonts_model(
         encoder = ARFlowEncoder(
             data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
             use_mask=False, hidden_dim=width, fut_summary=fut_summary,
-            channels=channels, causal_layers=2, nheads=nheads, backbone="transformer",
-            clamp_logvar_min=-7.0, clamp_logvar_max=7.0, grad_checkpoint=grad_checkpoint,
+            channels=arflow_channels if arflow_channels is not None else channels,
+            causal_layers=arflow_causal_layers, nheads=nheads, backbone="transformer",
+            clamp_logvar_min=-7.0, clamp_logvar_max=7.0,
+            init_logvar_bias=arflow_init_logvar_bias,
+            stochastic_state=arflow_stochastic_state, grad_checkpoint=grad_checkpoint,
         )
     else:
         raise ValueError(
@@ -147,7 +167,7 @@ def build_gluonts_model(
             channels=8,
             num_layers=2,
             residual_block=ResidualBlockConfig(
-                feature=FeatureMixerConfig(n_layers=2, dropout=0.0)
+                feature=FeatureMixerConfig(nheads=1, n_layers=2, dropout=0.0)
             ),
         ),
     )

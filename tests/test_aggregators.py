@@ -133,16 +133,15 @@ def test_attention_aggregator_handles_fully_padded_row():
 
 @pytest.mark.parametrize("j", [1, 2, 4])
 def test_context_producer_aggregator_shape(j):
-    # ResidualBlockConfig default nheads=8; use a small nheads divisor of H=8.
-    rb = ResidualBlockConfig(feature=FeatureMixerConfig(nheads=4, n_layers=1))
+    rb = ResidualBlockConfig(feature=FeatureMixerConfig(nheads=1, n_layers=1))
     agg = ContextProducerAggregator(
         latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T,
-        channels=4, num_layers=1, residual_block=rb,
+        channels=8, num_layers=1, residual_block=rb,
     )
     z, t, m = _inputs(B=B, d=D, j=j, e_t=E_T)
     out = agg(z_hist=z, hist_time_emb=t, pad_mask=m)
     assert out.shape == (B, agg.out_features)
-    assert agg.out_features == 4 * H
+    assert agg.out_features == 8 * H
 
 
 @pytest.mark.parametrize("agg_cls,extra", [
@@ -161,12 +160,12 @@ def test_simple_aggregators_reject_static_emb(agg_cls, extra):
 def test_aggregator_backprop():
     """Gradients flow through each aggregator backbone."""
     j = 2
-    rb = ResidualBlockConfig(feature=FeatureMixerConfig(nheads=4, n_layers=1))
+    rb = ResidualBlockConfig(feature=FeatureMixerConfig(nheads=1, n_layers=1))
     for agg_cls, extra in [
         (GRUAggregator, {"num_gru_layers": 1}),
         (MLPAggregator, {"num_layers": 2}),
         (AttentionAggregator, {"nheads": NHEADS, "num_attn_layers": 1}),
-        (ContextProducerAggregator, {"channels": 4, "num_layers": 1, "residual_block": rb}),
+        (ContextProducerAggregator, {"channels": 8, "num_layers": 1, "residual_block": rb}),
     ]:
         agg = agg_cls(
             latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T, **extra,

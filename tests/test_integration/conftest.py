@@ -51,7 +51,7 @@ J = 1
 EMB_TIME = 8
 T_MAX = 16
 CHANNELS = 16
-NHEADS = 4
+NHEADS = 2
 
 
 _CTX = partial(
