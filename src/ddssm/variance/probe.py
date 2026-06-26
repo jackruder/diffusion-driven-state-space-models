@@ -23,11 +23,24 @@ def seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def _p_k_for_mode(transition: torch.nn.Module, mode: str) -> torch.Tensor:
+def _p_k_for_mode(
+    transition: torch.nn.Module, mode: str, *, sigma_d2: float = 1.0,
+) -> torch.Tensor:
     if not hasattr(transition, "p_k"):
         raise TypeError("Variance probe currently supports transitions with a p_k buffer.")
+    # The adaptive modes are computed per-row at loss-time, so their owning
+    # transition has ``self.p_k = None``. Fall back to ``sigma_tilde`` to size
+    # / dtype the static-mode tensors when that's the case.
     if mode == "uniform":
-        p_k = torch.full_like(transition.p_k, 1.0 / float(transition.p_k.numel()))
+        if transition.p_k is not None:
+            p_k = torch.full_like(transition.p_k, 1.0 / float(transition.p_k.numel()))
+        else:
+            K = int(transition.sigma_tilde.numel())
+            p_k = torch.full(
+                (K,), 1.0 / K,
+                dtype=transition.sigma_tilde.dtype,
+                device=transition.sigma_tilde.device,
+            )
     elif mode == "lsgm_is":
         eps = torch.finfo(transition.beta.dtype).eps
         proposal = transition.beta / (1.0 - transition.alpha.pow(2)).clamp_min(eps)
@@ -36,11 +49,29 @@ def _p_k_for_mode(transition: torch.nn.Module, mode: str) -> torch.Tensor:
         if gamma != 1.0:
             proposal = proposal.pow(gamma)
         p_k = proposal / proposal.sum().clamp_min(eps)
-    elif mode == "esm_is":
-        from ddssm.model.transitions.diffusion import _esm_is_density
+    elif mode == "adaptive_is":
+        from ddssm.model.transitions.diffusion import _adaptive_is_density_meandom
 
-        gfloor = float(getattr(transition, "gfloor", 1e-12))
-        p_k = _esm_is_density(transition.sigma_tilde, floor=gfloor)
+        sd2 = torch.tensor(
+            [sigma_d2], dtype=transition.sigma_tilde.dtype,
+            device=transition.sigma_tilde.device,
+        )
+        p_k = _adaptive_is_density_meandom(
+            transition.sigma_tilde, sd2, floor=transition.gfloor,
+        ).squeeze(0)
+    elif mode == "adaptive_is_full":
+        from ddssm.model.transitions.diffusion import _adaptive_is_density_full
+
+        # TODO: pull σ² and μ̂² from real batch stats in a future iteration —
+        # for now the probe is diagnostic-only and uses unit defaults.
+        dtype = transition.sigma_tilde.dtype
+        device = transition.sigma_tilde.device
+        sd2 = torch.tensor([sigma_d2], dtype=dtype, device=device)
+        sg2 = torch.tensor([1.0], dtype=dtype, device=device)
+        mh2 = torch.tensor([1.0], dtype=dtype, device=device)
+        p_k = _adaptive_is_density_full(
+            transition.sigma_tilde, sd2, sg2, mh2, floor=transition.gfloor,
+        ).squeeze(0)
     else:
         raise ValueError(f"Unsupported k_sampling_mode {mode!r}.")
     return p_k
@@ -119,8 +150,13 @@ def run_probe(
 
     modes = sorted({cell.k_sampling_mode for cell in spec.cells})
     transitions: dict[str, torch.nn.Module] = {mode: model.transition for mode in modes}
+    # ``transition.p_k`` is ``None`` when the transition's own training-time
+    # mode is adaptive (the buffer is computed per-row at loss-time); fall
+    # back to ``sigma_tilde`` for the dtype in that case.
+    _pk_buf = model.transition.p_k
+    _pk_dtype = _pk_buf.dtype if _pk_buf is not None else model.transition.sigma_tilde.dtype
     p_k_by_mode = {
-        mode: _p_k_for_mode(model.transition, mode).to(device=device, dtype=model.transition.p_k.dtype)
+        mode: _p_k_for_mode(model.transition, mode).to(device=device, dtype=_pk_dtype)
         for mode in modes
     }
 

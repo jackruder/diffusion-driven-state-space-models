@@ -63,7 +63,12 @@ def register_probe_plot(name: str) -> Callable[[ProbePlotFn], ProbePlotFn]:
 # that the pair is degenerate.
 
 _OBJ_COLOR = {"esm": "#1f77b4", "dsm": "#ff7f0e"}
-_MODE_STYLE = {"uniform": "-", "lsgm_is": "--"}
+_MODE_STYLE = {
+    "uniform": "-",
+    "lsgm_is": "--",
+    "adaptive_is": "-.",
+    "adaptive_is_full": ":",
+}
 _KIND_COLOR = {"loss": "#2ca02c", "grad": "#d62728"}
 
 
@@ -203,7 +208,7 @@ def plot_ratio_vs_tau(
     any_line = False
     for kind in ("loss", "grad"):
         per_mode = rpt.get(kind, {})
-        for mode in ("uniform", "lsgm_is"):
+        for mode in ("uniform", "lsgm_is", "adaptive_is", "adaptive_is_full"):
             kvals = per_mode.get(mode, {})
             if not kvals:
                 continue

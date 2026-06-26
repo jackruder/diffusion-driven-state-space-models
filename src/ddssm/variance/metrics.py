@@ -114,7 +114,7 @@ def metric_ratio_esm_dsm(ctx: ProbeContext) -> dict[str, Any]:
     loss_var = metric_loss_var(ctx)["loss_var"]
     grad_var = metric_grad_var(ctx)["grad_var"]
     out: dict[str, Any] = {"loss": {}, "grad": {}}
-    for mode in ("uniform", "lsgm_is"):
+    for mode in ("uniform", "lsgm_is", "adaptive_is", "adaptive_is_full"):
         e_key = f"esm:{mode}"
         d_key = f"dsm:{mode}"
         d_loss = loss_var.get(d_key, np.nan)
@@ -187,7 +187,7 @@ def metric_ratio_per_tau(ctx: ProbeContext) -> dict[str, Any]:
         for cell, kmap in grad_raw.items()
     }
     out: dict[str, dict[str, dict[str, float]]] = {"loss": {}, "grad": {}}
-    for mode in ("uniform", "lsgm_is"):
+    for mode in ("uniform", "lsgm_is", "adaptive_is", "adaptive_is_full"):
         e_key = f"esm:{mode}"
         d_key = f"dsm:{mode}"
         for kind, src in (("loss", loss_pt), ("grad", grad_pt)):
