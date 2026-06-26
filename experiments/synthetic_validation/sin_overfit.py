@@ -122,9 +122,10 @@ sin_overfit = experiment(
     model=SynthValModel(
         data_dim=1, latent_dim=4, j=2,
         hidden_dim=32, channels=32, diffusion_num_steps=32,
-        # k_sampling_mode defaults to "esm_is" via
-        # DiffusionScheduleConfig (the loss-aware optimal IS density);
-        # no override needed.
+        # k_sampling_mode defaults to "adaptive_is" via
+        # DiffusionScheduleConfig — the loss-aware optimal IS density
+        # per-t with live σ_d² (importance-sampling.org § Mean-
+        # dominated regime). No override needed.
     ),
     hparams=_HPARAMS,
     training=_TRAINING,

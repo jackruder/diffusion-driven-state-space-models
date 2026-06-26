@@ -214,10 +214,11 @@ def _build_init_centering_model(
             feature=FeatureMixerConfig(type="conv", n_layers=1)
         ),
     )
-    # ``k_sampling_mode`` defaults to ``"lsgm_is"`` on
-    # ``DiffusionScheduleConfig`` — the LSGM importance-sampling
-    # distribution from model-v2.org § Importance Sampling
-    # (p_k ∝ (β / (1 − α²))^γ, with the unbiasing reweight in
+    # ``k_sampling_mode`` defaults to ``"adaptive_is"`` on
+    # ``DiffusionScheduleConfig`` — the loss-aware optimal IS
+    # density per-t built from the live ``σ_d²`` running estimate
+    # (see ``importance-sampling.org`` § Mean-dominated regime for
+    # the derivation, with the unbiasing reweight applied in
     # ``_esm_chunk_loss``). No override needed here.
     schedule = DiffusionScheduleConfig(
         S_k=diffusion_S_k,

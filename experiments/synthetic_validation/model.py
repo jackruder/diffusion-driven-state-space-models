@@ -94,12 +94,15 @@ def build_synthval_model(
     diffusion_layers: int = 2,
     diffusion_num_steps: int = 64,
     # Stage-2 ESM/EDM schedule knobs. ``k_sampling_mode`` defaults
-    # to ``"esm_is"`` on ``DiffusionScheduleConfig`` (the loss-aware
-    # optimal IS density); the parameter is plumbed through so
-    # ablations can flip to ``"uniform"`` or ``"lsgm_is"`` if needed.
-    # ``S_k=1`` matches the dataclass default — bump it up for
-    # tighter per-step gradient estimates on small-data overfits.
-    diffusion_k_sampling_mode: str = "esm_is",
+    # to ``"adaptive_is"`` on ``DiffusionScheduleConfig`` — the
+    # loss-aware optimal IS density per-t built from the live
+    # ``σ_d²`` running estimate (see ``importance-sampling.org``
+    # § Mean-dominated regime). The parameter is plumbed through so
+    # ablations can flip to ``"uniform"``, ``"lsgm_is"``, or
+    # ``"adaptive_is_full"`` if needed. ``S_k=1`` matches the
+    # dataclass default — bump it up for tighter per-step gradient
+    # estimates on small-data overfits.
+    diffusion_k_sampling_mode: str = "adaptive_is",
     diffusion_S_k: int = 1,
     # Baseline form for the shared centering head. Persistence
     # (``μ_p = z_{t-1}``) is the library default since it's the
