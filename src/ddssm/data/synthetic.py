@@ -214,6 +214,26 @@ class SyntheticDataset(Dataset):
 
             data = z
 
+        elif self.mode == "harmonic-mixed":
+            # Sine waves with varying amplitude, frequency, and phase:
+            #   x_t = A * sin(omega * t + phi) + epsilon
+            # A      ~ U[0.5, 2.0]
+            # omega  ~ U[0.2, 0.6]
+            # phi    ~ U[0, 2pi]
+            # Low observation noise so an overfit checks dynamics learning.
+            z = torch.zeros(self.N_total, self.D, self.T)
+            t_grid = torch.arange(self.T, dtype=torch.float32)
+
+            for i in range(self.N_total):
+                amp = 0.5 + 1.5 * torch.rand(1).item()
+                omega = 0.2 + 0.4 * torch.rand(1).item()
+                phi = 2 * np.pi * torch.rand(1).item()
+
+                sig = amp * torch.sin(omega * t_grid + phi)
+                z[i, 0, :] = sig + 0.05 * torch.randn(self.T)
+
+            data = z
+
         elif self.mode == "bimodal":
             # Bimodal random walk:
             # z_t = 0.9 z_{t-1} + 4 s_t, s_t in {-1, +1}

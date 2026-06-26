@@ -642,80 +642,146 @@ def test_sample_clamps_sigma_data_beyond_horizon() -> None:
 
 
 # ---------------------------------------------------------------------------
-# esm_is importance sampling — Group A: distribution properties
+# adaptive_is importance sampling — Group A: distribution properties
 # ---------------------------------------------------------------------------
 
 
-def _esm_is_schedule(num_steps: int = 20, **kw) -> DiffusionScheduleConfig:
+def _adaptive_is_schedule(num_steps: int = 20, **kw) -> DiffusionScheduleConfig:
     return DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=num_steps,
         beta_min=0.1, beta_max=20.0, tau_min=1e-3,
-        k_sampling_mode="esm_is", **kw,
+        k_sampling_mode="adaptive_is", **kw,
     )
 
 
-def test_esm_is_p_k_sums_to_one() -> None:
-    """p_k is a valid PMF: sums to 1, all entries non-negative."""
+def _adaptive_is_meandom_pk(transition, sigma_d2: float) -> torch.Tensor:
+    """Compute the mean-dominated adaptive-IS density at a given σ_d² from
+    the transition's σ̃ buffer. Mirrors the helper the diffusion module
+    will expose; used to assert distribution properties without relying
+    on a static ``transition.p_k`` buffer (which is None under
+    ``adaptive_is`` since p_k is recomputed per-row from live σ_d²)."""
+    from ddssm.model.transitions.diffusion import _adaptive_is_density_meandom
+
+    s = transition.sigma_tilde
+    sd2 = torch.tensor([sigma_d2], dtype=s.dtype)
+    pk = _adaptive_is_density_meandom(s, sd2, floor=1e-12)  # (1, K)
+    return pk.squeeze(0)
+
+
+def test_adaptive_is_p_k_sums_to_one() -> None:
+    """Mean-dom adaptive-IS density at σ_d=1 is a valid PMF."""
     transition = _make_diffusion(
-        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule()
+        ZeroBaseline(latent_dim=D, j=J), schedule=_adaptive_is_schedule()
     )
-    assert torch.allclose(transition.p_k.sum(), torch.tensor(1.0), atol=1e-6)
-    assert (transition.p_k >= 0).all()
+    pk = _adaptive_is_meandom_pk(transition, sigma_d2=1.0)
+    assert torch.allclose(pk.sum(), torch.tensor(1.0), atol=1e-6)
+    assert (pk >= 0).all()
 
 
-def test_esm_is_p_k_peaks_near_one_over_sqrt3() -> None:
-    """Peak of p*(s) ∝ s/(1+s²)² is at s = 1/√3 ≈ 0.577."""
+@pytest.mark.parametrize("sigma_d2", [0.25, 1.0, 4.0])
+def test_adaptive_is_p_k_peaks_at_sigma_d_over_sqrt3(sigma_d2: float) -> None:
+    """Mean-dom adaptive-IS density peaks at s = σ_d/√3."""
     transition = _make_diffusion(
-        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule(num_steps=200)
+        ZeroBaseline(latent_dim=D, j=J),
+        schedule=_adaptive_is_schedule(num_steps=200),
     )
-    k_peak = transition.p_k.argmax()
+    pk = _adaptive_is_meandom_pk(transition, sigma_d2=sigma_d2)
+    k_peak = pk.argmax()
     s_peak = float(transition.sigma_tilde[k_peak])
-    assert abs(s_peak - 1.0 / math.sqrt(3)) < 0.15
+    s_expected = math.sqrt(sigma_d2) / math.sqrt(3)
+    # Allow 15% relative tolerance since peak resolution depends on grid.
+    assert abs(s_peak - s_expected) / s_expected < 0.15
 
 
-def test_esm_is_cdf_mass_below_01_is_small() -> None:
-    """Only ~1% of IS mass should lie below σ̃ = 0.1."""
+def test_adaptive_is_cdf_mass_below_01_is_small_at_sigma_d_one() -> None:
+    """At σ_d=1 only a small fraction of IS mass lies below σ̃ = 0.1."""
     transition = _make_diffusion(
-        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule(num_steps=500)
+        ZeroBaseline(latent_dim=D, j=J),
+        schedule=_adaptive_is_schedule(num_steps=500),
     )
+    pk = _adaptive_is_meandom_pk(transition, sigma_d2=1.0)
     mask_low = transition.sigma_tilde <= 0.1
-    mass_low = float(transition.p_k[mask_low].sum())
+    mass_low = float(pk[mask_low].sum())
     assert mass_low < 0.05
 
 
-def test_esm_is_cdf_median_near_s1() -> None:
-    """The CDF median (50% mass) is near s = 1."""
+def test_adaptive_is_cdf_median_near_s1_at_sigma_d_one() -> None:
+    """At σ_d=1 the CDF median (50% mass) sits near s = 1."""
     transition = _make_diffusion(
-        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule(num_steps=500)
+        ZeroBaseline(latent_dim=D, j=J),
+        schedule=_adaptive_is_schedule(num_steps=500),
     )
-    cdf = transition.p_k.cumsum(dim=0)
+    pk = _adaptive_is_meandom_pk(transition, sigma_d2=1.0)
+    cdf = pk.cumsum(dim=0)
     idx_median = (cdf >= 0.5).nonzero(as_tuple=True)[0][0]
     s_median = float(transition.sigma_tilde[idx_median])
     assert abs(s_median - 1.0) < 0.3
 
 
 @pytest.mark.parametrize("num_steps", [20, 100, 500])
-def test_esm_is_formula_matches_sigma_tilde(num_steps: int) -> None:
-    """p_k matches the analytic formula recomputed from the σ̃ buffer."""
+@pytest.mark.parametrize("sigma_d2", [0.25, 1.0, 4.0])
+def test_adaptive_is_formula_matches_sigma_tilde(
+    num_steps: int, sigma_d2: float
+) -> None:
+    """Mean-dom p_k(s) = s/(σ_d²+s²)² (normalised) recomputed from σ̃."""
     transition = _make_diffusion(
-        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule(num_steps=num_steps)
+        ZeroBaseline(latent_dim=D, j=J),
+        schedule=_adaptive_is_schedule(num_steps=num_steps),
     )
+    pk = _adaptive_is_meandom_pk(transition, sigma_d2=sigma_d2)
     s = transition.sigma_tilde
-    expected = s / (1.0 + s * s).pow(2)
+    expected = s / (sigma_d2 + s * s).pow(2)
     expected = expected.clamp_min(1e-12)
     expected = expected / expected.sum()
-    assert torch.allclose(transition.p_k, expected, atol=1e-6)
+    assert torch.allclose(pk, expected, atol=1e-6)
+
+
+def test_adaptive_is_meandom_at_sigma_d_one_matches_legacy_esm_is_formula() -> None:
+    """At σ_d=1 the new mean-dom formula reduces to the old s/(1+s²)² form."""
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J),
+        schedule=_adaptive_is_schedule(num_steps=200),
+    )
+    pk_new = _adaptive_is_meandom_pk(transition, sigma_d2=1.0)
+    s = transition.sigma_tilde
+    pk_old = s / (1.0 + s * s).pow(2)
+    pk_old = (pk_old.clamp_min(1e-12) / pk_old.clamp_min(1e-12).sum())
+    assert torch.allclose(pk_new, pk_old, atol=1e-6)
+
+
+def test_adaptive_is_full_collapses_to_meandom_at_special_case() -> None:
+    """Full formula at (μ̂²=1, σ²=σ_d²=1) equals the mean-dom formula."""
+    from ddssm.model.transitions.diffusion import (
+        _adaptive_is_density_full,
+        _adaptive_is_density_meandom,
+    )
+
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J),
+        schedule=_adaptive_is_schedule(num_steps=200),
+    )
+    s = transition.sigma_tilde
+    sigma_d2 = torch.tensor([1.0])
+    sigma2 = torch.tensor([1.0])
+    mu_hat2 = torch.tensor([1.0])
+    pk_full = _adaptive_is_density_full(
+        s, sigma_d2=sigma_d2, sigma2=sigma2, mu_hat2=mu_hat2, floor=1e-12,
+    ).squeeze(0)
+    pk_meandom = _adaptive_is_density_meandom(
+        s, sigma_d2=sigma_d2, floor=1e-12,
+    ).squeeze(0)
+    assert torch.allclose(pk_full, pk_meandom, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# esm_is — Group B: training integration
+# adaptive_is — Group B: training integration
 # ---------------------------------------------------------------------------
 
 
-def test_esm_is_transition_kl_runs_and_returns_finite() -> None:
-    """transition_kl produces a finite scalar loss under esm_is."""
+def test_adaptive_is_transition_kl_runs_and_returns_finite() -> None:
+    """transition_kl produces a finite scalar loss under adaptive_is."""
     baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
-    transition = _make_diffusion(baseline, schedule=_esm_is_schedule())
+    transition = _make_diffusion(baseline, schedule=_adaptive_is_schedule())
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
     out = transition.transition_kl(
@@ -725,10 +791,10 @@ def test_esm_is_transition_kl_runs_and_returns_finite() -> None:
     assert torch.isfinite(out["kl"])
 
 
-def test_esm_is_transition_kl_gradients_flow() -> None:
-    """Backward through the esm_is loss produces nonzero diffmodel gradients."""
+def test_adaptive_is_transition_kl_gradients_flow() -> None:
+    """Backward through the adaptive_is loss produces nonzero diffmodel gradients."""
     baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
-    transition = _make_diffusion(baseline, schedule=_esm_is_schedule())
+    transition = _make_diffusion(baseline, schedule=_adaptive_is_schedule())
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
     out = transition.transition_kl(
@@ -741,14 +807,32 @@ def test_esm_is_transition_kl_gradients_flow() -> None:
     assert any(g.abs().max() > 0 for g in grads)
 
 
+def test_adaptive_is_full_transition_kl_runs_and_returns_finite() -> None:
+    """transition_kl produces a finite scalar loss under adaptive_is_full."""
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    sched = DiffusionScheduleConfig(
+        S_k=1, k_chunk=1, num_steps=20,
+        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        k_sampling_mode="adaptive_is_full",
+    )
+    transition = _make_diffusion(baseline, schedule=sched)
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+    out = transition.transition_kl(
+        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
+        time_embed=time_embed, sigma_data=sigma_data,
+    )
+    assert torch.isfinite(out["kl"])
+
+
 @pytest.mark.slow
-def test_esm_is_transition_kl_is_invariant_to_num_steps() -> None:
-    """ESM loss under esm_is is grid-invariant (not scaling with num_steps)."""
+def test_adaptive_is_transition_kl_is_invariant_to_num_steps() -> None:
+    """ESM loss under adaptive_is is grid-invariant (not scaling with num_steps)."""
     def _sched(K: int) -> DiffusionScheduleConfig:
         return DiffusionScheduleConfig(
             S_k=2048, k_chunk=256, num_steps=K,
             beta_min=0.1, beta_max=20.0, tau_min=1e-3,
-            k_sampling_mode="esm_is",
+            k_sampling_mode="adaptive_is",
         )
 
     baseline = ZeroBaseline(latent_dim=D, j=J)
@@ -777,48 +861,50 @@ def test_esm_is_transition_kl_is_invariant_to_num_steps() -> None:
 
 
 # ---------------------------------------------------------------------------
-# esm_is — Group C: cross-mode comparison
+# adaptive_is — Group C: cross-mode comparison
 # ---------------------------------------------------------------------------
 
 
-def test_esm_is_concentrates_more_in_informative_range() -> None:
-    """esm_is puts >70% of mass in [0.3, 3.0] and more than lsgm_is."""
-    sched_esm = _esm_is_schedule(num_steps=200)
+def test_adaptive_is_concentrates_more_in_informative_range() -> None:
+    """At σ_d=1 adaptive_is puts >70% of mass in [0.3, 3.0] and more than lsgm_is."""
+    sched_ad = _adaptive_is_schedule(num_steps=200)
     sched_lsgm = DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=200,
         beta_min=0.1, beta_max=20.0, tau_min=1e-3,
         k_sampling_mode="lsgm_is",
     )
-    t_esm = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_esm)
+    t_ad = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_ad)
     t_lsgm = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_lsgm)
 
-    mask = (t_esm.sigma_tilde >= 0.3) & (t_esm.sigma_tilde <= 3.0)
-    mass_esm = float(t_esm.p_k[mask].sum())
+    pk_ad = _adaptive_is_meandom_pk(t_ad, sigma_d2=1.0)
+    mask = (t_ad.sigma_tilde >= 0.3) & (t_ad.sigma_tilde <= 3.0)
+    mass_ad = float(pk_ad[mask].sum())
     mass_lsgm = float(t_lsgm.p_k[mask].sum())
-    assert mass_esm > 0.70
-    assert mass_esm > mass_lsgm
+    assert mass_ad > 0.70
+    assert mass_ad > mass_lsgm
 
 
-def test_esm_is_deprioritizes_low_noise() -> None:
-    """esm_is puts less mass below σ̃ = 0.1 than lsgm_is."""
-    sched_esm = _esm_is_schedule(num_steps=200)
+def test_adaptive_is_deprioritizes_low_noise() -> None:
+    """At σ_d=1 adaptive_is puts less mass below σ̃ = 0.1 than lsgm_is."""
+    sched_ad = _adaptive_is_schedule(num_steps=200)
     sched_lsgm = DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=200,
         beta_min=0.1, beta_max=20.0, tau_min=1e-3,
         k_sampling_mode="lsgm_is",
     )
-    t_esm = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_esm)
+    t_ad = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_ad)
     t_lsgm = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_lsgm)
 
-    mask_low = t_esm.sigma_tilde <= 0.1
-    mass_esm = float(t_esm.p_k[mask_low].sum())
+    pk_ad = _adaptive_is_meandom_pk(t_ad, sigma_d2=1.0)
+    mask_low = t_ad.sigma_tilde <= 0.1
+    mass_ad = float(pk_ad[mask_low].sum())
     mass_lsgm = float(t_lsgm.p_k[mask_low].sum())
-    assert mass_esm < mass_lsgm
+    assert mass_ad < mass_lsgm
 
 
-def test_esm_is_constructor_rejects_unknown_mode() -> None:
-    """Unknown k_sampling_mode still raises ValueError."""
-    with pytest.raises(ValueError, match="esm_is"):
+def test_adaptive_is_constructor_rejects_unknown_mode() -> None:
+    """Unknown k_sampling_mode raises ValueError listing the supported modes."""
+    with pytest.raises(ValueError, match="adaptive_is"):
         _make_diffusion(
             ZeroBaseline(latent_dim=D, j=J),
             schedule=DiffusionScheduleConfig(
@@ -828,17 +914,81 @@ def test_esm_is_constructor_rejects_unknown_mode() -> None:
         )
 
 
+def test_constructor_rejects_legacy_esm_is_string() -> None:
+    """The legacy ``esm_is`` mode string was renamed to ``adaptive_is`` and
+    must now raise so users get an explicit signal rather than silent
+    behaviour change."""
+    with pytest.raises(ValueError, match="adaptive_is"):
+        _make_diffusion(
+            ZeroBaseline(latent_dim=D, j=J),
+            schedule=DiffusionScheduleConfig(
+                S_k=1, k_chunk=1, num_steps=20,
+                k_sampling_mode="esm_is",
+            ),
+        )
+
+
 # ---------------------------------------------------------------------------
-# esm_is — Group D: variance probe compatibility
+# adaptive_is — Group D: variance probe compatibility
 # ---------------------------------------------------------------------------
 
 
-def test_probe_p_k_for_mode_esm_is_matches_buffer() -> None:
-    """_p_k_for_mode reconstructs the same p_k that the constructor built."""
+def test_probe_p_k_for_mode_adaptive_is_matches_formula() -> None:
+    """``_p_k_for_mode("adaptive_is", sigma_d2=1.0)`` returns the mean-dom density."""
     from ddssm.variance.probe import _p_k_for_mode
 
     transition = _make_diffusion(
-        ZeroBaseline(latent_dim=D, j=J), schedule=_esm_is_schedule()
+        ZeroBaseline(latent_dim=D, j=J), schedule=_adaptive_is_schedule()
     )
-    reconstructed = _p_k_for_mode(transition, "esm_is")
-    assert torch.allclose(reconstructed, transition.p_k, atol=1e-6)
+    reconstructed = _p_k_for_mode(transition, "adaptive_is", sigma_d2=1.0)
+    expected = _adaptive_is_meandom_pk(transition, sigma_d2=1.0)
+    assert torch.allclose(reconstructed, expected, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Sampling schedule split — independent from the IS-density work
+# ---------------------------------------------------------------------------
+
+
+def test_sampling_schedule_split_uses_independent_num_steps() -> None:
+    """A DiffusionSamplingScheduleConfig with num_steps=10 yields a 10-step
+    rollout while the training schedule stays at its default num_steps=20.
+
+    Verified via ``self.sample_num_steps`` (the buffer the sampler loop
+    reads at line 1098 of diffusion.py)."""
+    from ddssm.model.transitions.diffusion import (
+        DiffusionSamplingScheduleConfig,
+    )
+
+    baseline = ZeroBaseline(latent_dim=D, j=J)
+    sampling_schedule = DiffusionSamplingScheduleConfig(
+        num_steps=10, tau_min=1e-3, tau_max=1.0,
+        beta_min=0.1, beta_max=20.0,
+    )
+    transition = DiffusionTransition(
+        baseline=baseline, latent_dim=D, j=J,
+        emb_time_dim=EMB_TIME, T_max=T_MAX, unet=_tiny_unet(),
+        schedule=DiffusionScheduleConfig(
+            S_k=1, k_chunk=1, num_steps=20,
+            beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+            k_sampling_mode="adaptive_is",
+        ),
+        sampling_schedule=sampling_schedule,
+    )
+    # Training schedule is preserved.
+    assert int(transition.num_steps) == 20
+    assert transition.sigma_tilde.numel() == 20
+    # Sampling schedule has its own buffers.
+    assert int(transition.sample_num_steps) == 10
+    assert transition.sample_sigma_tilde.numel() == 10
+    assert transition.sample_tau.numel() == 10
+
+
+def test_sampling_schedule_defaults_to_training_when_none() -> None:
+    """When sampling_schedule=None the sample_* buffers alias the training ones."""
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J), schedule=_adaptive_is_schedule(num_steps=20)
+    )
+    assert int(transition.sample_num_steps) == int(transition.num_steps)
+    assert torch.equal(transition.sample_sigma_tilde, transition.sigma_tilde)
+    assert torch.equal(transition.sample_tau, transition.tau)

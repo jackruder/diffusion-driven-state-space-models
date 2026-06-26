@@ -52,7 +52,14 @@ class SigmaDataBuffer(nn.Module):
     Args:
         T_max: Max latent timestep covered by the buffer (1-based,
             inclusive).
-        tracking_mode: One of "fixed", "global_ema", "per_t".
+        tracking_mode: One of "fixed", "global_ema", "per_t". Default
+            ``"per_t"`` — each timestep gets its own running EMA, kept
+            tracking through stage 2 so the centered-ESM target
+            preconditioning stays calibrated as the encoder's residual
+            distribution drifts. ``"fixed"`` freezes the buffer at the
+            centering handoff (init_smoke_simple still uses this for
+            its numerical V2 anchor); ``"global_ema"`` collapses all t
+            into one shared scalar.
         ema_decay: EMA decay γ in [0, 1).  Larger → slower update.
         init_value: Initial value used to fill every slot.  Default 1.0
             matches the doc's "approximately unit variance" assumption
@@ -65,7 +72,7 @@ class SigmaDataBuffer(nn.Module):
     def __init__(
         self,
         T_max: int,
-        tracking_mode: str = "fixed",
+        tracking_mode: str = "per_t",
         ema_decay: float = 0.999,
         init_value: float = 1.0,
     ) -> None:
