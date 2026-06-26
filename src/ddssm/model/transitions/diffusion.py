@@ -898,8 +898,12 @@ class DiffusionTransition(BaseTransition):
                 self.sigma_tilde, sigma_d2_per_row, floor=self.gfloor,
             )  # (N, K)
         elif self.k_sampling_mode == "adaptive_is_full":
-            mu_hat2_row = mu_hat_t.pow(2).sum(dim=1)  # (N,)
-            sigma2_row = sigma2_t.sum(dim=1)          # (N,)
+            # Per-coordinate means so these match σ_d²'s per-coordinate scale
+            # (sigma_data tracks residual variance per coordinate). Using sum
+            # would over-scale by ~d and break the collapse to mean-dom at
+            # real calibration for d > 1.
+            mu_hat2_row = mu_hat_t.pow(2).mean(dim=1)  # (N,)
+            sigma2_row = sigma2_t.mean(dim=1)          # (N,)
             p_k_per_row = _adaptive_is_density_full(
                 self.sigma_tilde,
                 sigma_d2=sigma_d2_per_row,

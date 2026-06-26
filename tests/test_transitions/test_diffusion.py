@@ -773,6 +773,69 @@ def test_adaptive_is_full_collapses_to_meandom_at_special_case() -> None:
     assert torch.allclose(pk_full, pk_meandom, atol=1e-6)
 
 
+def test_adaptive_is_full_call_site_reduces_per_coordinate(monkeypatch) -> None:
+    """Regression (d > 1): the adaptive_is_full call site must reduce σ²/μ̂²
+    over the coordinate axis with ``.mean`` (per-coordinate scale), not
+    ``.sum``.
+
+    σ_data tracks residual variance *per coordinate*, so passing a d×-scaled
+    sum to the full density makes ``(σ²-σ_d²)²`` never vanish at real
+    calibration and breaks the collapse to mean-dom for d > 1. The
+    function-level collapse test above can't catch this because it feeds
+    pre-reduced scalars; here we go through ``transition_kl`` with a constant
+    posterior logvar (so every coordinate's σ² is identical) and assert the
+    value handed to the full density equals that per-coordinate σ² (exp(c)),
+    not D·exp(c).
+    """
+    import ddssm.model.transitions.diffusion as diff_mod
+
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    sched = DiffusionScheduleConfig(
+        S_k=1, k_chunk=1, num_steps=20,
+        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        k_sampling_mode="adaptive_is_full",
+    )
+    transition = _make_diffusion(baseline, schedule=sched)
+
+    log_c = -0.5
+    sigma2_per_coord = math.exp(log_c)
+    torch.manual_seed(0)
+    zs = torch.randn(B, S, D, T)
+    mus = 0.3 * torch.randn(B, S, D, T)
+    logvars = torch.full((B, S, D, T), log_c)
+    enc_stats = {"mus": mus, "logvars": logvars}
+    time_embed = torch.randn(B, T, EMB_TIME)
+    logq_paths = torch.randn(B, S, T)
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+
+    captured: dict[str, torch.Tensor] = {}
+    real_full = diff_mod._adaptive_is_density_full
+
+    def spy(sigma_tilde, *, sigma_d2, sigma2, mu_hat2, floor=1e-12):
+        captured["sigma2"] = sigma2.detach().clone()
+        captured["mu_hat2"] = mu_hat2.detach().clone()
+        return real_full(
+            sigma_tilde, sigma_d2=sigma_d2, sigma2=sigma2,
+            mu_hat2=mu_hat2, floor=floor,
+        )
+
+    monkeypatch.setattr(diff_mod, "_adaptive_is_density_full", spy)
+
+    transition.transition_kl(
+        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
+        time_embed=time_embed, sigma_data=sigma_data,
+    )
+
+    assert "sigma2" in captured, "adaptive_is_full density was never called"
+    sig2 = captured["sigma2"]
+    # Per-coordinate mean equals exp(log_c); the .sum bug would give D·exp(log_c).
+    assert torch.allclose(
+        sig2, torch.full_like(sig2, sigma2_per_coord), atol=1e-5
+    ), f"expected per-coordinate σ²≈{sigma2_per_coord}, got {sig2}"
+    # Explicit guard against the d>1 .sum regression.
+    assert float(sig2.max()) < D * sigma2_per_coord - 1e-3
+
+
 # ---------------------------------------------------------------------------
 # adaptive_is — Group B: training integration
 # ---------------------------------------------------------------------------
