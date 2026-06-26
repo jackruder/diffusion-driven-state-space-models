@@ -12,10 +12,12 @@ from . import (
     init_centering,  # noqa: F401  -- model-v2 VHP / centering family
     gluonts_forecast,  # noqa: F401  -- CSDI/TimeGrad NIPS forecasting benchmark
     synthetic_validation,  # noqa: F401  -- authoring-guide worked-example family
+    arflow_headtohead,  # noqa: F401  -- gaussian-vs-arflow encoder validation gate
 )
 from ._make import run, to_yaml, override, from_yaml, save_yaml, experiment
 
 __all__ = [
     "experiment", "run", "to_yaml", "save_yaml", "from_yaml", "override",
     "datasets", "init_centering", "gluonts_forecast", "synthetic_validation",
+    "arflow_headtohead",
 ]
