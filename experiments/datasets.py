@@ -29,6 +29,7 @@ from ddssm.data.presets import (
     KDDStation,
     Electricity,
     BimodalNoisy,
+    HarmonicMixed,
     NonlinBimodalLift1D,
     NonlinBimodalLiftMV,
 )
@@ -37,6 +38,7 @@ from ddssm.experiment.stores import data_store
 # Synthetic (sequence-format) datasets.
 data_store(LGSSM, name="lgssm")
 data_store(Harmonic, name="harmonic")
+data_store(HarmonicMixed, name="harmonic_mixed")
 data_store(Bimodal, name="bimodal")
 data_store(BimodalNoisy, name="bimodal_noisy")
 data_store(Robot2D, name="robot2d")
