@@ -207,6 +207,43 @@ class CausalTransformerTimeLayer(TimeLayer):
         return y
 
 
+class TransformerTimeLayer(TimeLayer):
+    """Time mixer: a NON-causal Transformer over the ``L`` axis (per ``d`` site).
+
+    Bidirectional analogue of :class:`CausalTransformerTimeLayer` — every position
+    attends to the whole window (the CSDI-style full-attention time mixer). RoPE is
+    REQUIRED: with ``emb_time_dim=0`` the side-info carries no positional signal, so
+    without RoPE the layer would be permutation-invariant over time and strictly
+    worse than the conv it replaces. ``dropout=0`` keeps gradient-checkpoint
+    recompute deterministic.
+    """
+
+    def __init__(
+        self, channels: int, nheads: int = 8, layers: int = 1, dropout: float = 0.0
+    ):
+        super().__init__()
+        self.layer = TransformerEncoder(
+            d_model=channels,
+            nheads=nheads,
+            num_layers=layers,
+            dim_feedforward=64,
+            dropout=dropout,
+            causal=False,
+            rope=True,
+        )
+
+    def forward(
+        self, x_flat: torch.Tensor, base_shape: tuple[int, int, int, int]
+    ) -> torch.Tensor:
+        B, C, d, L = base_shape
+        if L <= 1:
+            return x_flat
+        y = x_flat.view(B, C, d, L).permute(0, 2, 3, 1).reshape(B * d, L, C)
+        y = self.layer(y)
+        y = y.reshape(B, d, L, C).permute(0, 3, 1, 2).reshape(B, C, d * L)
+        return y
+
+
 class FeatureLayer(nn.Module):
     """Abstract base for feature-mixing layers."""
 
@@ -276,15 +313,27 @@ class IdentityLayer(FeatureLayer, TimeLayer):
         return x_flat
 
 
-def build_time_layer(time_type: str, channels: int, kernel_size: int = 3, gru_layers: int = 1) -> TimeLayer:
+def build_time_layer(
+    time_type: str,
+    channels: int,
+    kernel_size: int = 3,
+    gru_layers: int = 1,
+    nheads: int = 8,
+    n_layers: int = 1,
+    dropout: float = 0.0,
+) -> TimeLayer:
     """Factory: create a TimeLayer from a type string and shared ``channels``."""
     if time_type == "conv":
         return ConvTimeLayer(channels, kernel_size=kernel_size)
     if time_type == "gru":
         return GRUTimeLayer(channels, gru_layers=gru_layers)
+    if time_type == "transformer":
+        return TransformerTimeLayer(channels, nheads=nheads, layers=n_layers, dropout=dropout)
     if time_type == "identity":
         return IdentityLayer()
-    raise ValueError(f"Unknown time_type: {time_type!r}. Choose from 'conv', 'gru', 'identity'.")
+    raise ValueError(
+        f"Unknown time_type: {time_type!r}. Choose from 'conv', 'gru', 'transformer', 'identity'."
+    )
 
 
 def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_layers: int = 1, dropout: float = 0.1) -> FeatureLayer:
@@ -305,6 +354,10 @@ class TimeMixerConfig:
     type: str = "conv"
     kernel_size: int = 3
     gru_layers: int = 1
+    # Only used when ``type == "transformer"`` (non-causal RoPE attention over L).
+    nheads: int = 8
+    n_layers: int = 1
+    dropout: float = 0.0
 
 
 @dataclass
@@ -538,6 +591,9 @@ class CSDIUnet(nn.Module):
                         channels,
                         kernel_size=residual_block.time.kernel_size,
                         gru_layers=residual_block.time.gru_layers,
+                        nheads=residual_block.time.nheads,
+                        n_layers=residual_block.time.n_layers,
+                        dropout=residual_block.time.dropout,
                     ),
                     feature_layer=build_feature_layer(
                         residual_block.feature.type,
@@ -821,6 +877,9 @@ class ContextProducer(nn.Module):
                         channels,
                         kernel_size=residual_block.time.kernel_size,
                         gru_layers=residual_block.time.gru_layers,
+                        nheads=residual_block.time.nheads,
+                        n_layers=residual_block.time.n_layers,
+                        dropout=residual_block.time.dropout,
                     ),
                     feature_layer=build_feature_layer(
                         residual_block.feature.type,
