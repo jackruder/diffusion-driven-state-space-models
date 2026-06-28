@@ -86,7 +86,13 @@ class EMA:
     def update(self):
         msd = self._module.state_dict()
         for k, v in msd.items():
-            self.shadow[k].mul_(self.decay).add_(v, alpha=1.0 - self.decay)
+            # Non-floating buffers (flags, counters, integer codes — e.g. a
+            # transition's one-shot "calibrated" flag) have no meaningful running
+            # average; snapshot the live value so ``swap`` restores it intact.
+            if torch.is_floating_point(v):
+                self.shadow[k].mul_(self.decay).add_(v, alpha=1.0 - self.decay)
+            else:
+                self.shadow[k].copy_(v)
 
     @contextmanager
     def swap(self):
