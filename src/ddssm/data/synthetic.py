@@ -20,6 +20,7 @@ NLBL_MV_LATENT_D = 4
 NLBL_MV_OBS_D = 8
 NLBL_MV_HIDDEN_DIM = 16
 NLBL_MV_A_SEED = 12345
+NLBL_MV_SIGN_PERSISTENCE = 0.85
 
 # Chaotic variant (``henon-lift``): a deterministic Hénon-map latent
 # (d = 2, a = 1.4, b = 0.3 — the classic chaotic regime) plus small process
@@ -327,10 +328,10 @@ class SyntheticDataset(Dataset):
 
             z = torch.zeros(self.N_total, latent_d, self.T)
             z[:, :, 0] = torch.randn(self.N_total, latent_d)
+            s_t = (torch.randint(0, 2, (self.N_total, latent_d)).float() * 2.0) - 1.0
             for t in range(1, self.T):
-                s_t = (
-                    torch.randint(0, 2, (self.N_total, latent_d)).float() * 2.0
-                ) - 1.0
+                keep = torch.rand(self.N_total, latent_d) < NLBL_MV_SIGN_PERSISTENCE
+                s_t = torch.where(keep, s_t, -s_t)
                 Az = z[:, :, t - 1] @ A.t()
                 z[:, :, t] = (
                     torch.tanh(Az)
