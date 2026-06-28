@@ -266,7 +266,7 @@ class DiffusionTransition(BaseTransition):
         schedule: DiffusionScheduleConfig | None = None,
         sampling_schedule: "DiffusionSamplingScheduleConfig | None" = None,
         emb_feature_dim: int | None = None,
-        sampler: str = "pf_ode",
+        sampler: str = "edm",
         edm_s_churn: float = 0.0,
         edm_s_noise: float = 1.0,
         edm_s_tmin: float = 0.0,
@@ -308,9 +308,10 @@ class DiffusionTransition(BaseTransition):
             self.emb_time_dim + self.covariate_dim + self.emb_feature_dim + 2
         )
 
-        # Sampler selection + EDM (Karras 2022) knobs. ``pf_ode`` is the legacy
-        # deterministic VP probability-flow Euler sampler; ``edm`` is the σ-space
-        # Heun sampler with optional stochastic churn.
+        # Sampler selection + EDM (Karras 2022) knobs. ``edm`` (default) is the
+        # σ-space Heun sampler with optional stochastic churn (deterministic at
+        # the default edm_s_churn=0); ``pf_ode`` is the legacy deterministic VP
+        # probability-flow Euler sampler.
         self.sampler = str(sampler)
         self.edm_s_churn = float(edm_s_churn)
         self.edm_s_noise = float(edm_s_noise)
