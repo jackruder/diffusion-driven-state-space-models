@@ -642,6 +642,199 @@ def test_sample_clamps_sigma_data_beyond_horizon() -> None:
 
 
 # ---------------------------------------------------------------------------
+# EDM (Karras 2022) sampler — analytic distributional correctness
+# ---------------------------------------------------------------------------
+
+
+def _make_edm_diffusion(
+    sigma_d2: float,
+    *,
+    num_steps: int,
+    edm_s_churn: float = 0.0,
+    edm_s_noise: float = 1.0,
+) -> tuple[DiffusionTransition, SigmaDataBuffer]:
+    """Build a ZeroBaseline EDM transition + a frozen σ_data² buffer.
+
+    ZeroBaseline ⟹ μ_p≡0 so the returned sample IS the centered draw, and the
+    default zero-init final projection ⟹ F_ψ≡0 so the EDM denoiser collapses to
+    the exact Tweedie denoiser for N(0, σ_d²).
+    """
+    transition = DiffusionTransition(
+        baseline=ZeroBaseline(latent_dim=D, j=J),
+        latent_dim=D,
+        j=J,
+        emb_time_dim=EMB_TIME,
+        T_max=T_MAX,
+        unet=_tiny_unet(),
+        schedule=DiffusionScheduleConfig(
+            S_k=1, k_chunk=1, num_steps=num_steps,
+            beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+            k_sampling_mode="uniform",
+        ),
+        sampler="edm",
+        edm_s_churn=edm_s_churn,
+        edm_s_noise=edm_s_noise,
+    )
+    transition.eval()
+    buf = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed", init_value=sigma_d2)
+    return transition, buf
+
+
+def _edm_draw(transition, buf, n_samples: int) -> torch.Tensor:
+    """Draw ``n_samples`` centered EDM samples; returns ``(n_samples, D)``."""
+    z_hist = torch.zeros(n_samples, D, J)
+    ctx = {
+        "hist_time_emb": torch.zeros(n_samples, J, EMB_TIME),
+        "target_time_emb": torch.zeros(n_samples, 1, EMB_TIME),
+        "sigma_data": buf,
+        "t": J + 1,
+    }
+    z = transition.sample(z_hist=z_hist, S=1, ctx=ctx)  # (n, 1, D)
+    assert z.shape == (n_samples, 1, D)
+    return z.squeeze(1)
+
+
+@pytest.mark.parametrize("sigma_d2", [0.5, 1.0, 2.0])
+def test_edm_sampler_zero_denoiser_is_gaussian_n0_sigma_data(sigma_d2: float) -> None:
+    """Deterministic EDM (no churn) with F_ψ≡0 emits samples ~ N(0, σ_d²).
+
+    With the zero-init final projection F_ψ≡0, the EDM denoiser reduces to the
+    skip path  D = c_skip·x̃ = σ_d²/(σ̃²+σ_d²)·x̃  — *exactly* the optimal
+    (Tweedie) denoiser for data ~ N(0, σ_d²I).  The PF-ODE the sampler
+    integrates is then the exact reverse flow of that Gaussian, so the centered
+    draw is distributed N(0, σ_d²) to discretisation + MC tolerance — a
+    network-independent correctness check on the sampler itself.
+    """
+    torch.manual_seed(0)
+    n = 4000
+    transition, buf = _make_edm_diffusion(sigma_d2, num_steps=40)
+
+    # Establish F_ψ ≡ 0: the EDM denoiser is the pure skip path.
+    w = transition.diffmodel.output_projection2.weight
+    b = transition.diffmodel.output_projection2.bias
+    assert torch.equal(w, torch.zeros_like(w))
+    assert b is None or torch.equal(b, torch.zeros_like(b))
+
+    z = _edm_draw(transition, buf, n)
+    assert torch.isfinite(z).all()
+    flat = z.reshape(-1)  # iid N(0, σ_d²) across rows × coords
+    emp_mean = flat.mean().item()
+    emp_var = flat.var().item()
+    # mean SE = √(σ_d²/(n·D)); 0.06·√σ_d² ≈ 5 SE.
+    assert abs(emp_mean) < 0.06 * math.sqrt(sigma_d2), f"{sigma_d2=} mean={emp_mean}"
+    assert abs(emp_var / sigma_d2 - 1.0) < 0.1, f"{sigma_d2=} var={emp_var}"
+
+
+def test_edm_sampler_churn_preserves_gaussian_marginal() -> None:
+    """The stochastic-churn EDM branch still maps F_ψ≡0 to N(0, σ_d²).
+
+    Churn injects noise (σ̂ > σ_cur) then the Heun step removes it; with the
+    exact denoiser the stationary marginal N(0, σ_d²+σ̃²) is preserved, so the
+    σ→0 sample is still N(0, σ_d²).  Looser tolerance than the deterministic
+    case — churn adds Monte-Carlo variance and a little discretisation bias.
+    Exercises the otherwise-untouched churn branch (γ>0, noise injection).
+    """
+    torch.manual_seed(0)
+    n = 4000
+    sigma_d2 = 1.0
+    transition, buf = _make_edm_diffusion(
+        sigma_d2, num_steps=40, edm_s_churn=16.0, edm_s_noise=1.0
+    )
+    # γ = min(S_churn/N, √2−1) > 0 ⟹ the churn branch fires.
+    assert min(transition.edm_s_churn / 40, math.sqrt(2.0) - 1.0) > 0.0
+
+    z = _edm_draw(transition, buf, n)
+    assert torch.isfinite(z).all()
+    flat = z.reshape(-1)
+    assert abs(flat.mean().item()) < 0.08
+    assert abs(flat.var().item() / sigma_d2 - 1.0) < 0.15
+
+
+class _MoGPreconditionedDenoiser(torch.nn.Module):
+    """Mock ``diffmodel`` whose EDM-preconditioned denoiser is the *exact*
+    posterior mean of a Gaussian mixture  ``Σ_k w_k N(μ_k, σ_d² I)``.
+
+    The sampler drives the network with ``c_in·x̃`` (last slot of ``latent_w``)
+    and ``c_noise = ¼·log σ``, then forms ``D = c_skip·x̃ + c_out·F``.  We invert
+    the preconditioning to recover ``x̃`` and ``σ``, evaluate the closed-form MoG
+    Tweedie denoiser  ``E[x|x̃] = Σ_k r_k(x̃)·[μ_k + c_skip·(x̃−μ_k)]``  with
+    responsibilities ``r_k ∝ w_k N(x̃; μ_k, (σ_d²+σ²)I)``, then re-precondition to
+    ``F = (D − c_skip·x̃)/c_out``.  Feeding this through ``_edm_sample_centered``
+    must reconstruct the mixture — a non-Gaussian, multimodal target.
+    """
+
+    def __init__(
+        self, means: torch.Tensor, weights: torch.Tensor, sigma_d2: float
+    ) -> None:
+        super().__init__()
+        self.register_buffer("means", means.double())                  # (K, d)
+        self.register_buffer("log_weights", weights.double().log())    # (K,)
+        self.sigma_d2 = float(sigma_d2)
+
+    def forward(self, latent_w, side_win, c_noise):  # noqa: D102
+        del side_win
+        dtype = latent_w.dtype
+        x_pre = latent_w[..., -1].double()                 # (B, d) = c_in·x̃
+        sigma = float(torch.exp(4.0 * c_noise[0]).item())  # σ = exp(4·¼log σ)
+        sd2 = self.sigma_d2
+        var_pert = sigma * sigma + sd2
+        c_skip = sd2 / var_pert
+        c_out = (sigma * math.sqrt(sd2)) / math.sqrt(var_pert)
+        x_tilde = x_pre * math.sqrt(var_pert)              # undo c_in = 1/√var_pert
+
+        diff = x_tilde.unsqueeze(1) - self.means.unsqueeze(0)   # (B, K, d)
+        log_r = self.log_weights.unsqueeze(0) - 0.5 * diff.pow(2).sum(-1) / var_pert
+        log_r = log_r - torch.logsumexp(log_r, dim=1, keepdim=True)
+        resp = log_r.exp()                                      # (B, K)
+        comp_mean = self.means.unsqueeze(0) + c_skip * diff     # m_k = μ_k+c_skip·diff
+        d_star = (resp.unsqueeze(-1) * comp_mean).sum(1)        # (B, d) = E[x|x̃]
+
+        f = (d_star - c_skip * x_tilde) / c_out
+        return f.to(dtype).unsqueeze(-1)                        # (B, d, 1)
+
+
+@pytest.mark.parametrize("weights", [(0.5, 0.5), (0.85, 0.15)])
+def test_edm_sampler_recovers_mixture_of_gaussians(weights) -> None:
+    """The EDM sampler reconstructs a 2-component Gaussian mixture from its
+    exact closed-form (Tweedie) denoiser.
+
+    Stronger than the single-Gaussian check: the MoG score is nonlinear and
+    multimodal, so recovering the right mode *weights*, *means* and per-mode
+    *variance* validates the full Heun integration on a genuinely non-Gaussian
+    target — the bimodal regime (0.85/0.15) this project's data lives in.  The
+    init prior N(0, σ_max²+σ_d²) mismatches the true σ_max-marginal only in its
+    mean (μ̄≠0), but that error is suppressed by σ_d/σ_max ≈ 0.003 in the flow,
+    so recovery is exact to discretisation + MC tolerance.
+    """
+    torch.manual_seed(0)
+    n = 8000
+    sigma_d2 = 0.25
+    means = torch.tensor([[3.0, 3.0], [-3.0, -3.0]])  # (K=2, d=2): ~17σ_d apart
+    w = torch.tensor(weights)
+
+    transition, buf = _make_edm_diffusion(sigma_d2, num_steps=64)
+    transition.diffmodel = _MoGPreconditionedDenoiser(means, w, sigma_d2)
+    transition.eval()
+
+    z = _edm_draw(transition, buf, n)  # (n, d)
+    assert torch.isfinite(z).all()
+
+    # Nearest-centroid assignment is unambiguous at ~17σ separation.
+    sq = (z.unsqueeze(1) - means.unsqueeze(0)).pow(2).sum(-1)  # (n, K)
+    assign = sq.argmin(dim=1)
+
+    for k in range(2):
+        sel = z[assign == k]
+        frac = sel.shape[0] / n
+        assert abs(frac - float(w[k])) < 0.03, f"mode {k}: weight {frac} vs {w[k]}"
+        assert torch.allclose(sel.mean(0), means[k], atol=0.1), f"mode {k}: mean"
+        var_k = sel.var(dim=0)  # (d,) — per coord
+        assert torch.allclose(
+            var_k, torch.full_like(var_k, sigma_d2), rtol=0.15, atol=0.05
+        ), f"mode {k}: var {var_k} vs σ_d²={sigma_d2}"
+
+
+# ---------------------------------------------------------------------------
 # adaptive_is importance sampling — Group A: distribution properties
 # ---------------------------------------------------------------------------
 
