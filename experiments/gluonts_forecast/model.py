@@ -59,9 +59,7 @@ def build_gluonts_model(
     num_steps: int = 128,
     nheads: int = 8,
     summary_layers: int = 2,
-    # Diffusion IS mode for noise-level selection: "lsgm_is" (default), "uniform",
-    # or "esm_is" (p_k ∝ s/(1+s²)², peaks at σ̃≈0.6).
-    k_sampling_mode: str = "lsgm_is",
+    k_sampling_mode: str = "adaptive_is",
     # Floor on the IS density p_k. The default 1e-12 lets esm_is assign p_k~1e-7 to
     # extreme noise levels, so the unbiased 1/(K·p_k) reweighting can hit ~2e5× and
     # explode when such a level is (rarely) sampled. Raise to ~1e-3 to bound the

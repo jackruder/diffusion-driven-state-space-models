@@ -24,8 +24,8 @@ class ProbeCell:
 
     Attributes:
         objective: Diffusion loss objective (``"esm"`` or ``"dsm"``).
-        k_sampling_mode: Diffusion-step sampling (``"uniform"`` or
-            ``"lsgm_is"``).
+        k_sampling_mode: Diffusion-step sampling (``"uniform"``,
+            ``"adaptive_is"``, etc.).
     """
 
     objective: str
@@ -87,8 +87,8 @@ class ProbeSpec:
     cells: list = field(default_factory=lambda: [
         ProbeCell("esm", "uniform"),
         ProbeCell("dsm", "uniform"),
-        ProbeCell("esm", "lsgm_is"),
-        ProbeCell("dsm", "lsgm_is"),
+        ProbeCell("esm", "adaptive_is"),
+        ProbeCell("dsm", "adaptive_is"),
     ])
     R: int = 128
     B_var: int = 16

@@ -152,7 +152,7 @@ def _render_ratio_trajectory(
     per_step_data: list[tuple[int, dict]],
     *,
     kind: str = "grad",
-    mode: str = "lsgm_is",
+    mode: str = "adaptive_is",
 ) -> None:
     """One static plot, one curve per checkpoint.
 
@@ -337,7 +337,7 @@ def _probe_per_step(experiment, device: torch.device, run_dir: str) -> dict:
 
     # Static trajectory plot — all checkpoints overlaid, coloured by step.
     log.info("Rendering ratio trajectory plot")
-    _render_ratio_trajectory(run_dir, per_step_data, kind="grad", mode="lsgm_is")
+    _render_ratio_trajectory(run_dir, per_step_data, kind="grad", mode="adaptive_is")
 
     return {
         "per_step_dir": per_step_dir,
