@@ -43,6 +43,7 @@ from ddssm.model.transitions.diffusion import (
     DiffusionScheduleConfig,
 )
 from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
+from ddssm.model.transitions.csdi_transition import CSDITransition
 
 
 def build_gluonts_model(
@@ -65,6 +66,11 @@ def build_gluonts_model(
     # explode when such a level is (rarely) sampled. Raise to ~1e-3 to bound the
     # weight (still unbiased — sampling & reweighting share the floored p_k).
     pk_floor: float = 1e-12,
+    transition_type: str = "diffusion",
+    csdi_channels: int = 64,
+    csdi_layers: int = 4,
+    csdi_nheads: int = 8,
+    csdi_num_steps: int = 50,
     # "gaussian" = the settled sequential encoder; "arflow" = the parallel
     # AR-flow-on-noise drop-in (opt-in; flip the default only past the slice-9 gate).
     encoder_type: str = "gaussian",
@@ -85,6 +91,9 @@ def build_gluonts_model(
     arflow_channels: int | None = None,  # None → = channels; must be ÷ nheads
     arflow_causal_layers: int = 2,
     grad_checkpoint: bool = True,
+    # "csdi"-transition time embedding width (the vendored ermongroup CSDI). 0 turns
+    # CSDI's time-conditioning OFF to match our emb_time_dim==0 (embedding parity).
+    csdi_timeemb: int = 128,
 ) -> DDSSM_base:
     """Build a gluonts-forecast DDSSM (persistence-pinned, additive encoder)."""
     # Single width rule: 2×latent for summary + encoder + decoder hidden.
@@ -125,10 +134,26 @@ def build_gluonts_model(
         S_k=1, k_chunk=1, num_steps=num_steps, k_sampling_mode=k_sampling_mode,
         time_chunk_size=time_chunk, pk_floor=pk_floor,
     )
-    stage2_transition = DiffusionTransition(
-        baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
-        T_max=T_max, unet=unet, schedule=schedule, grad_checkpoint=grad_checkpoint,
-    )
+    if transition_type == "diffusion":
+        stage2_transition = DiffusionTransition(
+            baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
+            T_max=T_max, unet=unet, schedule=schedule, grad_checkpoint=grad_checkpoint,
+        )
+    elif transition_type == "gaussian":
+        stage2_transition = BaselineGaussianTransition(
+            baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
+        )
+    elif transition_type == "csdi":
+        stage2_transition = CSDITransition(
+            latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim, T_max=T_max,
+            channels=csdi_channels, layers=csdi_layers, nheads=csdi_nheads,
+            num_steps=csdi_num_steps, timeemb=csdi_timeemb,
+        )
+    else:
+        raise ValueError(
+            "transition_type must be 'diffusion', 'gaussian', or 'csdi'; got "
+            f"{transition_type!r}"
+        )
 
     fut_summary = partial(
         TransformerFutureSummary, summary_dim=width, nheads=nheads,
