@@ -5,14 +5,13 @@ init-prior + baseline-Gaussian / centered-diffusion transitions) can
 overfit a small, low-noise, well-behaved dataset. This is a pipeline
 correctness check, not a generalisation experiment.
 
-Dataset: ``HarmonicMixed`` (``mode="harmonic-mixed"``) shrunk to 16
+Dataset: ``HarmonicMixed`` (``mode="harmonic-mixed"``) shrunk to 64
 training sequences. Each is ``x_t = A sin(omega t + phi) + 0.05 eps``
 with ``A ~ U[0.5, 2.0]``, ``omega ~ U[0.2, 0.6]``, ``phi ~ U[0, 2pi]``.
 
-Model: ``SynthValModel`` (``data_dim=1, latent_dim=1, j=1``).
+Model: ``SynthValModel`` (``data_dim=1, latent_dim=4, j=2``).
 
-Training: short two-stage budget (200 + 400 = 600 stage-relative
-steps) — enough to overfit ~16 samples at ``batch_size=8``.
+Training: stage-2-only with enough budget to reach the noise floor.
 
 Eval + viz are wired so::
 
@@ -33,14 +32,10 @@ import dataclasses
 from experiments._make import experiment
 from ddssm.data.presets import HarmonicMixed
 from ddssm.experiment.stores import experiment_store
-from ddssm.experiment.builders import Eval, Hparams, Plot, Viz, Training
+from ddssm.experiment.builders import Eval, Hparams, Objective, Plot, Viz, Training
 from experiments.init_centering.hparams import StagesB
 from experiments.synthetic_validation.model import SynthValModel
 
-# 64 train / 64 val / 64 test sequences. v10 made do with 16 but the
-# forecast extremes (longest periods, smallest amplitudes) suffered
-# from sparse frequency/amplitude coverage. 64 gives ~4× tighter
-# coverage at ~4× wall-clock per epoch (mitigated by larger batch).
 _SinOverfitData = dataclasses.replace(
     HarmonicMixed,
     N_per_split=64,
@@ -51,48 +46,35 @@ _HPARAMS = Hparams(
     S=1,
     batch_size=16,
     grad_accum_steps=1,
-    enc_lr=1e-3,
-    dec_lr=1e-3,
-    trans_lr=1e-3,
+    enc_lr=5e-4,
+    dec_lr=5e-4,
+    trans_lr=5e-4,
     ema_decay=0.997,
 )
 
-# `steps` is ignored once stages are configured; kept > 0 for the
-# sanity-check convention.
-_TRAINING = Training(steps=600, log_every=25, amp=False, checkpoint_every=200)
+_TRAINING = Training(steps=600, log_every=25, amp=False, checkpoint_every=500)
 
-# Stage budget tuned for overfit on 16 samples at batch_size=8 (= 2
-# batches/epoch). 200 stage-1 steps ≈ 100 epochs of closed-form Gaussian
-# pretraining; 400 stage-2 steps ≈ 200 epochs of centered diffusion.
 _STAGES = StagesB(
     baseline_mode="pinned",
-    # v7/v8 showed that any stage_1 with PersistenceBaseline drives
-    # the encoder into posterior collapse (z ≈ 0 trivially satisfies
-    # persistence). Drop stage_1 entirely — train stage_2 from scratch
-    # so the encoder is shaped by the joint diffusion + recon loss,
-    # not by the easier-to-collapse closed-form KL.
     run_stages=["stage_2"],
-    n_pretrain=1,  # unused: stage_1 not in run_stages
-    n_stage2=1500,
-    base_lr=1e-3,
-    log_every=10,
-    checkpoint_every=300,
+    n_pretrain=200,
+    n_stage2=5000,
+    base_lr=5e-4,
+    log_every=100,
+    checkpoint_every=5000,
+    stage_2_warmup_frac=0.15,
+    stage_2_lambda_start=0.01,
+    stage_2_lambda_end=1.0,
+    stage_2_freeze_enc_dec=False,
 )
 
-# Eval: forecast MAE + CRPS-sum on the val split.
 _EVAL = Eval(
-    metrics=["mae", "crps_sum", "recon_mse"],
+    metrics=["mae", "rmse", "crps_sum", "recon_mse"],
     split="val",
     num_samples=20,
-    # SyntheticDataModule reports forecast_split=None, so eval needs an
-    # explicit T_split. Use the same context length the viz uses.
     T_split=20,
 )
 
-# Viz: one row per sequence; with T=32 and T_split=20 the model has to
-# roll out a 12-step forecast for each sin curve. Drawing from the
-# train split makes "did it overfit?" visually obvious; the eval CRPS
-# above already covers generalisation to val.
 _VIZ = Viz(
     plots=[
         Plot(
@@ -112,26 +94,20 @@ _VIZ = Viz(
 
 sin_overfit = experiment(
     data=_SinOverfitData,
-    # latent_dim=4, j=2: with A, omega, phi all varying per-sample,
-    # the latent has to encode (i) where in the trajectory we are
-    # and (ii) which curve we're on (its A and omega). A 2-dim
-    # latent is right at the edge — give it 4 dims so the transition
-    # has enough state to disambiguate the per-sample parameters.
-    # channels=32 + diffusion_num_steps=32 keeps the diffusion-
-    # transition capacity modest so the CPU run stays fast.
     model=SynthValModel(
-        data_dim=1, latent_dim=4, j=2,
-        hidden_dim=32, channels=32, diffusion_num_steps=32,
-        # k_sampling_mode defaults to "adaptive_is" via
-        # DiffusionScheduleConfig — the loss-aware optimal IS density
-        # per-t with live σ_d² (importance-sampling.org § Mean-
-        # dominated regime). No override needed.
+        data_dim=1, latent_dim=4, j=4,
+        hidden_dim=128, channels=64, diffusion_num_steps=64,
+        diffusion_layers=2,
+        baseline_form="zero",
+        diffusion_time_chunk_size=32,
+        recon_time_chunk=32,
     ),
     hparams=_HPARAMS,
     training=_TRAINING,
     stages=_STAGES,
     eval=_EVAL,
     viz=_VIZ,
+    objective=Objective(metric="rmse", source="json"),
 )
 experiment_store(sin_overfit, name="sin_overfit")
 

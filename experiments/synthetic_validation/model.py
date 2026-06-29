@@ -104,6 +104,8 @@ def build_synthval_model(
     # estimates on small-data overfits.
     diffusion_k_sampling_mode: str = "adaptive_is",
     diffusion_S_k: int = 1,
+    diffusion_time_chunk_size: int | None = None,
+    recon_time_chunk: int | None = None,
     # Baseline form for the shared centering head. Persistence
     # (``μ_p = z_{t-1}``) is the library default since it's the
     # simplest dynamics-capable prior. Use ``"zero"`` for the legacy
@@ -171,6 +173,7 @@ def build_synthval_model(
             num_steps=diffusion_num_steps,
             k_sampling_mode=diffusion_k_sampling_mode,
             S_k=diffusion_S_k,
+            time_chunk_size=diffusion_time_chunk_size,
         ),
     )
 
@@ -208,6 +211,7 @@ def build_synthval_model(
         baseline_mode="pinned",  # μ_p frozen
         sigma_data=sigma_data,
         stage1_transition=stage1_transition,
+        recon_time_chunk=recon_time_chunk,
     )
 
 
