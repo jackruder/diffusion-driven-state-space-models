@@ -61,9 +61,101 @@ _T_SPLIT = 24
 # encoder key -> the model kwargs that select it.
 _ENCODERS = {
     "gaussian": dict(encoder_type="gaussian"),
+    # Same sequential encoder as `gaussian` but a LOCAL future-summary (filtering
+    # q(z_t|x_t)) — tests whether a simpler encoder gives a cleaner near-identity
+    # latent frame at latent_dim==data_dim==8.
+    "gaussian_local": dict(encoder_type="gaussian_local"),
     "iaf": dict(encoder_type="arflow", arflow_stochastic_state=True),
     "det": dict(encoder_type="arflow", arflow_stochastic_state=False),
+    # Forward-message variants (parallel encoder + a forward-causal data message):
+    # o1_flow = option-1 (forward pass over b → o_t) sent through the IAF flow;
+    # fb_mf / fb_flow = [f_t, b_t] context with a mean-field / IAF head respectively.
+    "o1_flow": dict(
+        encoder_type="arflow", arflow_stochastic_state=True,
+        arflow_forward_message="fwd_summary",
+    ),
+    "fb_mf": dict(
+        encoder_type="arflow", arflow_stochastic_state=False,
+        arflow_forward_message="fwd_data",
+    ),
+    "fb_flow": dict(
+        encoder_type="arflow", arflow_stochastic_state=True,
+        arflow_forward_message="fwd_data",
+    ),
+    # Pinned identity encoder/decoder (z=x, requires latent_dim==data_dim): the
+    # diffusion transition denoises in OBSERVATION space → a CSDI-style obs-space
+    # model inside the DDSSM pipeline. Decisive isolation of the latent-frame
+    # bottleneck: if this hits ~CSDI (58%), the encoder frame is the problem; if it
+    # stays ~gaussian (26%), the transition/training is.
+    "identity": dict(encoder_type="identity"),
+    # identity enc/dec + the LITERAL vendored ermongroup CSDI in the transition
+    # slot (transition_type="csdi"). With j==HIST this reproduces the 58% standalone
+    # CSDI forecaster INSIDE the DDSSM ELBO pipeline → decisively indicts (≈58%) or
+    # exonerates (≈22%) our own transition code, since the latent frame is already
+    # cleared by the plain `identity` cell stalling at ~22%.
+    "identity_csdi": dict(encoder_type="identity", transition_type="csdi"),
+    # LEARNED gaussian frame (latent_dim=8) + the literal CSDI transition. Pairs
+    # with identity_csdi (66%): if this also lands ~66% the learned frame is fine
+    # for a correct transition; if it drops toward gaussian's ~26% the learned
+    # frame is a real secondary bottleneck (co-evolution / amortization gap).
+    "gaussian_csdi": dict(encoder_type="gaussian", transition_type="csdi"),
+    # "KITCHEN-SINK" identity + OUR DiffusionTransition made CSDI-LIKE on every axis
+    # found to differ from the literal CSDI (the 24%->66% gap on the identity frame):
+    #   - k_sampling_mode=uniform     (CSDI samples noise levels uniformly)
+    #   - emb_feature_dim=16          (CSDI's per-channel feature embedding; decoupled
+    #                                  from emb_time_dim, which stays 0)
+    #   - time_mixer=transformer      (non-causal RoPE attention over the window, the
+    #                                  CSDI time axis; ours was a 3-tap conv)
+    #   - diffusion_sampler=edm       (Karras Heun + stochastic churn; ours was a
+    #                                  deterministic VP probability-flow Euler)
+    #   - baseline_type=zero          (μ_p≡0: persistence centers on ONE bimodal mode,
+    #                                  so the transition only modeled a residual)
+    # All knobs are independent factory params, so single-axis ablations are CLI
+    # overrides off this cell. Read vs identity+ours (24%) and identity+CSDI (66%):
+    # if this closes toward 66%, the gap is the transition RECIPE (one of these axes);
+    # if it stays ~24%, the gap is elsewhere (training/pipeline).
+    "identity_csdilike": dict(
+        encoder_type="identity",
+        baseline_type="zero",
+        emb_feature_dim=16,
+        time_mixer="transformer",
+        diffusion_sampler="edm",
+        edm_s_churn=16.0,
+        edm_s_noise=1.0,
+        k_sampling_mode="uniform",
+    ),
 }
+
+# Single-axis ablations off the kitchen-sink (LEAVE-ONE-OUT): each reverts exactly
+# ONE CSDI-like axis to the identity+ours (24%) baseline value, keeping the other
+# four flipped, to attribute the 24->55% gain. Plus the FRAME-TRANSFER cell: the
+# full recipe on the LEARNED gaussian frame (does the recipe win survive a lossy
+# frame, or collapse like literal CSDI did 66->16?). Baked as presets so the
+# eval_baselines/probe (which rebuild the model from the experiment NAME alone)
+# reconstruct the exact architecture.
+_KS = _ENCODERS["identity_csdilike"]
+_ENCODERS.update(
+    {
+        # noise-level sampling: uniform -> adaptive_is (the 24% anchor's value)
+        "identity_csdilike_ksamp": {
+            **_KS, "k_sampling_mode": "adaptive_is", "pk_floor": 1e-3,
+        },
+        # per-channel feature embedding: 16 -> 0 (off)
+        "identity_csdilike_embfeat": {**_KS, "emb_feature_dim": 0},
+        # time mixer: transformer (non-causal RoPE) -> conv (3-tap)
+        "identity_csdilike_timemix": {**_KS, "time_mixer": "conv"},
+        # sampler: EDM Heun+churn -> legacy pf_ode (deterministic VP Euler).
+        # Inference-only, so this cell re-scores the kitchen-sink checkpoint.
+        "identity_csdilike_sampler": {
+            **_KS, "diffusion_sampler": "pf_ode", "edm_s_churn": 0.0,
+        },
+        # baseline: zero (μ_p≡0) -> persistence (μ_p = z_{t-1})
+        "identity_csdilike_baseline": {**_KS, "baseline_type": "persistence"},
+        # FRAME TRANSFER: full kitchen-sink recipe on the learned gaussian frame
+        "gaussian_csdilike": {**_KS, "encoder_type": "gaussian"},
+    }
+)
+
 # dataset key -> (data-module preset, obs dim). LGSSM exposes GT latents so
 # finalists can be scored on latent recovery + the analytic Kalman reference.
 _DATASETS = {
@@ -75,9 +167,9 @@ _DATASETS = {
 def _model(encoder_key: str, data_dim: int, j: int = 1):
     """Same backbone for every cell; parallel encoders get bumped capacity."""
     caps = (
-        {}
-        if encoder_key == "gaussian"
-        else dict(arflow_channels=128, arflow_causal_layers=4)
+        dict(arflow_channels=128, arflow_causal_layers=4)
+        if _ENCODERS[encoder_key].get("encoder_type") == "arflow"
+        else {}
     )
     return GluonModel(
         data_dim=data_dim, latent_dim=_LATENT_DIM, j=j, T_max=_T,
@@ -88,18 +180,25 @@ def _model(encoder_key: str, data_dim: int, j: int = 1):
 
 
 def _phase2_cell(encoder_key: str, dataset_key: str, j: int = 1):
-    """Full two-stage ELBO cell; stage hyperparameters are SWEPT (un-pinned)."""
+    """Single-stage ELBO cell (stage-2-only); stage hyperparameters are SWEPT.
+
+    Stage-1 pretraining is dropped here (harmful in early arflow runs): with
+    ``run=["stage_2"]`` no centering handoff fires, so there is no μ_p
+    snapshot/pin and no encoder perturbation, and ``per_t`` σ_data
+    self-calibrates from cold via its EMA warmup.
+    """
     data, data_dim = _DATASETS[dataset_key]
     return experiment(
         data=data,
         model=_model(encoder_key, data_dim, j),
-        hparams=dataclasses.replace(GluonHparams, batch_size=32, clip_grad_norm=1.0),
+        hparams=dataclasses.replace(GluonHparams, batch_size=32),
         training=GluonTraining,
         # Budget/cadence fixed from calibration (plateau ~3700); everything else
-        # (base_lr, dec/trans_mult, sigma_pert, λ starts + warmup fracs,
-        # lambda_sigma_p) is left at neutral defaults for +sweep=h2h_full.
+        # (base_lr, dec/trans_mult, λ start + warmup frac) is left at neutral
+        # defaults for +sweep=h2h_full. Stage-2-only: the stage-1 knobs
+        # (n_pretrain, sigma_pert, lambda_sigma_p, stage_1_*) are inert.
         stages=GluonStages(
-            n_pretrain=450, n_stage2=4000,
+            run=["stage_2"], n_stage2=4000,
             validate_every=100, log_every=50, checkpoint_every=1000,
         ),
         # Per-trial objective eval: forecast CRPS-sum on the VAL split (select on
@@ -119,7 +218,7 @@ def _phase1_cell(encoder_key: str, dataset_key: str, j: int = 1):
     return experiment(
         data=data,
         model=_model(encoder_key, data_dim, j),
-        hparams=dataclasses.replace(GluonHparams, batch_size=32, clip_grad_norm=1.0),
+        hparams=dataclasses.replace(GluonHparams, batch_size=32),
         training=GluonTraining,
         stages=GluonStages(
             run=["stage_1"],
@@ -146,3 +245,66 @@ for _ds in ("lgssm", "nlblmv"):
     for _enc in ("gaussian", "iaf", "det"):
         experiment_store(_phase2_cell(_enc, _ds), name=f"h2h__{_enc}__{_ds}")
         experiment_store(_phase1_cell(_enc, _ds), name=f"h2h_cap__{_enc}__{_ds}")
+
+# Forward-message variants + the local-summary gaussian: only the discriminative
+# nlblmv phase-2 cell (the p=0.85 head-to-head). Same model/training/eval — only the
+# encoder differs.
+for _enc in ("gaussian_local", "o1_flow", "fb_mf", "fb_flow"):
+    experiment_store(_phase2_cell(_enc, "nlblmv"), name=f"h2h__{_enc}__nlblmv")
+
+# j=2 variants on nlblmv: the true generative process is 2nd-order Markov in z
+# (recovering the sign-persistence state s_{t-1} needs z_{t-1} AND z_{t-2}), so the
+# j=1 cells above are structurally unable to model the 0.85/0.15 mode-weighting.
+# Same cells, only the transition/encoder conditioning order changes.
+for _enc in (
+    "gaussian", "gaussian_local", "iaf", "det", "o1_flow", "fb_mf", "fb_flow",
+    "identity",
+):
+    experiment_store(_phase2_cell(_enc, "nlblmv", j=2), name=f"h2h__{_enc}__nlblmv__j2")
+
+# Faithful-CSDI control: identity enc/dec + the literal vendored CSDI transition at
+# j=10 (== CSDI HIST=10, SEQ=11). Reproduces the 58% standalone forecaster inside
+# the DDSSM pipeline; pass/stall cleanly indicts/exonerates our transition code.
+experiment_store(
+    _phase2_cell("identity_csdi", "nlblmv", j=10), name="h2h__csdi__nlblmv__j10"
+)
+
+# identity enc/dec + OUR DiffusionTransition at j=10 — the 4th cell of the 2x2
+# {identity,gaussian} x {ours,CSDI}. Single-variable swap from the faithful CSDI run
+# (only the transition differs): does our transition trail CSDI in obs-space too?
+experiment_store(
+    _phase2_cell("identity", "nlblmv", j=10), name="h2h__identity__nlblmv__j10"
+)
+
+# LEARNED gaussian frame (latent_dim=8) + literal CSDI transition at j=10. Pairs with
+# the faithful identity+CSDI run (66%): ≈66% => the learned frame is fine for a correct
+# transition; drop toward gaussian-our-transition (~26%) => the learned frame is a real
+# secondary bottleneck (co-evolution / amortization gap).
+experiment_store(
+    _phase2_cell("gaussian_csdi", "nlblmv", j=10),
+    name="h2h__gaussian_csdi__nlblmv__j10",
+)
+
+# Kitchen-sink CSDI-like identity + OUR transition at j=10: every axis that differed
+# from the literal CSDI flipped at once (uniform noise sampling, feature embedding,
+# transformer time mixer, EDM stochastic sampler, zero baseline). Read vs identity+ours
+# (24%) and identity+CSDI (66%) to attribute the gap to the transition recipe.
+experiment_store(
+    _phase2_cell("identity_csdilike", "nlblmv", j=10),
+    name="h2h__identity_csdilike__nlblmv__j10",
+)
+
+# Attribution batch: 5 single-axis leave-one-out ablations off the kitchen-sink +
+# the gaussian-frame transfer, all j=10 on nlblmv. Each ablation cell name encodes
+# the axis reverted to the 24% baseline (see the _ENCODERS.update block above).
+for _enc in (
+    "identity_csdilike_ksamp",
+    "identity_csdilike_embfeat",
+    "identity_csdilike_timemix",
+    "identity_csdilike_sampler",
+    "identity_csdilike_baseline",
+    "gaussian_csdilike",
+):
+    experiment_store(
+        _phase2_cell(_enc, "nlblmv", j=10), name=f"h2h__{_enc}__nlblmv__j10"
+    )

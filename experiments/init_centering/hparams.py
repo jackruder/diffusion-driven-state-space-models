@@ -91,6 +91,8 @@ def _build_init_centering_stages(
     # loss-form change, not relearn the rate-distortion tradeoff.
     stage_1_lambda_start: float = 0.001,
     stage_2_lambda_start: float = 0.1,
+    stage_1_lambda_end: float = 1.0,
+    stage_2_lambda_end: float = 1.0,
     stage_1_warmup_frac: float = 0.25,
     stage_2_warmup_frac: float = 0.10,
     log_every: int = 25,
@@ -99,6 +101,7 @@ def _build_init_centering_stages(
     early_stop_window: int = 50,
     early_stop_min_improvement: float = 1e-4,
     early_stop_warmup_steps: int = 100,
+    stage_2_freeze_enc_dec: bool = False,
     # Which stages to execute, in order. Default runs both. Override
     # to ``["stage_2"]`` to skip the closed-form-Gaussian pretrain and
     # train the diffusion-centered model from random init (no stage-1
@@ -132,8 +135,10 @@ def _build_init_centering_stages(
         encoder=True, decoder=True, transition=True, baseline=True,
     )
     stage2_baseline_trainable = baseline_mode == "learnable"
+    stage2_enc = not stage_2_freeze_enc_dec
+    stage2_dec = not stage_2_freeze_enc_dec
     stage2_trainable = StageTrainableConf(
-        encoder=True, decoder=True, transition=True,
+        encoder=stage2_enc, decoder=stage2_dec, transition=True,
         baseline=stage2_baseline_trainable,
     )
     es = EarlyStopSpec(
@@ -144,13 +149,13 @@ def _build_init_centering_stages(
     )
     stage1_lambda = LambdaRampConf(
         start=float(stage_1_lambda_start),
-        end=1.0,
+        end=float(stage_1_lambda_end),
         steps=max(1, int(round(stage_1_warmup_frac * n_pretrain))),
         delay=0,
     )
     stage2_lambda = LambdaRampConf(
         start=float(stage_2_lambda_start),
-        end=1.0,
+        end=float(stage_2_lambda_end),
         steps=max(1, int(round(stage_2_warmup_frac * n_stage2))),
         delay=0,
     )
@@ -183,6 +188,10 @@ def _build_init_centering_stages(
             val_every=0,
             checkpoint_every=checkpoint_every,
             early_stop=es if early_stop_enabled else None,
+            # Fires *after* stage 1 (only when stage 2 will run): a
+            # stage-2-only run gets no handoff, hence zero μ_p snapshot/pin
+            # or encoder perturbation.
+            centering_handoff=CenteringHandoff(sigma_pert=float(sigma_pert)),
             loss=stage1_loss,
         ),
         stage_2=StageSpecConf(
@@ -193,7 +202,6 @@ def _build_init_centering_stages(
             log_every=log_every,
             val_every=0,
             checkpoint_every=checkpoint_every,
-            centering_handoff=CenteringHandoff(sigma_pert=float(sigma_pert)),
             loss=stage2_loss,
         ),
         run=list(run_stages) if run_stages is not None else ["stage_1", "stage_2"],

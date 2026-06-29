@@ -2,9 +2,14 @@
 
 A stage = a contiguous block of training with a per-stage trainable
 mask, per-stage learning rates, and an optional one-time
-``centering_handoff`` hook that fires *before* the stage's training
-loop (used at the stage-1 → stage-2 boundary per
-``model-v2.org`` § Stage-1 → stage-2 handoff).
+``centering_handoff`` hook that fires *after* the declaring stage's
+training loop — and only when a later stage will run (used at the
+stage-1 → stage-2 boundary per ``model-v2.org`` § Stage-1 → stage-2
+handoff). Declaring it on stage 1 means the handoff snapshots the
+*trained* baseline and is a strict consequence of stage 1 having run:
+a stage-2-only run sees no handoff (no μ_p snapshot/pin, no encoder
+perturbation), and a stage-1-only probe leaves its final checkpoint
+unperturbed.
 """
 
 from __future__ import annotations
@@ -108,9 +113,12 @@ class LambdaRampConf:
 class StageSpecConf:
     """A single stage of multi-stage training.
 
-    Optional ``centering_handoff`` fires *before* this stage's training
-    loop.  When set, the handoff rebuilds the optimizer itself; the
-    orchestrator then skips its own ``_rebuild_optimizer`` call.
+    Optional ``centering_handoff`` fires *after* this stage's training
+    loop, and only when a later stage will run (so it snapshots the
+    *trained* baseline and is skipped for a terminal stage).  When it
+    fires, the handoff rebuilds the optimizer with the *next* stage's
+    LRs; the orchestrator then skips that next stage's own
+    ``_rebuild_optimizer`` call.
     """
 
     steps: int = MISSING
@@ -173,13 +181,15 @@ class StageOrchestrator:
     For each stage in ``stages.run``:
 
     1. Flip ``trainer.model.stage_selector`` to the stage key.
-    2. If ``stage.centering_handoff`` is set, call
-       :func:`perform_centering_handoff` with the stage's LRs.  The
-       handoff rebuilds the optimizer itself, so the orchestrator
-       *skips* its own ``_rebuild_optimizer`` step.
-    3. Otherwise, rebuild the optimizer with the stage's LRs.
-    4. Set per-module trainable flags.
-    5. Drive ``trainer.fit`` for ``stage.steps`` training steps.
+    2. Rebuild the optimizer with the stage's LRs — unless the previous
+       stage's post-loop centering handoff already rebuilt it (with this
+       stage's LRs), in which case the rebuild is skipped.
+    3. Set per-module trainable flags.
+    4. Drive ``trainer.fit`` for ``stage.steps`` training steps.
+    5. If ``stage.centering_handoff`` is set *and* a later stage will
+       run, call :func:`perform_centering_handoff` with the *next*
+       stage's LRs.  The handoff rebuilds the optimizer itself, so the
+       next stage skips its own ``_rebuild_optimizer`` step.
     """
 
     def __init__(self, trainer: "DDSSMTrainer", stages: "StagesConf") -> None:
@@ -240,10 +250,14 @@ class StageOrchestrator:
 
         When ``resume_from`` points at a checkpoint carrying
         ``stage_prefix=<key>`` (see ADR-0009), the orchestrator skips every
-        stage iteration whose key precedes ``<key>`` in ``stages.run`` and
-        suppresses ``perform_centering_handoff`` on the resumed stage (the
-        handoff already happened before the ckpt was written; firing it
-        again would re-perturb the encoder and reset σ_data).
+        stage iteration whose key precedes ``<key>`` in ``stages.run``.
+        Because the centering handoff now fires *after* its declaring
+        stage's loop, a stage's checkpoints always pre-date its handoff:
+        resuming into a stage re-runs that stage and then fires the
+        handoff (correct — it had not yet been applied to the ckpt), while
+        resuming into a *later* stage skips the declaring stage entirely
+        and so never re-fires it (no double encoder-perturb / σ_data
+        reset). No explicit suppression is needed.
         Downstream stages run normally with no ``resume_from``.
 
         A ``resume_from`` ckpt without a ``stage_prefix`` field (legacy,
@@ -261,9 +275,14 @@ class StageOrchestrator:
 
         # Iterate from the resume point onwards (or from the start when
         # resume_from is None). ``is_resumed_stage`` is True only for the
-        # first iteration of the resumed run; it suppresses the centering
-        # handoff and threads ``resume_from`` into the trainer's fit.
+        # first iteration of the resumed run; it threads ``resume_from`` into
+        # the trainer's fit (the post-loop handoff needs no resume suppression,
+        # since a stage's ckpts always pre-date its own handoff).
         start_idx = ordered.index(resume_stage_key) if resume_stage_key is not None else 0
+        # Set True by a stage's post-loop centering handoff (which rebuilds the
+        # optimizer with the *next* stage's LRs) so that next stage skips its
+        # own rebuild.
+        skip_next_rebuild = False
         for i, key in enumerate(ordered[start_idx:]):
             stage: StageSpecConf = getattr(stages, key)
             is_resumed_stage = (i == 0) and (resume_from is not None)
@@ -277,14 +296,11 @@ class StageOrchestrator:
             # marks each stage and its boundary.
             self.trainer._current_stage_idx = start_idx + i + 1
 
-            # 2. Optional centering handoff.  When set, the handoff rebuilds
-            # the optimizer itself.  Suppress on the resumed stage: the
-            # handoff already fired before the saved ckpt was written; firing
-            # again would re-perturb the encoder and reset σ_data (ADR-0009).
-            if stage.centering_handoff is not None and not is_resumed_stage:
-                perform_centering_handoff(
-                    self.trainer, stage.centering_handoff, new_lrs=stage.lrs,
-                )
+            # 2. Rebuild the optimizer with this stage's LRs — unless the
+            # previous stage's post-loop centering handoff already rebuilt it
+            # (with this stage's LRs).
+            if skip_next_rebuild:
+                skip_next_rebuild = False
             else:
                 self.trainer._rebuild_optimizer(stage.lrs)
 
@@ -360,3 +376,20 @@ class StageOrchestrator:
                 early_stop=stage.early_stop,
                 resume_from=stage_resume,
             )
+
+            # 6. Post-stage centering handoff. Fires *after* this stage's loop
+            # — so it snapshots the *trained* baseline — and only when a later
+            # stage will run. A terminal stage (e.g. a stage-1-only capacity
+            # probe) is skipped, leaving its final checkpoint unperturbed; a
+            # stage-2-only run never reaches a declaring stage_1, so it sees no
+            # handoff at all (no μ_p snapshot/pin, no encoder perturbation).
+            # The handoff rebuilds the optimizer with the next stage's LRs, so
+            # that next stage skips its own rebuild (skip_next_rebuild).
+            abs_idx = start_idx + i
+            has_next = (abs_idx + 1) < len(ordered)
+            if stage.centering_handoff is not None and has_next:
+                next_stage: StageSpecConf = getattr(stages, ordered[abs_idx + 1])
+                perform_centering_handoff(
+                    self.trainer, stage.centering_handoff, new_lrs=next_stage.lrs,
+                )
+                skip_next_rebuild = True

@@ -68,6 +68,7 @@ def _build_gluonts_stages(
     early_stop_window: int = 500,
     early_stop_min_improvement: float = 1e-4,
     early_stop_warmup_steps: int = 500,
+    stage_2_freeze_frame: bool = False,
 ) -> StagesConf:
     """Two-stage recon→joint orchestration for a gluonts cell (persistence/pinned)."""
     effective_enc_lr = enc_lr if enc_lr is not None else base_lr
@@ -81,6 +82,15 @@ def _build_gluonts_stages(
     # Persistence μ_p is param-free → baseline never trainable (pinned).
     trainable = StageTrainableConf(
         encoder=True, decoder=True, transition=True, baseline=False,
+    )
+    # Stage-2 mask: optionally freeze the learned frame (enc+dec) so only the
+    # transition trains against a static latent target.
+    stage2_trainable = (
+        StageTrainableConf(
+            encoder=False, decoder=False, transition=True, baseline=False,
+        )
+        if stage_2_freeze_frame
+        else trainable
     )
     es = EarlyStopSpec(
         enabled=early_stop_enabled,
@@ -121,17 +131,20 @@ def _build_gluonts_stages(
             val_every=validate_every,
             checkpoint_every=checkpoint_every,
             early_stop=es if early_stop_enabled else None,
+            # Fires *after* stage 1 (only when stage 2 will run): a
+            # stage-2-only run gets no handoff, hence zero μ_p snapshot/pin
+            # or encoder perturbation.
+            centering_handoff=CenteringHandoff(sigma_pert=float(sigma_pert)),
             loss=stage1_loss,
         ),
         stage_2=StageSpecConf(
             steps=int(n_stage2),
-            trainable=trainable,
+            trainable=stage2_trainable,
             lrs=lrs,
             lambda_ramp=stage2_lambda,
             log_every=log_every,
             val_every=validate_every,
             checkpoint_every=checkpoint_every,
-            centering_handoff=CenteringHandoff(sigma_pert=float(sigma_pert)),
             loss=stage2_loss,
         ),
         run=["stage_1", "stage_2"],
@@ -144,7 +157,7 @@ GluonStages = builds(_build_gluonts_stages, populate_full_signature=True)
 
 __all__ = [
     "GluonHparams",
-    "GluonTraining",
     "GluonStages",
+    "GluonTraining",
     "_build_gluonts_stages",
 ]

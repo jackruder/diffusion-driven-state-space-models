@@ -16,7 +16,6 @@ must produce a baseline-trainable mask consistent with the chosen
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 import logging
 
 import pytest
@@ -35,8 +34,6 @@ from experiments.init_centering.hparams import _build_init_centering_stages
 def _cells():
     """Every cell of the post-auto-clamp ablation grid."""
     return list(iter_cells())
-
-
 
 
 @pytest.mark.parametrize("baseline_form,baseline_mode,tracking_mode", _cells())
@@ -137,9 +134,11 @@ def test_stages_factory_baseline_mask_matches_mode(
     assert stages.stage_1.trainable.baseline is True
     # Stage 2 mirrors the mode.
     assert stages.stage_2.trainable.baseline is expected_stage2_baseline
-    # The handoff is always set on stage 2.
-    assert stages.stage_2.centering_handoff is not None
-    assert stages.stage_2.centering_handoff.sigma_pert == pytest.approx(1e-3)
+    # The handoff is declared on stage 1 (fires *after* it, before stage 2),
+    # so a stage-2-only run carries no handoff artifact.
+    assert stages.stage_1.centering_handoff is not None
+    assert stages.stage_1.centering_handoff.sigma_pert == pytest.approx(1e-3)
+    assert stages.stage_2.centering_handoff is None
 
 
 def test_stages_factory_early_stop_disabled_by_default() -> None:

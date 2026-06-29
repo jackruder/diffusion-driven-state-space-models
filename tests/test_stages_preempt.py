@@ -2,8 +2,9 @@
 
 Covers ADR-0009 multi-stage resume support: per-stage ``stage_prefix``
 embedded in the checkpoint payload, ``StageOrchestrator.run(resume_from=)``
-that uses it to skip already-completed stages and suppress the centering
-handoff on the resumed stage.
+that uses it to skip already-completed stages.  The centering handoff now
+fires *after* its declaring stage's loop, so resuming into a later stage
+skips the declaring stage entirely and never re-fires it.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from unittest.mock import patch
 
 import torch
 import pytest
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 
 from ddssm.nn.futsum import GRUFutureSummary
 from ddssm.model.dssd import DDSSM_base
@@ -197,18 +198,19 @@ class _OrchTrainer:
 
 
 def _two_stage_config() -> StagesConf:
+    # Handoff declared on stage 1: fires *after* stage 1's loop, before stage 2.
     stage_1 = StageSpecConf(
         steps=10,
         trainable=StageTrainableConf(),
         lrs=StageLrsConf(enc_lr=1e-3),
         log_every=5, val_every=10, checkpoint_every=10,
+        centering_handoff=CenteringHandoffConf(sigma_pert=0.0),
     )
     stage_2 = StageSpecConf(
         steps=20,
         trainable=StageTrainableConf(),
         lrs=StageLrsConf(enc_lr=2e-3),
         log_every=5, val_every=10, checkpoint_every=10,
-        centering_handoff=CenteringHandoffConf(sigma_pert=0.0),
     )
     return StagesConf(stage_1=stage_1, stage_2=stage_2, run=["stage_1", "stage_2"])
 
@@ -240,7 +242,7 @@ def test_orchestrator_run_accepts_resume_from(tmp_path) -> None:
     cfg = _two_stage_config()
     orch = StageOrchestrator(trainer, cfg)
 
-    # resume_from=None — both stages run, handoff fires on stage_2.
+    # resume_from=None — both stages run, handoff fires after stage_1.
     with patch("ddssm.training.stages.perform_centering_handoff") as mock_handoff:
         orch.run(train_loader=object(), amp=False, resume_from=None)
     fit_prefixes = [c[1] for c in trainer.calls if c[0] == "fit"]
@@ -286,7 +288,7 @@ def test_orchestrator_resumes_into_stage_2_skips_stage_1_and_handoff(
 def test_orchestrator_resumes_into_stage_1_still_runs_stage_2_normally(
     tmp_path,
 ) -> None:
-    """Resuming a stage_1 ckpt: stage_1 fit gets resume_from; stage_2 runs with handoff."""
+    """Resuming a stage_1 ckpt: stage_1 fit gets resume_from; handoff then fires once."""
     ckpt_path = _write_stage_ckpt(tmp_path, stage_prefix="stage_1")
     trainer = _OrchTrainer()
     cfg = _two_stage_config()
@@ -300,7 +302,8 @@ def test_orchestrator_resumes_into_stage_1_still_runs_stage_2_normally(
     assert len(fits) == 2
     assert fits[0][1] == "stage_1" and fits[0][2] == ckpt_path
     assert fits[1][1] == "stage_2" and fits[1][2] is None
-    # Handoff fires for stage_2 normally.
+    # Handoff fires after stage_1 (before stage_2): the resumed stage_1 ckpt
+    # pre-dates the handoff, so re-running stage_1 fires it exactly once.
     assert mock_handoff.call_count == 1
 
 
