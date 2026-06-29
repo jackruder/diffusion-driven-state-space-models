@@ -363,3 +363,88 @@ class GaussianDecoder(BaseDecoder):
         obs_count_t = m_t.sum(dim=1).clamp_min(1.0)  # (B,)
 
         return logp_t, mu_x, logvar_x, obs_count_t
+
+
+class IdentityDecoder(BaseDecoder):
+    """Pinned identity emission ``p(x_t | z_t) = N(z_t, σ_x²)`` (fixed σ_x).
+
+    Requires ``latent_dim == data_dim``. Passes the current latent ``z_t`` (the
+    last history slot) straight through to ``x_t`` with a FIXED log-variance, so
+    the predictive spread comes from the diffusion TRANSITION, not a learnable
+    decoder. Pairs with :class:`~ddssm.model.encoder.IdentityEncoder` to make the
+    pipeline an observation-space (CSDI-style) model. Param-free (no optimizer
+    group). ``fixed_logvar`` defaults to ``log(0.1²)`` to match the nlblmv obs
+    noise.
+    """
+
+    def __init__(
+        self,
+        latent_dim: int,
+        data_dim: int,
+        j: int = 1,
+        emb_time_dim: int = 0,
+        fixed_logvar: float = -4.605,  # log(0.1²): true obs-noise σ_x
+        **_unused,
+    ) -> None:
+        super().__init__()
+        if latent_dim != data_dim:
+            raise ValueError(
+                "IdentityDecoder requires latent_dim == data_dim; got "
+                f"latent_dim={latent_dim}, data_dim={data_dim}"
+            )
+        self.latent_dim = latent_dim
+        self.data_dim = data_dim
+        self.j = j
+        self.emb_time_dim = emb_time_dim
+        self.register_buffer(
+            "fixed_logvar", torch.tensor(float(fixed_logvar)), persistent=False
+        )
+
+    def forward(
+        self,
+        z: torch.Tensor,  # (B, d, k) with k <= j; last slot = current z_t
+        time_embed: torch.Tensor,
+        time_idx: torch.Tensor,
+        covariates: torch.Tensor | None = None,
+        static_embed: torch.Tensor | None = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        B, d, _k = z.shape
+        assert d == self.latent_dim, f"z latent dim {d} != {self.latent_dim}"
+        mu = z[:, :, -1]  # (B, D) = z_t
+        logvar = self.fixed_logvar.to(device=z.device, dtype=z.dtype).expand(
+            B, self.data_dim
+        )
+        return mu, logvar
+
+    def variance_prior_loss(self) -> torch.Tensor:
+        return torch.zeros(
+            (), device=self.fixed_logvar.device, dtype=self.fixed_logvar.dtype
+        )
+
+    def log_likelihood(
+        self,
+        x_t: torch.Tensor,  # (B, D)
+        z_hist: torch.Tensor,  # (B, d, k<=j)
+        time_embed: torch.Tensor,
+        time_idx: torch.Tensor,
+        observation_mask_t: torch.Tensor | None = None,
+        covariates: torch.Tensor | None = None,
+        static_embed: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        device = x_t.device
+        B, D = x_t.shape
+        assert self.data_dim == D
+        mu_x, logvar_x = self.forward(z_hist, time_embed, time_idx)
+
+        if observation_mask_t is None:
+            m_t = torch.ones_like(x_t, device=device)
+        else:
+            m_t = observation_mask_t.to(device)
+
+        resid = torch.where(m_t > 0, x_t - mu_x, torch.zeros_like(mu_x))
+        inv_var = torch.exp(-logvar_x)
+        const = math.log(2.0 * math.pi)
+        nll = 0.5 * m_t * (resid * resid * inv_var + logvar_x + const)
+        logp_t = -nll.sum(dim=1)
+        obs_count_t = m_t.sum(dim=1).clamp_min(1.0)
+        return logp_t, mu_x, logvar_x, obs_count_t

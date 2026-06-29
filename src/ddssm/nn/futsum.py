@@ -1,9 +1,12 @@
 """Future-summary modules (F_ϕ) that summarise an observed sequence.
 
-Each module reverses time, runs a pluggable mixing backbone (GRU, Conv,
-Identity, Transformer), and projects to a per-step context vector. Missing-data
-masking is handled inline. The summary is consumed by the encoder to produce
-latent distributions q_ϕ(z_t | ·).
+Each module projects to a per-step context vector via a pluggable mixing
+backbone (GRU, Conv, Identity, Transformer). With ``reverse_time=True`` (the
+default) it runs in reversed time so each step ``t`` summarises its FUTURE
+``x_{t:T}`` — the backward data message ``b_t``. With ``reverse_time=False`` the
+same backbone runs forward-causally, so each step summarises its PAST
+``x_{1:t}`` — the forward data message ``f_t``. Missing-data masking is handled
+inline. The summary is consumed by the encoder to produce q_ϕ(z_t | ·).
 """
 
 import torch
@@ -37,6 +40,7 @@ class FutureSummary(nn.Module):
         static_embed_dim: int = 0,
         summary_dim: int = 64,
         num_layers: int = 2,
+        reverse_time: bool = True,
     ) -> None:
         super().__init__()
         self.data_dim = data_dim
@@ -46,6 +50,9 @@ class FutureSummary(nn.Module):
         self.summary_dim = summary_dim
         self.num_layers = num_layers
         self.use_mask = use_mask
+        # True: backward summary b_t (reversed time → step t sees x_{t:T}).
+        # False: forward-causal message f_t (step t sees x_{1:t}).
+        self.reverse_time = reverse_time
 
         self.input_dim = data_dim + emb_time_dim + (data_dim if use_mask else 0)
 
@@ -95,12 +102,15 @@ class FutureSummary(nn.Module):
             )  # (B, T, D + E_t + D + D * E_s)
 
         h_in = self.input_proj(x_aug)
-        h_rev = torch.flip(h_in, dims=[1])  # reverse time (B, T, summary_dim)
-
-        h_rev = self._forward_mixer(h_rev)
-
-        h = torch.flip(h_rev, dims=[1])  # (B, T, summary_dim)
-        return h
+        if self.reverse_time:
+            # Backward summary: mix in reversed time so a causal backbone gives
+            # each step its FUTURE, then flip back to original order.
+            h_in = torch.flip(h_in, dims=[1])  # (B, T, summary_dim)
+            h_mix = self._forward_mixer(h_in)
+            return torch.flip(h_mix, dims=[1])  # (B, T, summary_dim)
+        # Forward-causal message f_t: mix in original order (causal backbone →
+        # step t sees only x_{1:t}); no flip.
+        return self._forward_mixer(h_in)
 
 
 class GRUFutureSummary(FutureSummary):
@@ -115,6 +125,7 @@ class GRUFutureSummary(FutureSummary):
         summary_dim: int = 64,
         num_layers: int = 2,
         gru_layers: int = 1,
+        reverse_time: bool = True,
     ):
         super().__init__(
             data_dim=data_dim,
@@ -123,6 +134,7 @@ class GRUFutureSummary(FutureSummary):
             static_embed_dim=static_embed_dim,
             summary_dim=summary_dim,
             num_layers=num_layers,
+            reverse_time=reverse_time,
         )
         self.rnn = nn.GRU(
             input_size=self.summary_dim,
@@ -156,6 +168,7 @@ class TransformerFutureSummary(FutureSummary):
         ff_mult: int = 4,
         dropout: float = 0.0,
         transformer_layers: int = 1,
+        reverse_time: bool = True,
     ):
         super().__init__(
             data_dim=data_dim,
@@ -164,6 +177,7 @@ class TransformerFutureSummary(FutureSummary):
             static_embed_dim=static_embed_dim,
             summary_dim=summary_dim,
             num_layers=num_layers,
+            reverse_time=reverse_time,
         )
         d_model = self.summary_dim
         if d_model % nheads != 0:
@@ -185,12 +199,25 @@ class TransformerFutureSummary(FutureSummary):
         self.encoder = nn.TransformerEncoder(layer, num_layers=transformer_layers)
 
     def _forward_mixer(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, T, H) in reversed time order.
-        # Causal mask prevents looking "ahead" in reversed order.
-        B, T, _ = x.shape
-        causal_mask = torch.triu(
-            torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1
-        )
-        return self.encoder(x, mask=causal_mask)
+        # x: (B, T, H) in reversed time (backward b_t) or original time (forward
+        # f_t), set by reverse_time. The causal mask (SDPA is_causal=True) gives
+        # each step its future (reversed) or its past (forward); no manual triu.
+        return self.encoder(x)
+
+
+class IdentityFutureSummary(FutureSummary):
+    """Local per-step summary: ``h_t = Linear(x_t)``; no time mixing.
+
+    The identity backbone gives the encoder a FILTERING posterior
+    ``q(z_t | x_t, z_hist)`` (each step sees only its own observation) instead of
+    the smoothing ``q(z_t | x_{t:T}, z_hist)`` of the GRU/Transformer summaries.
+    For a per-timestep lift ``x_t = lift(z_t)`` this is the matched inverse: the
+    encoder can learn a clean near-identity frame at ``latent_dim == data_dim``
+    without blurring information across time. ``reverse_time`` is a no-op here
+    (identity commutes with the time flip).
+    """
+
+    def _forward_mixer(self, x: torch.Tensor) -> torch.Tensor:
+        return x
 
 

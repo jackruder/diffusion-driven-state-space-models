@@ -28,7 +28,7 @@ from ddssm.nn.gaussians import (
     gaussian_log_prob,
     gaussian_entropy,
 )
-from ddssm.nn.net_utils import hist_abs_time_tokens
+from ddssm.nn.net_utils import TransformerEncoder, hist_abs_time_tokens
 from ddssm.nn.dist_heads import BaseDistHead, GaussianDistHead
 from ddssm.nn.aggregators import ContextProducerAggregator
 from ddssm.nn.torch_compile import maybe_compile, maybe_compile_fn
@@ -575,13 +575,27 @@ class CausalNoiseNet(nn.Module):
 
 
 class ARFlowEncoder(BaseEncoder):
-    """Parallel autoregressive-flow encoder over pre-sampled noise (drop-in for ``GaussianEncoder``).
+    """Parallel encoder over pre-sampled noise (drop-in for ``GaussianEncoder``).
 
-    Pushes forward a pre-sampled noise field ``η`` through an additive/persistence flow:
-    ``z_t = μ_t + σ_t⊙η_t``, ``μ_t = z_{t-1} + g_φ(η_{<t}, h_t)`` with ``z_{t-1}`` a parallel
-    cumsum (``z_0=0``). Because ``η`` is drawn up front and ``g_φ`` is causal in ``η_{<t}``,
-    all ``t`` compute in one parallel pass — no per-step loop. Identity/persistence-baseline
-    only; the additive frame hard-codes ``μ_p = z_{t-1}``.
+    Draws a noise field ``η`` once, then ``z_t = μ_t + σ_t⊙η_t`` with
+    ``(μ_t, logσ²_t) = CausalNoiseNet(η, c)`` in one parallel pass — no per-step
+    loop. ``stochastic_state`` toggles the conditioner: ``True`` = IAF (sees the
+    strictly-causal noise history ``η_{<t}`` → q is an autoregressive flow on the
+    realized path); ``False`` = mean-field (``μ,σ = f(c)`` only). Identity/persistence
+    baseline only (``μ_p`` handled by the transition's centering).
+
+    ``forward_message`` chooses the data context ``c`` fed to the conditioner:
+
+    * ``"none"`` — ``c = b_t`` (the backward summary ``b_s = F_ϕ(x_{s:T})``; default).
+    * ``"fwd_data"`` — ``c = [f_t, b_t]``, adding a forward-causal data message
+      ``f_t = F_ϕ(x_{1:t})`` (the clean past-only summary that the overlapping
+      backward summaries cannot reconstruct).
+    * ``"fwd_summary"`` — ``c = o_t``, a forward-causal pass over ``b`` (a
+      deterministic analog of the AR latent path).
+
+    The data context may use future information freely; only the NOISE stays
+    strictly causal inside ``CausalNoiseNet``, so the IAF log-prob (lower-triangular
+    Jacobian, diagonal ``σ_t``) is exact regardless of ``forward_message``.
     """
 
     def __init__(
@@ -601,6 +615,11 @@ class ARFlowEncoder(BaseEncoder):
         backbone: Literal["conv", "transformer"] = "transformer",
         clamp_logvar_min: float = -7.0,
         clamp_logvar_max: float = 7.0,
+        init_logvar_bias: float = 0.0,
+        stochastic_state: bool = True,
+        forward_message: Literal["none", "fwd_data", "fwd_summary"] = "none",
+        fwd_summary: Callable[..., FutureSummary] | None = None,
+        fwd_layers: int = 2,
         grad_checkpoint: bool = False,
     ) -> None:
         super().__init__()
@@ -632,9 +651,46 @@ class ARFlowEncoder(BaseEncoder):
         )
         self.summary_dim = self.fut_sum_module.summary_dim
 
+        # Optional forward DATA message folded into the conditioner context c. The
+        # noise path stays strictly causal inside CausalNoiseNet, so a forward (or
+        # backward) data context never breaks the IAF log-prob — causality is only
+        # required in η, never in the data.
+        self.forward_message = forward_message
+        if forward_message == "fwd_data":
+            # f_t = forward-causal summary of x_{1:t}; c = [f_t, b_t].
+            if fwd_summary is None:
+                fwd_summary = partial(
+                    GRUFutureSummary, summary_dim=self.summary_dim,
+                    num_layers=2, reverse_time=False,
+                )
+            self.fwd_sum_module = fwd_summary(
+                data_dim=data_dim,
+                emb_time_dim=emb_time_dim + covariate_dim,
+                use_mask=use_mask,
+                static_embed_dim=self.total_static_dim,
+            )
+            context_dim = self.summary_dim + self.fwd_sum_module.summary_dim
+            self.fwd_sum_module = maybe_compile(self.fwd_sum_module, dynamic=True)
+        elif forward_message == "fwd_summary":
+            # o_t = forward-causal pass over the backward summary b; c = o_t.
+            self.fwd_refiner = TransformerEncoder(
+                d_model=self.summary_dim, nheads=nheads, num_layers=fwd_layers,
+                dim_feedforward=max(self.summary_dim, 4 * self.summary_dim),
+                dropout=0.0, causal=True, rope=True,
+            )
+            context_dim = self.summary_dim
+            self.fwd_refiner = maybe_compile(self.fwd_refiner, dynamic=True)
+        elif forward_message == "none":
+            context_dim = self.summary_dim
+        else:
+            raise ValueError(
+                "forward_message must be 'none', 'fwd_data', or 'fwd_summary'; "
+                f"got {forward_message!r}"
+            )
+
         self.causal_net = CausalNoiseNet(
             latent_dim=latent_dim,
-            summary_dim=self.summary_dim,
+            summary_dim=context_dim,  # dim of the context c the conditioner sees
             channels=channels,
             causal_layers=causal_layers,
             nheads=nheads,
@@ -689,10 +745,29 @@ class ARFlowEncoder(BaseEncoder):
                 static_embed=static_embed,
             )
 
+        # Conditioner context c from the backward summary b (=h), optionally with a
+        # forward DATA message. (Data context only — η enters causally in causal_net.)
+        if self.forward_message == "fwd_data":
+            if self.grad_checkpoint and self.training and torch.is_grad_enabled():
+                f = checkpoint(
+                    self.fwd_sum_module, obs_perm, mask_perm, h_time_embed,
+                    static_embed, use_reentrant=False, preserve_rng_state=False,
+                )  # f_t = F_ϕ(x_{1:t})
+            else:
+                f = self.fwd_sum_module(
+                    observed_data=obs_perm, observed_mask=mask_perm,
+                    t_emb=h_time_embed, static_embed=static_embed,
+                )
+            context = torch.cat([f, h], dim=-1)  # (B, T, 2·summary_dim)
+        elif self.forward_message == "fwd_summary":
+            context = self.fwd_refiner(h)  # forward-causal pass over b → o_t
+        else:
+            context = h
+
         # Expand to S paths and draw η ONCE, per (B·S) path (not shared across S, so
         # forecast samples with S>1 differ).
         BS = B * S
-        h_expanded = h.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, T, -1)
+        h_expanded = context.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, T, -1)
         eta = torch.randn(BS, d, T, device=device, dtype=dtype)
 
         g, logvar = self.causal_net(eta, h_expanded)  # (BS, d, T)
@@ -712,6 +787,87 @@ class ARFlowEncoder(BaseEncoder):
             "logvars": logvar.view(B, S, d, T),
         }
         return zs, logqs, stats
+
+    def entropy_transition(self, stats: dict, j: int) -> torch.Tensor:
+        return gaussian_entropy(stats["logvars"][..., j:]).mean()
+
+    def entropy_init(self, stats: dict, steps: int) -> torch.Tensor:
+        return gaussian_entropy(stats["logvars"][..., :steps]).mean()
+
+
+class IdentityEncoder(BaseEncoder):
+    """Pinned identity posterior ``q(z_t | x_t) = δ(z_t − x_t)`` (near-delta).
+
+    Requires ``latent_dim == data_dim``: the latent frame IS the observation, so
+    the diffusion transition denoises directly in OBSERVATION space — a CSDI-style
+    obs-space model wrapped in the DDSSM pipeline, with the learnable encoder/decoder
+    removed as a bottleneck. Use it to test whether the *latent pipeline* (not the
+    transition) is what holds DDSSM below the obs-space CSDI reference.
+
+    Param-free (contributes no optimizer group). The reported ``mus = x`` are the
+    ABSOLUTE per-step means, so the transition's centered target is the persistence
+    residual ``x_t − μ_p(x_{<t})``. A small FIXED log-variance keeps ``log q`` and the
+    Gaussian entropy finite while the realized ``z ≈ x`` (σ ≈ 0.03 at the −7 clamp).
+    """
+
+    def __init__(
+        self,
+        data_dim: int,
+        latent_dim: int,
+        j: int,
+        emb_time_dim: int,
+        use_mask: bool = False,
+        fixed_logvar: float = -7.0,
+        **_unused,
+    ) -> None:
+        super().__init__()
+        if latent_dim != data_dim:
+            raise ValueError(
+                "IdentityEncoder requires latent_dim == data_dim; got "
+                f"latent_dim={latent_dim}, data_dim={data_dim}"
+            )
+        self.data_dim = data_dim
+        self.latent_dim = latent_dim
+        self.j = j
+        self.emb_time_dim = emb_time_dim
+        self.use_mask = bool(use_mask)
+        self.register_buffer(
+            "fixed_logvar", torch.tensor(float(fixed_logvar)), persistent=False
+        )
+
+    @property
+    def is_gaussian_family(self) -> bool:
+        return True
+
+    def sample_paths(
+        self,
+        observed_data: torch.Tensor,  # (B, D, T)
+        time_embed: torch.Tensor,  # (B, T, E_t)
+        S: int = 1,
+        cond_mask: Optional[torch.Tensor] = None,
+        covariates: Optional[torch.Tensor] = None,
+        static_embed: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
+        device = observed_data.device
+        dtype = observed_data.dtype
+        B, D, T = observed_data.shape
+        d = self.latent_dim
+        assert D == d, f"IdentityEncoder data_dim {D} != latent_dim {d}"
+        BS = B * S
+
+        mus = observed_data.unsqueeze(1).expand(B, S, d, T)  # (B,S,d,T) = x
+        logvars = self.fixed_logvar.to(device=device, dtype=dtype).expand(B, S, d, T)
+        sigma = (0.5 * logvars).exp()
+        eta = torch.randn(B, S, d, T, device=device, dtype=dtype)
+        z = mus + sigma * eta  # z ≈ x (near-delta)
+
+        logq = gaussian_log_prob(
+            z.reshape(BS, d, T).permute(0, 2, 1),
+            mus.reshape(BS, d, T).permute(0, 2, 1),
+            logvars.reshape(BS, d, T).permute(0, 2, 1),
+        ).view(B, S, T)
+        stats: dict = {"mus": mus, "logvars": logvars}
+        return z, logq, stats
 
     def entropy_transition(self, stats: dict, j: int) -> torch.Tensor:
         return gaussian_entropy(stats["logvars"][..., j:]).mean()

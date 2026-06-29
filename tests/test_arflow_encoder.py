@@ -348,3 +348,145 @@ def test_end_to_end_arflow_elbo_and_sigma_data() -> None:
     assert torch.isfinite(main).all() and (main > 0).all()
     assert (main < 50).all()  # bounded — no ∝t random-walk blow-up
     assert (main.max() / main.min()).item() < 6.0  # roughly flat in t
+
+
+# ---- Forward-message variants (o1_flow / fb_mf / fb_flow) ------------------
+
+
+def make_fwd_encoder(
+    forward_message: str,
+    stochastic_state: bool,
+    *,
+    data_dim: int = 12,
+    latent_dim: int = 8,
+    hidden_dim: int = 16,
+    channels: int = 16,
+    nheads: int = 2,
+) -> ARFlowEncoder:
+    fwd = partial(
+        TransformerFutureSummary, summary_dim=hidden_dim, nheads=nheads,
+        transformer_layers=1, reverse_time=False,  # forward-causal f_t
+    )
+    return ARFlowEncoder(
+        data_dim=data_dim, latent_dim=latent_dim, j=1, emb_time_dim=0,
+        use_mask=False, hidden_dim=hidden_dim, channels=channels, causal_layers=2,
+        nheads=nheads, backbone="transformer",
+        fut_summary=partial(
+            TransformerFutureSummary, summary_dim=hidden_dim, nheads=nheads,
+            transformer_layers=1,
+        ),
+        stochastic_state=stochastic_state, forward_message=forward_message,
+        fwd_summary=fwd, fwd_layers=2,
+    )
+
+
+# (forward_message, stochastic_state) for the 3 shipped variants.
+_FWD_VARIANTS = [
+    ("fwd_summary", True),   # o1_flow
+    ("fwd_data", False),     # fb_mf
+    ("fwd_data", True),      # fb_flow
+]
+
+
+@pytest.mark.parametrize("fm,ss", _FWD_VARIANTS)
+def test_fwd_message_shapes_and_logq(fm: str, ss: bool) -> None:
+    from ddssm.nn.gaussians import gaussian_log_prob
+
+    B, D, T, S, d = 2, 12, 5, 3, 8
+    enc = make_fwd_encoder(fm, ss, data_dim=D, latent_dim=d)
+    zs, logqs, stats = enc.sample_paths(torch.randn(B, D, T), torch.zeros(B, T, 0), S=S)
+    assert zs.shape == (B, S, d, T)
+    assert logqs.shape == (B, S, T)
+    assert stats["mus"].shape == (B, S, d, T)
+    # logq must equal the per-step Gaussian density at the realized (z; μ, logσ²).
+    recomputed = gaussian_log_prob(
+        zs.permute(0, 1, 3, 2),
+        stats["mus"].permute(0, 1, 3, 2),
+        stats["logvars"].permute(0, 1, 3, 2),
+    )
+    assert torch.allclose(recomputed, logqs, atol=1e-5)
+    assert torch.isfinite(zs).all() and torch.isfinite(logqs).all()
+
+
+@pytest.mark.parametrize("fm,ss", _FWD_VARIANTS)
+def test_fwd_message_data_reaches_mean(fm: str, ss: bool) -> None:
+    # The forward-message path must let the observed data reach the latent mean.
+    B, D, T, d = 2, 12, 6, 8
+    enc = make_fwd_encoder(fm, ss, data_dim=D, latent_dim=d)
+    obs = torch.randn(B, D, T, requires_grad=True)
+    _zs, _lq, stats = enc.sample_paths(obs, torch.zeros(B, T, 0), S=1)
+    stats["mus"].sum().backward()
+    assert obs.grad is not None and obs.grad.abs().max() > 0.0
+
+
+def test_fwd_data_message_is_live() -> None:
+    # The forward summary module (f_t) must carry gradient — not dead-wired.
+    B, D, T, d = 2, 12, 6, 8
+    enc = make_fwd_encoder("fwd_data", True, data_dim=D, latent_dim=d)
+    _zs, _lq, stats = enc.sample_paths(torch.randn(B, D, T), torch.zeros(B, T, 0), S=1)
+    stats["mus"].sum().backward()
+    grads = [p.grad for p in enc.fwd_sum_module.parameters() if p.grad is not None]
+    assert grads and max(g.abs().max() for g in grads) > 0.0
+
+
+def test_fwd_summary_refiner_is_live() -> None:
+    # The forward refiner producing o_t must carry gradient.
+    B, D, T, d = 2, 12, 6, 8
+    enc = make_fwd_encoder("fwd_summary", True, data_dim=D, latent_dim=d)
+    _zs, _lq, stats = enc.sample_paths(torch.randn(B, D, T), torch.zeros(B, T, 0), S=1)
+    stats["mus"].sum().backward()
+    grads = [p.grad for p in enc.fwd_refiner.parameters() if p.grad is not None]
+    assert grads and max(g.abs().max() for g in grads) > 0.0
+
+
+@pytest.mark.parametrize("reverse_time", [True, False])
+def test_future_summary_time_direction(reverse_time: bool) -> None:
+    # reverse_time toggles the data-message direction: backward b_t = F(x_{t:T})
+    # vs forward f_t = F(x_{1:t}). Perturb x at t_pert and check which steps move.
+    T, D, t_pert = 6, 5, 2
+    fs = TransformerFutureSummary(
+        data_dim=D, emb_time_dim=0, use_mask=False, summary_dim=16, nheads=2,
+        transformer_layers=1, reverse_time=reverse_time,
+    )
+    fs.eval()
+    te = torch.zeros(1, T, 0)
+    with torch.no_grad():
+        x0 = torch.randn(1, T, D)
+        h0 = fs(observed_data=x0, observed_mask=None, t_emb=te)
+        x1 = x0.clone()
+        x1[:, t_pert, :] += 1.0
+        h1 = fs(observed_data=x1, observed_mask=None, t_emb=te)
+    diff = (h0 - h1).abs().amax(dim=-1)[0]  # (T,)
+    assert diff[t_pert] > 1e-6
+    if reverse_time:
+        # b_t includes x_{t_pert} iff t ≤ t_pert → strictly-later steps unchanged.
+        assert diff[t_pert + 1 :].max() < 1e-6
+    else:
+        # f_t includes x_{t_pert} iff t ≥ t_pert → strictly-earlier steps unchanged.
+        assert diff[:t_pert].max() < 1e-6
+
+
+def test_fwd_flow_strict_noise_causality() -> None:
+    # Adding a (forward/backward) DATA context must NOT break the IAF's noise
+    # causality: μ_s, logσ²_s ⟂ η_{≥s} (the exact-log-prob guarantee). Probe the
+    # conditioner at the augmented context dim used by the fwd_data flow.
+    d, T = 4, 6
+    enc = make_fwd_encoder("fwd_data", True, latent_dim=d)
+    nn.init.normal_(enc.causal_net.head.weight, std=0.5)
+    nn.init.normal_(enc.causal_net.head.bias, std=0.5)
+    enc.eval()
+    ctx_dim = enc.causal_net.summary_dim  # 2·hidden for fwd_data
+    c = torch.randn(1, T, ctx_dim)
+    eta = torch.randn(1, d, T, requires_grad=True)
+    g, logvar = enc.causal_net(eta, c)
+
+    def grad_wrt_eta(scalar: torch.Tensor) -> torch.Tensor:
+        if eta.grad is not None:
+            eta.grad = None
+        scalar.backward(retain_graph=True)
+        return eta.grad.clone()
+
+    for s in range(T):
+        for tensor, name in ((g, "mu"), (logvar, "logvar")):
+            grad = grad_wrt_eta(tensor[..., s].sum())
+            assert grad[..., s:].abs().max() < 1e-6, f"{name} leaks η≥{s}"

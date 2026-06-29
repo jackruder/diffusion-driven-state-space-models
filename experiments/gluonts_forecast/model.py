@@ -27,16 +27,17 @@ from ddssm.model.dssd import DDSSM_base
 from ddssm.nn.diffnets import (
     CSDIUnet,
     ContextProducer,
+    TimeMixerConfig,
     FeatureMixerConfig,
     ResidualBlockConfig,
     DiffResidualBlockConfig,
 )
-from ddssm.nn.futsum import TransformerFutureSummary
-from ddssm.model.decoder import GaussianDecoder
-from ddssm.model.encoder import GaussianEncoder, ARFlowEncoder
+from ddssm.nn.futsum import TransformerFutureSummary, IdentityFutureSummary
+from ddssm.model.decoder import GaussianDecoder, IdentityDecoder
+from ddssm.model.encoder import GaussianEncoder, ARFlowEncoder, IdentityEncoder
 from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.experiment.stores import model_store
-from ddssm.model.centering.baselines import PersistenceBaseline
+from ddssm.model.centering.baselines import PersistenceBaseline, ZeroBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
@@ -71,8 +72,11 @@ def build_gluonts_model(
     csdi_layers: int = 4,
     csdi_nheads: int = 8,
     csdi_num_steps: int = 50,
-    # "gaussian" = the settled sequential encoder; "arflow" = the parallel
-    # AR-flow-on-noise drop-in (opt-in; flip the default only past the slice-9 gate).
+    # "gaussian" = the settled sequential encoder (smoothing q(z_t|x_{t:T}) via a
+    # Transformer future-summary); "gaussian_local" = same sequential encoder but a
+    # LOCAL future-summary (h_t = Linear(x_t), identity time-mixer) → filtering
+    # q(z_t|x_t), biased toward a clean near-identity frame at latent_dim==data_dim;
+    # "arflow" = the parallel AR-flow-on-noise drop-in (opt-in).
     encoder_type: str = "gaussian",
     # Timesteps per score-net call in the ESM loss. With checkpointing the peak
     # is one chunk's d²-attention (~time_chunk·B·nheads·latent²), so this trades
@@ -86,11 +90,37 @@ def build_gluonts_model(
     # ARFlow-only: True → IAF (conditioner sees the noise history; μ,σ condition on the
     # realized path). False → deterministic causal encoder (μ,σ = f(h), z_hist amortized).
     arflow_stochastic_state: bool = True,
+    # ARFlow-only: data context the conditioner sees. "none" → backward summary b_t;
+    # "fwd_data" → [f_t, b_t] (adds a forward-causal data message f_t = F_ϕ(x_{1:t}));
+    # "fwd_summary" → o_t, a forward-causal pass over b (deterministic analog of z).
+    arflow_forward_message: str = "none",
     # ARFlow encoder capacity, DECOUPLED from the transition's `channels` so the encoder
     # gets more punch without inflating the diffusion (vs the already-swept gaussian).
     arflow_channels: int | None = None,  # None → = channels; must be ÷ nheads
     arflow_causal_layers: int = 2,
     grad_checkpoint: bool = True,
+    # Centering baseline for the diffusion/gaussian transition: "persistence"
+    # (μ_p = last latent) or "zero" (μ_p ≡ 0). Persistence centers on the *last*
+    # latent, which under a bimodal data conditional sits on one mode → the
+    # transition only has to model the residual to that mode; "zero" makes the
+    # transition model the full (bimodal) conditional directly.
+    baseline_type: str = "persistence",
+    # Per-channel feature embedding width for the "diffusion" transition's side-info.
+    # 0 → off; >0 → CSDI-style learned per-channel embedding (decoupled from
+    # time-conditioning, which stays off). Default 16 = literal CSDI's featureemb;
+    # the kitchen-sink attribution made this the single dominant denoiser axis.
+    emb_feature_dim: int = 16,
+    # "diffusion"-transition time-axis mixer: "auto" (transformer for j>4, else conv),
+    # "conv" (3-tap causal conv), or "transformer" (non-causal RoPE attention over the
+    # j+1 window, CSDI-style). Transformer is locked in for non-trivial history.
+    time_mixer: str = "auto",
+    # "diffusion"-transition sampler: "edm" (default; Karras 2022 Heun + optional
+    # stochastic churn, deterministic at edm_s_churn=0) or "pf_ode" (legacy
+    # deterministic VP probability-flow Euler). Churn 16 is the locked-in default.
+    diffusion_sampler: str = "edm",
+    edm_s_churn: float = 16.0,
+    edm_s_noise: float = 1.0,
+    edm_rho: float = 7.0,
     # "csdi"-transition time embedding width (the vendored ermongroup CSDI). 0 turns
     # CSDI's time-conditioning OFF to match our emb_time_dim==0 (embedding parity).
     csdi_timeemb: int = 128,
@@ -100,11 +130,25 @@ def build_gluonts_model(
     width = 2 * latent_dim
     emb_time_dim = 0  # time-conditioning OFF (v1); collapses the time-cond ops out.
 
-    # Shared persistence baseline (param-free → pinned both stages); the SAME
-    # instance threads stage-1 → stage-2 so the handoff snapshot is consistent.
-    baseline = PersistenceBaseline(
-        latent_dim=latent_dim, j=j, hidden_dim=width, n_layers=2,
-    )
+    # "auto" time-mixer: a j+1 window only wide enough to need attention (j>4) gets the
+    # transformer; short windows keep the cheap 3-tap conv. Explicit values pass through.
+    if time_mixer == "auto":
+        time_mixer = "transformer" if j > 4 else "conv"
+
+    # Shared centering baseline (param-free → pinned both stages); the SAME instance
+    # threads stage-1 → stage-2 so the handoff snapshot is consistent.
+    if baseline_type == "persistence":
+        baseline = PersistenceBaseline(
+            latent_dim=latent_dim, j=j, hidden_dim=width, n_layers=2,
+        )
+    elif baseline_type == "zero":
+        baseline = ZeroBaseline(
+            latent_dim=latent_dim, j=j, hidden_dim=width, n_layers=2,
+        )
+    else:
+        raise ValueError(
+            f"baseline_type must be 'persistence' or 'zero'; got {baseline_type!r}"
+        )
     aux_posterior = AuxPosterior(
         latent_dim=latent_dim, j=j, hidden_dim=width, n_layers=2,
     )
@@ -125,9 +169,12 @@ def build_gluonts_model(
         residual_block=DiffResidualBlockConfig(
             # dropout=0.0: the score-net is gradient-checkpointed (deterministic
             # recompute) and a denoiser shouldn't add noise to its ESM target.
+            time=TimeMixerConfig(
+                type=time_mixer, nheads=nheads, n_layers=1, dropout=0.0
+            ),
             feature=FeatureMixerConfig(
                 type="transformer", nheads=nheads, n_layers=1, dropout=0.0
-            )
+            ),
         ),
     )
     schedule = DiffusionScheduleConfig(
@@ -138,6 +185,8 @@ def build_gluonts_model(
         stage2_transition = DiffusionTransition(
             baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
             T_max=T_max, unet=unet, schedule=schedule, grad_checkpoint=grad_checkpoint,
+            emb_feature_dim=emb_feature_dim, sampler=diffusion_sampler,
+            edm_s_churn=edm_s_churn, edm_s_noise=edm_s_noise, edm_rho=edm_rho,
         )
     elif transition_type == "gaussian":
         stage2_transition = BaselineGaussianTransition(
@@ -159,11 +208,23 @@ def build_gluonts_model(
         TransformerFutureSummary, summary_dim=width, nheads=nheads,
         transformer_layers=summary_layers,
     )
-    if encoder_type == "gaussian":
+    # Forward-causal twin of the future summary (no time-flip) → the f_t message
+    # for ARFlow's "fwd_data" context. Same width/heads/depth as the backward b_t.
+    fut_summary_fwd = partial(
+        TransformerFutureSummary, summary_dim=width, nheads=nheads,
+        transformer_layers=summary_layers, reverse_time=False,
+    )
+    # Local twin of the future summary: h_t = Linear(x_t), no time mixing. Drives the
+    # filtering "gaussian_local" encoder (matched inverse for the per-timestep lift).
+    fut_summary_local = partial(IdentityFutureSummary, summary_dim=width)
+    if encoder_type in ("gaussian", "gaussian_local"):
         encoder = GaussianEncoder(
             data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
             use_mask=False, hidden_dim=width, mu_mode="additive",
-            fut_summary=fut_summary, grad_checkpoint=grad_checkpoint,
+            fut_summary=(
+                fut_summary_local if encoder_type == "gaussian_local" else fut_summary
+            ),
+            grad_checkpoint=grad_checkpoint,
         )
     elif encoder_type == "arflow":
         # Head logvar clamp pinned to the DDSSM_base default [-7, 7] (dssd.py:130-131)
@@ -175,27 +236,46 @@ def build_gluonts_model(
             causal_layers=arflow_causal_layers, nheads=nheads, backbone="transformer",
             clamp_logvar_min=-7.0, clamp_logvar_max=7.0,
             init_logvar_bias=arflow_init_logvar_bias,
-            stochastic_state=arflow_stochastic_state, grad_checkpoint=grad_checkpoint,
+            stochastic_state=arflow_stochastic_state,
+            forward_message=arflow_forward_message,
+            fwd_summary=fut_summary_fwd, fwd_layers=summary_layers,
+            grad_checkpoint=grad_checkpoint,
+        )
+    elif encoder_type == "identity":
+        # Pinned z_t = x_t (requires latent_dim == data_dim): the latent frame IS
+        # the observation, so the diffusion transition denoises in OBSERVATION space
+        # — a CSDI-style obs-space model inside the DDSSM pipeline. Isolates whether
+        # the latent pipeline (not the transition) is the bottleneck vs obs-space CSDI.
+        encoder = IdentityEncoder(
+            data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
         )
     else:
         raise ValueError(
-            f"encoder_type must be 'gaussian' or 'arflow'; got {encoder_type!r}"
+            "encoder_type must be 'gaussian', 'gaussian_local', 'arflow', or "
+            f"'identity'; got {encoder_type!r}"
         )
-    decoder = GaussianDecoder(
-        data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
-        hidden_dim=width,
-        # Deterministic decoder (dropout=0): required so the time-chunked recon is
-        # batch-invariant and its checkpoint (preserve_rng_state=False) is exact —
-        # the ContextProducer default carries dropout=0.1.
-        context=partial(
-            ContextProducer,
-            channels=8,
-            num_layers=2,
-            residual_block=ResidualBlockConfig(
-                feature=FeatureMixerConfig(nheads=1, n_layers=2, dropout=0.0)
+    if encoder_type == "identity":
+        # Matched identity emission x_t = z_t (fixed σ_x); predictive spread comes
+        # from the transition, not a learnable decoder.
+        decoder = IdentityDecoder(
+            latent_dim=latent_dim, data_dim=data_dim, j=j, emb_time_dim=emb_time_dim,
+        )
+    else:
+        decoder = GaussianDecoder(
+            data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
+            hidden_dim=width,
+            # Deterministic decoder (dropout=0): required so the time-chunked recon is
+            # batch-invariant and its checkpoint (preserve_rng_state=False) is exact —
+            # the ContextProducer default carries dropout=0.1.
+            context=partial(
+                ContextProducer,
+                channels=8,
+                num_layers=2,
+                residual_block=ResidualBlockConfig(
+                    feature=FeatureMixerConfig(nheads=1, n_layers=2, dropout=0.0)
+                ),
             ),
-        ),
-    )
+        )
 
     return DDSSM_base(
         encoder=encoder,
