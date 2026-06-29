@@ -16,6 +16,7 @@ def test_init_fills_buffer_with_init_value() -> None:
     buf = SigmaDataBuffer(T_max=T_MAX, init_value=2.5)
     assert torch.allclose(buf.sigma_data2, torch.full((T_MAX,), 2.5))
     assert torch.equal(buf.ema_step, torch.zeros(T_MAX, dtype=torch.long))
+    assert torch.equal(buf.n_updates, torch.zeros(T_MAX, dtype=torch.long))
     assert not buf.frozen
 
 
@@ -236,6 +237,103 @@ def test_update_is_noop_under_no_grad() -> None:
         buf.update(t_idx=t_idx, mu_hat_batch=mu, sigma_t2_batch=s2)
     assert not torch.equal(buf.sigma_data2, before), "σ_data did not update in training"
     assert int(buf.ema_step[1]) == int(step_before[1]) + 1  # t=2 -> slot 1
+
+
+def _const_batch(v: float, n: int = 8) -> tuple[torch.Tensor, torch.Tensor]:
+    """Inputs whose per-t estimator ``bar`` equals exactly ``v``.
+
+    ``μ̂`` all-equal → ``tr Var[μ̂] = 0``; ``σ² = v`` everywhere →
+    ``avg_post_var = v·d``; so ``bar = (v·d + 0)/d = v``.
+    """
+    return torch.zeros(n, D), torch.full((n, D), float(v))
+
+
+def test_warmup_forgets_init_on_first_update() -> None:
+    """The first real update fully replaces the uninformative init (α=1).
+
+    With a high steady-state decay (γ=0.99) the *old* plain EMA would land at
+    ``0.99·init + 0.01·v`` after one step and take ~hundreds of steps to forget
+    ``init``. The warmup makes the buffer equal the batch estimate ``v`` after a
+    single update, regardless of ``init_value`` or γ.
+    """
+    buf = SigmaDataBuffer(
+        T_max=T_MAX, tracking_mode="per_t", ema_decay=0.99, init_value=5.0
+    )
+    mu, s2 = _const_batch(0.2)
+    with torch.enable_grad():
+        buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert pytest.approx(float(buf.read(2).item()), rel=1e-5) == 0.2
+
+
+def test_warmup_is_exact_running_mean_then_crosses_to_ema() -> None:
+    """During warmup the buffer is the exact arithmetic mean of estimates seen.
+
+    γ=0.9 → crossover at ``n+1 = 1/(1-γ) = 10``; the three updates below stay
+    inside the warmup, so the buffer equals ``mean([1,3,5]) = 3``. Then a fourth
+    update made *after* forcing the slot past the crossover moves at the slow EMA
+    rate ``1-γ``, confirming the handover to plain EMA.
+    """
+    buf = SigmaDataBuffer(
+        T_max=T_MAX, tracking_mode="per_t", ema_decay=0.9, init_value=0.0
+    )
+    for v in (1.0, 3.0, 5.0):
+        mu, s2 = _const_batch(v)
+        with torch.enable_grad():
+            buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert pytest.approx(float(buf.read(2).item()), rel=1e-5) == 3.0
+
+    # Push the slot well past the crossover at the steady value 3.0, then a
+    # distinct update should move only by the EMA rate (0.1), not fully replace.
+    for _ in range(50):
+        mu, s2 = _const_batch(3.0)
+        with torch.enable_grad():
+            buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert pytest.approx(float(buf.read(2).item()), rel=1e-4) == 3.0
+    mu, s2 = _const_batch(13.0)
+    with torch.enable_grad():
+        buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert pytest.approx(float(buf.read(2).item()), rel=1e-4) == 0.9 * 3.0 + 0.1 * 13.0
+
+
+def test_warmup_counter_survives_handoff_reset() -> None:
+    """``reset_schedule`` resets ``ema_step`` but NOT ``n_updates``.
+
+    A slot primed in stage 1 must keep tracking with the slow EMA in stage 2,
+    not re-warm and discard its persisted value (the σ_data-persistence
+    invariant of the centering handoff). So after a handoff a new update moves
+    at the EMA rate, not a full replace.
+    """
+    buf = SigmaDataBuffer(
+        T_max=T_MAX, tracking_mode="per_t", ema_decay=0.9, init_value=0.0
+    )
+    for _ in range(50):
+        mu, s2 = _const_batch(1.0)
+        with torch.enable_grad():
+            buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert pytest.approx(float(buf.read(2).item()), rel=1e-4) == 1.0
+
+    buf.reset_schedule()
+    assert int(buf.ema_step[1].item()) == 0  # schedule counter reset
+    assert int(buf.n_updates[1].item()) >= 50  # lifetime counter preserved
+
+    mu, s2 = _const_batch(11.0)
+    with torch.enable_grad():
+        buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
+    # EMA rate, not a full replace → 0.9·1 + 0.1·11 = 2.0.
+    assert pytest.approx(float(buf.read(2).item()), rel=1e-5) == 2.0
+
+
+def test_n_updates_is_persisted_in_state_dict() -> None:
+    """``n_updates`` round-trips through ``state_dict`` so resume keeps warmup state."""
+    buf = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+    assert "n_updates" in buf.state_dict()
+    mu, s2 = _const_batch(1.0)
+    with torch.enable_grad():
+        buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
+    sd = buf.state_dict()
+    fresh = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+    fresh.load_state_dict(sd)
+    assert torch.equal(fresh.n_updates, buf.n_updates)
 
 
 def test_update_no_grad_gate_covers_global_ema() -> None:
