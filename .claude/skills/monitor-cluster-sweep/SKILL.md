@@ -30,7 +30,7 @@ Driven entirely by env vars on `monitor.sh` — **all optional**:
   profile if unset; default `__mv`.
 - `TARGET` — trials/cell target for the ETA projection. Default 128.
 - `REBUILD=1` — force a context rebuild (re-introspect, overwrite the profile).
-- `HOST` — ssh target. Default `z89p425@tempest-login.msu.montana.edu`.
+- `HOST` — ssh target. Defaults from `.claude/cluster.local.env` → `CLUSTER_HOST` (see template).
 - `REMOTE_DIR` — project dir on the cluster. Default `~/diffusion-driven-state-space-models`.
 - `PORT` / `PULL_DIR` / `NO_DASH` — dashboard port, local pull dir, skip-dashboard.
 

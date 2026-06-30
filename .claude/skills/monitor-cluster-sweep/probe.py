@@ -92,8 +92,12 @@ def main():
     from optuna.trial import TrialState as TS
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    dbs = sorted(glob.glob(os.path.join(
-        remote, "optuna", f"{prefix}_*{suffix}.db")))
+    dbs = []
+    for _subdir in ("runs/optuna", "optuna"):
+        dbs = sorted(glob.glob(os.path.join(
+            remote, _subdir, f"{prefix}_*{suffix}.db")))
+        if dbs:
+            break
     rows = []
     for db in dbs:
         base = os.path.basename(db)[:-3]

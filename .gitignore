@@ -149,6 +149,7 @@ activemq-data/
 # Environments
 .env
 .envrc
+.claude/cluster.local.env
 .venv
 env/
 venv/

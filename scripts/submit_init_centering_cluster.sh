@@ -46,7 +46,7 @@
 
 # Default to THIS repo's location: the script must be run from the repo
 # root (the launcher + venv below use repo-relative paths), so $PWD is the
-# checkout — on Tempest that's /home/z89p425/diffusion-driven-state-space-models.
+# checkout — on Tempest that's ~/diffusion-driven-state-space-models by convention.
 # The venv ($CLUSTER_BASE/.venv) is exactly where `uv sync` puts it.
 CLUSTER_BASE=${CLUSTER_BASE:-$PWD}
 CLUSTER_RUNS_DIR=${CLUSTER_RUNS_DIR:-${CLUSTER_BASE}/runs}

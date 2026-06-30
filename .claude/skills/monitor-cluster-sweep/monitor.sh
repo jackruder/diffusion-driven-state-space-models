@@ -12,7 +12,7 @@
 # differently and correctly.
 #
 # Env (all optional except as noted):
-#   HOST          ssh target            (default z89p425@tempest-login.msu.montana.edu)
+#   HOST          ssh target            (default: CLUSTER_HOST from .claude/cluster.local.env)
 #   REMOTE_DIR    project dir on cluster (default ~/diffusion-driven-state-space-models)
 #   STUDY_PREFIX  which experiment to show. If unset, discover + auto-pick the
 #                 most-active and print the ranked alternatives.
@@ -24,12 +24,15 @@
 # Exit codes: 2 bad args/empty, 3 cluster unreachable (VPN down).
 
 set -uo pipefail
-HOST=${HOST:-z89p425@tempest-login.msu.montana.edu}
-REMOTE_DIR=${REMOTE_DIR:-'~/diffusion-driven-state-space-models'}
-TARGET=${TARGET:-128}
-PORT=${PORT:-8080}
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT=${REPO_ROOT:-$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}
+# Source per-user cluster config (git-ignored). See .claude/cluster.local.env.template.
+_ENV_FILE="$REPO_ROOT/.claude/cluster.local.env"
+if [ -f "$_ENV_FILE" ]; then source "$_ENV_FILE"; fi
+HOST=${HOST:-${CLUSTER_HOST:-YOUR_NETID@tempest-login.msu.montana.edu}}
+REMOTE_DIR=${REMOTE_DIR:-${CLUSTER_REMOTE_DIR:-'~/diffusion-driven-state-space-models'}}
+TARGET=${TARGET:-128}
+PORT=${PORT:-8080}
 PULL_DIR=${PULL_DIR:-"$REPO_ROOT/runs/optuna_pull"}
 PROFILE_DIR="$SKILL_DIR/profiles"
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=15"
@@ -43,13 +46,14 @@ if ! $SSH "$HOST" true 2>/dev/null; then
   echo "Bring up the VPN, confirm with 'ping ${HOST#*@}', then re-run." >&2
   exit 3
 fi
-$SSH "$HOST" "mkdir -p /tmp/mcsweep" 2>/dev/null
+REMOTE_TMP="/tmp/mcsweep_${HOST%%@*}"
+$SSH "$HOST" "mkdir -p $REMOTE_TMP" 2>/dev/null
 CLEAN() { grep -vE "post-quantum|store now|openssh.com|may need to be"; }
 runpy() {  # scp a skill script and run it in the cluster venv; args follow
   local script="$1"; shift
-  scp -q "$SKILL_DIR/$script" "$HOST:/tmp/mcsweep/$script"
+  scp -q "$SKILL_DIR/$script" "$HOST:$REMOTE_TMP/$script"
   $SSH "$HOST" "bash -lc 'cd $REMOTE_DIR && source .venv/bin/activate && \
-    python /tmp/mcsweep/$script $*'" 2>&1 | CLEAN
+    python $REMOTE_TMP/$script $*'" 2>&1 | CLEAN
 }
 
 # 1. discover + suggest if no study named ------------------------------------
@@ -71,7 +75,7 @@ fi
 if [ -z "${STUDY_PREFIX:-}" ]; then
   echo "ERROR: no experiment to show (set STUDY_PREFIX=…)." >&2; exit 2
 fi
-SUFFIX=${SUFFIX:-${SUFFIX_AUTO:-__mv}}
+SUFFIX=${SUFFIX-${SUFFIX_AUTO-__mv}}
 
 # 2. profile: "have I worked on this experiment before?" ---------------------
 PROFILE="$PROFILE_DIR/${STUDY_PREFIX}.json"
@@ -79,17 +83,18 @@ if [ -f "$PROFILE" ] && [ "${REBUILD:-0}" != "1" ]; then
   echo "✓ Seen '$STUDY_PREFIX' before — using cached context ($PROFILE)."
 else
   echo "• First time on '$STUDY_PREFIX'${REBUILD:+ (rebuild forced)} — building display context…"
+  _suffix_arg=(); [ -n "$SUFFIX" ] && _suffix_arg=(--suffix "$SUFFIX")
   CTX=$(runpy build_context.py --remote-dir "$REMOTE_DIR" \
-        --study-prefix "$STUDY_PREFIX" --suffix "$SUFFIX")
+        --study-prefix "$STUDY_PREFIX" "${_suffix_arg[@]}")
   echo "$CTX" | grep -v '^__JSON__'
   echo "$CTX" | grep '^__JSON__' | sed 's/^__JSON__//' > "$PROFILE"
   if [ ! -s "$PROFILE" ]; then echo "ERROR: context build failed." >&2; exit 2; fi
 fi
-SUFFIX=$(jget "$PROFILE" suffix); SUFFIX=${SUFFIX:-__mv}
+SUFFIX=$(jget "$PROFILE" suffix); SUFFIX=${SUFFIX-__mv}
 
 # 3. probe per-cell stats per the context ------------------------------------
-scp -q "$PROFILE" "$HOST:/tmp/mcsweep/ctx.json"
-PROBE=$(runpy probe.py --remote-dir "$REMOTE_DIR" --context /tmp/mcsweep/ctx.json \
+scp -q "$PROFILE" "$HOST:$REMOTE_TMP/ctx.json"
+PROBE=$(runpy probe.py --remote-dir "$REMOTE_DIR" --context $REMOTE_TMP/ctx.json \
         --target "$TARGET")
 echo "$PROBE" | grep -v '^__JSON__'
 JSON=$(echo "$PROBE" | grep '^__JSON__' | sed 's/^__JSON__//')

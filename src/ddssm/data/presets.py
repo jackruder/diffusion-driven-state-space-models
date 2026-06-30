@@ -60,6 +60,14 @@ NonlinBimodalLiftMV = Synthetic(
     N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
     expose_gt_latents=True,
 )
+LorenzDirect = Synthetic(
+    mode="lorenz",
+    D=3,
+    T=64,
+    N_per_split=1024,
+    batch_size=16,
+    expose_clean_data=True,
+)
 
 # Real windowed datasets. These keep their own (larger) window/batch defaults
 # from the builders — T above applies only to the synthetic sequence modes.

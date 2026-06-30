@@ -547,6 +547,15 @@ def parse_batch(batch: dict, device: torch.device):
                 batch["gt_latent"], device=device, dtype=torch.float32
             )
 
+        # Optional clean (noise-free) observation-space sequences
+        # (synthetic data with ``expose_clean_data=True``; used by the
+        # ``denoise_mse`` metric to score reconstruction against the true
+        # signal rather than the noisy observation).
+        if batch.get("clean_data", None) is not None:
+            out["clean_data"] = torch.as_tensor(
+                batch["clean_data"], device=device, dtype=torch.float32
+            )
+
         return out
 
     # GluonTS path

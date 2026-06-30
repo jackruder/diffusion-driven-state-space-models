@@ -33,7 +33,9 @@ python -m ddssm.evaluate experiment=synthval__harmonic \
 | `mae` | mean abs error of the forecast mean (+ per-t) |
 | `crps_sum` | channel-summed CRPS over forecast samples (+ per-t) |
 | `energy_score` | multivariate energy score over samples |
-| `recon_mse` | MSE of decoded posterior mean vs observed |
+| `recon_mse` | MSE of decoded posterior mean vs observed (noisy) sequence |
+| `denoise_mse` | MSE of decoded posterior mean vs the clean (noise-free) sequence; needs `expose_clean_data=True`; soft-skips when absent |
+| `regime` | metastable regime-switching quality: residence accuracy, first-switch timing, and residence-time climatology JSD — parameterized by `channel`, `threshold`, `deadband` so it works for any system (Lorenz, double-well, etc.) |
 | `stage2_elbo_surrogate` | held-out ELBO surrogate (rate + distortion, unweighted) |
 | `nll` | marginal `−log p(x)` via prob-flow ODE + IWAE |
 | `crps_sum_latent` / `gt_latent_jsd` | latent-space CRPS / JSD vs ground-truth (needs `expose_gt_latents`) |

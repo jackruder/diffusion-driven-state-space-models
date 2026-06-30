@@ -32,8 +32,10 @@ from ddssm.data.presets import (
     HarmonicMixed,
     NonlinBimodalLift1D,
     NonlinBimodalLiftMV,
+    LorenzDirect,
 )
 from ddssm.experiment.stores import data_store
+from experiments.lorenz.data import LorenzDirect
 
 # Synthetic (sequence-format) datasets.
 data_store(LGSSM, name="lgssm")
@@ -44,6 +46,8 @@ data_store(BimodalNoisy, name="bimodal_noisy")
 data_store(Robot2D, name="robot2d")
 data_store(NonlinBimodalLift1D, name="nonlin_bimodal_lift_1d")
 data_store(NonlinBimodalLiftMV, name="nonlin_bimodal_lift_mv")
+# Synthetic (Lorenz) datasets.
+data_store(LorenzDirect, name="lorenz")
 
 # GluonTS repository datasets (windowed; fetched lazily on first loader access).
 data_store(Solar, name="solar")

@@ -58,6 +58,7 @@ class SyntheticDataset(Dataset):
         seed: int = 42,
         dataset_seed: int = 1234,
         expose_gt_latents: bool = False,
+        expose_clean_data: bool = False,
     ):
         """Generate the population and keep the slice for ``split``.
 
@@ -77,6 +78,12 @@ class SyntheticDataset(Dataset):
                 registered closed-form transition kernel in
                 :mod:`ddssm.eval.synthetic_kernels`. Today: ``lgssm``,
                 ``nonlinear-bimodal-lift``, ``nonlinear-bimodal-lift-mv``.
+            expose_clean_data: When True, ``__getitem__`` returns a
+                ``clean_data`` field with the noise-free observation-space
+                trajectory (before observation noise is added). Distinct
+                from ``gt_latent`` (which is model-latent-space, dim d);
+                ``clean_data`` is observation-space (dim D). Supported for
+                modes that add explicit observation noise: ``lorenz``.
         """
         self.mode = mode
         self.split = split
@@ -84,9 +91,12 @@ class SyntheticDataset(Dataset):
         self.T = T
         self.D = D
         self.expose_gt_latents = bool(expose_gt_latents)
+        self.expose_clean_data = bool(expose_clean_data)
         # Populated by _generate_data when the mode supports it.
         self._all_gt_latents: torch.Tensor | None = None
         self.gt_latents: torch.Tensor | None = None
+        self._all_clean: torch.Tensor | None = None
+        self.clean_data: torch.Tensor | None = None
 
         self.N_total = 3 * N_per_split
         all_data = self._generate_data(dataset_seed)
@@ -95,19 +105,26 @@ class SyntheticDataset(Dataset):
             self.data = all_data[:N_per_split]
             if self._all_gt_latents is not None:
                 self.gt_latents = self._all_gt_latents[:N_per_split]
+            if self._all_clean is not None:
+                self.clean_data = self._all_clean[:N_per_split]
         elif split == "val":
             self.data = all_data[N_per_split : 2 * N_per_split]
             if self._all_gt_latents is not None:
                 self.gt_latents = self._all_gt_latents[N_per_split : 2 * N_per_split]
+            if self._all_clean is not None:
+                self.clean_data = self._all_clean[N_per_split : 2 * N_per_split]
         elif split == "test":
             self.data = all_data[2 * N_per_split : 3 * N_per_split]
             if self._all_gt_latents is not None:
                 self.gt_latents = self._all_gt_latents[2 * N_per_split : 3 * N_per_split]
+            if self._all_clean is not None:
+                self.clean_data = self._all_clean[2 * N_per_split : 3 * N_per_split]
         else:
             raise ValueError(f"Unknown split: {split}")
 
-        # Free the full tensor; the per-split slice is what we keep.
+        # Free the full tensors; the per-split slices are what we keep.
         self._all_gt_latents = None
+        self._all_clean = None
 
         self.N = len(self.data)
 
@@ -487,6 +504,71 @@ class SyntheticDataset(Dataset):
             if self.expose_gt_latents:
                 self._all_gt_latents = z
 
+        elif self.mode == "lorenz":
+            # Lorenz 63 system: dx/dt = σ(y-x), dy/dt = x(ρ-z)-y, dz/dt = xy-βz
+            # Standard chaotic parameters; two-lobe attractor with Hausdorff
+            # dimension ~2.06. RK4 at dt=0.05 gives ~3 Lyapunov times per T=64
+            # sequence, so most trajectories contain 1-3 lobe-switching events —
+            # the regime where the Gaussian baseline fails and the diffusion
+            # transition is needed. RK4 is used instead of Euler because Lorenz
+            # can diverge with Euler from off-attractor starting points.
+            assert self.D == 3, (
+                f"lorenz mode requires D=3 (x, y, z); got D={self.D}. "
+                f"Pass D=3 to the data module."
+            )
+            sigma_l, rho_l, beta_l = 10.0, 28.0, 8.0 / 3.0
+            dt = 0.05
+            n_burnin = 200  # ~10 Lyapunov times; ensures all ICs reach the attractor
+
+            def _lorenz_deriv(s: torch.Tensor) -> torch.Tensor:
+                xc, yc, zc = s[:, 0], s[:, 1], s[:, 2]
+                return torch.stack([
+                    sigma_l * (yc - xc),
+                    xc * (rho_l - zc) - yc,
+                    xc * yc - beta_l * zc,
+                ], dim=1)
+
+            def _rk4_step(s: torch.Tensor) -> torch.Tensor:
+                k1 = _lorenz_deriv(s)
+                k2 = _lorenz_deriv(s + 0.5 * dt * k1)
+                k3 = _lorenz_deriv(s + 0.5 * dt * k2)
+                k4 = _lorenz_deriv(s + dt * k3)
+                return s + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+            # Initialize inside the attractor bounding box to avoid the large
+            # derivatives near z=0 that cause Euler-style divergence.
+            state = torch.stack([
+                torch.empty(self.N_total).uniform_(-15.0, 15.0),   # x
+                torch.empty(self.N_total).uniform_(-20.0, 20.0),   # y
+                torch.empty(self.N_total).uniform_(5.0, 45.0),     # z > 0
+            ], dim=1)
+            for _ in range(n_burnin):
+                state = _rk4_step(state)
+
+            # Record T steps after burn-in.
+            trajectory = torch.zeros(self.N_total, 3, self.T)
+            for t in range(self.T):
+                trajectory[:, :, t] = state
+                state = _rk4_step(state)
+
+            # Per-channel z-score normalization so all three channels have
+            # comparable scale for the encoder/decoder (raw z ranges [0,50],
+            # raw x,y range [-20,20] — a 2.5× variance mismatch).
+            chan_mean = trajectory.mean(dim=(0, 2), keepdim=True)   # (1, 3, 1)
+            chan_std = trajectory.std(dim=(0, 2), keepdim=True).clamp(min=1e-6)
+            trajectory = (trajectory - chan_mean) / chan_std
+
+            # Store the clean (noise-free) trajectory before adding noise so
+            # the denoising eval can score against it. No extra RNG calls,
+            # so generated data remains bit-identical when the flag is off.
+            if self.expose_clean_data:
+                self._all_clean = trajectory.clone()
+
+            # Small Gaussian observation noise (σ=0.1 in standardized units,
+            # SNR≈10) makes posterior inference non-trivial without swamping
+            # the lobe-switching signal.
+            data = trajectory + 0.1 * torch.randn_like(trajectory)
+
         return data
 
     def __len__(self):
@@ -496,8 +578,10 @@ class SyntheticDataset(Dataset):
         """Return one model-ready item.
 
         Keys: ``observed_data`` (D, T), ``observation_mask`` (D, T,
-        all ones), ``timepoints`` (T,), and ``gt_latent`` (D, T) when
-        ``expose_gt_latents`` is set and the mode supports it.
+        all ones), ``timepoints`` (T,), ``gt_latent`` (d, T) when
+        ``expose_gt_latents`` is set and the mode supports it, and
+        ``clean_data`` (D, T) when ``expose_clean_data`` is set and the
+        mode supports it (currently: ``lorenz``).
         """
         full_seq = self.data[idx]  # (D, T)
 
@@ -510,6 +594,8 @@ class SyntheticDataset(Dataset):
         }
         if self.expose_gt_latents and self.gt_latents is not None:
             item["gt_latent"] = self.gt_latents[idx]
+        if self.expose_clean_data and self.clean_data is not None:
+            item["clean_data"] = self.clean_data[idx]
         return item
 
 

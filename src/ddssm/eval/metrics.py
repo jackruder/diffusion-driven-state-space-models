@@ -223,6 +223,70 @@ def eval_recon_mse(ctx: EvalContext) -> Dict[str, Any]:
     return {"recon_mse": sums / max(counts, 1)}
 
 
+@register_metric("denoise_mse")
+def eval_denoise_mse(ctx: EvalContext) -> Dict[str, Any]:
+    """MSE between the decoded posterior mean and the clean (noise-free) sequence.
+
+    Measures whether the model actually denoises — i.e., whether the
+    posterior reconstruction improves on simply copying the noisy input.
+    The ``clean_data`` batch key must be present (enabled via
+    ``expose_clean_data=True`` on the data module, currently supported for
+    the ``lorenz`` synthetic mode).
+
+    Returns a soft-skip dict when ``clean_data`` is absent so the metric
+    can be listed in specs that may run against modes that don't expose it.
+    The noise floor (σ² = 0.01 for Lorenz's σ=0.1 observation noise) is
+    reported alongside so readers can see whether the model beats identity.
+    """
+    if ctx.model is None or ctx.loader is None:
+        raise ValueError("denoise_mse requires model and loader.")
+    model, device = ctx.model, ctx.device
+    transform = ctx.batch_transform
+    sums, counts = 0.0, 0
+    clean_seen = False
+
+    with torch.no_grad():
+        for batch in ctx.loader:
+            if transform is not None:
+                batch = transform(batch, device)
+            if "clean_data" not in batch:
+                break
+            clean_seen = True
+            x = batch["observed_data"]
+            mask = batch["observation_mask"]
+            t = batch["timepoints"]
+            target = batch["clean_data"]
+            _components, _metrics, stats = model(x, mask, t, train=False)
+            zs = stats["zs"][:, 0]  # (B, d, T)
+
+            from ddssm.nn.net_utils import time_embedding
+            te = time_embedding(t, model.emb_time_dim, device=device)
+
+            T = x.shape[-1]
+            recon = torch.zeros_like(x)
+            for tt in range(T):
+                t_idx = torch.full((x.shape[0],), tt, device=device, dtype=torch.long)
+                z_hist = zs[..., : tt + 1]
+                if z_hist.shape[-1] > model.j:
+                    z_hist = z_hist[..., -model.j :]
+                mu_x, _ = model.decoder(z_hist, te, t_idx)
+                recon[..., tt] = mu_x
+
+            err = (recon - target) ** 2
+            counts += int(err.numel())
+            sums += float(err.sum().item())
+
+    if not clean_seen:
+        return {"denoise_mse_available": False}
+
+    # The irreducible floor for a model that copies its noisy input is σ²
+    # of the observation noise (0.1² = 0.01 for Lorenz in z-scored units).
+    return {
+        "denoise_mse": sums / max(counts, 1),
+        "denoise_mse_noise_floor": 0.01,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Bimodal JSD: per-sample one-step JSD against the analytic bimodal truth.
 #
