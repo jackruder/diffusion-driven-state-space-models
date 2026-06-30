@@ -266,12 +266,19 @@ def prepare_model(
             "No checkpoint provided; using randomly-initialised weights."
         )
     else:
+        # strict=False: a two-stage checkpoint carries the training-only
+        # ``baseline_anchor.*`` submodule (snapshotted at the centering handoff,
+        # used only by the r_mu_p regularizer) that the freshly-built eval model
+        # lacks. Shape mismatches still hard-fail inside load_state_dict; this
+        # only tolerates that dynamically-attached anchor (matches the
+        # eval_baselines / probe loaders).
         load_into_model(
             model, checkpoint_path, device=device,
             expected_model_config_yaml=getattr(
                 experiment, "model_config_yaml", None,
             ),
             load_ema=load_ema,
+            strict=False,
         )
         log.info("Loaded checkpoint from %s", checkpoint_path)
     model.train() if train else model.eval()

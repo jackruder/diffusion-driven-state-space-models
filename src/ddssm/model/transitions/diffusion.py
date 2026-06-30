@@ -53,6 +53,119 @@ from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.transitions import BaseTransition
 
 
+def _compute_vp_schedule_buffers(
+    *,
+    num_steps: int,
+    beta_min: float,
+    beta_max: float,
+    tau_min: float,
+    tau_max: float = 1.0,
+) -> Dict[str, torch.Tensor]:
+    """Precompute the VP-SDE grid quantities for a given schedule.
+
+    Returns a dict of float32 tensors keyed by the names the rest of the
+    module expects: ``alpha``, ``alpha2``, ``sigma_tilde``,
+    ``one_minus_alpha2``, ``c_noise``, ``beta``, ``tau``,
+    ``w_per_tau_unit``, ``wtilde_base``.
+
+    Factored out of ``DiffusionTransition.__init__`` so the same precompute
+    can be reused for the (independent) sampling schedule. The math is
+    unchanged — only the wrapping into a helper is new.
+    """
+    if not (0.0 < tau_min < tau_max):
+        raise ValueError(
+            f"tau_min must be in (0, tau_max); got tau_min={tau_min}, tau_max={tau_max}"
+        )
+    if beta_max <= beta_min:
+        raise ValueError(f"beta_max ({beta_max}) must be > beta_min ({beta_min})")
+
+    dtype64 = torch.float64
+    eps64 = torch.finfo(dtype64).eps
+    K = int(num_steps)
+
+    # K left-endpoint grid points {τ_min, …, τ_max − dτ} with spacing dτ.
+    tau = torch.linspace(tau_min, tau_max, K + 1, dtype=dtype64)[:-1]
+    beta = beta_min + (beta_max - beta_min) * tau
+    int_beta = beta_min * tau + 0.5 * (beta_max - beta_min) * tau * tau
+    alpha = torch.exp(-0.5 * int_beta)
+    alpha2 = alpha * alpha
+    one_minus_alpha2 = (1.0 - alpha2).clamp_min(eps64)
+    sigma_tilde = torch.sqrt(one_minus_alpha2 / alpha2.clamp_min(eps64))
+    c_noise = 0.25 * torch.log(sigma_tilde.clamp_min(eps64))
+
+    # Per-tau g²(τ) for the ESM weight (σ_data-independent factor).
+    # The σ_data-dependent piece c_out²(τ;t) is multiplied in per call.
+    w_per_tau_unit = beta * alpha2 / one_minus_alpha2  # diagnostic
+    dtau = (tau_max - tau_min) / float(K)
+    # Bake the (1/2 * dtau) Riemann measure into ``wtilde_base``.
+    # The full weight is ``wtilde_base[k] · σ_data²(t) / (σ̃² + σ_data²(t))``;
+    # this gets applied in ``_esm_chunk_loss`` once σ_data is known.
+    wtilde_base = 0.5 * dtau * beta / one_minus_alpha2
+
+    return {
+        "alpha": alpha.to(torch.float32),
+        "alpha2": alpha2.to(torch.float32),
+        "sigma_tilde": sigma_tilde.to(torch.float32),
+        "one_minus_alpha2": one_minus_alpha2.to(torch.float32),
+        "c_noise": c_noise.to(torch.float32),
+        "beta": beta.to(torch.float32),
+        "tau": tau.to(torch.float32),
+        "w_per_tau_unit": w_per_tau_unit.to(torch.float32),
+        "wtilde_base": wtilde_base.to(torch.float32),
+    }
+
+
+def _adaptive_is_density_meandom(
+    sigma_tilde: torch.Tensor,   # (K,)
+    sigma_d2: torch.Tensor,      # (n_t,)
+    floor: float = 1e-12,
+) -> torch.Tensor:
+    """Mean-dominated adaptive IS density per (importance-sampling.org § Mean-
+    dominated regime, line 342)::
+
+        p*(s; σ_d²) ∝ s / (σ_d² + s²)²,   s_peak = σ_d/√3.
+
+    Per-t-broadcast: returns shape ``(n_t, K)`` with each row normalised to
+    sum to 1. Reduces exactly to the legacy ``s/(1+s²)²`` density at
+    ``σ_d² = 1``. Sample-independent under the regularised regime where the
+    encoder posterior variance stays near σ_d² across samples — the (σ²−σ_d²)²
+    term in the full formula vanishes and the (σ²+s²) factor cancels.
+    """
+    s = sigma_tilde.to(torch.float32)                                 # (K,)
+    sd2 = sigma_d2.to(torch.float32).clamp_min(floor).unsqueeze(-1)   # (n_t, 1)
+    raw = (s / (sd2 + s * s).pow(2)).clamp_min(floor)                 # (n_t, K)
+    return raw / raw.sum(dim=-1, keepdim=True)
+
+
+def _adaptive_is_density_full(
+    sigma_tilde: torch.Tensor,   # (K,)
+    sigma_d2: torch.Tensor,      # (N,)
+    sigma2: torch.Tensor,        # (N,)
+    mu_hat2: torch.Tensor,       # (N,)
+    floor: float = 1e-12,
+) -> torch.Tensor:
+    """Full per-sample adaptive IS density (importance-sampling.org line 319,
+    the boxed equation)::
+
+        p*(s; σ_d², σ², μ̂²) ∝
+            s · [μ̂²(σ²+s²) + (σ²-σ_d²)²]
+              / [(σ_d²+s²)² · (σ²+s²)]
+
+    Returns shape ``(N, K)`` with each row normalised to sum to 1. At
+    ``σ²=σ_d²`` the second numerator term vanishes and the ``(σ²+s²)``
+    factor cancels, collapsing to the mean-dom form modulo a per-row
+    scalar (which is absorbed by the normalisation)."""
+    s = sigma_tilde.to(torch.float32)                                 # (K,)
+    s2 = s * s                                                        # (K,)
+    sd2 = sigma_d2.to(torch.float32).clamp_min(floor).unsqueeze(-1)   # (N, 1)
+    sg2 = sigma2.to(torch.float32).clamp_min(floor).unsqueeze(-1)     # (N, 1)
+    mh2 = mu_hat2.to(torch.float32).unsqueeze(-1)                     # (N, 1)
+    num = s * (mh2 * (sg2 + s2) + (sg2 - sd2).pow(2))                 # (N, K)
+    den = (sd2 + s2).pow(2) * (sg2 + s2)                              # (N, K)
+    raw = (num / den.clamp_min(floor)).clamp_min(floor)
+    return raw / raw.sum(dim=-1, keepdim=True)
+
+
 @dataclass
 class DiffusionScheduleConfig:
     """VP-SDE schedule configuration for :class:`DiffusionTransition`.
@@ -68,9 +181,56 @@ class DiffusionScheduleConfig:
     beta_min: float = 0.1
     beta_max: float = 20.0
     tau_min: float = 1e-3
-    k_sampling_mode: str = "uniform"
+    # Importance-sampling mode for noise-level selection (training-time MC
+    # over the diffusion τ axis). The IS reweighting in
+    # ``_esm_chunk_loss`` keeps the estimator unbiased regardless of mode.
+    #
+    # - ``"adaptive_is"``: mean-dominated form of the loss-aware optimal
+    #   IS density per importance-sampling.org § Mean-dominated regime
+    #   (line 342)::  p_k ∝ s / (σ_d²(t) + s²)²,  s_peak = σ_d(t)/√3.
+    #   Per-t adaptive — concentrates MC mass at the τ scale set by the
+    #   live ``SigmaDataBuffer``. Default. Sample-independent in the
+    #   regularised regime; cheap.
+    # - ``"adaptive_is_full"``: full per-sample IS density per
+    #   importance-sampling.org line 319 (the boxed equation),
+    #   ``s·[μ̂²(σ²+s²) + (σ²-σ_d²)²] / [(σ_d²+s²)²·(σ²+s²)]``. Captures
+    #   the bimodal regime when the per-sample posterior variance
+    #   diverges from σ_d² (encoder over-confidence). More expensive
+    #   per step; pick when you want sharper IS under encoder pathology.
+    # - ``"lsgm_is"``: p_k ∝ β/(1−α²), the LSGM importance-sampling
+    #   density. Schedule-aware but not σ_d-aware.
+    # - ``"uniform"``: flat p_k, preserved as a baseline + for the
+    #   variance probe.
+    k_sampling_mode: str = "adaptive_is"
     pk_gamma: float = 1.0
     pk_floor: float = 1e-12
+
+
+@dataclass
+class DiffusionSamplingScheduleConfig:
+    """Inference-time (rollout) VP-SDE schedule. Independent of
+    :class:`DiffusionScheduleConfig` (which is the training-loss schedule).
+
+    The training schedule must be **wide and σ_d=1-centred** because σ_d(t)
+    is evolving during training — we don't know where it'll land. The
+    sampling schedule is set post-training when σ_d has stabilised and can
+    be narrower and σ_d-centred (the user is responsible for picking
+    values consistent with the converged σ_d — this config does *not*
+    read the live buffer at sample-time).
+
+    Default ``num_steps=50`` is smaller than the training default (100)
+    because inference walks the τ grid deterministically — fewer steps
+    = faster rollout. ``tau_min``, ``tau_max``, ``beta_*`` are deliberate
+    user knobs, not σ_d-relative. See importance-sampling.org §
+    "Revised practical implications" for the σ_d-aware floor recommendations
+    when calibrating these by hand.
+    """
+
+    num_steps: int = 50
+    tau_min: float = 1e-3
+    tau_max: float = 1.0
+    beta_min: float = 0.1
+    beta_max: float = 20.0
 
 
 @final
@@ -104,6 +264,14 @@ class DiffusionTransition(BaseTransition):
         covariate_dim: int = 0,
         unet: Callable[..., CSDIUnet] | None = None,
         schedule: DiffusionScheduleConfig | None = None,
+        sampling_schedule: "DiffusionSamplingScheduleConfig | None" = None,
+        emb_feature_dim: int | None = None,
+        sampler: str = "edm",
+        edm_s_churn: float = 0.0,
+        edm_s_noise: float = 1.0,
+        edm_s_tmin: float = 0.0,
+        edm_s_tmax: float = float("inf"),
+        edm_rho: float = 7.0,
     ) -> None:
         super().__init__()
         if int(baseline.latent_dim) != int(latent_dim):
@@ -130,10 +298,26 @@ class DiffusionTransition(BaseTransition):
 
         # Feature + side-info dim — +1 for cond_mask, +1 for padding_mask
         # (precursor (iii) from init-experiment.org § Implementation precursors).
-        self.emb_feature_dim = emb_time_dim
+        # emb_feature_dim historically tracked emb_time_dim; it is now decoupled so
+        # the per-channel feature embedding can be enabled (CSDI-style) while time
+        # conditioning stays off (emb_time_dim=0).
+        self.emb_feature_dim = (
+            int(emb_time_dim) if emb_feature_dim is None else int(emb_feature_dim)
+        )
         self.side_dim = (
             self.emb_time_dim + self.covariate_dim + self.emb_feature_dim + 2
         )
+
+        # Sampler selection + EDM (Karras 2022) knobs. ``edm`` (default) is the
+        # σ-space Heun sampler with optional stochastic churn (deterministic at
+        # the default edm_s_churn=0); ``pf_ode`` is the legacy deterministic VP
+        # probability-flow Euler sampler.
+        self.sampler = str(sampler)
+        self.edm_s_churn = float(edm_s_churn)
+        self.edm_s_noise = float(edm_s_noise)
+        self.edm_s_tmin = float(edm_s_tmin)
+        self.edm_s_tmax = float(edm_s_tmax)
+        self.edm_rho = float(edm_rho)
 
         if unet is None:
             unet = partial(
@@ -161,68 +345,76 @@ class DiffusionTransition(BaseTransition):
         )
 
         # ---------- VP-SDE precompute (σ_data-independent quantities) ----------
-        dtype64 = torch.float64
-        eps64 = torch.finfo(dtype64).eps
-        K = self.num_steps
-        beta_min = float(schedule.beta_min)
-        beta_max = float(schedule.beta_max)
-        tau_min = float(schedule.tau_min)
-        if not (0.0 < tau_min < 1.0):
-            raise ValueError(f"tau_min must be in (0, 1); got {tau_min}")
-        if beta_max <= beta_min:
-            raise ValueError(f"beta_max ({beta_max}) must be > beta_min ({beta_min})")
+        # Training schedule: every loss-side buffer (alpha, beta, …) plus
+        # the IS p_k are derived from this. ``sample_*`` mirrors register
+        # the sampling-schedule grid the rollout reads in
+        # ``_vp_pf_sample_centered``.
+        precomp_train = _compute_vp_schedule_buffers(
+            num_steps=int(schedule.num_steps),
+            beta_min=float(schedule.beta_min),
+            beta_max=float(schedule.beta_max),
+            tau_min=float(schedule.tau_min),
+            tau_max=1.0,
+        )
+        for name, t in precomp_train.items():
+            self.register_buffer(name, t)
 
-        # K left-endpoint grid points {τ_min, …, 1 − dτ} with spacing exactly
-        # dτ = (1 − τ_min)/K, so the baked Riemann measure below is consistent.
-        # ``linspace(τ_min, 1, K+1)`` has spacing (1 − τ_min)/K; dropping the
-        # right endpoint τ=1 keeps K points and total measure K·dτ = (1 − τ_min).
-        # (Previously ``linspace(…, K)`` had spacing (1 − τ_min)/(K−1) ≠ dτ.)
-        tau = torch.linspace(tau_min, 1.0, K + 1, dtype=dtype64)[:-1]
-        beta = beta_min + (beta_max - beta_min) * tau
-        int_beta = beta_min * tau + 0.5 * (beta_max - beta_min) * tau * tau
-        alpha = torch.exp(-0.5 * int_beta)
-        alpha2 = alpha * alpha
-        one_minus_alpha2 = (1.0 - alpha2).clamp_min(eps64)
-        sigma_tilde = torch.sqrt(one_minus_alpha2 / alpha2.clamp_min(eps64))
-        c_noise = 0.25 * torch.log(sigma_tilde.clamp_min(eps64))
+        # Sampling-schedule buffers. If ``sampling_schedule`` is provided,
+        # build a second VP-SDE grid; otherwise alias to the training
+        # buffers so ``sample()`` can read ``self.sample_*`` unconditionally.
+        if sampling_schedule is not None:
+            precomp_sample = _compute_vp_schedule_buffers(
+                num_steps=int(sampling_schedule.num_steps),
+                beta_min=float(sampling_schedule.beta_min),
+                beta_max=float(sampling_schedule.beta_max),
+                tau_min=float(sampling_schedule.tau_min),
+                tau_max=float(sampling_schedule.tau_max),
+            )
+            for name, t in precomp_sample.items():
+                self.register_buffer(f"sample_{name}", t)
+            self.sample_num_steps = int(sampling_schedule.num_steps)
+        else:
+            # Alias training buffers as plain Python attributes — assigning
+            # an already-registered buffer back as a buffer would clone and
+            # waste memory; an attribute alias is free and PyTorch handles
+            # the duplicate name cleanly on save/load.
+            for name in precomp_train.keys():
+                setattr(self, f"sample_{name}", getattr(self, name))
+            self.sample_num_steps = int(self.num_steps)
+        self.sampling_schedule = sampling_schedule
 
-        # Per-tau g²(τ) for the ESM weight (σ_data-independent factor).
-        # The σ_data-dependent piece c_out²(τ;t) is multiplied in per call.
-        w_per_tau_unit = beta * alpha2 / one_minus_alpha2  # diagnostic
-        dtau = (1.0 - tau_min) / float(K)
-        # Bake the (1/2 * dtau) Riemann measure into ``wtilde_base``.
-        # The full weight is ``wtilde_base[k] · σ_data²(t) / (σ̃² + σ_data²(t))``;
-        # this gets applied in ``_esm_chunk_loss`` once σ_data is known.
-        wtilde_base = 0.5 * dtau * beta / one_minus_alpha2
-
-        self.register_buffer("alpha", alpha.to(torch.float32))
-        self.register_buffer("alpha2", alpha2.to(torch.float32))
-        self.register_buffer("sigma_tilde", sigma_tilde.to(torch.float32))
-        self.register_buffer("one_minus_alpha2", one_minus_alpha2.to(torch.float32))
-        self.register_buffer("c_noise", c_noise.to(torch.float32))
-        self.register_buffer("beta", beta.to(torch.float32))
-        self.register_buffer("tau", tau.to(torch.float32))
-        self.register_buffer("w_per_tau_unit", w_per_tau_unit.to(torch.float32))
-        self.register_buffer("wtilde_base", wtilde_base.to(torch.float32))
-
-        # Importance-sampling distribution p_k.
+        # Importance-sampling distribution p_k. Static modes
+        # (``uniform``, ``lsgm_is``) register a ``(K,)`` buffer that
+        # ``_esm_chunk_loss`` broadcasts to per-row. Adaptive modes
+        # (``adaptive_is``, ``adaptive_is_full``) compute p_k per-row at
+        # loss-time from the live ``SigmaDataBuffer``; there is no static
+        # buffer to register, so ``self.p_k`` is left ``None``.
         ismode = schedule.k_sampling_mode
         self.gamma = float(schedule.pk_gamma)
         self.gfloor = float(schedule.pk_floor)
         if ismode == "lsgm_is":
-            p_k = (beta / one_minus_alpha2).to(torch.float32).clamp_min(self.gfloor)
+            beta_t = self.beta.to(torch.float32)
+            om_a2 = self.one_minus_alpha2.to(torch.float32)
+            p_k = (beta_t / om_a2).clamp_min(self.gfloor)
             if self.gamma != 1.0:
                 p_k = p_k.pow(self.gamma)
             p_k = p_k / p_k.sum()
+            self.register_buffer("p_k", p_k)
         elif ismode == "uniform":
             p_k = torch.full(
                 (self.num_steps,), 1.0 / self.num_steps, dtype=torch.float32
             )
+            self.register_buffer("p_k", p_k)
+        elif ismode in ("adaptive_is", "adaptive_is_full"):
+            # Per-row p_k is computed inside ``_esm_chunk_loss`` from the
+            # live σ_d²(t) (and per-sample stats for ``adaptive_is_full``).
+            self.p_k = None
         else:
             raise ValueError(
-                f"Unknown k_sampling_mode={ismode!r}; expected 'uniform' or 'lsgm_is'"
+                f"Unknown k_sampling_mode={ismode!r}; "
+                f"expected 'uniform', 'lsgm_is', 'adaptive_is', or "
+                f"'adaptive_is_full'"
             )
-        self.register_buffer("p_k", p_k)
         self.k_sampling_mode = ismode
 
     # ------------------------------------------------------------------
@@ -719,6 +911,33 @@ class DiffusionTransition(BaseTransition):
             override_k_idx = mc_override.get("k_idx")
             override_eps = mc_override.get("eps")
 
+        # Build per-row p_k once per chunk-loss call. Static modes
+        # (uniform / lsgm_is) get a no-copy expand view of self.p_k; the
+        # two adaptive modes recompute from the live σ_d² (and per-sample
+        # stats for ``adaptive_is_full``) per row. Reweighting at the
+        # ``weights = wtilde / p_k`` step below does a row-aware gather.
+        if self.k_sampling_mode == "adaptive_is":
+            p_k_per_row = _adaptive_is_density_meandom(
+                self.sigma_tilde, sigma_d2_per_row, floor=self.gfloor,
+            )  # (N, K)
+        elif self.k_sampling_mode == "adaptive_is_full":
+            # Per-coordinate means so these match σ_d²'s per-coordinate scale
+            # (sigma_data tracks residual variance per coordinate). Using sum
+            # would over-scale by ~d and break the collapse to mean-dom at
+            # real calibration for d > 1.
+            mu_hat2_row = mu_hat_t.pow(2).mean(dim=1)  # (N,)
+            sigma2_row = sigma2_t.mean(dim=1)          # (N,)
+            p_k_per_row = _adaptive_is_density_full(
+                self.sigma_tilde,
+                sigma_d2=sigma_d2_per_row,
+                sigma2=sigma2_row,
+                mu_hat2=mu_hat2_row,
+                floor=self.gfloor,
+            )  # (N, K)
+        else:
+            # Static mode: broadcast view (zero-copy).
+            p_k_per_row = self.p_k.unsqueeze(0).expand(N, -1)  # (N, K)
+
         remaining_k = int(self.S_k)
         k_cursor = 0
         while remaining_k > 0:
@@ -728,9 +947,10 @@ class DiffusionTransition(BaseTransition):
             if override_k_idx is not None:
                 k_idx = override_k_idx[:, k_cursor : k_cursor + kc]
             else:
-                k_idx = torch.multinomial(self.p_k, N * kc, replacement=True).view(
-                    N, kc
-                )
+                # Per-row sampling: each of N rows draws kc τ-bins from its
+                # own p_k. ``torch.multinomial`` natively handles the 2D
+                # input, returning shape (N, kc).
+                k_idx = torch.multinomial(p_k_per_row, kc, replacement=True)
             if override_eps is not None:
                 eps_n = override_eps[:, :, k_cursor : k_cursor + kc]
             else:
@@ -798,9 +1018,11 @@ class DiffusionTransition(BaseTransition):
             # baked weight by the sampling mass p_k (one-over-density × weight,
             # per model-v2.org § Importance Sampling). Do NOT also divide by K —
             # that double-counts the τ-measure (dτ ≈ 1/K already in wtilde_base)
-            # and shrinks the per-t ESM loss by a factor of K.
+            # and shrinks the per-t ESM loss by a factor of K. ``gather``
+            # picks each row's p_k at the row-specific sampled k.
+            p_k_at_sample = p_k_per_row.gather(1, k_idx).reshape(N * kc)
             weights = (
-                wtilde_full / self.p_k[k_flat].clamp_min(eps_dtype)
+                wtilde_full / p_k_at_sample.clamp_min(eps_dtype)
             ).detach()
 
             F_pred = self.diffmodel(latent_w, side_w, c_noise_flat)  # (N*kc, d, 1)
@@ -1036,9 +1258,14 @@ class DiffusionTransition(BaseTransition):
         )
 
         mu_p = self.baseline.mean(z_hist)  # (B, d) — added back at end
-        z_hat_sample = self._vp_pf_sample_centered(
-            z_hist=z_hist, side_win=side_win, sigma_d2=sd2_scalar,
-        )
+        if self.sampler == "edm":
+            z_hat_sample = self._edm_sample_centered(
+                z_hist=z_hist, side_win=side_win, sigma_d2=sd2_scalar,
+            )
+        else:
+            z_hat_sample = self._vp_pf_sample_centered(
+                z_hist=z_hist, side_win=side_win, sigma_d2=sd2_scalar,
+            )
         z_sample = z_hat_sample + mu_p
         return z_sample.unsqueeze(1)  # (B, 1, d)
 
@@ -1062,22 +1289,27 @@ class DiffusionTransition(BaseTransition):
         # marginal (reduces to N(0, I) at σ_data ≡ 1 and matches the prob-flow
         # likelihood's N(0, I) terminal prior). The previous
         # N(0, max(σ_d², 1)) over-dispersed forecast samples when σ_data² > 1.
-        a2_top = float(self.alpha2[-1].item())
-        om_a2_top = float(self.one_minus_alpha2[-1].item())
+        #
+        # Sampling-schedule buffers (``self.sample_*``) are separate from
+        # the training grid; when no sampling_schedule was provided the
+        # ``sample_*`` aliases reference the training buffers (so this
+        # branch is unchanged for that case).
+        a2_top = float(self.sample_alpha2[-1].item())
+        om_a2_top = float(self.sample_one_minus_alpha2[-1].item())
         var_init = max(a2_top * sigma_d2 + om_a2_top, eps_dtype)
         x = math.sqrt(var_init) * torch.randn(B, d, device=device, dtype=dtype)
 
-        K = self.num_steps
+        K = self.sample_num_steps
         for i in range(K - 1, 0, -1):
-            alpha_i = float(self.alpha[i].item())
-            sigma_tilde_i = float(self.sigma_tilde[i].item())
+            alpha_i = float(self.sample_alpha[i].item())
+            sigma_tilde_i = float(self.sample_sigma_tilde[i].item())
             sigma_tilde2_i = sigma_tilde_i * sigma_tilde_i
             denom = sigma_tilde2_i + sigma_d2
             sqrt_denom = math.sqrt(max(denom, eps_dtype))
             c_skip_i = sigma_d2 / max(denom, eps_dtype)
             c_out_i = (sigma_tilde_i * math.sqrt(sigma_d2)) / sqrt_denom
             c_in_i = 1.0 / sqrt_denom
-            c_noise_i = float(self.c_noise[i].item())
+            c_noise_i = float(self.sample_c_noise[i].item())
 
             # Convert native x to VE-coords ẑ_tilde (drives the network).
             z_tilde = x / max(alpha_i, eps_dtype)
@@ -1092,10 +1324,97 @@ class DiffusionTransition(BaseTransition):
             s_tilde = (D_pred - z_tilde) / max(sigma_tilde2_i, eps_dtype)
             s_native = s_tilde / max(alpha_i, eps_dtype)
 
-            beta_i = float(self.beta[i].item())
-            d_tau = float((self.tau[i - 1] - self.tau[i]).item())  # < 0
+            beta_i = float(self.sample_beta[i].item())
+            d_tau = float(
+                (self.sample_tau[i - 1] - self.sample_tau[i]).item()
+            )  # < 0
             drift = -0.5 * beta_i * x - 0.5 * beta_i * s_native
             x = x + d_tau * drift
+
+        return x
+
+    @torch.no_grad()
+    def _edm_sample_centered(
+        self,
+        z_hist: torch.Tensor,    # (B, d, j)
+        side_win: torch.Tensor,  # (B, side_dim, d, j+1)
+        sigma_d2: float,
+    ) -> torch.Tensor:
+        """EDM (Karras 2022) Heun sampler with optional stochastic churn.
+
+        Operates in VE/centered coords: the network sees ẑ_tilde with marginal
+        N(z_centered, σ̃²) and the EDM preconditioning maps F→D(ẑ;σ̃). The σ̃ grid
+        reuses the trained ``sample_sigma_tilde`` buffer's endpoints; the
+        intermediate nodes follow the EDM ρ-power schedule. The final x at σ→0 is
+        the centered native clean latent (= z_hat_sample); ``sample()`` adds μ_p.
+        """
+        B, d, _ = z_hist.shape
+        device = z_hist.device
+        dtype = z_hist.dtype
+        eps_dtype = torch.finfo(dtype).eps
+        sd2 = max(float(sigma_d2), eps_dtype)
+        sd = math.sqrt(sd2)
+        sigma_max = float(self.sample_sigma_tilde[-1].item())
+        sigma_min = float(self.sample_sigma_tilde[0].item())
+        N = int(self.sample_num_steps)
+        rho = float(self.edm_rho)
+
+        def denoise(x_tilde: torch.Tensor, sigma: float) -> torch.Tensor:
+            sigma2 = sigma * sigma
+            denom = sigma2 + sd2
+            sqrt_denom = math.sqrt(denom)
+            c_skip = sd2 / denom
+            c_out = (sigma * sd) / sqrt_denom
+            c_in = 1.0 / sqrt_denom
+            c_noise = 0.25 * math.log(max(sigma, eps_dtype))
+            z_in = (c_in * x_tilde).unsqueeze(2)  # (B, d, 1)
+            latent_w = torch.cat([z_hist, z_in], dim=2)
+            c_noise_vec = torch.full((B,), c_noise, device=device, dtype=dtype)
+            F_pred = self.diffmodel(latent_w, side_win, c_noise_vec).squeeze(-1)
+            return c_skip * x_tilde + c_out * F_pred
+
+        # EDM ρ-power σ schedule, descending to a final 0.0 node.
+        if N > 1:
+            ramp = torch.linspace(0.0, 1.0, N, dtype=torch.float64)
+        else:
+            ramp = torch.zeros(1, dtype=torch.float64)
+        min_inv = sigma_min ** (1.0 / rho)
+        max_inv = sigma_max ** (1.0 / rho)
+        sigmas = (max_inv + ramp * (min_inv - max_inv)) ** rho
+        sigmas = torch.cat([sigmas, torch.zeros(1, dtype=torch.float64)]).tolist()
+
+        gamma_max = math.sqrt(2.0) - 1.0
+        churn = (
+            min(self.edm_s_churn / max(N, 1), gamma_max)
+            if self.edm_s_churn > 0
+            else 0.0
+        )
+
+        # Init at the EDM-coords prior: ẑ_tilde ~ N(0, σ_max² + σ_d²) (the VE marginal
+        # of centered data perturbed to σ_max). Matches the c_skip/c_out contract.
+        x = math.sqrt(sigma_max * sigma_max + sd2) * torch.randn(
+            B, d, device=device, dtype=dtype
+        )
+        for i in range(N):
+            sigma_cur = sigmas[i]
+            sigma_next = sigmas[i + 1]
+            gamma = (
+                churn
+                if (self.edm_s_tmin <= sigma_cur <= self.edm_s_tmax)
+                else 0.0
+            )
+            sigma_hat = min(sigma_cur * (1.0 + gamma), sigma_max)
+            if sigma_hat > sigma_cur:
+                noise = torch.randn(B, d, device=device, dtype=dtype)
+                x = x + math.sqrt(
+                    max(sigma_hat * sigma_hat - sigma_cur * sigma_cur, 0.0)
+                ) * self.edm_s_noise * noise
+            d_cur = (x - denoise(x, sigma_hat)) / max(sigma_hat, eps_dtype)
+            x_next = x + (sigma_next - sigma_hat) * d_cur
+            if sigma_next > 0.0:
+                d_next = (x_next - denoise(x_next, sigma_next)) / sigma_next
+                x_next = x + (sigma_next - sigma_hat) * 0.5 * (d_cur + d_next)
+            x = x_next
 
         return x
 

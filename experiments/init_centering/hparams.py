@@ -99,6 +99,12 @@ def _build_init_centering_stages(
     early_stop_window: int = 50,
     early_stop_min_improvement: float = 1e-4,
     early_stop_warmup_steps: int = 100,
+    # Which stages to execute, in order. Default runs both. Override
+    # to ``["stage_2"]`` to skip the closed-form-Gaussian pretrain and
+    # train the diffusion-centered model from random init (no stage-1
+    # baseline anchor — the centering_handoff still snapshots the
+    # random-init baseline, harmless under baseline_mode="pinned").
+    run_stages: list[str] | None = None,
 ) -> StagesConf:
     """Build the two-stage orchestration spec for an init-centering cell.
 
@@ -190,7 +196,7 @@ def _build_init_centering_stages(
             centering_handoff=CenteringHandoff(sigma_pert=float(sigma_pert)),
             loss=stage2_loss,
         ),
-        run=["stage_1", "stage_2"],
+        run=list(run_stages) if run_stages is not None else ["stage_1", "stage_2"],
     )
 
 

@@ -9,7 +9,13 @@ preconditioning constants ``(c_skip, c_out, c_in)``.  The buffer:
 * Accumulates *passively* throughout stage 1 (the stage-1 Gaussian
   closed-form KL does not consume the buffer, but the stage-1
   transition still calls ``update(...)`` with the centered moments so
-  the buffer is populated by the close of pretraining).
+  the buffer is populated by the close of pretraining).  This stage-1
+  pre-warm is *not required* under ``"per_t"``/``"global_ema"``: the
+  EMA warmup (see :meth:`_update_unchecked`) makes the buffer
+  self-calibrate within ``~1/(1-γ)`` stage-2 updates from any init, so
+  a stage-2-only run still gets a correctly-scaled buffer.  Only
+  ``"fixed"`` (frozen at handoff) genuinely needs a representative
+  encoder before the freeze.
 * Carries its value through the stage-1 → stage-2 handoff
   (§ Stage-1 → stage-2 handoff step 5); only the EMA *schedule* (step
   counter, ``frozen`` flag for "fixed" tracking) resets at handoff.
@@ -52,20 +58,35 @@ class SigmaDataBuffer(nn.Module):
     Args:
         T_max: Max latent timestep covered by the buffer (1-based,
             inclusive).
-        tracking_mode: One of "fixed", "global_ema", "per_t".
-        ema_decay: EMA decay γ in [0, 1).  Larger → slower update.
-        init_value: Initial value used to fill every slot.  Default 1.0
-            matches the doc's "approximately unit variance" assumption
-            at the close of pretraining.
+        tracking_mode: One of "fixed", "global_ema", "per_t". Default
+            ``"per_t"`` — each timestep gets its own running EMA, kept
+            tracking through stage 2 so the centered-ESM target
+            preconditioning stays calibrated as the encoder's residual
+            distribution drifts. ``"fixed"`` freezes the buffer at the
+            centering handoff (init_smoke_simple still uses this for
+            its numerical V2 anchor); ``"global_ema"`` collapses all t
+            into one shared scalar.
+        ema_decay: Steady-state EMA decay γ in [0, 1).  Larger → slower
+            tracking once warmed up.  A per-slot warmup (running-mean
+            blend for the first ``~1/(1-γ)`` updates) makes the *initial*
+            convergence fast regardless of γ, so γ can stay high for
+            stable drift tracking without paying a slow cold start.
+        init_value: Value used to fill every slot at construction.  Only
+            matters before the first update — the warmup's first step
+            (α=1) fully replaces it — so it is just a safe default for
+            reads that happen before any training step (e.g. the very
+            first stage-2 forward, which reads then updates).  Default
+            1.0 ("approximately unit variance").
     """
 
     sigma_data2: torch.Tensor
     ema_step: torch.Tensor
+    n_updates: torch.Tensor
 
     def __init__(
         self,
         T_max: int,
-        tracking_mode: str = "fixed",
+        tracking_mode: str = "per_t",
         ema_decay: float = 0.999,
         init_value: float = 1.0,
     ) -> None:
@@ -92,6 +113,15 @@ class SigmaDataBuffer(nn.Module):
         )
         self.register_buffer(
             "ema_step",
+            torch.zeros(self.T_max, dtype=torch.long),
+        )
+        # Lifetime per-slot update count driving the EMA warmup. Distinct from
+        # ``ema_step``: it is NOT reset at the stage-1 → stage-2 handoff, so a
+        # slot already primed in stage 1 keeps tracking with the steady-state
+        # EMA instead of re-warming and discarding its persisted value. Persisted
+        # in ``state_dict`` so a preemption-resume does not re-fire the warmup.
+        self.register_buffer(
+            "n_updates",
             torch.zeros(self.T_max, dtype=torch.long),
         )
 
@@ -156,20 +186,33 @@ class SigmaDataBuffer(nn.Module):
         self._check_in_range(idx)
 
         bar = self._estimator_per_t(idx, mu_hat_batch, sigma_t2_batch)
-        gamma = self.ema_decay
+        # EMA warmup: blend at the running-mean rate ``1/(n+1)`` until it falls
+        # to the steady-state rate ``1 - γ``, where ``n`` is the slot's lifetime
+        # update count. The first real update (n=0 → α=1) fully replaces the
+        # uninformative ``init_value``, and the early estimate is the exact
+        # batch-average — so a freshly-built buffer is calibrated within a few
+        # steps instead of taking ``~1/(1-γ)`` steps to decay the init away.
+        # After the crossover (``n ≳ 1/(1-γ)``) ``α`` pins to ``1 - γ`` and the
+        # buffer reverts to a plain EMA that tracks the encoder's drift.
+        min_alpha = 1.0 - self.ema_decay
 
         if self.tracking_mode == "global_ema":
             scalar = bar.mean()
-            new_value = gamma * self.sigma_data2[0] + (1.0 - gamma) * scalar
+            alpha = max(min_alpha, 1.0 / (float(self.n_updates[0]) + 1.0))
+            new_value = (1.0 - alpha) * self.sigma_data2[0] + alpha * scalar
             self.sigma_data2.fill_(new_value)
             self.ema_step += 1
+            self.n_updates += 1
             return
 
         # "per_t" or "fixed-but-still-accumulating" (pre-handoff stage 1).
         ext = idx - 1  # to internal 0-based
-        new_value = gamma * self.sigma_data2[ext] + (1.0 - gamma) * bar
+        step = self.n_updates[ext].to(torch.float32)
+        alpha = torch.clamp(1.0 / (step + 1.0), min=min_alpha)  # (n,)
+        new_value = (1.0 - alpha) * self.sigma_data2[ext] + alpha * bar
         self.sigma_data2[ext] = new_value
         self.ema_step[ext] += 1
+        self.n_updates[ext] += 1
 
     @staticmethod
     def _estimator_per_t(
@@ -234,7 +277,10 @@ class SigmaDataBuffer(nn.Module):
         Zeros the per-t step counter and (under "fixed" tracking)
         freezes the buffer.  Does NOT touch ``sigma_data2`` — the
         values persist across the handoff per
-        ``model-v2.org`` § Stage-1 → stage-2 handoff step 5.
+        ``model-v2.org`` § Stage-1 → stage-2 handoff step 5 — nor
+        ``n_updates``: a slot primed in stage 1 must keep tracking with
+        the steady-state EMA in stage 2, not re-warm and discard its
+        persisted value.
         """
         self.ema_step.zero_()
         if self.tracking_mode == "fixed":

@@ -30,6 +30,10 @@ Harmonic = Synthetic(
     mode="harmonic", D=1, T=T,
     N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
 )
+HarmonicMixed = Synthetic(
+    mode="harmonic-mixed", D=1, T=T,
+    N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
+)
 Bimodal = Synthetic(
     mode="bimodal", D=1, T=T,
     N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
@@ -80,7 +84,7 @@ KDDStation = KDD(filepath="data/kdd-aotizhongxin_aq.pt")
 
 
 __all__ = [
-    "LGSSM", "Harmonic", "Bimodal", "BimodalNoisy", "Robot2D",
+    "LGSSM", "Harmonic", "HarmonicMixed", "Bimodal", "BimodalNoisy", "Robot2D",
     "NonlinBimodalLift1D", "NonlinBimodalLiftMV",
     "Solar", "Electricity", "Traffic", "Taxi", "Wiki",
     "KDDFull", "KDDBeijing", "KDDStation",
