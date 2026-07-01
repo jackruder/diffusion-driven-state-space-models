@@ -473,18 +473,6 @@ class BaseTransition(nn.Module):
 
         traj = torch.zeros(B, S, d, steps, device=device, dtype=dtype)
 
-        if hist_valid_len is not None:
-            hist_valid_len = hist_valid_len.to(device=device)
-            if hist_valid_len.shape != (B,):
-                raise ValueError(
-                    f"hist_valid_len must be (B,); got {tuple(hist_valid_len.shape)}"
-                )
-            mask = (  # TODO fix this. incorrect
-                torch.arange(self.j, device=device).view(1, 1, 1, self.j)
-                >= hist_valid_len.view(B, 1, 1, 1).clamp(max=self.j)
-            )
-            hist = hist.masked_fill(mask, 0)
-        valid_len = hist_valid_len
         for t in range(steps):
             hist_flat = hist.reshape(B * S, d, self.j)
 
@@ -495,11 +483,6 @@ class BaseTransition(nn.Module):
             }
             if time_windows is not None:
                 hist_time = time_windows[:, t, :, :]  # (B, E, j)
-                if valid_len is not None:
-                    tmask = torch.arange(self.j, device=device).view(
-                        1, 1, self.j
-                    ) >= valid_len.view(B, 1, 1).clamp(max=self.j)
-                    hist_time = hist_time.masked_fill(tmask, 0)
                 hist_time = (
                     hist_time
                     .permute(0, 2, 1)  # (B, j, E)
@@ -511,11 +494,6 @@ class BaseTransition(nn.Module):
 
             if cov_windows is not None:
                 hist_cov = cov_windows[:, t, :, :]  # (B, V, j)
-                if valid_len is not None:
-                    tmask = torch.arange(self.j, device=device).view(
-                        1, 1, self.j
-                    ) >= valid_len.view(B, 1, 1).clamp(max=self.j)
-                    hist_cov = hist_cov.masked_fill(tmask, 0)
                 hist_cov = (
                     hist_cov
                     .permute(0, 2, 1)  # (B, j, V)
@@ -539,8 +517,6 @@ class BaseTransition(nn.Module):
                 hist = torch.cat([hist[:, :, :, 1:], z_next.unsqueeze(-1)], dim=-1)
             else:
                 hist = z_next.unsqueeze(-1)
-            if valid_len is not None:
-                valid_len = torch.clamp(valid_len + 1, max=self.j)
 
         return traj
 

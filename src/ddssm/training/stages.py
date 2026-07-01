@@ -184,9 +184,11 @@ class StageOrchestrator:
     For each stage in ``stages.run``:
 
     1. Flip ``trainer.model.stage_selector`` to the stage key.
-    2. Rebuild the optimizer with the stage's LRs — unless the previous
-       stage's post-loop centering handoff already rebuilt it (with this
-       stage's LRs), in which case the rebuild is skipped.
+    2. Rebuild the optimizer with the stage's LRs — skipped when either
+       (a) the previous stage's post-loop centering handoff already rebuilt
+       it with this stage's LRs, or (b) this stage's LRs equal the previous
+       stage's LRs, in which case rebuilding would only discard live Adam
+       moments for no benefit.
     3. Set per-module trainable flags.
     4. Drive ``trainer.fit`` for ``stage.steps`` training steps.
     5. If ``stage.centering_handoff`` is set *and* a later stage will
@@ -284,6 +286,13 @@ class StageOrchestrator:
         # optimizer with the *next* stage's LRs) so that next stage skips its
         # own rebuild.
         skip_next_rebuild = False
+        # Track the previous stage's LRs so we can skip a redundant rebuild when
+        # they haven't changed — a fresh AdamW would drop the accumulated
+        # first/second moments, which is a silent slowdown of convergence on the
+        # next stage. The handoff path is intentionally exempt (see its
+        # docstring: stage-1 moments are calibrated to a different loss surface
+        # than stage 2 and are meant to be reset).
+        prev_stage_lrs: StageLrsConf | None = None
         for i, key in enumerate(ordered[start_idx:]):
             stage: StageSpecConf = getattr(stages, key)
             is_resumed_stage = (i == 0) and (resume_from is not None)
@@ -299,11 +308,16 @@ class StageOrchestrator:
 
             # 2. Rebuild the optimizer with this stage's LRs — unless the
             # previous stage's post-loop centering handoff already rebuilt it
-            # (with this stage's LRs).
+            # (with this stage's LRs), or the LRs are unchanged from the
+            # previous stage (in which case a rebuild would only discard live
+            # Adam moments).
             if skip_next_rebuild:
                 skip_next_rebuild = False
+            elif prev_stage_lrs is not None and stage.lrs == prev_stage_lrs:
+                pass
             else:
                 self.trainer._rebuild_optimizer(stage.lrs)
+            prev_stage_lrs = stage.lrs
 
             # 3. Per-module trainable flags.
             self.trainer._set_trainable(stage.trainable)

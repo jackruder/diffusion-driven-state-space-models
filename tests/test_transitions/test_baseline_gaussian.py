@@ -306,3 +306,33 @@ def test_transition_kl_init_grad_flows_to_aux_posterior() -> None:
     (out["loss_init"] + out["kl_aux"]).backward()
     aux_grads = [p.grad for p in aux.parameters() if p.grad is not None]
     assert len(aux_grads) > 0
+
+
+# ---------------------------------------------------------------------------
+# sample_latent_trajectory (inherited from BaseTransition)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("j", [1, 2])
+@pytest.mark.parametrize("with_time_embed", [False, True])
+def test_sample_latent_trajectory_shape_and_finite(
+    j: int, with_time_embed: bool
+) -> None:
+    """Autoregressive rollout returns the documented shape and is finite.
+
+    Regression guard for the ``hist_valid_len`` NameError that hid in
+    ``BaseTransition.sample_latent_trajectory`` until nothing exercised it.
+    """
+    baseline = PersistenceBaseline(latent_dim=D, j=j)
+    transition = _make_transition(baseline, j=j)
+    torch.manual_seed(0)
+    z_hist = torch.randn(B, D, j)
+    steps = 4
+    ctx = None
+    if with_time_embed:
+        ctx = {"time_embed": torch.randn(B, j + steps, EMB_TIME)}
+
+    traj = transition.sample_latent_trajectory(z_hist, steps=steps, S=S, ctx=ctx)
+
+    assert traj.shape == (B, S, D, steps)
+    assert torch.isfinite(traj).all()
