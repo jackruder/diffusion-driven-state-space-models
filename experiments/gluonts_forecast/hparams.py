@@ -63,6 +63,10 @@ def _build_gluonts_stages(
     trans_lr: float | None = None,
     stage_1_lambda_start: float = 0.001,
     stage_2_lambda_start: float = 0.1,
+    # λ ramp END (default 1.0). Set start=end=0.0 to pin the rate/KL weight to a
+    # constant 0 — a pure autoencoder (Phase-1 encoder-capacity probe), no ramp.
+    stage_1_lambda_end: float = 1.0,
+    stage_2_lambda_end: float = 1.0,
     stage_1_warmup_frac: float = 0.3,
     stage_2_warmup_frac: float = 0.1,
     log_every: int = 100,
@@ -72,6 +76,12 @@ def _build_gluonts_stages(
     early_stop_window: int = 500,
     early_stop_min_improvement: float = 1e-4,
     early_stop_warmup_steps: int = 500,
+    # Stage run order; default both. Pass ["stage_1"] for a stage-1-only run
+    # (the pure-AE Phase-1 path — stage_2 is still built but never executed).
+    run: list[str] | None = None,
+    # Freeze enc+dec in stage_2 so ONLY the transition trains against a STATIC
+    # latent frame — isolates transition learning from the encoder co-evolution
+    # trap (a good frame is learned in stage_1, then pinned).
     stage_2_freeze_frame: bool = False,
 ) -> StagesConf:
     """Two-stage recon→joint orchestration for a gluonts cell (persistence/pinned)."""
@@ -110,13 +120,13 @@ def _build_gluonts_stages(
     )
     stage1_lambda = LambdaRampConf(
         start=float(stage_1_lambda_start),
-        end=1.0,
+        end=float(stage_1_lambda_end),
         steps=max(1, int(round(stage_1_warmup_frac * n_pretrain))),
         delay=0,
     )
     stage2_lambda = LambdaRampConf(
         start=float(stage_2_lambda_start),
-        end=1.0,
+        end=float(stage_2_lambda_end),
         steps=max(1, int(round(stage_2_warmup_frac * n_stage2))),
         delay=0,
     )
@@ -124,7 +134,7 @@ def _build_gluonts_stages(
         rate_lambda=make_lambda_cosine(
             stage1_lambda,
             total_steps=int(n_pretrain),
-            default_end=1.0,
+            default_end=float(stage_1_lambda_end),
         ),
         lambda_sigma_p=lambda_sigma_p,
         lambda_mu_p=0.0,
@@ -134,7 +144,7 @@ def _build_gluonts_stages(
         rate_lambda=make_lambda_cosine(
             stage2_lambda,
             total_steps=int(n_stage2),
-            default_end=1.0,
+            default_end=float(stage_2_lambda_end),
         ),
         lambda_sigma_p=0.0,
         lambda_mu_p=0.0,
@@ -165,7 +175,7 @@ def _build_gluonts_stages(
             checkpoint_every=checkpoint_every,
             loss=stage2_loss,
         ),
-        run=["stage_1", "stage_2"],
+        run=list(run) if run is not None else ["stage_1", "stage_2"],
     )
 
 

@@ -126,6 +126,51 @@ _ENCODERS = {
         edm_s_churn=16.0,
         edm_s_noise=1.0,
         k_sampling_mode="uniform",
+        channels=80,
+        diffusion_layers=3,
+        nheads=2,
+    ),
+    # Same as identity_csdilike but with adaptive_is k-sampling.
+    "identity_csdilike_ais": dict(
+        encoder_type="identity",
+        baseline_type="zero",
+        emb_feature_dim=16,
+        time_mixer="transformer",
+        diffusion_sampler="edm",
+        edm_s_churn=16.0,
+        edm_s_noise=1.0,
+        k_sampling_mode="adaptive_is",
+        channels=80,
+        diffusion_layers=3,
+        nheads=2,
+    ),
+    # bumped capacity: 96ch / 4 layers / 4 heads (704K params vs 409K)
+    "identity_csdilike_ais_big": dict(
+        encoder_type="identity",
+        baseline_type="zero",
+        emb_feature_dim=16,
+        time_mixer="transformer",
+        diffusion_sampler="edm",
+        edm_s_churn=16.0,
+        edm_s_noise=1.0,
+        k_sampling_mode="adaptive_is",
+        channels=96,
+        diffusion_layers=4,
+        nheads=4,
+    ),
+    # adaptive_is + persistence baseline
+    "identity_csdilike_ais_persist": dict(
+        encoder_type="identity",
+        baseline_type="persistence",
+        emb_feature_dim=16,
+        time_mixer="transformer",
+        diffusion_sampler="edm",
+        edm_s_churn=16.0,
+        edm_s_noise=1.0,
+        k_sampling_mode="adaptive_is",
+        channels=80,
+        diffusion_layers=3,
+        nheads=2,
     ),
 }
 
@@ -176,18 +221,20 @@ def _model(encoder_key: str, data_dim: int, j: int = 1):
         if _ENCODERS[encoder_key].get("encoder_type") == "arflow"
         else {}
     )
+    enc = {k: v for k, v in _ENCODERS[encoder_key].items()
+           if k not in ("channels", "nheads", "diffusion_layers")}
     return GluonModel(
         data_dim=data_dim,
         latent_dim=_LATENT_DIM,
         j=j,
         T_max=_T,
-        channels=48,
-        nheads=2,
+        channels=_ENCODERS[encoder_key].get("channels", 48),
+        nheads=_ENCODERS[encoder_key].get("nheads", 2),
         summary_layers=1,
-        diffusion_layers=3,
+        diffusion_layers=_ENCODERS[encoder_key].get("diffusion_layers", 3),
         num_steps=64,
         grad_checkpoint=False,
-        **_ENCODERS[encoder_key],
+        **enc,
         **caps,
     )
 
@@ -212,10 +259,10 @@ def _phase2_cell(encoder_key: str, dataset_key: str, j: int = 1):
         # (n_pretrain, sigma_pert, lambda_sigma_p, stage_1_*) are inert.
         stages=GluonStages(
             run=["stage_2"],
-            n_stage2=4000,
+            n_stage2=10000,
             validate_every=100,
             log_every=50,
-            checkpoint_every=1000,
+            checkpoint_every=2000,
         ),
         # Per-trial objective eval: forecast CRPS-sum on the VAL split (select on
         # val, report on test). One forecast pass per trial; finalists get the
@@ -327,6 +374,20 @@ experiment_store(
     name="h2h__identity_csdilike__nlblmv__j10",
 )
 
+# Same as kitchen-sink but adaptive_is k-sampling (weights=1 via diffusion.py TEMP).
+experiment_store(
+    _phase2_cell("identity_csdilike_ais", "nlblmv", j=10),
+    name="h2h__identity_csdilike_ais__nlblmv__j10",
+)
+
+# Persistence baseline variants (uniform and adaptive_is).
+# identity_csdilike_baseline is already registered in the attribution loop below,
+# so only register the adaptive_is + persistence variant here.
+experiment_store(
+    _phase2_cell("identity_csdilike_ais_persist", "nlblmv", j=10),
+    name="h2h__identity_csdilike_ais_persist__nlblmv__j10",
+)
+
 # Attribution batch: 5 single-axis leave-one-out ablations off the kitchen-sink +
 # the gaussian-frame transfer, all j=10 on nlblmv. Each ablation cell name encodes
 # the axis reverted to the 24% baseline (see the _ENCODERS.update block above).
@@ -341,3 +402,45 @@ for _enc in (
     experiment_store(
         _phase2_cell(_enc, "nlblmv", j=10), name=f"h2h__{_enc}__nlblmv__j10"
     )
+
+# j-sweep: top 4 configs at j=6,4,2,1 (j=10 already registered above).
+for _j in (6, 4, 2, 1):
+    for _enc in (
+        "identity_csdilike_ais",
+        "identity_csdilike_ais_persist",
+        "identity_csdilike",
+        "identity_csdi",
+    ):
+        experiment_store(
+            _phase2_cell(_enc, "nlblmv", j=_j),
+            name=f"h2h__{_enc}__nlblmv__j{_j}",
+        )
+
+# Bumped capacity (704K): 96ch / 4 layers / 4 heads at j=4.
+experiment_store(
+    _phase2_cell("identity_csdilike_ais_big", "nlblmv", j=4),
+    name="h2h__identity_csdilike_ais_big__nlblmv__j4",
+)
+
+# 20K steps, LR=8e-4, bumped capacity.
+experiment_store(
+    experiment(
+        data=NonlinBimodalLiftMV,
+        model=_model("identity_csdilike_ais_big", 8, j=4),
+        hparams=dataclasses.replace(
+            GluonHparams, batch_size=32,
+            enc_lr=8e-4, dec_lr=8e-4, trans_lr=8e-4,
+        ),
+        training=GluonTraining,
+        stages=GluonStages(
+            run=["stage_2"], n_stage2=20000,
+            validate_every=100, log_every=50, checkpoint_every=4000,
+        ),
+        eval=Eval(
+            metrics=["crps_sum"], split="val", num_samples=100,
+            T_split=_T_SPLIT, output_filename="metrics.json",
+        ),
+        objective=Objective(metric="crps_sum", source="json"),
+    ),
+    name="h2h__identity_csdilike_ais_big_20k__nlblmv__j4",
+)

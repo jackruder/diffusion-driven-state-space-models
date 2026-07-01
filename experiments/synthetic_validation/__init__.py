@@ -8,5 +8,6 @@ store; the import is triggered from :mod:`experiments`.
 
 from . import (
     study,  # noqa: F401  -- registers the synthval study + synthval__* presets
+    sweeps,  # noqa: F401  -- registers sin_overfit_mse sweep
     sin_overfit,  # noqa: F401  -- registers the sin_overfit sanity-check preset
 )

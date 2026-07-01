@@ -212,6 +212,98 @@ def eval_crps_sum(ctx: EvalContext) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Analytic LGSSM optimum: the Kalman-filter predictive forecast NLL — the floor a
+# trained model can approach but not beat on the easy (lgssm) cell.
+# ---------------------------------------------------------------------------
+
+# Generative params of the ``lgssm`` synthetic mode (data/synthetic.py): a scalar
+# AR(1) latent z_t = a·z_{t-1} + N(0, q) observed as x_t = z_t + N(0, r), applied
+# independently per channel from a DETERMINISTIC start z_0 = 0. These MUST track the
+# generator; test_kalman_forecast_nll guards against drift by checking the empirical
+# NLL against the analytic Gaussian entropy floor.
+_LGSSM_A = 0.9
+_LGSSM_PROC_SIGMA = 0.1
+_LGSSM_OBS_SIGMA = 0.1
+
+
+@register_metric("kalman_forecast_nll")
+def eval_kalman_forecast_nll(
+    ctx: EvalContext,
+    *,
+    a: float = _LGSSM_A,
+    proc_sigma: float = _LGSSM_PROC_SIGMA,
+    obs_sigma: float = _LGSSM_OBS_SIGMA,
+) -> Dict[str, Any]:
+    """Bayes-optimal (Kalman) per-step forecast NLL on LGSSM data.
+
+    Conditions on the first ``ctx.T_split`` observations, propagates the EXACT
+    Gaussian predictive forward over the horizon, and scores ``-log N(x_t; μ_t, V_t)``
+    at the TRUE future observations — the optimal-forecaster reference for the
+    ``lgssm`` cell (a number the model approaches from above). Data-only (no model);
+    assumes the un-normalized scalar-AR(1) process applied per channel.
+    """
+    if ctx.loader is None or ctx.T_split is None:
+        raise ValueError(
+            "kalman_forecast_nll requires loader and T_split on the EvalContext."
+        )
+    device = ctx.device
+    transform = ctx.batch_transform
+    L1 = int(ctx.T_split)
+    a = float(a)
+    q = float(proc_sigma) ** 2
+    r = float(obs_sigma) ** 2
+
+    per_t_acc: list[np.ndarray] = []
+    weights: list[int] = []
+    with torch.no_grad():
+        for batch in ctx.loader:
+            if transform is not None:
+                batch = transform(batch, device)
+            else:
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+            x = batch["observed_data"]            # (B, D, T)
+            B, D, T = x.shape
+            if T <= L1:
+                continue
+            H = T - L1
+
+            # Kalman filter over the history. z_0 = 0 is known, so the variance
+            # recursion is data-independent (a scalar); only the mean depends on x.
+            z_filt = torch.zeros(B, D, device=device, dtype=x.dtype)
+            P_f = 0.0
+            for t in range(1, L1):
+                P_pred = a * a * P_f + q
+                K = P_pred / (P_pred + r)
+                z_filt = a * z_filt + K * (x[..., t] - a * z_filt)
+                P_f = (1.0 - K) * P_pred
+
+            # Forecast: propagate the filtered posterior forward, no updates.
+            zhat = a * z_filt                     # latent predictive mean at t=L1
+            P_lat = a * a * P_f + q               # latent predictive var at t=L1
+            per_t = torch.empty(H, device=device, dtype=x.dtype)
+            for h in range(H):
+                Vx = P_lat + r                    # obs predictive var at t=L1+h
+                resid = x[..., L1 + h] - zhat
+                per_t[h] = (0.5 * (resid * resid / Vx + math.log(2.0 * math.pi * Vx))).mean()
+                zhat = a * zhat
+                P_lat = a * a * P_lat + q
+            per_t_acc.append(per_t.detach().cpu().numpy())
+            weights.append(B)
+
+    if not per_t_acc:
+        return {"kalman_forecast_nll": float("nan"), "kalman_forecast_nll_per_t": []}
+    w = np.asarray(weights, dtype=float)
+    per_t = np.average(np.stack(per_t_acc, axis=0), axis=0, weights=w)
+    return {
+        "kalman_forecast_nll": float(per_t.mean()),
+        "kalman_forecast_nll_per_t": per_t.tolist(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Reconstruction MSE: compares posterior reconstruction to observed values.
 # ---------------------------------------------------------------------------
 

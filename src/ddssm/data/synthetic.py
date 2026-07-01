@@ -20,7 +20,14 @@ NLBL_MV_LATENT_D = 4
 NLBL_MV_OBS_D = 8
 NLBL_MV_HIDDEN_DIM = 16
 NLBL_MV_A_SEED = 12345
-NLBL_MV_SIGN_PERSISTENCE = 0.85
+# Sign-persistence p for the mode impulse: s_t = s_{t-1} w.p. p, flips w.p. 1-p
+# (a 2-state Markov chain per latent dim). p=0.5 recovers the original i.i.d.
+# Rademacher sign (which mode is taken is 50/50 → unpredictable → forecast stuck at
+# the marginal floor). p>0.5 makes the DOMINANT mode predictable from the state
+# (z_{t-1} encodes s_{t-1} via the ±NLBL_DELTA shift) while the conditional stays
+# bimodal (weights p / 1-p), so the diffusion's multimodality still matters AND a
+# good encoder+transition can forecast above the marginal floor.
+NLBL_MV_SIGN_PERSISTENCE = 0.85  # history-dependent sign: conditional (0.85/0.15 bimodal) != marginal
 
 # Chaotic variant (``henon-lift``): a deterministic Hénon-map latent
 # (d = 2, a = 1.4, b = 0.3 — the classic chaotic regime) plus small process
@@ -330,6 +337,8 @@ class SyntheticDataset(Dataset):
 
             z = torch.zeros(self.N_total, latent_d, self.T)
             z[:, :, 0] = torch.randn(self.N_total, latent_d)
+            # Persistent Markov sign: keep s_{t-1} w.p. p, flip w.p. 1-p (per dim).
+            # p=0.5 == the original i.i.d. Rademacher impulse.
             s_t = (torch.randint(0, 2, (self.N_total, latent_d)).float() * 2.0) - 1.0
             for t in range(1, self.T):
                 keep = torch.rand(self.N_total, latent_d) < NLBL_MV_SIGN_PERSISTENCE

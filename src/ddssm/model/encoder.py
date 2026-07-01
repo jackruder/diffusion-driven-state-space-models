@@ -490,11 +490,15 @@ def arflow_cumsum(g, eta, logvar, clamp_logvar_min, clamp_logvar_max):
 
 
 class CausalNoiseNet(nn.Module):
-    """Causal, parallel net producing ``(g, logσ²)`` from ``η_{<t}`` and ``h_t``.
+    """IAF conditioner: ``(μ_t, logσ²_t)`` from strictly-causal noise ``n_{<t}`` and ``h``.
 
-    CSDI ``(BS, C, d, T)`` representation: a ``1→C`` lift, ``L`` causal CSDI-style blocks
-    (causal time mixer over T + feature mixer over d + per-position ``h_t`` as additive
-    side-info), a noise skip, and a zero-init head (so ``g≈0, σ≈1`` at init).
+    The base noise ``n`` is shift-right-by-one (``n_{<t}``) and concatenated per ``(d,t)``
+    with the data summary ``h_t``, projected to ``C`` channels, then run through ``L`` causal
+    CSDI blocks (causal time mixer over T + feature mixer over d). The head emits
+    ``(μ_t, logσ²_t)``. Because the conditioner sees only ``n_{<t}`` (the shift), the reparam
+    ``z_t = μ_t + σ_t·n_t`` is a lower-triangular flow with diagonal ``∂z_t/∂n_t = σ_t`` — so
+    ``log q = Σ_t gaussian_log_prob(z_t; μ_t, logσ²_t)`` is exact. ``h`` is data (bidirectional
+    is fine); only the noise must be strictly causal.
     """
 
     def __init__(
@@ -505,6 +509,8 @@ class CausalNoiseNet(nn.Module):
         causal_layers: int = 2,
         nheads: int = 8,
         backbone: str = "transformer",
+        init_logvar_bias: float = 0.0,
+        stochastic_state: bool = True,
     ) -> None:
         super().__init__()
         self.latent_dim = latent_dim
@@ -512,11 +518,13 @@ class CausalNoiseNet(nn.Module):
         self.channels = channels
         self.nheads = nheads
         self.backbone = backbone
+        # stochastic_state=True: the IAF conditioner sees [n_{<t}, h] so μ,σ depend on the
+        # noise history (q is an autoregressive flow conditioned on the realized path).
+        # False: the deterministic causal encoder, μ,σ = f(h) only (z_hist amortized).
+        self.stochastic_state = stochastic_state
 
-        # 1 → C lift over the (d, T) grid (ContextProducer.input_projection pattern).
-        self.input_projection = nn.Conv1d(1, channels, kernel_size=1)
-        nn.init.kaiming_normal_(self.input_projection.weight, nonlinearity="relu")
-        nn.init.zeros_(self.input_projection.bias)
+        # Input: [n_{<t} (1, if stochastic), h_t (summary_dim)] per (d,t) → C channels.
+        self.input_projection = nn.Linear(int(stochastic_state) + summary_dim, channels)
 
         def _make_time_layer() -> nn.Module:
             if backbone == "conv":
@@ -541,21 +549,27 @@ class CausalNoiseNet(nn.Module):
             for _ in range(causal_layers)
         )
 
-        # Head: C → 2 channels (g, logσ²). Zero-init weight AND bias so g≈0, logσ²≈0
-        # (σ≈1) at init → the stage-1→2 handoff starts at q ≈ N(z_{t-1}, I), KL ≈ 0.
+        # Head: C → 2 (μ, logσ²). Small-init weight so μ is data-responsive yet small at
+        # init (q ≈ N(0, σ²), KL≈0 handoff); the data-at-input path trains μ immediately.
         self.head = nn.Conv1d(channels, 2, kernel_size=1)
-        nn.init.zeros_(self.head.weight)
+        nn.init.xavier_uniform_(self.head.weight, gain=0.5)
         nn.init.zeros_(self.head.bias)
+        self.head.bias.data[1] = init_logvar_bias
 
-    def forward(self, eta, h):
-        """``eta`` ``(BS, d, T)``; ``h`` ``(BS, T, summary_dim)`` → ``(g, logσ²)`` ``(BS, d, T)``."""
-        BS, d, T = eta.shape
-        eta_shifted = _shift_right_time(eta)  # strictly η_{<t}
-        x0 = torch.relu(
-            self.input_projection(eta_shifted.reshape(BS, 1, d * T))
-        ).reshape(BS, self.channels, d, T)
+    def forward(self, n, h):
+        """``n`` ``(BS, d, T)`` base noise; ``h`` ``(BS, T, summary_dim)`` → ``(μ, logσ²)`` ``(BS, d, T)``."""
+        BS, d, T = n.shape
+        # Input per (d,t): the data summary h_t, plus — for the stochastic IAF — the
+        # strictly-causal noise n_{<t} (shift) so μ,σ condition on the realized path.
+        h_grid = h.unsqueeze(1).expand(BS, d, T, self.summary_dim)  # (BS, d, T, M)
+        if self.stochastic_state:
+            n_shifted = _shift_right_time(n).unsqueeze(-1)  # (BS, d, T, 1) — n_{<t}
+            inp = torch.cat([n_shifted, h_grid], dim=-1)  # (BS, d, T, 1+M)
+        else:
+            inp = h_grid  # (BS, d, T, M) — deterministic causal encoder
+        x0 = self.input_projection(inp).permute(0, 3, 1, 2)  # (BS, C, d, T)
 
-        # h_t as additive side-info, broadcast over the d sites → (BS, summary_dim, d, T).
+        # h_t as additive in-block side-info (extra data conditioning), broadcast over d.
         side_info = h.permute(0, 2, 1).unsqueeze(2).expand(-1, -1, d, -1)
 
         x = x0
@@ -564,12 +578,10 @@ class CausalNoiseNet(nn.Module):
             x, skip = blk(x, side_info)
             skips.append(skip)
         x = torch.stack(skips, dim=0).sum(0) / (len(self.blocks) ** 0.5)
-
-        # Noise skip: give the head direct access to the (lifted) recent noise.
-        x = x + x0
+        x = x + x0  # skip: direct access to the (projected) input
 
         out = self.head(x.reshape(BS, self.channels, d * T)).reshape(BS, 2, d, T)
-        return out[:, 0], out[:, 1]
+        return out[:, 0], out[:, 1]  # μ, logσ²
 
 
 class ARFlowEncoder(BaseEncoder):
@@ -699,6 +711,8 @@ class ARFlowEncoder(BaseEncoder):
             causal_layers=causal_layers,
             nheads=nheads,
             backbone=backbone,
+            init_logvar_bias=init_logvar_bias,
+            stochastic_state=stochastic_state,
         )
 
         self.fut_sum_module = maybe_compile(self.fut_sum_module, dynamic=True)
@@ -781,10 +795,11 @@ class ARFlowEncoder(BaseEncoder):
         h_expanded = context.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, T, -1)
         eta = torch.randn(BS, d, T, device=device, dtype=dtype)
 
-        g, logvar = self.causal_net(eta, h_expanded)  # (BS, d, T)
-        z, mus, logvar = arflow_cumsum(
-            g, eta, logvar, self.clamp_logvar_min, self.clamp_logvar_max
-        )
+        mu, logvar = self.causal_net(eta, h_expanded)  # μ_t, logσ²_t  (⟂ η_{≥t})
+        logvar = logvar.clamp(self.clamp_logvar_min, self.clamp_logvar_max)
+        # IAF reparam with the SAME (unshifted) noise: z = F(η; x), diagonal ∂z_t/∂η_t = σ_t.
+        z = mu + (0.5 * logvar).exp() * eta
+        mus = mu
 
         # Per-step log q (sum over d): permute (BS, d, T) → (BS, T, d).
         logq = gaussian_log_prob(
