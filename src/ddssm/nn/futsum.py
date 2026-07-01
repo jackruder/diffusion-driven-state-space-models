@@ -12,6 +12,7 @@ inline. The summary is consumed by the encoder to produce q_ϕ(z_t | ·).
 import torch
 import torch.nn as nn
 
+from ddssm.nn.net_utils import TransformerEncoder
 from ddssm.nn.diffnets import (  # , MambaTimeLayer
     TimeLayer,
     ConvTimeLayer,
@@ -152,8 +153,11 @@ class GRUFutureSummary(FutureSummary):
 class TransformerFutureSummary(FutureSummary):
     """Future-summary with a causal Transformer-encoder time-mixing backbone.
 
-    The causal mask is applied in reversed-time order, so each step attends
-    only to its own future in the original sequence.
+    Causality is applied in reversed-time order (each step attends only to its
+    own future in the original sequence). Uses the project's RMSNorm + SwiGLU
+    + SDPA TransformerEncoder for bf16-autocast stability — the stock
+    nn.TransformerEncoder's MHA softmax-backward path produces NaNs in bf16
+    when attention scores get peaky (see test_bf16_attention).
     """
 
     def __init__(
@@ -187,16 +191,15 @@ class TransformerFutureSummary(FutureSummary):
             )
 
         ff_dim = max(d_model, ff_mult * d_model)
-        layer = nn.TransformerEncoderLayer(
+        self.encoder = TransformerEncoder(
             d_model=d_model,
-            nhead=nheads,
+            nheads=nheads,
+            num_layers=transformer_layers,
             dim_feedforward=ff_dim,
             dropout=dropout,
-            batch_first=True,
-            norm_first=True,
-            activation="gelu",
+            causal=True,
+            rope=True,
         )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=transformer_layers)
 
     def _forward_mixer(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, T, H) in reversed time (backward b_t) or original time (forward

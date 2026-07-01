@@ -65,7 +65,17 @@ def build_gluonts_model(
     # explode when such a level is (rarely) sampled. Raise to ~1e-3 to bound the
     # weight (still unbiased — sampling & reweighting share the floored p_k).
     pk_floor: float = 1e-12,
+    # Stage-2 transition type: "diffusion" (default, our CSDI-style denoiser),
+    # "gaussian" (BaselineGaussianTransition — unimodal per-step prior; a JSD/CRPS
+    # calibration baseline for the diffusion transition's expressive value), or
+    # "csdi" (the *literal* vendored ermongroup CSDI dropped into the transition
+    # slot — DDPM ε-MSE + ancestral sampler + masked conditioning; pairs with
+    # encoder_type="identity" + j==HIST to reproduce the 58% standalone baseline
+    # inside the DDSSM pipeline → a clean indictment/exoneration of our own code).
     transition_type: str = "diffusion",
+    # "csdi"-transition capacity knobs (default = the 58% standalone nlblmv config:
+    # 64ch / 4 layers / 8 heads / 50 ancestral steps). Independent of the model's
+    # `channels`/`diffusion_layers`/`nheads`, which size the "diffusion" branch.
     csdi_channels: int = 64,
     csdi_layers: int = 4,
     csdi_nheads: int = 8,
@@ -159,27 +169,27 @@ def build_gluonts_model(
         baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
     )
 
-    unet = partial(
-        CSDIUnet,
-        channels=channels,
-        n_layers=diffusion_layers,
-        embedding_dim=embedding_dim,
-        residual_block=DiffResidualBlockConfig(
-            # dropout=0.0: the score-net is gradient-checkpointed (deterministic
-            # recompute) and a denoiser shouldn't add noise to its ESM target.
-            time=TimeMixerConfig(
-                type=time_mixer, nheads=nheads, n_layers=1, dropout=0.0
-            ),
-            feature=FeatureMixerConfig(
-                type="transformer", nheads=nheads, n_layers=1, dropout=0.0
-            ),
-        ),
-    )
-    schedule = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=num_steps, k_sampling_mode=k_sampling_mode,
-        time_chunk_size=time_chunk, pk_floor=pk_floor,
-    )
     if transition_type == "diffusion":
+        unet = partial(
+            CSDIUnet,
+            channels=channels,
+            n_layers=diffusion_layers,
+            embedding_dim=embedding_dim,
+            residual_block=DiffResidualBlockConfig(
+                # dropout=0.0: the score-net is gradient-checkpointed (deterministic
+                # recompute) and a denoiser shouldn't add noise to its ESM target.
+                time=TimeMixerConfig(
+                    type=time_mixer, nheads=nheads, n_layers=1, dropout=0.0
+                ),
+                feature=FeatureMixerConfig(
+                    type="transformer", nheads=nheads, n_layers=1, dropout=0.0
+                ),
+            ),
+        )
+        schedule = DiffusionScheduleConfig(
+            S_k=1, k_chunk=1, num_steps=num_steps, k_sampling_mode=k_sampling_mode,
+            time_chunk_size=time_chunk, pk_floor=pk_floor,
+        )
         stage2_transition = DiffusionTransition(
             baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
             T_max=T_max, unet=unet, schedule=schedule, grad_checkpoint=grad_checkpoint,
@@ -187,10 +197,14 @@ def build_gluonts_model(
             edm_s_churn=edm_s_churn, edm_s_noise=edm_s_noise, edm_rho=edm_rho,
         )
     elif transition_type == "gaussian":
+        # JSD/CRPS calibration baseline: unimodal Gaussian transition prior.
         stage2_transition = BaselineGaussianTransition(
             baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
         )
     elif transition_type == "csdi":
+        # Literal ermongroup CSDI in the transition slot (its own capacity, its own
+        # quad β-schedule + ancestral sampler). Ignores the persistence baseline /
+        # σ_data buffer — it is a self-contained conditional diffusion model.
         stage2_transition = CSDITransition(
             latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim, T_max=T_max,
             channels=csdi_channels, layers=csdi_layers, nheads=csdi_nheads,
