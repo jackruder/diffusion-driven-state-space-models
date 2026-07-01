@@ -1,23 +1,22 @@
 """GluonTS-based data loading utilities: sliding-window loaders, batch parsing, and z-score scaling."""
 
 from dataclasses import dataclass
-from typing import List
 
 import numpy as np
-import pandas as pd
 import torch
+import pandas as pd
+from torch.utils.data import Dataset, DataLoader
 from pandas.tseries.frequencies import to_offset
-from torch.utils.data import DataLoader, Dataset
 
 _GLUONTS_IMPORT_ERROR: Exception | None = None
 try:
+    from gluonts.transform import InstanceSplitter, AddObservedValuesIndicator
     from gluonts.dataset.common import ListDataset
-    from gluonts.dataset.field_names import FieldName
     from gluonts.dataset.loader import TrainDataLoader, as_stacked_batches
-    from gluonts.dataset.multivariate_grouper import MultivariateGrouper
     from gluonts.torch.batchify import batchify
-    from gluonts.transform import AddObservedValuesIndicator, InstanceSplitter
-    from gluonts.transform.sampler import ExpectedNumInstanceSampler, InstanceSampler
+    from gluonts.transform.sampler import InstanceSampler, ExpectedNumInstanceSampler
+    from gluonts.dataset.field_names import FieldName
+    from gluonts.dataset.multivariate_grouper import MultivariateGrouper
 except (ImportError, ModuleNotFoundError) as err:  # pragma: no cover - GluonTS optional
     _GLUONTS_IMPORT_ERROR = err
     ListDataset = None
@@ -217,7 +216,7 @@ def _collate_model_ready(batch: list[dict]):
 
 
 def build_loaders_for_expt(
-    series_list: List[pd.Series],
+    series_list: list[pd.Series],
     L1: int,
     L2: int,
     test_windows: int,
@@ -227,7 +226,7 @@ def build_loaders_for_expt(
     num_train_batches_per_epoch: int | None = None,
     train_instances_per_series: float = 64.0,
     device: torch.device | None = None,
-    covariates_list: List[np.ndarray] | None = None,
+    covariates_list: list[np.ndarray] | None = None,
     static_covariates: np.ndarray | None = None,
     eval_step_size: int | None = None,
     backend: str = "torch",
@@ -529,12 +528,12 @@ def parse_batch(batch: dict, device: torch.device):
             ),
             "covariates": None,
         }
-        if batch.get("covariates", None) is not None:
+        if batch.get("covariates") is not None:
             out["covariates"] = torch.as_tensor(
                 batch["covariates"], device=device, dtype=torch.float32
             )
 
-        if batch.get("static_covariates", None) is not None:
+        if batch.get("static_covariates") is not None:
             out["static_covariates"] = torch.as_tensor(
                 batch["static_covariates"], device=device, dtype=torch.long
             )
@@ -542,7 +541,7 @@ def parse_batch(batch: dict, device: torch.device):
         # Optional ground-truth latents (synthetic data with
         # ``expose_gt_latents=True``; used by the model-v2 evaluation
         # metrics ``gt_latent_jsd`` and ``crps_sum_latent``).
-        if batch.get("gt_latent", None) is not None:
+        if batch.get("gt_latent") is not None:
             out["gt_latent"] = torch.as_tensor(
                 batch["gt_latent"], device=device, dtype=torch.float32
             )
@@ -577,8 +576,8 @@ def parse_batch(batch: dict, device: torch.device):
     timepoints = torch.cat([past_ticks, future_ticks], dim=1)
     timepoints = timepoints - timepoints[:, :1]
 
-    past_cov = batch.get(f"past_{FieldName.FEAT_DYNAMIC_REAL}", None)
-    future_cov = batch.get(f"future_{FieldName.FEAT_DYNAMIC_REAL}", None)
+    past_cov = batch.get(f"past_{FieldName.FEAT_DYNAMIC_REAL}")
+    future_cov = batch.get(f"future_{FieldName.FEAT_DYNAMIC_REAL}")
     covariates = None
     if past_cov is not None and future_cov is not None:
         past_cov = torch.as_tensor(past_cov, device=device, dtype=torch.float32)

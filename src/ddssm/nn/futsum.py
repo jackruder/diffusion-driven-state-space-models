@@ -12,12 +12,6 @@ inline. The summary is consumed by the encoder to produce q_ϕ(z_t | ·).
 import torch
 import torch.nn as nn
 
-from ddssm.nn.diffnets import (  # , MambaTimeLayer
-    TimeLayer,
-    ConvTimeLayer,
-    IdentityLayer,
-)
-
 
 class FutureSummary(nn.Module):
     """Base class for F_ϕ: future-summary.
@@ -219,5 +213,3 @@ class IdentityFutureSummary(FutureSummary):
 
     def _forward_mixer(self, x: torch.Tensor) -> torch.Tensor:
         return x
-
-

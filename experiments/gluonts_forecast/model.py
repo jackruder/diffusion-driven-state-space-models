@@ -23,6 +23,7 @@ from functools import partial
 
 from hydra_zen import builds
 
+from ddssm.nn.futsum import IdentityFutureSummary, TransformerFutureSummary
 from ddssm.model.dssd import DDSSM_base
 from ddssm.nn.diffnets import (
     CSDIUnet,
@@ -32,19 +33,18 @@ from ddssm.nn.diffnets import (
     ResidualBlockConfig,
     DiffResidualBlockConfig,
 )
-from ddssm.nn.futsum import TransformerFutureSummary, IdentityFutureSummary
 from ddssm.model.decoder import GaussianDecoder, IdentityDecoder
-from ddssm.model.encoder import GaussianEncoder, ARFlowEncoder, IdentityEncoder
+from ddssm.model.encoder import ARFlowEncoder, GaussianEncoder, IdentityEncoder
 from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.experiment.stores import model_store
-from ddssm.model.centering.baselines import PersistenceBaseline, ZeroBaseline
+from ddssm.model.centering.baselines import ZeroBaseline, PersistenceBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
     DiffusionScheduleConfig,
 )
-from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 from ddssm.model.transitions.csdi_transition import CSDITransition
+from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 
 def build_gluonts_model(
@@ -137,26 +137,40 @@ def build_gluonts_model(
     # threads stage-1 → stage-2 so the handoff snapshot is consistent.
     if baseline_type == "persistence":
         baseline = PersistenceBaseline(
-            latent_dim=latent_dim, j=j, hidden_dim=width, n_layers=2,
+            latent_dim=latent_dim,
+            j=j,
+            hidden_dim=width,
+            n_layers=2,
         )
     elif baseline_type == "zero":
         baseline = ZeroBaseline(
-            latent_dim=latent_dim, j=j, hidden_dim=width, n_layers=2,
+            latent_dim=latent_dim,
+            j=j,
+            hidden_dim=width,
+            n_layers=2,
         )
     else:
         raise ValueError(
             f"baseline_type must be 'persistence' or 'zero'; got {baseline_type!r}"
         )
     aux_posterior = AuxPosterior(
-        latent_dim=latent_dim, j=j, hidden_dim=width, n_layers=2,
+        latent_dim=latent_dim,
+        j=j,
+        hidden_dim=width,
+        n_layers=2,
     )
     sigma_data = SigmaDataBuffer(
-        T_max=T_max, tracking_mode=tracking_mode, init_value=1.0,
+        T_max=T_max,
+        tracking_mode=tracking_mode,
+        init_value=1.0,
         ema_decay=sigma_data_ema_decay,
     )
 
     stage1_transition = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
+        baseline=baseline,
+        latent_dim=latent_dim,
+        j=j,
+        emb_time_dim=emb_time_dim,
     )
 
     unet = partial(
@@ -176,25 +190,47 @@ def build_gluonts_model(
         ),
     )
     schedule = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=num_steps, k_sampling_mode=k_sampling_mode,
-        time_chunk_size=time_chunk, pk_floor=pk_floor,
+        S_k=1,
+        k_chunk=1,
+        num_steps=num_steps,
+        k_sampling_mode=k_sampling_mode,
+        time_chunk_size=time_chunk,
+        pk_floor=pk_floor,
     )
     if transition_type == "diffusion":
         stage2_transition = DiffusionTransition(
-            baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
-            T_max=T_max, unet=unet, schedule=schedule, grad_checkpoint=grad_checkpoint,
-            emb_feature_dim=emb_feature_dim, sampler=diffusion_sampler,
-            edm_s_churn=edm_s_churn, edm_s_noise=edm_s_noise, edm_rho=edm_rho,
+            baseline=baseline,
+            latent_dim=latent_dim,
+            j=j,
+            emb_time_dim=emb_time_dim,
+            T_max=T_max,
+            unet=unet,
+            schedule=schedule,
+            grad_checkpoint=grad_checkpoint,
+            emb_feature_dim=emb_feature_dim,
+            sampler=diffusion_sampler,
+            edm_s_churn=edm_s_churn,
+            edm_s_noise=edm_s_noise,
+            edm_rho=edm_rho,
         )
     elif transition_type == "gaussian":
         stage2_transition = BaselineGaussianTransition(
-            baseline=baseline, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
+            baseline=baseline,
+            latent_dim=latent_dim,
+            j=j,
+            emb_time_dim=emb_time_dim,
         )
     elif transition_type == "csdi":
         stage2_transition = CSDITransition(
-            latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim, T_max=T_max,
-            channels=csdi_channels, layers=csdi_layers, nheads=csdi_nheads,
-            num_steps=csdi_num_steps, timeemb=csdi_timeemb,
+            latent_dim=latent_dim,
+            j=j,
+            emb_time_dim=emb_time_dim,
+            T_max=T_max,
+            channels=csdi_channels,
+            layers=csdi_layers,
+            nheads=csdi_nheads,
+            num_steps=csdi_num_steps,
+            timeemb=csdi_timeemb,
         )
     else:
         raise ValueError(
@@ -203,22 +239,32 @@ def build_gluonts_model(
         )
 
     fut_summary = partial(
-        TransformerFutureSummary, summary_dim=width, nheads=nheads,
+        TransformerFutureSummary,
+        summary_dim=width,
+        nheads=nheads,
         transformer_layers=summary_layers,
     )
     # Forward-causal twin of the future summary (no time-flip) → the f_t message
     # for ARFlow's "fwd_data" context. Same width/heads/depth as the backward b_t.
     fut_summary_fwd = partial(
-        TransformerFutureSummary, summary_dim=width, nheads=nheads,
-        transformer_layers=summary_layers, reverse_time=False,
+        TransformerFutureSummary,
+        summary_dim=width,
+        nheads=nheads,
+        transformer_layers=summary_layers,
+        reverse_time=False,
     )
     # Local twin of the future summary: h_t = Linear(x_t), no time mixing. Drives the
     # filtering "gaussian_local" encoder (matched inverse for the per-timestep lift).
     fut_summary_local = partial(IdentityFutureSummary, summary_dim=width)
     if encoder_type in ("gaussian", "gaussian_local"):
         encoder = GaussianEncoder(
-            data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
-            use_mask=False, hidden_dim=width, mu_mode="additive",
+            data_dim=data_dim,
+            latent_dim=latent_dim,
+            j=j,
+            emb_time_dim=emb_time_dim,
+            use_mask=False,
+            hidden_dim=width,
+            mu_mode="additive",
             fut_summary=(
                 fut_summary_local if encoder_type == "gaussian_local" else fut_summary
             ),
@@ -228,15 +274,24 @@ def build_gluonts_model(
         # Head logvar clamp pinned to the DDSSM_base default [-7, 7] (dssd.py:130-131)
         # so the in-encoder logq matches the KL's re-clamped logvars (dssd.py:697).
         encoder = ARFlowEncoder(
-            data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
-            use_mask=False, hidden_dim=width, fut_summary=fut_summary,
+            data_dim=data_dim,
+            latent_dim=latent_dim,
+            j=j,
+            emb_time_dim=emb_time_dim,
+            use_mask=False,
+            hidden_dim=width,
+            fut_summary=fut_summary,
             channels=arflow_channels if arflow_channels is not None else channels,
-            causal_layers=arflow_causal_layers, nheads=nheads, backbone="transformer",
-            clamp_logvar_min=-7.0, clamp_logvar_max=7.0,
+            causal_layers=arflow_causal_layers,
+            nheads=nheads,
+            backbone="transformer",
+            clamp_logvar_min=-7.0,
+            clamp_logvar_max=7.0,
             init_logvar_bias=arflow_init_logvar_bias,
             stochastic_state=arflow_stochastic_state,
             forward_message=arflow_forward_message,
-            fwd_summary=fut_summary_fwd, fwd_layers=summary_layers,
+            fwd_summary=fut_summary_fwd,
+            fwd_layers=summary_layers,
             grad_checkpoint=grad_checkpoint,
         )
     elif encoder_type == "identity":
@@ -245,7 +300,10 @@ def build_gluonts_model(
         # — a CSDI-style obs-space model inside the DDSSM pipeline. Isolates whether
         # the latent pipeline (not the transition) is the bottleneck vs obs-space CSDI.
         encoder = IdentityEncoder(
-            data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
+            data_dim=data_dim,
+            latent_dim=latent_dim,
+            j=j,
+            emb_time_dim=emb_time_dim,
         )
     else:
         raise ValueError(
@@ -256,11 +314,17 @@ def build_gluonts_model(
         # Matched identity emission x_t = z_t (fixed σ_x); predictive spread comes
         # from the transition, not a learnable decoder.
         decoder = IdentityDecoder(
-            latent_dim=latent_dim, data_dim=data_dim, j=j, emb_time_dim=emb_time_dim,
+            latent_dim=latent_dim,
+            data_dim=data_dim,
+            j=j,
+            emb_time_dim=emb_time_dim,
         )
     else:
         decoder = GaussianDecoder(
-            data_dim=data_dim, latent_dim=latent_dim, j=j, emb_time_dim=emb_time_dim,
+            data_dim=data_dim,
+            latent_dim=latent_dim,
+            j=j,
+            emb_time_dim=emb_time_dim,
             hidden_dim=width,
             # Deterministic decoder (dropout=0): required so the time-chunked recon is
             # batch-invariant and its checkpoint (preserve_rng_state=False) is exact —

@@ -6,22 +6,58 @@ factories live in the experiment families (e.g.
 import a model factory + a dataset and call :func:`experiment` (it ties
 them together and curries ``hparams`` onto the trainer)::
 
-    from ddssm.experiment.builders import Eval, Hparams, Training
-    from ddssm.experiment.stores import experiment_store
-    from experiments._make import experiment, run
-    from experiments.init_centering.model import SmokeModel
-    from ddssm.data.presets import NonlinBimodalLift1D
+    from ddssm.experiment.builders import (
+        Eval,
+        Hparams,
+        Training,
+    )
+    from ddssm.experiment.stores import (
+        experiment_store,
+    )
+    from experiments._make import (
+        experiment,
+        run,
+    )
+    from experiments.init_centering.model import (
+        SmokeModel,
+    )
+    from ddssm.data.presets import (
+        NonlinBimodalLift1D,
+    )
 
     exp = experiment(
         data=NonlinBimodalLift1D,
-        model=SmokeModel(baseline_form="zero", latent_dim=1, data_dim=1),
-        hparams=Hparams(S=1, batch_size=16,
-                        enc_lr=5e-4, dec_lr=5e-4, trans_lr=5e-4),
-        training=Training(steps=800, log_every=25, checkpoint_every=200),
-        eval=Eval(metrics=["stage2_elbo_surrogate"], split="val"),
+        model=SmokeModel(
+            baseline_form="zero",
+            latent_dim=1,
+            data_dim=1,
+        ),
+        hparams=Hparams(
+            S=1,
+            batch_size=16,
+            enc_lr=5e-4,
+            dec_lr=5e-4,
+            trans_lr=5e-4,
+        ),
+        training=Training(
+            steps=800,
+            log_every=25,
+            checkpoint_every=200,
+        ),
+        eval=Eval(
+            metrics=[
+                "stage2_elbo_surrogate"
+            ],
+            split="val",
+        ),
     )
-    experiment_store(exp, name="my_cell")
-    run(exp, run_dir="runs/my_cell")
+    experiment_store(
+        exp, name="my_cell"
+    )
+    run(
+        exp,
+        run_dir="runs/my_cell",
+    )
 
 For ad-hoc variants in a notebook / sweep, derive from a registered
 experiment with :func:`override` (Hydra-CLI-style strings or dicts).
@@ -111,19 +147,38 @@ def override(obj: Any, *overrides: Any) -> Any:
       is a Python object (a builder instance, a callable, etc.) that
       cannot live in a string — e.g.::
 
-          override(exp, {"model.transition.unet": MLPUnet(channels=64)})
+          override(
+              exp,
+              {
+                  "model.transition.unet": MLPUnet(
+                      channels=64
+                  )
+              },
+          )
 
     Multiple overrides compose left-to-right. The original ``obj`` is
     never mutated; ``override`` returns a fresh dataclass.
 
     Examples::
 
-        B = override(A, "training.steps=200",
-                        "model.transition.schedule.sigma_min=0.001")
+        B = override(
+            A,
+            "training.steps=200",
+            "model.transition.schedule.sigma_min=0.001",
+        )
 
-        for mode in ["harmonic", "bimodal", "robot-basis-pursuit"]:
-            exp = override(A, f"data.mode={mode}")
-            run(exp, run_dir=f"runs/{mode}")
+        for mode in [
+            "harmonic",
+            "bimodal",
+            "robot-basis-pursuit",
+        ]:
+            exp = override(
+                A, f"data.mode={mode}"
+            )
+            run(
+                exp,
+                run_dir=f"runs/{mode}",
+            )
     """
     import yaml
 
@@ -132,8 +187,7 @@ def override(obj: Any, *overrides: Any) -> Any:
         if isinstance(item, str):
             if "=" not in item:
                 raise ValueError(
-                    f"CLI override missing '=': {item!r}. "
-                    f"Use 'path.to.field=value'."
+                    f"CLI override missing '=': {item!r}. Use 'path.to.field=value'."
                 )
             key, _, val = item.partition("=")
             flat[key.strip()] = yaml.safe_load(val)
@@ -208,5 +262,10 @@ def run(
 
 
 __all__ = [
-    "experiment", "run", "to_yaml", "save_yaml", "from_yaml", "override",
+    "experiment",
+    "from_yaml",
+    "override",
+    "run",
+    "save_yaml",
+    "to_yaml",
 ]

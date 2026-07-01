@@ -1,7 +1,7 @@
-import optuna
-import json
 import os
-import argparse
+import json
+
+import optuna
 
 
 def migrate(old_name, new_name):
@@ -31,7 +31,7 @@ def migrate(old_name, new_name):
             continue
 
         try:
-            with open(metrics_path, "r") as f:
+            with open(metrics_path) as f:
                 m = json.load(f)
 
             # EXTRACT THE STEP-1 CRPS

@@ -122,8 +122,8 @@ def test_control_cells_no_longer_registered() -> None:
 
 
 _REPRESENTATIVE_CELLS = [
-    ("zero", "pinned", "fixed"),       # simplest; reduces to V2 (see other test)
-    ("mlp", "pinned", "per_t"),        # canonical cell (== Phase-C pilot)
+    ("zero", "pinned", "fixed"),  # simplest; reduces to V2 (see other test)
+    ("mlp", "pinned", "per_t"),  # canonical cell (== Phase-C pilot)
     ("linear", "learnable", "per_t"),  # all-three-axes-distinct exemplar
 ]
 
@@ -148,7 +148,9 @@ def test_cell_axes_propagate_through_hydra(form, mode, tracking) -> None:
         ("mlp", MLPBaseline),
     ],
 )
-def test_cell_instantiates_with_correct_baseline_class(form, expected_baseline_cls) -> None:
+def test_cell_instantiates_with_correct_baseline_class(
+    form, expected_baseline_cls
+) -> None:
     """Instantiating a cell preset materialises the right baseline class."""
     # Use the (form, pinned, fixed) cell on the 1d dataset for each form
     # (always valid post-clamp).

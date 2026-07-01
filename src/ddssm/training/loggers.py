@@ -7,10 +7,11 @@ from abc import ABC, abstractmethod
 import csv
 import math
 import time
-from typing import Any, Dict, Callable, Optional
+from typing import Any
 import fnmatch
 import logging
 from dataclasses import dataclass
+from collections.abc import Callable
 
 import torch
 
@@ -96,7 +97,7 @@ class EMAMeter(Meter):
         self.m = 0.0
 
 
-METER_FACTORY: Dict[str, Callable[[], Meter]] = {
+METER_FACTORY: dict[str, Callable[[], Meter]] = {
     "mean": MeanMeter,
     "sum": SumMeter,
     "last": LastMeter,
@@ -107,14 +108,14 @@ METER_FACTORY: Dict[str, Callable[[], Meter]] = {
 # ---------- loggers ----------
 class Logger(ABC):
     @abstractmethod
-    def on_step(self, split: str, step: int, row: Dict[str, float]): ...
+    def on_step(self, split: str, step: int, row: dict[str, float]): ...
 
     @abstractmethod
-    def on_epoch(self, split: str, epoch: int, row: Dict[str, float]): ...
+    def on_epoch(self, split: str, epoch: int, row: dict[str, float]): ...
 
 
 class ConsoleLogger(Logger):
-    def __init__(self, every_steps: int = 0, fmt: Optional[str] = None):
+    def __init__(self, every_steps: int = 0, fmt: str | None = None):
         self.every_steps = every_steps
         self.fmt = fmt  # optional custom printf string with {key}
 
@@ -164,7 +165,7 @@ class CSVLogger(Logger):
         # append compatibly on resumed runs.
         if os.path.exists(path) and os.path.getsize(path) > 0:
             try:
-                with open(path, "r", newline="") as f:
+                with open(path, newline="") as f:
                     reader = csv.reader(f)
                     header = next(reader, None)
                 if header and len(header) >= 2:
@@ -186,7 +187,7 @@ class CSVLogger(Logger):
         old_rows: list[list[str]] = []
         old_header: list[str] = []
         if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
-            with open(self.path, "r", newline="") as f:
+            with open(self.path, newline="") as f:
                 reader = csv.reader(f)
                 old_header = next(reader, []) or []
                 old_rows = list(reader)
@@ -203,11 +204,11 @@ class CSVLogger(Logger):
             for row in old_rows:
                 writer.writerow(row + pad)
 
-    def _write(self, split: str, idx_name: str, idx: int, row: Dict[str, float]):
+    def _write(self, split: str, idx_name: str, idx: int, row: dict[str, float]):
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
 
         # Detect new keys (preserve first-seen order from ``row``).
-        new_keys = [k for k in row.keys() if k not in self._known_set]
+        new_keys = [k for k in row if k not in self._known_set]
         if new_keys:
             for k in new_keys:
                 self._known_set.add(k)
@@ -252,7 +253,7 @@ class MetricSpec:
 class SplitStore:
     def __init__(self, spec: list[MetricSpec]):
         self.spec = spec
-        self.meters: Dict[str, Meter] = {}
+        self.meters: dict[str, Meter] = {}
         self.order: list[str] = []  # first-seen order
 
     def _make_meter(self, key: str) -> Meter:
@@ -268,7 +269,7 @@ class SplitStore:
             self.order.append(key)
         self.meters[key].add(val, w)
 
-    def values(self) -> Dict[str, float]:
+    def values(self) -> dict[str, float]:
         return {k: self.meters[k].value() for k in self.order}
 
     def reset(self):
@@ -286,25 +287,48 @@ class MetricStore:
     Usage::
 
         metrics = MetricStore(
-            spec=[MetricSpec("loss/*", "mean"), MetricSpec("time/*", "sum")],
-            loggers=[ConsoleLogger(every_steps=50), CSVLogger("metrics.csv")],
+            spec=[
+                MetricSpec(
+                    "loss/*", "mean"
+                ),
+                MetricSpec(
+                    "time/*", "sum"
+                ),
+            ],
+            loggers=[
+                ConsoleLogger(
+                    every_steps=50
+                ),
+                CSVLogger(
+                    "metrics.csv"
+                ),
+            ],
         )
         # step loop:
         metrics.update(
             "train",
-            {"loss/total": loss, "loss/recon": Lrec},
-            weights={"loss/recon": obs},
+            {
+                "loss/total": loss,
+                "loss/recon": Lrec,
+            },
+            weights={
+                "loss/recon": obs
+            },
         )
-        metrics.step_end("train", global_step)
+        metrics.step_end(
+            "train", global_step
+        )
         # epoch end:
-        metrics.epoch_end("train", epoch)  # -> dict (averaged)
+        metrics.epoch_end(
+            "train", epoch
+        )  # -> dict (averaged)
     """
 
     def __init__(
         self,
-        spec: Optional[list[MetricSpec]] = None,
-        loggers: Optional[list[Logger]] = None,
-        split_spec: Optional[Dict[str, list[MetricSpec]]] = None,
+        spec: list[MetricSpec] | None = None,
+        loggers: list[Logger] | None = None,
+        split_spec: dict[str, list[MetricSpec]] | None = None,
     ):
         self.spec = spec or [MetricSpec("loss/*", "mean")]
         # Per-split spec overrides. Validation, for instance, accumulates
@@ -313,7 +337,7 @@ class MetricStore:
         # step before each flush.
         self.split_spec = split_spec or {}
         self.loggers = loggers or [ConsoleLogger()]
-        self.splits: Dict[str, SplitStore] = {}
+        self.splits: dict[str, SplitStore] = {}
         self._t0 = time.time()
         # Running count of non-finite (NaN/Inf) metric values seen, surfaced as
         # the ``nonfinite/total`` column so a diverged run is visible in the CSV
@@ -340,9 +364,9 @@ class MetricStore:
     def update(
         self,
         split: str,
-        values: Dict[str, Any],
+        values: dict[str, Any],
         weight: float = 1.0,
-        weights: Optional[Dict[str, float]] = None,
+        weights: dict[str, float] | None = None,
     ):
         """values: dict of metric -> scalar (tensor ok).
         weight: default weight (e.g., batch size)
@@ -358,11 +382,14 @@ class MetricStore:
                     self._nonfinite_warned.add(k)
                     log.warning(
                         "Non-finite metric %r=%s in split %r; recorded but "
-                        "surfaced via nonfinite/total.", k, f, split,
+                        "surfaced via nonfinite/total.",
+                        k,
+                        f,
+                        split,
                     )
             ss.add(k, f, float(w))
 
-    def _with_health(self, row: Dict[str, float]) -> Dict[str, float]:
+    def _with_health(self, row: dict[str, float]) -> dict[str, float]:
         """Attach the run-health counter to a flushed row."""
         row = dict(row)
         row["nonfinite/total"] = float(self._nonfinite_total)
@@ -396,7 +423,7 @@ class TensorBoardLogger(Logger):
         self._active = False
         self.writer = None
         try:
-            from torch.utils.tensorboard import SummaryWriter  # noqa: PLC0415
+            from torch.utils.tensorboard import SummaryWriter
         except ImportError:
             print(
                 "[TensorBoardLogger] tensorboard not installed — logging disabled. "
@@ -406,14 +433,14 @@ class TensorBoardLogger(Logger):
         self.writer = SummaryWriter(log_dir=log_dir, flush_secs=flush_secs)
         self._active = True
 
-    def on_step(self, split: str, step: int, row: Dict[str, float]):
+    def on_step(self, split: str, step: int, row: dict[str, float]):
         if not self._active:
             return
         # log each metric as <split>/<name>, e.g. train/loss/total
         for k, v in row.items():
             self.writer.add_scalar(f"{split}/{k}", v, step)
 
-    def on_epoch(self, split: str, epoch: int, row: Dict[str, float]):
+    def on_epoch(self, split: str, epoch: int, row: dict[str, float]):
         if not self._active:
             return
         for k, v in row.items():
@@ -471,14 +498,14 @@ class WandbLogger(Logger):
     def __init__(
         self,
         project: str = "ddssm",
-        entity: Optional[str] = None,
-        name: Optional[str] = None,
-        group: Optional[str] = None,
-        tags: Optional[list[str]] = None,
-        config: Optional[Dict[str, Any]] = None,
-        base_url: Optional[str] = None,
-        run_dir: Optional[str] = None,
-        watch_log: Optional[str] = None,
+        entity: str | None = None,
+        name: str | None = None,
+        group: str | None = None,
+        tags: list[str] | None = None,
+        config: dict[str, Any] | None = None,
+        base_url: str | None = None,
+        run_dir: str | None = None,
+        watch_log: str | None = None,
         watch_log_freq: int = 100,
         enabled: bool = True,
     ):
@@ -490,7 +517,7 @@ class WandbLogger(Logger):
             return
 
         try:
-            import wandb  # noqa: PLC0415
+            import wandb
         except ImportError:
             print(
                 "[WandbLogger] wandb not installed — logging disabled. "
@@ -501,7 +528,7 @@ class WandbLogger(Logger):
         if base_url:
             os.environ["WANDB_BASE_URL"] = base_url
 
-        init_kwargs: Dict[str, Any] = dict(
+        init_kwargs: dict[str, Any] = dict(
             project=project,
             entity=entity,
             name=name,
@@ -555,25 +582,29 @@ class WandbLogger(Logger):
             return
         try:
             self._wandb.watch(
-                model, log=self._watch_log, log_freq=self._watch_log_freq,
+                model,
+                log=self._watch_log,
+                log_freq=self._watch_log_freq,
             )
-        except Exception as e:  # noqa: BLE001 — best-effort; never break training
+        except Exception as e:
             print(f"[WandbLogger] wandb.watch failed: {e}")
 
-    def _log(self, prefix: str, step_key: str, step: int, row: Dict[str, float]) -> None:
+    def _log(
+        self, prefix: str, step_key: str, step: int, row: dict[str, float]
+    ) -> None:
         if not self._active:
             return
-        payload: Dict[str, Any] = {f"{prefix}/{k}": v for k, v in row.items()}
+        payload: dict[str, Any] = {f"{prefix}/{k}": v for k, v in row.items()}
         # Embed the step into the payload; let W&B's per-metric step axis
         # ordering handle monotonicity. Do not pass ``step=`` -- that
         # collides between train/val/epoch namespaces.
         payload[step_key] = int(step)
         self._wandb.log(payload)
 
-    def on_step(self, split: str, step: int, row: Dict[str, float]) -> None:
+    def on_step(self, split: str, step: int, row: dict[str, float]) -> None:
         self._log(split, "train_step", step, row)
 
-    def on_epoch(self, split: str, epoch: int, row: Dict[str, float]) -> None:
+    def on_epoch(self, split: str, epoch: int, row: dict[str, float]) -> None:
         self._log(f"epoch/{split}", "epoch", epoch, row)
 
     def _upload_artifacts(self) -> None:
@@ -587,10 +618,12 @@ class WandbLogger(Logger):
         if not self._active or not self._run_dir:
             return
         artifact_targets = [
-            ("model", "pth",
-             os.path.join(self._run_dir, "checkpoints", "ckpt_latest.pth")),
-            ("config", "yaml",
-             os.path.join(self._run_dir, "resolved_config.yaml")),
+            (
+                "model",
+                "pth",
+                os.path.join(self._run_dir, "checkpoints", "ckpt_latest.pth"),
+            ),
+            ("config", "yaml", os.path.join(self._run_dir, "resolved_config.yaml")),
         ]
         run = getattr(self._wandb, "run", None)
         run_id = getattr(run, "id", "") if run is not None else ""
@@ -602,15 +635,13 @@ class WandbLogger(Logger):
                 # under one canonical name (W&B versions them anyway, but
                 # the human-readable identity stays unique per run).
                 artifact = self._wandb.Artifact(
-                    name=f"{kind}-{run_id or 'run'}", type=kind,
+                    name=f"{kind}-{run_id or 'run'}",
+                    type=kind,
                 )
                 artifact.add_file(path)
                 self._wandb.log_artifact(artifact)
-            except Exception as e:  # noqa: BLE001 — best-effort
-                print(
-                    f"[WandbLogger] Failed to upload {kind} artifact "
-                    f"({path}): {e}"
-                )
+            except Exception as e:
+                print(f"[WandbLogger] Failed to upload {kind} artifact ({path}): {e}")
 
     def close(self) -> None:
         if self._active:
@@ -620,7 +651,8 @@ class WandbLogger(Logger):
 
 
 def resume_run_from_dir(
-    run_dir: str, wandb_config: Optional[Dict[str, Any]],
+    run_dir: str,
+    wandb_config: dict[str, Any] | None,
 ) -> Any:
     """Re-open the train run's W&B session from ``<run_dir>/.wandb_run_id``.
 
@@ -643,7 +675,7 @@ def resume_run_from_dir(
     if not run_id:
         return None
     try:
-        import wandb  # noqa: PLC0415
+        import wandb
     except ImportError:
         return None
     base_url = wandb_config.get("base_url")
@@ -657,7 +689,7 @@ def resume_run_from_dir(
             resume="allow",
             dir=run_dir,
         )
-    except Exception as e:  # noqa: BLE001 — best-effort
+    except Exception as e:
         print(f"[WandbLogger] resume failed: {e}")
         return None
     return wandb

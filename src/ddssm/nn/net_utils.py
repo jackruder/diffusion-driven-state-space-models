@@ -139,8 +139,7 @@ def _precompute_rope_freqs(
 ) -> torch.Tensor:
     """Precompute RoPE complex exponentials for up to ``max_len`` positions."""
     freqs = 1.0 / (
-        theta
-        ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim)
+        theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim)
     )
     t = torch.arange(max_len, dtype=torch.float32)
     angles = torch.outer(t, freqs)
@@ -211,9 +210,7 @@ class TransformerBlock(nn.Module):
         y = y.transpose(1, 2).reshape(B, T, C)
         x = x + self.out_proj(y)
         h2 = self.norm2(x)
-        x = x + self._ff_drop(
-            self.w_down(F.silu(self.w_gate(h2)) * self.w_up(h2))
-        )
+        x = x + self._ff_drop(self.w_down(F.silu(self.w_gate(h2)) * self.w_up(h2)))
         return x
 
 

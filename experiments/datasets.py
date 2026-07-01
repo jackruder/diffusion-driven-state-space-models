@@ -16,15 +16,15 @@ experiment families.
 from __future__ import annotations
 
 from ddssm.data.presets import (
+    LGSSM,
     Taxi,
     Wiki,
-    LGSSM,
     Solar,
     Bimodal,
-    Robot2D,
-    Harmonic,
-    Traffic,
     KDDFull,
+    Robot2D,
+    Traffic,
+    Harmonic,
     KDDBeijing,
     KDDStation,
     Electricity,

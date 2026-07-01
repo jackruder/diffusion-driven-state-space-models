@@ -77,7 +77,9 @@ def _make_encoder() -> GaussianEncoder:
         use_mask=True,
         hidden_dim=CHANNELS,
         combiner=partial(
-            CompoundCombiner, aggregator=_AGG, fusion=partial(ConcatLinearFusion),
+            CompoundCombiner,
+            aggregator=_AGG,
+            fusion=partial(ConcatLinearFusion),
         ),
         dist_head=partial(GaussianDistHead),
         fut_summary=partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1),
@@ -137,7 +139,10 @@ def test_constructor_requires_aux_posterior() -> None:
     dec = _make_decoder()
     baseline = _make_gaussian_baseline()
     trans = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        baseline=baseline,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
     )
     with pytest.raises(ValueError, match="aux_posterior is required"):
         DDSSM_base(
@@ -164,7 +169,10 @@ def _make_vhp_model(lambda_sigma_p: float = 0.0) -> DDSSM_base:
     aux = AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
     sigma_data = SigmaDataBuffer(T_max=10, tracking_mode="fixed")
     trans = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        baseline=baseline,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
     )
     model = DDSSM_base(
         encoder=enc,

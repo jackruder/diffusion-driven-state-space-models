@@ -103,7 +103,9 @@ class SyntheticDataset(Dataset):
         elif split == "test":
             self.data = all_data[2 * N_per_split : 3 * N_per_split]
             if self._all_gt_latents is not None:
-                self.gt_latents = self._all_gt_latents[2 * N_per_split : 3 * N_per_split]
+                self.gt_latents = self._all_gt_latents[
+                    2 * N_per_split : 3 * N_per_split
+                ]
         else:
             raise ValueError(f"Unknown split: {split}")
 
@@ -464,7 +466,12 @@ class SyntheticDataset(Dataset):
             z[:, 0, 0], z[:, 1, 0] = x, y
             for t in range(1, self.T):
                 xp, yp = z[:, 0, t - 1], z[:, 1, t - 1]
-                xn = 1.0 - HENON_A * xp * xp + yp + HENON_SIGMA_Z * torch.randn(self.N_total)
+                xn = (
+                    1.0
+                    - HENON_A * xp * xp
+                    + yp
+                    + HENON_SIGMA_Z * torch.randn(self.N_total)
+                )
                 yn = HENON_B * xp + HENON_SIGMA_Z * torch.randn(self.N_total)
                 z[:, 0, t] = xn.clamp(-2.0, 2.0)
                 z[:, 1, t] = yn.clamp(-1.0, 1.0)

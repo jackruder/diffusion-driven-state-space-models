@@ -28,13 +28,11 @@ when one is supplied — passive accumulation per ``model-v2.org``
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Tuple, Optional
+from typing import Any
 
 import torch
-import torch.nn as nn
 
 from ddssm.nn.gaussians import GaussianStats, gaussian_kl_divergence
-from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.model.centering.baselines import BaseBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.transitions import BaseTransition
@@ -85,8 +83,8 @@ class BaselineGaussianTransition(BaseTransition):
     def prior_params(
         self,
         z_hist: torch.Tensor,
-        ctx: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        ctx: dict[str, Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """``(μ_p, log σ_p²)`` from :meth:`BaseBaseline.mean_and_logvar`.
 
         ``ctx`` is accepted for API compatibility but ignored — μ_p / σ_p
@@ -100,7 +98,7 @@ class BaselineGaussianTransition(BaseTransition):
         self,
         z_hist: torch.Tensor,
         S: int = 1,
-        ctx: Optional[Dict[str, Any]] = None,
+        ctx: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Draw ``z_t = μ_p + σ_p · ε``, ``ε ∼ N(0, I)``.
 
@@ -117,8 +115,8 @@ class BaselineGaussianTransition(BaseTransition):
         self,
         z: torch.Tensor,
         z_hist: torch.Tensor,
-        ctx: Optional[Dict[str, Any]] = None,
-        mc_override: Optional[Dict[str, Any]] = None,
+        ctx: dict[str, Any] | None = None,
+        mc_override: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Closed-form Gaussian log-density of ``z`` under the baseline prior.
 
@@ -140,9 +138,9 @@ class BaselineGaussianTransition(BaseTransition):
         zs: torch.Tensor,  # (B, S, d, T)
         logq_paths: torch.Tensor,  # (B, S, T)  unused on the closed-form path
         time_embed: torch.Tensor,  # (B, T, E_t)
-        sigma_data: Optional[SigmaDataBuffer] = None,
-        covariates: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+        sigma_data: SigmaDataBuffer | None = None,
+        covariates: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         """Closed-form Gaussian KL plus passive σ_data update.
 
         For every chunked target ``t = j+1 … T`` (1-based; ``t_start =
@@ -196,21 +194,17 @@ class BaselineGaussianTransition(BaseTransition):
                 z_hist_flat,
                 _ctx,
             ) in self._iter_window_chunks(
-                zs, time_embed, covariates=covariates,
+                zs,
+                time_embed,
+                covariates=covariates,
             ):
                 # Shape: (N, d) where N = B*S*chunk_len
                 p_mu, p_logvar = self.baseline.mean_and_logvar(z_hist_flat)
 
                 # Slice encoder stats for the chunk's targets.
-                q_mu = (
-                    mus[..., t_start:t_end]
-                    .permute(0, 1, 3, 2)
-                    .reshape(-1, d)
-                )
+                q_mu = mus[..., t_start:t_end].permute(0, 1, 3, 2).reshape(-1, d)
                 q_logvar = (
-                    logvars[..., t_start:t_end]
-                    .permute(0, 1, 3, 2)
-                    .reshape(-1, d)
+                    logvars[..., t_start:t_end].permute(0, 1, 3, 2).reshape(-1, d)
                 )
 
                 kl_flat = gaussian_kl_divergence(q_mu, q_logvar, p_mu, p_logvar)
@@ -228,7 +222,10 @@ class BaselineGaussianTransition(BaseTransition):
                         q_mu=q_mu,
                         q_logvar=q_logvar,
                         p_mu=p_mu,
-                        B=B_, S=S_, chunk_len=chunk_len, d=d,
+                        B=B_,
+                        S=S_,
+                        chunk_len=chunk_len,
+                        d=d,
                         t_start_external=t_start + 1,  # 1-based per the doc
                     )
 
@@ -248,11 +245,11 @@ class BaselineGaussianTransition(BaseTransition):
         self,
         *,
         step: int,
-        z_t: torch.Tensor,            # (BS, d)
-        z_hist: torch.Tensor,         # (BS, d, j)
+        z_t: torch.Tensor,  # (BS, d)
+        z_hist: torch.Tensor,  # (BS, d, j)
         enc_stats: GaussianStats,
-        time_embed: torch.Tensor,     # unused — baseline doesn't condition on time
-        sigma_data: Optional[SigmaDataBuffer],
+        time_embed: torch.Tensor,  # unused — baseline doesn't condition on time
+        sigma_data: SigmaDataBuffer | None,
         B: int,
         S: int,
         T: int,
@@ -290,9 +287,9 @@ class BaselineGaussianTransition(BaseTransition):
 
 
 def _gaussian_log_prob_flat(
-    z: torch.Tensor,         # (N, d)
-    mu: torch.Tensor,        # (N, d)
-    logvar: torch.Tensor,    # (N, d)
+    z: torch.Tensor,  # (N, d)
+    mu: torch.Tensor,  # (N, d)
+    logvar: torch.Tensor,  # (N, d)
 ) -> torch.Tensor:
     """Closed-form Gaussian log-density summed over the ``d`` axis."""
     var = logvar.exp()
@@ -316,13 +313,8 @@ def _gaussian_log_prob(
         S = z.shape[1]
         mu_exp = mu.unsqueeze(1).expand(B, S, latent_dim)
         lv_exp = logvar.unsqueeze(1).expand(B, S, latent_dim)
-        per_dim = (
-            -0.5
-            * (
-                (z - mu_exp).pow(2) / lv_exp.exp()
-                + lv_exp
-                + math.log(2 * math.pi)
-            )
+        per_dim = -0.5 * (
+            (z - mu_exp).pow(2) / lv_exp.exp() + lv_exp + math.log(2 * math.pi)
         )
         return per_dim.sum(dim=-1)  # (B, S)
     raise ValueError(f"z must be (B,d) or (B,S,d); got shape {tuple(z.shape)}")
@@ -331,9 +323,9 @@ def _gaussian_log_prob(
 def _update_sigma_data_from_chunk(
     *,
     sigma_data: SigmaDataBuffer,
-    q_mu: torch.Tensor,         # (N=B*S*chunk_len, d)
-    q_logvar: torch.Tensor,     # (N, d)
-    p_mu: torch.Tensor,         # (N, d)
+    q_mu: torch.Tensor,  # (N=B*S*chunk_len, d)
+    q_logvar: torch.Tensor,  # (N, d)
+    p_mu: torch.Tensor,  # (N, d)
     B: int,
     S: int,
     chunk_len: int,
@@ -352,12 +344,14 @@ def _update_sigma_data_from_chunk(
     sigma2 = q_logvar.exp()
     # (B, S, chunk_len, d) -> (chunk_len, B, S, d) -> (chunk_len * B * S, d)
     mu_hat = (
-        mu_hat.view(B, S, chunk_len, d)
+        mu_hat
+        .view(B, S, chunk_len, d)
         .permute(2, 0, 1, 3)
         .reshape(chunk_len * B * S, d)
     )
     sigma2 = (
-        sigma2.view(B, S, chunk_len, d)
+        sigma2
+        .view(B, S, chunk_len, d)
         .permute(2, 0, 1, 3)
         .reshape(chunk_len * B * S, d)
     )

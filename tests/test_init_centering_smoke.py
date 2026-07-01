@@ -73,6 +73,7 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     summary_path = run_dir / "run_summary.json"
     assert summary_path.exists(), "run_summary.json missing"
     import json as _json
+
     summ = _json.loads(summary_path.read_text())
     assert summ["available"] is True and summ["stages_run"] == [1, 2]
 

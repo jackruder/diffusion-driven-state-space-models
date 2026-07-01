@@ -48,14 +48,18 @@ def _make_config(with_handoff: bool) -> StagesConf:
         steps=10,
         trainable=StageTrainableConf(),
         lrs=StageLrsConf(enc_lr=1e-3),
-        log_every=5, val_every=10, checkpoint_every=10,
+        log_every=5,
+        val_every=10,
+        checkpoint_every=10,
         centering_handoff=handoff,
     )
     stage_2 = StageSpecConf(
         steps=20,
         trainable=StageTrainableConf(),
         lrs=StageLrsConf(enc_lr=2e-3),
-        log_every=5, val_every=10, checkpoint_every=10,
+        log_every=5,
+        val_every=10,
+        checkpoint_every=10,
     )
     return StagesConf(stage_1=stage_1, stage_2=stage_2, run=["stage_1", "stage_2"])
 
@@ -89,7 +93,9 @@ def test_orchestrator_calls_handoff_after_stage1_when_configured() -> None:
     def _spy_handoff(trainer_arg, spec, *, new_lrs) -> None:  # noqa: ANN001
         handoff_called.append((spec.sigma_pert, new_lrs.enc_lr))
 
-    with patch("ddssm.training.stages.perform_centering_handoff", side_effect=_spy_handoff):
+    with patch(
+        "ddssm.training.stages.perform_centering_handoff", side_effect=_spy_handoff
+    ):
         orch.run(train_loader=object(), amp=False)
 
     # Called exactly once, rebuilding for stage_2 (its σ_pert + LRs).

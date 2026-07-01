@@ -63,19 +63,26 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m experiments.init_centering.verify_mv_mixing",
     )
     p.add_argument(
-        "--n-trajectories", type=int, default=64,
+        "--n-trajectories",
+        type=int,
+        default=64,
         help="Number of MV trajectories to sample (default 64).",
     )
     p.add_argument(
-        "--t-max", type=int, default=32,
+        "--t-max",
+        type=int,
+        default=32,
         help="Sequence length (default 32, matches the ablation).",
     )
     p.add_argument(
-        "--out", default="runs/mv_mixing.png",
+        "--out",
+        default="runs/mv_mixing.png",
         help="Output PNG path.",
     )
     p.add_argument(
-        "--seed", type=int, default=42,
+        "--seed",
+        type=int,
+        default=42,
         help="Dataset generation seed (controls split + matrices).",
     )
     args = p.parse_args(argv)
@@ -95,9 +102,9 @@ def main(argv: list[str] | None = None) -> int:
     z = ds.gt_latents.numpy()[: args.n_trajectories]  # (N, d, T)
 
     attractor_ids = _sign_attractor_indices(z)  # (N, T)
-    distinct_per_traj = np.array(
-        [len(set(attractor_ids[n].tolist())) for n in range(args.n_trajectories)]
-    )
+    distinct_per_traj = np.array([
+        len(set(attractor_ids[n].tolist())) for n in range(args.n_trajectories)
+    ])
     per_t_per_attractor = np.zeros((args.t_max, n_attractors), dtype=np.int64)
     for n in range(args.n_trajectories):
         for t in range(args.t_max):
@@ -105,11 +112,14 @@ def main(argv: list[str] | None = None) -> int:
     per_t_per_attractor = per_t_per_attractor.astype(np.float64) / args.n_trajectories
 
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fig, (ax_hist, ax_heat) = plt.subplots(
-        1, 2, figsize=(12, 5),
+        1,
+        2,
+        figsize=(12, 5),
         gridspec_kw={"width_ratios": [1, 1.6]},
     )
 
@@ -126,8 +136,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # Panel (b): per-t × attractor heatmap.
     im = ax_heat.imshow(
-        per_t_per_attractor.T, aspect="auto", origin="lower",
-        cmap="viridis", vmin=0.0, vmax=per_t_per_attractor.max(),
+        per_t_per_attractor.T,
+        aspect="auto",
+        origin="lower",
+        cmap="viridis",
+        vmin=0.0,
+        vmax=per_t_per_attractor.max(),
     )
     ax_heat.set_xlabel("latent timestep t")
     ax_heat.set_ylabel("attractor index (bit-pattern of sign(z))")
@@ -137,8 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     fig.colorbar(im, ax=ax_heat, label="fraction of trajectories")
 
     fig.suptitle(
-        "MV mixing check — nonlinear-bimodal-lift-mv at T="
-        f"{args.t_max}",
+        f"MV mixing check — nonlinear-bimodal-lift-mv at T={args.t_max}",
     )
     fig.tight_layout(rect=(0, 0, 1, 0.96))
 
@@ -147,10 +160,12 @@ def main(argv: list[str] | None = None) -> int:
     plt.close(fig)
     print(f"Wrote mixing-check plot to {args.out}")
     print(f"  trajectories sampled: {args.n_trajectories}")
-    print(f"  distinct attractors visited per traj: "
-          f"min={distinct_per_traj.min()} "
-          f"median={int(np.median(distinct_per_traj))} "
-          f"max={distinct_per_traj.max()}")
+    print(
+        f"  distinct attractors visited per traj: "
+        f"min={distinct_per_traj.min()} "
+        f"median={int(np.median(distinct_per_traj))} "
+        f"max={distinct_per_traj.max()}"
+    )
     print(f"  out of {n_attractors} possible attractors.")
     print(
         "Healthy mixing: median ≥ ~6 (a third of the modes visited per "

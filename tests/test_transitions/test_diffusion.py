@@ -51,8 +51,13 @@ def _make_diffusion(
 ) -> DiffusionTransition:
     if schedule is None:
         schedule = DiffusionScheduleConfig(
-            S_k=1, k_chunk=1, num_steps=20, beta_min=0.1, beta_max=20.0,
-            tau_min=1e-3, k_sampling_mode="uniform",
+            S_k=1,
+            k_chunk=1,
+            num_steps=20,
+            beta_min=0.1,
+            beta_max=20.0,
+            tau_min=1e-3,
+            k_sampling_mode="uniform",
         )
     return DiffusionTransition(
         baseline=baseline,
@@ -168,17 +173,25 @@ def test_transition_kl_does_not_mutate_sigma_data_under_no_grad() -> None:
 
     with torch.no_grad():
         transition.transition_kl(
-            enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
-            time_embed=time_embed, sigma_data=sigma_data,
+            enc_stats=enc_stats,
+            zs=zs,
+            logq_paths=logq_paths,
+            time_embed=time_embed,
+            sigma_data=sigma_data,
         )
     assert torch.equal(sigma_data.sigma_data2, before), "eval forward mutated σ_data"
 
     with torch.enable_grad():
         transition.transition_kl(
-            enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
-            time_embed=time_embed, sigma_data=sigma_data,
+            enc_stats=enc_stats,
+            zs=zs,
+            logq_paths=logq_paths,
+            time_embed=time_embed,
+            sigma_data=sigma_data,
         )
-    assert not torch.equal(sigma_data.sigma_data2, before), "training forward left σ_data unchanged"
+    assert not torch.equal(sigma_data.sigma_data2, before), (
+        "training forward left σ_data unchanged"
+    )
 
 
 @pytest.mark.slow
@@ -192,10 +205,16 @@ def test_transition_kl_is_invariant_to_num_steps() -> None:
     halved the loss; the correct estimator is grid-invariant (up to MC +
     discretisation noise).
     """
+
     def _sched(num_steps: int) -> DiffusionScheduleConfig:
         return DiffusionScheduleConfig(
-            S_k=2048, k_chunk=256, num_steps=num_steps,
-            beta_min=0.1, beta_max=20.0, tau_min=1e-3, k_sampling_mode="uniform",
+            S_k=2048,
+            k_chunk=256,
+            num_steps=num_steps,
+            beta_min=0.1,
+            beta_max=20.0,
+            tau_min=1e-3,
+            k_sampling_mode="uniform",
         )
 
     baseline = ZeroBaseline(latent_dim=D, j=J)  # no params → only the net to sync
@@ -212,8 +231,11 @@ def test_transition_kl_is_invariant_to_num_steps() -> None:
         sd = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
         return float(
             tr.transition_kl(
-                enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
-                time_embed=time_embed, sigma_data=sd,
+                enc_stats=enc_stats,
+                zs=zs,
+                logq_paths=logq_paths,
+                time_embed=time_embed,
+                sigma_data=sd,
             )["kl"].detach()
         )
 
@@ -326,8 +348,12 @@ def test_log_prob_matches_analytic_gaussian_when_score_is_marginal() -> None:
     torch.manual_seed(0)
     baseline = ZeroBaseline(latent_dim=D, j=J)
     schedule = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=20,
-        beta_min=0.1, beta_max=50.0, tau_min=1e-3,
+        S_k=1,
+        k_chunk=1,
+        num_steps=20,
+        beta_min=0.1,
+        beta_max=50.0,
+        tau_min=1e-3,
         k_sampling_mode="uniform",
     )
     transition = _make_diffusion(baseline, schedule=schedule)
@@ -359,8 +385,12 @@ def test_log_prob_matches_analytic_gaussian_when_score_is_marginal() -> None:
     sigma_d2 = torch.ones(B)
 
     actual = transition.log_prob(
-        z=z, z_hist=z_hist, ctx=ctx, sigma_d2=sigma_d2,
-        rtol=1e-7, atol=1e-7,
+        z=z,
+        z_hist=z_hist,
+        ctx=ctx,
+        sigma_d2=sigma_d2,
+        rtol=1e-7,
+        atol=1e-7,
     )
 
     expected = (
@@ -391,8 +421,12 @@ def test_log_prob_hutchinson_matches_exact_for_diagonal_jacobian() -> None:
     torch.manual_seed(0)
     baseline = ZeroBaseline(latent_dim=D, j=J)
     schedule = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=20,
-        beta_min=0.1, beta_max=50.0, tau_min=1e-3,
+        S_k=1,
+        k_chunk=1,
+        num_steps=20,
+        beta_min=0.1,
+        beta_max=50.0,
+        tau_min=1e-3,
         k_sampling_mode="uniform",
     )
     transition = _make_diffusion(baseline, schedule=schedule)
@@ -424,8 +458,12 @@ def test_log_prob_hutchinson_matches_exact_for_diagonal_jacobian() -> None:
     sigma_d2 = torch.ones(B)
 
     common_kwargs = dict(
-        z=z, z_hist=z_hist, ctx=ctx, sigma_d2=sigma_d2,
-        rtol=1e-7, atol=1e-7,
+        z=z,
+        z_hist=z_hist,
+        ctx=ctx,
+        sigma_d2=sigma_d2,
+        rtol=1e-7,
+        atol=1e-7,
     )
     exact_logp = transition.log_prob(divergence_mode="exact", **common_kwargs)
 
@@ -456,7 +494,7 @@ def test_transition_kl_updates_sigma_data_per_t() -> None:
     # The ema_step counters for t = j+1..T should have advanced.
     advanced = sigma_data.ema_step > pre_step
     expected = torch.zeros(T_MAX, dtype=torch.bool)
-    expected[j : T] = True  # 0-based slice covers internal slots j..T-1
+    expected[j:T] = True  # 0-based slice covers internal slots j..T-1
     assert torch.equal(advanced, expected)
 
 
@@ -669,8 +707,12 @@ def _make_edm_diffusion(
         T_max=T_MAX,
         unet=_tiny_unet(),
         schedule=DiffusionScheduleConfig(
-            S_k=1, k_chunk=1, num_steps=num_steps,
-            beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+            S_k=1,
+            k_chunk=1,
+            num_steps=num_steps,
+            beta_min=0.1,
+            beta_max=20.0,
+            tau_min=1e-3,
             k_sampling_mode="uniform",
         ),
         sampler="edm",
@@ -761,7 +803,9 @@ def test_edm_sigma_max_rel_clamps_schedule(sigma_max_rel: float) -> None:
     n = 4000
     sigma_d2 = 2.0
     transition, buf = _make_edm_diffusion(
-        sigma_d2, num_steps=40, edm_sigma_max_rel=sigma_max_rel,
+        sigma_d2,
+        num_steps=40,
+        edm_sigma_max_rel=sigma_max_rel,
     )
     assert transition.edm_sigma_max_rel == sigma_max_rel
     z = _edm_draw(transition, buf, n)
@@ -788,30 +832,30 @@ class _MoGPreconditionedDenoiser(torch.nn.Module):
         self, means: torch.Tensor, weights: torch.Tensor, sigma_d2: float
     ) -> None:
         super().__init__()
-        self.register_buffer("means", means.double())                  # (K, d)
-        self.register_buffer("log_weights", weights.double().log())    # (K,)
+        self.register_buffer("means", means.double())  # (K, d)
+        self.register_buffer("log_weights", weights.double().log())  # (K,)
         self.sigma_d2 = float(sigma_d2)
 
-    def forward(self, latent_w, side_win, c_noise):  # noqa: D102
+    def forward(self, latent_w, side_win, c_noise):
         del side_win
         dtype = latent_w.dtype
-        x_pre = latent_w[..., -1].double()                 # (B, d) = c_in·x̃
+        x_pre = latent_w[..., -1].double()  # (B, d) = c_in·x̃
         sigma = float(torch.exp(4.0 * c_noise[0]).item())  # σ = exp(4·¼log σ)
         sd2 = self.sigma_d2
         var_pert = sigma * sigma + sd2
         c_skip = sd2 / var_pert
         c_out = (sigma * math.sqrt(sd2)) / math.sqrt(var_pert)
-        x_tilde = x_pre * math.sqrt(var_pert)              # undo c_in = 1/√var_pert
+        x_tilde = x_pre * math.sqrt(var_pert)  # undo c_in = 1/√var_pert
 
-        diff = x_tilde.unsqueeze(1) - self.means.unsqueeze(0)   # (B, K, d)
+        diff = x_tilde.unsqueeze(1) - self.means.unsqueeze(0)  # (B, K, d)
         log_r = self.log_weights.unsqueeze(0) - 0.5 * diff.pow(2).sum(-1) / var_pert
         log_r = log_r - torch.logsumexp(log_r, dim=1, keepdim=True)
-        resp = log_r.exp()                                      # (B, K)
-        comp_mean = self.means.unsqueeze(0) + c_skip * diff     # m_k = μ_k+c_skip·diff
-        d_star = (resp.unsqueeze(-1) * comp_mean).sum(1)        # (B, d) = E[x|x̃]
+        resp = log_r.exp()  # (B, K)
+        comp_mean = self.means.unsqueeze(0) + c_skip * diff  # m_k = μ_k+c_skip·diff
+        d_star = (resp.unsqueeze(-1) * comp_mean).sum(1)  # (B, d) = E[x|x̃]
 
         f = (d_star - c_skip * x_tilde) / c_out
-        return f.to(dtype).unsqueeze(-1)                        # (B, d, 1)
+        return f.to(dtype).unsqueeze(-1)  # (B, d, 1)
 
 
 @pytest.mark.parametrize("weights", [(0.5, 0.5), (0.85, 0.15)])
@@ -862,9 +906,14 @@ def test_edm_sampler_recovers_mixture_of_gaussians(weights) -> None:
 
 def _adaptive_is_schedule(num_steps: int = 20, **kw) -> DiffusionScheduleConfig:
     return DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=num_steps,
-        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
-        k_sampling_mode="adaptive_is", **kw,
+        S_k=1,
+        k_chunk=1,
+        num_steps=num_steps,
+        beta_min=0.1,
+        beta_max=20.0,
+        tau_min=1e-3,
+        k_sampling_mode="adaptive_is",
+        **kw,
     )
 
 
@@ -873,7 +922,8 @@ def _adaptive_is_meandom_pk(transition, sigma_d2: float) -> torch.Tensor:
     the transition's σ̃ buffer. Mirrors the helper the diffusion module
     will expose; used to assert distribution properties without relying
     on a static ``transition.p_k`` buffer (which is None under
-    ``adaptive_is`` since p_k is recomputed per-row from live σ_d²)."""
+    ``adaptive_is`` since p_k is recomputed per-row from live σ_d²).
+    """
     from ddssm.model.transitions.diffusion import _adaptive_is_density_meandom
 
     s = transition.sigma_tilde
@@ -959,7 +1009,7 @@ def test_adaptive_is_meandom_at_sigma_d_one_matches_legacy_esm_is_formula() -> N
     pk_new = _adaptive_is_meandom_pk(transition, sigma_d2=1.0)
     s = transition.sigma_tilde
     pk_old = s / (1.0 + s * s).pow(2)
-    pk_old = (pk_old.clamp_min(1e-12) / pk_old.clamp_min(1e-12).sum())
+    pk_old = pk_old.clamp_min(1e-12) / pk_old.clamp_min(1e-12).sum()
     assert torch.allclose(pk_new, pk_old, atol=1e-6)
 
 
@@ -979,10 +1029,16 @@ def test_adaptive_is_full_collapses_to_meandom_at_special_case() -> None:
     sigma2 = torch.tensor([1.0])
     mu_hat2 = torch.tensor([1.0])
     pk_full = _adaptive_is_density_full(
-        s, sigma_d2=sigma_d2, sigma2=sigma2, mu_hat2=mu_hat2, floor=1e-12,
+        s,
+        sigma_d2=sigma_d2,
+        sigma2=sigma2,
+        mu_hat2=mu_hat2,
+        floor=1e-12,
     ).squeeze(0)
     pk_meandom = _adaptive_is_density_meandom(
-        s, sigma_d2=sigma_d2, floor=1e-12,
+        s,
+        sigma_d2=sigma_d2,
+        floor=1e-12,
     ).squeeze(0)
     assert torch.allclose(pk_full, pk_meandom, atol=1e-6)
 
@@ -1005,8 +1061,12 @@ def test_adaptive_is_full_call_site_reduces_per_coordinate(monkeypatch) -> None:
 
     baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
     sched = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=20,
-        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        S_k=1,
+        k_chunk=1,
+        num_steps=20,
+        beta_min=0.1,
+        beta_max=20.0,
+        tau_min=1e-3,
         k_sampling_mode="adaptive_is_full",
     )
     transition = _make_diffusion(baseline, schedule=sched)
@@ -1029,23 +1089,29 @@ def test_adaptive_is_full_call_site_reduces_per_coordinate(monkeypatch) -> None:
         captured["sigma2"] = sigma2.detach().clone()
         captured["mu_hat2"] = mu_hat2.detach().clone()
         return real_full(
-            sigma_tilde, sigma_d2=sigma_d2, sigma2=sigma2,
-            mu_hat2=mu_hat2, floor=floor,
+            sigma_tilde,
+            sigma_d2=sigma_d2,
+            sigma2=sigma2,
+            mu_hat2=mu_hat2,
+            floor=floor,
         )
 
     monkeypatch.setattr(diff_mod, "_adaptive_is_density_full", spy)
 
     transition.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
-        time_embed=time_embed, sigma_data=sigma_data,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
     )
 
     assert "sigma2" in captured, "adaptive_is_full density was never called"
     sig2 = captured["sigma2"]
     # Per-coordinate mean equals exp(log_c); the .sum bug would give D·exp(log_c).
-    assert torch.allclose(
-        sig2, torch.full_like(sig2, sigma2_per_coord), atol=1e-5
-    ), f"expected per-coordinate σ²≈{sigma2_per_coord}, got {sig2}"
+    assert torch.allclose(sig2, torch.full_like(sig2, sigma2_per_coord), atol=1e-5), (
+        f"expected per-coordinate σ²≈{sigma2_per_coord}, got {sig2}"
+    )
     # Explicit guard against the d>1 .sum regression.
     assert float(sig2.max()) < D * sigma2_per_coord - 1e-3
 
@@ -1062,8 +1128,11 @@ def test_adaptive_is_transition_kl_runs_and_returns_finite() -> None:
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
     out = transition.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
-        time_embed=time_embed, sigma_data=sigma_data,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
     )
     assert torch.isfinite(out["kl"])
 
@@ -1075,8 +1144,11 @@ def test_adaptive_is_transition_kl_gradients_flow() -> None:
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
     out = transition.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
-        time_embed=time_embed, sigma_data=sigma_data,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
     )
     out["kl"].backward()
     grads = [p.grad for p in transition.diffmodel.parameters() if p.grad is not None]
@@ -1088,16 +1160,23 @@ def test_adaptive_is_full_transition_kl_runs_and_returns_finite() -> None:
     """transition_kl produces a finite scalar loss under adaptive_is_full."""
     baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
     sched = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=20,
-        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        S_k=1,
+        k_chunk=1,
+        num_steps=20,
+        beta_min=0.1,
+        beta_max=20.0,
+        tau_min=1e-3,
         k_sampling_mode="adaptive_is_full",
     )
     transition = _make_diffusion(baseline, schedule=sched)
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
     out = transition.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
-        time_embed=time_embed, sigma_data=sigma_data,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
     )
     assert torch.isfinite(out["kl"])
 
@@ -1105,10 +1184,15 @@ def test_adaptive_is_full_transition_kl_runs_and_returns_finite() -> None:
 @pytest.mark.slow
 def test_adaptive_is_transition_kl_is_invariant_to_num_steps() -> None:
     """ESM loss under adaptive_is is grid-invariant (not scaling with num_steps)."""
+
     def _sched(K: int) -> DiffusionScheduleConfig:
         return DiffusionScheduleConfig(
-            S_k=2048, k_chunk=256, num_steps=K,
-            beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+            S_k=2048,
+            k_chunk=256,
+            num_steps=K,
+            beta_min=0.1,
+            beta_max=20.0,
+            tau_min=1e-3,
             k_sampling_mode="adaptive_is",
         )
 
@@ -1125,8 +1209,11 @@ def test_adaptive_is_transition_kl_is_invariant_to_num_steps() -> None:
         sd = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
         return float(
             tr.transition_kl(
-                enc_stats=enc_stats, zs=zs, logq_paths=logq_paths,
-                time_embed=time_embed, sigma_data=sd,
+                enc_stats=enc_stats,
+                zs=zs,
+                logq_paths=logq_paths,
+                time_embed=time_embed,
+                sigma_data=sd,
             )["kl"].detach()
         )
 
@@ -1146,8 +1233,12 @@ def test_adaptive_is_concentrates_more_in_informative_range() -> None:
     """At σ_d=1 adaptive_is puts >70% of mass in [0.3, 3.0] and more than lsgm_is."""
     sched_ad = _adaptive_is_schedule(num_steps=200)
     sched_lsgm = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=200,
-        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        S_k=1,
+        k_chunk=1,
+        num_steps=200,
+        beta_min=0.1,
+        beta_max=20.0,
+        tau_min=1e-3,
         k_sampling_mode="lsgm_is",
     )
     t_ad = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_ad)
@@ -1165,8 +1256,12 @@ def test_adaptive_is_deprioritizes_low_noise() -> None:
     """At σ_d=1 adaptive_is puts less mass below σ̃ = 0.1 than lsgm_is."""
     sched_ad = _adaptive_is_schedule(num_steps=200)
     sched_lsgm = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=200,
-        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        S_k=1,
+        k_chunk=1,
+        num_steps=200,
+        beta_min=0.1,
+        beta_max=20.0,
+        tau_min=1e-3,
         k_sampling_mode="lsgm_is",
     )
     t_ad = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=sched_ad)
@@ -1185,7 +1280,9 @@ def test_adaptive_is_constructor_rejects_unknown_mode() -> None:
         _make_diffusion(
             ZeroBaseline(latent_dim=D, j=J),
             schedule=DiffusionScheduleConfig(
-                S_k=1, k_chunk=1, num_steps=20,
+                S_k=1,
+                k_chunk=1,
+                num_steps=20,
                 k_sampling_mode="bogus",
             ),
         )
@@ -1194,12 +1291,15 @@ def test_adaptive_is_constructor_rejects_unknown_mode() -> None:
 def test_constructor_rejects_legacy_esm_is_string() -> None:
     """The legacy ``esm_is`` mode string was renamed to ``adaptive_is`` and
     must now raise so users get an explicit signal rather than silent
-    behaviour change."""
+    behaviour change.
+    """
     with pytest.raises(ValueError, match="adaptive_is"):
         _make_diffusion(
             ZeroBaseline(latent_dim=D, j=J),
             schedule=DiffusionScheduleConfig(
-                S_k=1, k_chunk=1, num_steps=20,
+                S_k=1,
+                k_chunk=1,
+                num_steps=20,
                 k_sampling_mode="esm_is",
             ),
         )
@@ -1232,22 +1332,34 @@ def test_sampling_schedule_split_uses_independent_num_steps() -> None:
     rollout while the training schedule stays at its default num_steps=20.
 
     Verified via ``self.sample_num_steps`` (the buffer the sampler loop
-    reads at line 1098 of diffusion.py)."""
+    reads at line 1098 of diffusion.py).
+    """
     from ddssm.model.transitions.diffusion import (
         DiffusionSamplingScheduleConfig,
     )
 
     baseline = ZeroBaseline(latent_dim=D, j=J)
     sampling_schedule = DiffusionSamplingScheduleConfig(
-        num_steps=10, tau_min=1e-3, tau_max=1.0,
-        beta_min=0.1, beta_max=20.0,
+        num_steps=10,
+        tau_min=1e-3,
+        tau_max=1.0,
+        beta_min=0.1,
+        beta_max=20.0,
     )
     transition = DiffusionTransition(
-        baseline=baseline, latent_dim=D, j=J,
-        emb_time_dim=EMB_TIME, T_max=T_MAX, unet=_tiny_unet(),
+        baseline=baseline,
+        latent_dim=D,
+        j=J,
+        emb_time_dim=EMB_TIME,
+        T_max=T_MAX,
+        unet=_tiny_unet(),
         schedule=DiffusionScheduleConfig(
-            S_k=1, k_chunk=1, num_steps=20,
-            beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+            S_k=1,
+            k_chunk=1,
+            num_steps=20,
+            beta_min=0.1,
+            beta_max=20.0,
+            tau_min=1e-3,
             k_sampling_mode="adaptive_is",
         ),
         sampling_schedule=sampling_schedule,

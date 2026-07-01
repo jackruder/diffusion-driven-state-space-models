@@ -36,7 +36,9 @@ def _measure_centered_residual_norm(model, data) -> float:
         from ddssm.nn.net_utils import time_embedding
 
         te = time_embedding(
-            data["timepoints"], model.emb_time_dim, device=data["observed_data"].device,
+            data["timepoints"],
+            model.emb_time_dim,
+            device=data["observed_data"].device,
         )
         zs, _, stats = model._encode_latents(
             observed_data=data["observed_data"],
@@ -80,7 +82,9 @@ def test_centered_residual_norm_shrinks_during_stage1(baseline_form: str) -> Non
         model=model,
         stage="stage_1",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=8, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=8,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=400,
         lr=3e-3,

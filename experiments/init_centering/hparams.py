@@ -132,13 +132,18 @@ def _build_init_centering_stages(
         trans_lr=effective_trans_lr,
     )
     stage1_trainable = StageTrainableConf(
-        encoder=True, decoder=True, transition=True, baseline=True,
+        encoder=True,
+        decoder=True,
+        transition=True,
+        baseline=True,
     )
     stage2_baseline_trainable = baseline_mode == "learnable"
     stage2_enc = not stage_2_freeze_enc_dec
     stage2_dec = not stage_2_freeze_enc_dec
     stage2_trainable = StageTrainableConf(
-        encoder=stage2_enc, decoder=stage2_dec, transition=True,
+        encoder=stage2_enc,
+        decoder=stage2_dec,
+        transition=True,
         baseline=stage2_baseline_trainable,
     )
     es = EarlyStopSpec(
@@ -166,14 +171,18 @@ def _build_init_centering_stages(
     # object, not on the model or Hparams.
     stage1_loss = FullELBO(
         rate_lambda=make_lambda_cosine(
-            stage1_lambda, total_steps=int(n_pretrain), default_end=1.0,
+            stage1_lambda,
+            total_steps=int(n_pretrain),
+            default_end=1.0,
         ),
         lambda_sigma_p=lambda_sigma_p,
         lambda_mu_p=0.0,
     )
     stage2_loss = FullELBO(
         rate_lambda=make_lambda_cosine(
-            stage2_lambda, total_steps=int(n_stage2), default_end=1.0,
+            stage2_lambda,
+            total_steps=int(n_stage2),
+            default_end=1.0,
         ),
         lambda_sigma_p=0.0,
         lambda_mu_p=anchor_lambda,

@@ -23,41 +23,65 @@ N_PER_SPLIT_LGSSM = 512  # LGSSM smoke runs use a smaller split.
 
 
 LGSSM = Synthetic(
-    mode="lgssm", D=1, T=T,
-    N_per_split=N_PER_SPLIT_LGSSM, batch_size=BATCH_SIZE,
+    mode="lgssm",
+    D=1,
+    T=T,
+    N_per_split=N_PER_SPLIT_LGSSM,
+    batch_size=BATCH_SIZE,
 )
 Harmonic = Synthetic(
-    mode="harmonic", D=1, T=T,
-    N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
+    mode="harmonic",
+    D=1,
+    T=T,
+    N_per_split=N_PER_SPLIT,
+    batch_size=BATCH_SIZE,
 )
 HarmonicMixed = Synthetic(
-    mode="harmonic-mixed", D=1, T=T,
-    N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
+    mode="harmonic-mixed",
+    D=1,
+    T=T,
+    N_per_split=N_PER_SPLIT,
+    batch_size=BATCH_SIZE,
 )
 Bimodal = Synthetic(
-    mode="bimodal", D=1, T=T,
-    N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
+    mode="bimodal",
+    D=1,
+    T=T,
+    N_per_split=N_PER_SPLIT,
+    batch_size=BATCH_SIZE,
 )
 BimodalNoisy = Synthetic(
-    mode="bimodal-noisy", D=1, T=T,
-    N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
+    mode="bimodal-noisy",
+    D=1,
+    T=T,
+    N_per_split=N_PER_SPLIT,
+    batch_size=BATCH_SIZE,
 )
 Robot2D = Synthetic(
-    mode="robot-basis-pursuit", D=2, T=T,
-    N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
+    mode="robot-basis-pursuit",
+    D=2,
+    T=T,
+    N_per_split=N_PER_SPLIT,
+    batch_size=BATCH_SIZE,
 )
 # Init-centering ablation datasets. Both expose GT latents so
 # ``gt_latent_jsd`` works headline-side; see
 # :mod:`ddssm.eval.synthetic_kernels` for the matching closed-form
 # transition kernels.
 NonlinBimodalLift1D = Synthetic(
-    mode="nonlinear-bimodal-lift", D=1, T=T,
-    N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
+    mode="nonlinear-bimodal-lift",
+    D=1,
+    T=T,
+    N_per_split=N_PER_SPLIT,
+    batch_size=BATCH_SIZE,
     expose_gt_latents=True,
 )
 NonlinBimodalLiftMV = Synthetic(
-    mode="nonlinear-bimodal-lift-mv", D=NLBL_MV_OBS_D, T=T,
-    N_per_split=N_PER_SPLIT, batch_size=BATCH_SIZE,
+    mode="nonlinear-bimodal-lift-mv",
+    D=NLBL_MV_OBS_D,
+    T=T,
+    N_per_split=N_PER_SPLIT,
+    batch_size=BATCH_SIZE,
     expose_gt_latents=True,
 )
 
@@ -76,8 +100,20 @@ KDDStation = KDD(filepath="data/kdd-aotizhongxin_aq.pt")
 
 
 __all__ = [
-    "LGSSM", "Harmonic", "HarmonicMixed", "Bimodal", "BimodalNoisy", "Robot2D",
-    "NonlinBimodalLift1D", "NonlinBimodalLiftMV",
-    "Solar", "Electricity", "Traffic", "Taxi", "Wiki",
-    "KDDFull", "KDDBeijing", "KDDStation",
+    "LGSSM",
+    "Bimodal",
+    "BimodalNoisy",
+    "Electricity",
+    "Harmonic",
+    "HarmonicMixed",
+    "KDDBeijing",
+    "KDDFull",
+    "KDDStation",
+    "NonlinBimodalLift1D",
+    "NonlinBimodalLiftMV",
+    "Robot2D",
+    "Solar",
+    "Taxi",
+    "Traffic",
+    "Wiki",
 ]

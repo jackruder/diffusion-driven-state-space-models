@@ -25,7 +25,7 @@ source of truth for the data generator) and are imported here.
 
 from __future__ import annotations
 
-from typing import Callable, Dict
+from collections.abc import Callable
 
 import numpy as np
 
@@ -36,9 +36,8 @@ from ddssm.data.synthetic import (
     NLBL_MV_LATENT_D,
 )
 
-
 KernelFn = Callable[..., np.ndarray]
-KERNEL_REGISTRY: Dict[str, KernelFn] = {}
+KERNEL_REGISTRY: dict[str, KernelFn] = {}
 
 
 def register_kernel(name: str) -> Callable[[KernelFn], KernelFn]:

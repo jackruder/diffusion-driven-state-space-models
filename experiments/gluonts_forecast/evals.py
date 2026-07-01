@@ -34,4 +34,4 @@ GluonEval = Eval(
     output_filename="metrics.json",
 )
 
-__all__ = ["ValElboObjective", "GluonEval"]
+__all__ = ["GluonEval", "ValElboObjective"]

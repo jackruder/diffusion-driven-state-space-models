@@ -69,7 +69,9 @@ def test_cross_check_warns_on_drift(tmp_path, caplog):
 
     with caplog.at_level(logging.WARNING, logger="ddssm.training.checkpoint"):
         load_into_model(
-            _Toy(), path, device=torch.device("cpu"),
+            _Toy(),
+            path,
+            device=torch.device("cpu"),
             expected_model_config_yaml="hidden_dim: 80",
         )
     assert any("config drift" in r.message for r in caplog.records)
@@ -82,7 +84,9 @@ def test_cross_check_silent_when_match(tmp_path, caplog):
 
     with caplog.at_level(logging.WARNING, logger="ddssm.training.checkpoint"):
         load_into_model(
-            _Toy(), path, device=torch.device("cpu"),
+            _Toy(),
+            path,
+            device=torch.device("cpu"),
             expected_model_config_yaml="hidden_dim: 64",
         )
     assert not any("config drift" in r.message for r in caplog.records)
@@ -94,7 +98,9 @@ def test_load_ema_swaps_transition(tmp_path):
     with torch.no_grad():
         for p in model.transition.parameters():
             p.zero_()
-    ema_shadow = {k: torch.ones_like(v) for k, v in model.transition.state_dict().items()}
+    ema_shadow = {
+        k: torch.ones_like(v) for k, v in model.transition.state_dict().items()
+    }
     trainer = _fake_trainer(model)
     trainer.ema = SimpleNamespace(shadow=ema_shadow)
     path = str(tmp_path / "ckpt.pth")
@@ -103,7 +109,9 @@ def test_load_ema_swaps_transition(tmp_path):
     # load_ema=False → live (zero) transition weights.
     live = _Toy()
     load_into_model(live, path, device=torch.device("cpu"), load_ema=False)
-    assert torch.allclose(live.transition.weight, torch.zeros_like(live.transition.weight))
+    assert torch.allclose(
+        live.transition.weight, torch.zeros_like(live.transition.weight)
+    )
 
     # load_ema=True → EMA (one) transition weights.
     ema = _Toy()
@@ -117,7 +125,9 @@ def _ema_checkpoint(tmp_path) -> str:
     with torch.no_grad():
         for p in model.transition.parameters():
             p.zero_()
-    ema_shadow = {k: torch.ones_like(v) for k, v in model.transition.state_dict().items()}
+    ema_shadow = {
+        k: torch.ones_like(v) for k, v in model.transition.state_dict().items()
+    }
     tr = _fake_trainer(model)
     tr.ema = SimpleNamespace(shadow=ema_shadow)
     path = str(tmp_path / "ema.pth")
@@ -135,9 +145,14 @@ def test_prepare_model_defaults_to_ema(tmp_path):
 
     exp_live = SimpleNamespace(model=_Toy(), model_config_yaml=None)
     m_live = prepare_model(
-        exp_live, checkpoint_path=path, device=torch.device("cpu"), load_ema=False,
+        exp_live,
+        checkpoint_path=path,
+        device=torch.device("cpu"),
+        load_ema=False,
     )
-    assert torch.allclose(m_live.transition.weight, torch.zeros_like(m_live.transition.weight))
+    assert torch.allclose(
+        m_live.transition.weight, torch.zeros_like(m_live.transition.weight)
+    )
 
 
 def test_legacy_raw_state_dict_loads(tmp_path):
@@ -231,8 +246,10 @@ def test_restore_raises_when_saved_scaler_state_but_live_scaler_disabled(tmp_pat
 
     model = make_small_model()
     trainer = DDSSMTrainer(
-        model=model, device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        model=model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     # Save a real (live-scaler-disabled) v2 ckpt, then inject a non-None
     # scaler_state into the payload and re-save.

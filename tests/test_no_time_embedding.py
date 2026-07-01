@@ -9,8 +9,6 @@ exercise both the eager and the Inductor graphs against ``emb_time_dim=0``.
 
 from __future__ import annotations
 
-import os
-
 import torch
 import pytest
 
@@ -21,7 +19,8 @@ def _make_batch(B: int, T: int, D: int, device: torch.device) -> dict:
     return {
         "observed_data": torch.randn(B, D, T, device=device),
         "observation_mask": torch.ones(B, D, T, device=device),
-        "timepoints": torch.arange(T, dtype=torch.float32, device=device)
+        "timepoints": torch
+        .arange(T, dtype=torch.float32, device=device)
         .unsqueeze(0)
         .expand(B, -1)
         .contiguous(),
@@ -65,11 +64,13 @@ def test_no_time_embedding_forward_and_forecast(
         out = model.forecast(
             x_hist=torch.randn(2, 1, H, device=device),
             x_mask=torch.ones(2, 1, H, device=device),
-            past_time=torch.arange(H, dtype=torch.float32, device=device)
+            past_time=torch
+            .arange(H, dtype=torch.float32, device=device)
             .unsqueeze(0)
             .expand(2, -1)
             .contiguous(),
-            future_time=torch.arange(H, H + L2, dtype=torch.float32, device=device)
+            future_time=torch
+            .arange(H, H + L2, dtype=torch.float32, device=device)
             .unsqueeze(0)
             .expand(2, -1)
             .contiguous(),

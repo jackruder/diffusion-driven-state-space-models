@@ -34,10 +34,13 @@ def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 def test_csv_source_returns_tail_mean(tmp_path: Path) -> None:
     """Default CSV source: read tail of ``loss/total``."""
     csv_path = tmp_path / "metrics.csv"
-    _write_csv(csv_path, [
-        {"step": str(i), "split": "train", "loss/total": str(float(i))}
-        for i in range(1, 11)
-    ])
+    _write_csv(
+        csv_path,
+        [
+            {"step": str(i), "split": "train", "loss/total": str(float(i))}
+            for i in range(1, 11)
+        ],
+    )
     spec = ObjectiveSpec(metric="loss/total", split="train", tail_frac=0.2)
     # tail_frac=0.2 over 10 rows → tail_n=2 (rows 9.0 and 10.0)
     assert spec.read(str(csv_path)) == pytest.approx(9.5)
@@ -46,11 +49,14 @@ def test_csv_source_returns_tail_mean(tmp_path: Path) -> None:
 def test_csv_source_filters_by_split(tmp_path: Path) -> None:
     """Rows whose ``split`` doesn't match are skipped."""
     csv_path = tmp_path / "metrics.csv"
-    _write_csv(csv_path, [
-        {"step": "1", "split": "train", "loss/total": "1.0"},
-        {"step": "2", "split": "val", "loss/total": "100.0"},
-        {"step": "3", "split": "train", "loss/total": "2.0"},
-    ])
+    _write_csv(
+        csv_path,
+        [
+            {"step": "1", "split": "train", "loss/total": "1.0"},
+            {"step": "2", "split": "val", "loss/total": "100.0"},
+            {"step": "3", "split": "train", "loss/total": "2.0"},
+        ],
+    )
     train = ObjectiveSpec(metric="loss/total", split="train", tail_frac=1.0)
     assert train.read(str(csv_path)) == pytest.approx(1.5)
 
@@ -66,10 +72,13 @@ def test_csv_metric_fallback_warns(tmp_path: Path, caplog) -> None:
     import logging
 
     csv_path = tmp_path / "metrics.csv"
-    _write_csv(csv_path, [
-        {"step": "1", "split": "train", "loss/total": "2.0"},
-        {"step": "2", "split": "train", "loss/total": "4.0"},
-    ])
+    _write_csv(
+        csv_path,
+        [
+            {"step": "1", "split": "train", "loss/total": "2.0"},
+            {"step": "2", "split": "train", "loss/total": "4.0"},
+        ],
+    )
     spec = ObjectiveSpec(metric="not_a_real_metric", split="train", tail_frac=1.0)
     with caplog.at_level(logging.WARNING, logger="ddssm.experiment"):
         val = spec.read(str(csv_path))
@@ -80,14 +89,17 @@ def test_csv_metric_fallback_warns(tmp_path: Path, caplog) -> None:
 
 
 def test_csv_split_missing_column_warns(tmp_path: Path, caplog) -> None:
-    """split set but no split column → no-op filter, surfaced as a warning."""
+    """Split set but no split column → no-op filter, surfaced as a warning."""
     import logging
 
     csv_path = tmp_path / "metrics.csv"
-    _write_csv(csv_path, [
-        {"step": "1", "loss/total": "1.0"},
-        {"step": "2", "loss/total": "3.0"},
-    ])
+    _write_csv(
+        csv_path,
+        [
+            {"step": "1", "loss/total": "1.0"},
+            {"step": "2", "loss/total": "3.0"},
+        ],
+    )
     spec = ObjectiveSpec(metric="loss/total", split="train", tail_frac=1.0)
     with caplog.at_level(logging.WARNING, logger="ddssm.experiment"):
         val = spec.read(str(csv_path))
@@ -112,9 +124,12 @@ def test_json_missing_key_warns(tmp_path: Path, caplog) -> None:
 def test_csv_source_accepts_run_dir(tmp_path: Path) -> None:
     """Passing a run_dir (not a file) reads ``metrics.csv`` inside it."""
     csv_path = tmp_path / "metrics.csv"
-    _write_csv(csv_path, [
-        {"step": "1", "split": "train", "loss/total": "0.7"},
-    ])
+    _write_csv(
+        csv_path,
+        [
+            {"step": "1", "split": "train", "loss/total": "0.7"},
+        ],
+    )
     spec = ObjectiveSpec(metric="loss/total", split="train", tail_frac=1.0)
     assert spec.read(str(tmp_path)) == pytest.approx(0.7)
 
@@ -126,10 +141,12 @@ def test_csv_source_accepts_run_dir(tmp_path: Path) -> None:
 
 def test_json_source_reads_scalar(tmp_path: Path) -> None:
     """``source='json'`` indexes ``metrics.json`` by ``metric`` name."""
-    (tmp_path / "metrics.json").write_text(json.dumps({
-        "stage2_elbo_surrogate": 0.42,
-        "sigma_data_drift_mean": 0.1,
-    }))
+    (tmp_path / "metrics.json").write_text(
+        json.dumps({
+            "stage2_elbo_surrogate": 0.42,
+            "sigma_data_drift_mean": 0.1,
+        })
+    )
     spec = ObjectiveSpec(metric="stage2_elbo_surrogate", source="json")
     assert spec.read(str(tmp_path)) == pytest.approx(0.42)
 
@@ -143,9 +160,7 @@ def test_json_source_returns_inf_on_missing_key(tmp_path: Path) -> None:
 
 def test_json_source_returns_inf_on_non_finite_value(tmp_path: Path) -> None:
     """NaN / inf values surface as ``+inf`` (not as the raw value)."""
-    (tmp_path / "metrics.json").write_text(
-        '{"stage2_elbo_surrogate": "NaN"}'
-    )
+    (tmp_path / "metrics.json").write_text('{"stage2_elbo_surrogate": "NaN"}')
     spec = ObjectiveSpec(metric="stage2_elbo_surrogate", source="json")
     result = spec.read(str(tmp_path))
     assert math.isinf(result) and result > 0
@@ -210,24 +225,30 @@ def test_moo_objective_instantiates_and_reads(tmp_path: Path) -> None:
         Objectives as ObjectivesCfg,
     )
 
-    cfg = ObjectivesCfg(specs=[
-        ObjectiveCfg(metric="m1", split="train", tail_frac=1.0, source="csv"),
-        ObjectiveCfg(metric="m2", split="train", tail_frac=1.0, source="csv"),
-    ])
+    cfg = ObjectivesCfg(
+        specs=[
+            ObjectiveCfg(metric="m1", split="train", tail_frac=1.0, source="csv"),
+            ObjectiveCfg(metric="m2", split="train", tail_frac=1.0, source="csv"),
+        ]
+    )
     obj = instantiate(cfg)
     assert isinstance(obj, Objectives)
     # Guard the bug's precondition: the nested specs come back as
     # OmegaConf nodes, not live ObjectiveSpec objects.
     assert not all(isinstance(s, ObjectiveSpec) for s in obj.specs)
 
-    _write_csv(tmp_path / "metrics.csv", [
-        {"step": "1", "split": "train", "m1": "1.0", "m2": "10.0"},
-        {"step": "2", "split": "train", "m1": "3.0", "m2": "30.0"},
-    ])
+    _write_csv(
+        tmp_path / "metrics.csv",
+        [
+            {"step": "1", "split": "train", "m1": "1.0", "m2": "10.0"},
+            {"step": "2", "split": "train", "m1": "3.0", "m2": "30.0"},
+        ],
+    )
 
     exp = _experiment_with_objective(obj)
     values = exp.objective_value(
-        device=torch.device("cpu"), run_dir=str(tmp_path),
+        device=torch.device("cpu"),
+        run_dir=str(tmp_path),
     )
     assert isinstance(values, list)
     assert values == [pytest.approx(2.0), pytest.approx(20.0)]
@@ -246,17 +267,24 @@ def test_moo_objective_penalty_survives_instantiation(tmp_path: Path) -> None:
         Objectives as ObjectivesCfg,
     )
 
-    cfg = ObjectivesCfg(specs=[
-        # json metric is absent from metrics.json → penalty kicks in.
-        ObjectiveCfg(
-            metric="missing", source="json", penalty="csv_tail_time",
-        ),
-    ])
+    cfg = ObjectivesCfg(
+        specs=[
+            # json metric is absent from metrics.json → penalty kicks in.
+            ObjectiveCfg(
+                metric="missing",
+                source="json",
+                penalty="csv_tail_time",
+            ),
+        ]
+    )
     obj = instantiate(cfg)
 
-    _write_csv(tmp_path / "metrics.csv", [
-        {"step": "1", "split": "train", "time/elapsed_s": "12.5"},
-    ])
+    _write_csv(
+        tmp_path / "metrics.csv",
+        [
+            {"step": "1", "split": "train", "time/elapsed_s": "12.5"},
+        ],
+    )
     (tmp_path / "metrics.json").write_text(json.dumps({"other": 1.0}))
 
     exp = _experiment_with_objective(obj)
@@ -271,7 +299,8 @@ def test_moo_objective_penalty_survives_instantiation(tmp_path: Path) -> None:
     assert spec.read(str(tmp_path)) == pytest.approx(12.5)
     # And the full path returns a finite penalty value (not a crash).
     values = exp.objective_value(
-        device=torch.device("cpu"), run_dir=str(tmp_path),
+        device=torch.device("cpu"),
+        run_dir=str(tmp_path),
     )
     assert isinstance(values, list) and len(values) == 1
 
@@ -285,14 +314,19 @@ def test_moo_objective_penalty_survives_instantiation(tmp_path: Path) -> None:
 
 def test_csv_tail_step_penalty_on_miss(tmp_path: Path) -> None:
     """JSON metric absent + ``penalty='csv_tail_step'`` ⇒ last CSV ``step``."""
-    _write_csv(tmp_path / "metrics.csv", [
-        {"step": "100", "split": "train", "loss/total": "5.0"},
-        {"step": "4900", "split": "train", "loss/total": "1.0"},
-        {"step": "5000", "split": "train", "loss/total": "0.5"},
-    ])
+    _write_csv(
+        tmp_path / "metrics.csv",
+        [
+            {"step": "100", "split": "train", "loss/total": "5.0"},
+            {"step": "4900", "split": "train", "loss/total": "1.0"},
+            {"step": "5000", "split": "train", "loss/total": "0.5"},
+        ],
+    )
     (tmp_path / "metrics.json").write_text(json.dumps({"other": 1.0}))
     spec = ObjectiveSpec(
-        metric="wallclock_to_target_step", source="json", penalty="csv_tail_step",
+        metric="wallclock_to_target_step",
+        source="json",
+        penalty="csv_tail_step",
     )
     # Target never reached → cost the full step budget (last step = 5000).
     assert spec.read(str(tmp_path)) == pytest.approx(5000.0)
@@ -304,7 +338,9 @@ def test_csv_tail_step_hit_returns_recorded_value(tmp_path: Path) -> None:
         json.dumps({"wallclock_to_target_step": 1234})
     )
     spec = ObjectiveSpec(
-        metric="wallclock_to_target_step", source="json", penalty="csv_tail_step",
+        metric="wallclock_to_target_step",
+        source="json",
+        penalty="csv_tail_step",
     )
     assert spec.read(str(tmp_path)) == pytest.approx(1234.0)
 
@@ -313,7 +349,9 @@ def test_csv_tail_step_returns_inf_without_csv(tmp_path: Path) -> None:
     """Miss + no ``metrics.csv`` ⇒ ``+inf`` (no step budget to fall back on)."""
     (tmp_path / "metrics.json").write_text(json.dumps({"other": 1.0}))
     spec = ObjectiveSpec(
-        metric="wallclock_to_target_step", source="json", penalty="csv_tail_step",
+        metric="wallclock_to_target_step",
+        source="json",
+        penalty="csv_tail_step",
     )
     result = spec.read(str(tmp_path))
     assert math.isinf(result) and result > 0
@@ -329,16 +367,23 @@ def test_csv_tail_step_survives_instantiation(tmp_path: Path) -> None:
         Objectives as ObjectivesCfg,
     )
 
-    cfg = ObjectivesCfg(specs=[
-        ObjectiveCfg(
-            metric="wallclock_to_target_step", source="json", penalty="csv_tail_step",
-        ),
-    ])
+    cfg = ObjectivesCfg(
+        specs=[
+            ObjectiveCfg(
+                metric="wallclock_to_target_step",
+                source="json",
+                penalty="csv_tail_step",
+            ),
+        ]
+    )
     obj = instantiate(cfg)
     spec = _as_objective_spec(obj.specs[0])
     assert spec.penalty == "csv_tail_step"
-    _write_csv(tmp_path / "metrics.csv", [
-        {"step": "5000", "split": "train", "loss/total": "0.5"},
-    ])
+    _write_csv(
+        tmp_path / "metrics.csv",
+        [
+            {"step": "5000", "split": "train", "loss/total": "0.5"},
+        ],
+    )
     (tmp_path / "metrics.json").write_text(json.dumps({"other": 1.0}))
     assert spec.read(str(tmp_path)) == pytest.approx(5000.0)

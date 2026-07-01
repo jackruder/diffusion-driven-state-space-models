@@ -5,10 +5,20 @@ in a notebook, org src block, or Python script. Each name here is a
 ``builds(...)`` config — call it like a function with keyword
 overrides::
 
-    from ddssm.experiment.builders import DiffTransition, DiffSchedule, Unet
+    from ddssm.experiment.builders import (
+        DiffTransition,
+        DiffSchedule,
+        Unet,
+    )
+
     t = DiffTransition(
-        unet=Unet(channels=64, n_layers=4),
-        schedule=DiffSchedule(S_k=20),
+        unet=Unet(
+            channels=64,
+            n_layers=4,
+        ),
+        schedule=DiffSchedule(
+            S_k=20
+        ),
     )
 
 Shape kwargs (``data_dim``, ``latent_dim``, ``j``, ``emb_time_dim``,
@@ -281,16 +291,25 @@ TransformerFutSum = builds(
 # ``experiments._make.experiment`` can fill them in one place.
 
 _SHAPE_ENC = dict(
-    data_dim=MISSING, latent_dim=MISSING, j=MISSING,
-    emb_time_dim=MISSING, covariate_dim=MISSING, use_mask=MISSING,
+    data_dim=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
+    emb_time_dim=MISSING,
+    covariate_dim=MISSING,
+    use_mask=MISSING,
 )
 _SHAPE_DEC = dict(
-    data_dim=MISSING, latent_dim=MISSING, j=MISSING,
-    emb_time_dim=MISSING, covariate_dim=MISSING,
+    data_dim=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
+    emb_time_dim=MISSING,
+    covariate_dim=MISSING,
 )
 _SHAPE_LAT = dict(
-    latent_dim=MISSING, j=MISSING,
-    emb_time_dim=MISSING, covariate_dim=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
+    emb_time_dim=MISSING,
+    covariate_dim=MISSING,
 )
 
 Encoder = builds(
@@ -325,27 +344,32 @@ GaussTransition = builds(
 ZeroBaselineB = builds(
     ZeroBaseline,
     populate_full_signature=True,
-    latent_dim=MISSING, j=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
 )
 PersistenceBaselineB = builds(
     PersistenceBaseline,
     populate_full_signature=True,
-    latent_dim=MISSING, j=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
 )
 LinearBaselineB = builds(
     LinearBaseline,
     populate_full_signature=True,
-    latent_dim=MISSING, j=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
 )
 MLPBaselineB = builds(
     MLPBaseline,
     populate_full_signature=True,
-    latent_dim=MISSING, j=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
 )
 AuxPosteriorB = builds(
     AuxPosterior,
     populate_full_signature=True,
-    latent_dim=MISSING, j=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
 )
 SigmaDataBufferB = builds(
     SigmaDataBuffer,
@@ -356,15 +380,18 @@ BaselineGaussTransition = builds(
     BaselineGaussianTransition,
     populate_full_signature=True,
     baseline=MISSING,
-    latent_dim=MISSING, j=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
 )
 
 DiffTransition = builds(
     DiffusionTransition,
     populate_full_signature=True,
     baseline=MISSING,
-    latent_dim=MISSING, j=MISSING,
-    emb_time_dim=MISSING, T_max=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
+    emb_time_dim=MISSING,
+    T_max=MISSING,
     unet=Unet(),
     schedule=DiffSchedule(),
 )
@@ -403,7 +430,9 @@ SBatch = builds(_SBatchDC, populate_full_signature=True)
 DDSSM = builds(
     DDSSM_base,
     populate_full_signature=True,
-    data_dim=MISSING, latent_dim=MISSING, j=MISSING,
+    data_dim=MISSING,
+    latent_dim=MISSING,
+    j=MISSING,
 )
 
 # ``build_trainer`` is a partial: the experiment fills in model/device/
@@ -435,34 +464,67 @@ ExperimentC = builds(Experiment, populate_full_signature=True)
 
 __all__ = [
     # Mixer / residual-block builders (instantiate to runtime dataclasses)
-    "TimeMixer", "FeatureMixer", "ResidualBlock", "DiffResidualBlock",
+    "TimeMixer",
+    "FeatureMixer",
+    "ResidualBlock",
+    "DiffResidualBlock",
     # Schedules
     "DiffSchedule",
     # Architectural builders
-    "Head", "Context", "MLPContext", "Unet", "MLPUnet",
-    "GRUFutSum", "TransformerFutSum",
+    "Head",
+    "Context",
+    "MLPContext",
+    "Unet",
+    "MLPUnet",
+    "GRUFutSum",
+    "TransformerFutSum",
     # Encoder building blocks: aggregator + fusion + dist-head
-    "IdentityAggregatorB", "GRUAggregatorB", "MLPAggregatorB",
-    "AttentionAggregatorB", "ContextAggregatorB",
-    "ConcatLinearFusionB", "DKSFusionB", "GatedFusionB",
+    "IdentityAggregatorB",
+    "GRUAggregatorB",
+    "MLPAggregatorB",
+    "AttentionAggregatorB",
+    "ContextAggregatorB",
+    "ConcatLinearFusionB",
+    "DKSFusionB",
+    "GatedFusionB",
     "Combiner",
     "GaussianDistHeadB",
     # Module-slot builders
-    "Encoder", "Decoder",
+    "Encoder",
+    "Decoder",
     "GaussTransition",
     # Model-v2 baseline-centering builders
-    "ZeroBaselineB", "PersistenceBaselineB", "LinearBaselineB", "MLPBaselineB",
-    "AuxPosteriorB", "SigmaDataBufferB",
-    "BaselineGaussTransition", "DiffTransition", "CenteringHandoff",
+    "ZeroBaselineB",
+    "PersistenceBaselineB",
+    "LinearBaselineB",
+    "MLPBaselineB",
+    "AuxPosteriorB",
+    "SigmaDataBufferB",
+    "BaselineGaussTransition",
+    "DiffTransition",
+    "CenteringHandoff",
     # Data modules
-    "Synthetic", "KDD", "GluonTS", "Null",
+    "Synthetic",
+    "KDD",
+    "GluonTS",
+    "Null",
     # Model + training
-    "DDSSM", "Hparams",
-    "Trainable", "Training", "Objective", "Objectives", "SBatch",
+    "DDSSM",
+    "Hparams",
+    "Trainable",
+    "Training",
+    "Objective",
+    "Objectives",
+    "SBatch",
     "TrainerPartial",
     # Eval / viz / variance
-    "Eval", "Plot", "Viz",
-    "Probe", "ProbeCellB", "ProbeMetric", "ProbePlot",
+    "Eval",
+    "Plot",
+    "Viz",
+    "Probe",
+    "ProbeCellB",
+    "ProbeMetric",
+    "ProbePlot",
     # Experiment composer
     "ExperimentC",
 ]

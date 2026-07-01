@@ -28,7 +28,8 @@ def test_train_calls_set_trainable_when_specified():
     expt.wandb_config = None
     expt.objective = None
     expt.training = TrainingScalars(
-        steps=0, log_every=1,
+        steps=0,
+        log_every=1,
         trainable=StageTrainableConf(encoder=True, decoder=True, transition=False),
     )
 

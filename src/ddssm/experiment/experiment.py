@@ -15,9 +15,10 @@ import csv
 import json
 import math
 import random
-from typing import Any, Literal, Callable
+from typing import Any, Literal
 import logging
 from dataclasses import field, dataclass
+from collections.abc import Callable
 
 import numpy as np
 import torch
@@ -159,7 +160,7 @@ class ObjectiveSpec:
             return float("inf")
         last_value: float | None = None
         try:
-            with open(csv_path, "r", newline="") as f:
+            with open(csv_path, newline="") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     raw = row.get(column, "")
@@ -184,15 +185,13 @@ class ObjectiveSpec:
         if not csv_path or not os.path.isfile(csv_path):
             return float("inf")
         try:
-            with open(csv_path, "r", newline="") as f:
+            with open(csv_path, newline="") as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames or []
                 if self.metric in fieldnames:
                     col = self.metric
                 else:
-                    col = next(
-                        (h for h in fieldnames if "loss" in h.lower()), ""
-                    )
+                    col = next((h for h in fieldnames if "loss" in h.lower()), "")
                     if col:
                         _warn_once(
                             f"ObjectiveSpec metric {self.metric!r} not in "
@@ -245,7 +244,7 @@ class ObjectiveSpec:
         if not os.path.isfile(json_path):
             return float("inf")
         try:
-            with open(json_path, "r") as f:
+            with open(json_path) as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             return float("inf")

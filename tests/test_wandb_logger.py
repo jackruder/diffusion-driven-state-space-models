@@ -139,7 +139,8 @@ def test_resume_run_from_dir_happy_path(fake_wandb, tmp_path):
     (tmp_path / WandbLogger._RUN_ID_FILENAME).write_text("savedid42")
 
     mod = resume_run_from_dir(
-        str(tmp_path), {"enabled": True, "project": "p", "entity": "e"},
+        str(tmp_path),
+        {"enabled": True, "project": "p", "entity": "e"},
     )
     assert mod is fake_wandb
     init_kwargs = fake_wandb.init.call_args.kwargs
@@ -162,9 +163,13 @@ def test_resume_run_from_dir_returns_none_without_dotfile(fake_wandb, tmp_path):
     """No persisted run-id → no resume (returns None)."""
     from ddssm.training.loggers import resume_run_from_dir
 
-    assert resume_run_from_dir(
-        str(tmp_path), {"enabled": True, "project": "p"},
-    ) is None
+    assert (
+        resume_run_from_dir(
+            str(tmp_path),
+            {"enabled": True, "project": "p"},
+        )
+        is None
+    )
     fake_wandb.init.assert_not_called()
 
 
@@ -185,7 +190,9 @@ def test_watch_model_calls_wandb_watch(fake_wandb):
     model = nn.Linear(3, 1)
     logger.watch_model(model)
     fake_wandb.watch.assert_called_once_with(
-        model, log="gradients", log_freq=50,
+        model,
+        log="gradients",
+        log_freq=50,
     )
 
 

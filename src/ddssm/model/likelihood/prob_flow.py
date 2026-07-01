@@ -20,7 +20,7 @@ vector.
 from __future__ import annotations
 
 import math
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import torch
 from torchdiffeq import odeint
@@ -110,7 +110,7 @@ def solve_prob_flow_logdensity(
     atol: float = 1e-5,
     method: str = "dopri5",
     divergence_mode: str = "exact",
-    generator: Optional[torch.Generator] = None,
+    generator: torch.Generator | None = None,
 ) -> torch.Tensor:
     """Native-coord prob-flow ODE log-density at ``z0``.
 
@@ -156,9 +156,13 @@ def solve_prob_flow_logdensity(
     drift_div_const = -0.5 * float(d)
 
     if divergence_mode == "hutchinson":
-        v = torch.randint(
-            0, 2, (B, d), device=device, generator=generator
-        ).to(dtype=dtype).mul_(2.0).sub_(1.0)
+        v = (
+            torch
+            .randint(0, 2, (B, d), device=device, generator=generator)
+            .to(dtype=dtype)
+            .mul_(2.0)
+            .sub_(1.0)
+        )
     else:
         v = None
 
@@ -177,14 +181,17 @@ def solve_prob_flow_logdensity(
     tau_grid = torch.tensor([tau_min, 1.0], device=device, dtype=dtype)
 
     z_traj, A_traj = odeint(
-        dynamics, (z0, A0), tau_grid,
-        method=method, rtol=rtol, atol=atol,
+        dynamics,
+        (z0, A0),
+        tau_grid,
+        method=method,
+        rtol=rtol,
+        atol=atol,
     )
     z_end = z_traj[-1]
     A_end = A_traj[-1]
 
-    log_prior = (
-        -0.5 * z_end.pow(2).sum(dim=-1)
-        - 0.5 * float(d) * math.log(2.0 * math.pi)
+    log_prior = -0.5 * z_end.pow(2).sum(dim=-1) - 0.5 * float(d) * math.log(
+        2.0 * math.pi
     )
     return log_prior + A_end

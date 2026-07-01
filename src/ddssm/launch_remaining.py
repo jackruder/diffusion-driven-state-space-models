@@ -103,7 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     do not rename without updating that emitter.
     """
     p = argparse.ArgumentParser(prog="python -m ddssm.launch_remaining")
-    p.add_argument("--storage", required=True, help="Optuna storage URL (e.g. sqlite:///path.db)")
+    p.add_argument(
+        "--storage", required=True, help="Optuna storage URL (e.g. sqlite:///path.db)"
+    )
     p.add_argument("--study", required=True, help="Optuna study name")
     p.add_argument("--target", type=int, required=True, help="Total trial budget")
     p.add_argument(

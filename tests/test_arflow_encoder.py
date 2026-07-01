@@ -7,12 +7,12 @@ from __future__ import annotations
 
 from functools import partial
 
-import pytest
 import torch
+import pytest
 import torch.nn as nn
 
-from ddssm.model.encoder import ARFlowEncoder, arflow_cumsum
 from ddssm.nn.futsum import TransformerFutureSummary
+from ddssm.model.encoder import ARFlowEncoder, arflow_cumsum
 
 
 def make_encoder(
@@ -140,8 +140,8 @@ def test_persistence_baseline_matches_z_prev() -> None:
     # The transition forms mu_hat = mus − PersistenceBaseline.mean(z_hist) and relies
     # on it being the innovation g. That holds iff the baseline's z_{t-1} (from
     # unfolding zs) equals the encoder's z_prev = shift_right(zs). Pin the off-by-one.
-    from ddssm.model.centering.baselines import PersistenceBaseline
     from ddssm.model.encoder import _shift_right_time
+    from ddssm.model.centering.baselines import PersistenceBaseline
 
     B, S, d, T, j = 2, 2, 8, 6, 1
     enc = make_encoder(latent_dim=d, hidden_dim=16)
@@ -269,7 +269,7 @@ def test_single_parallel_forward() -> None:
 
 def test_identity_baseline_guard() -> None:
     from ddssm.model.dssd import _require_persistence_baseline
-    from ddssm.model.centering.baselines import PersistenceBaseline, ZeroBaseline
+    from ddssm.model.centering.baselines import ZeroBaseline, PersistenceBaseline
 
     enc = make_encoder(latent_dim=4, hidden_dim=16)
     assert enc.requires_persistence_baseline is True
@@ -364,27 +364,41 @@ def make_fwd_encoder(
     nheads: int = 2,
 ) -> ARFlowEncoder:
     fwd = partial(
-        TransformerFutureSummary, summary_dim=hidden_dim, nheads=nheads,
-        transformer_layers=1, reverse_time=False,  # forward-causal f_t
+        TransformerFutureSummary,
+        summary_dim=hidden_dim,
+        nheads=nheads,
+        transformer_layers=1,
+        reverse_time=False,  # forward-causal f_t
     )
     return ARFlowEncoder(
-        data_dim=data_dim, latent_dim=latent_dim, j=1, emb_time_dim=0,
-        use_mask=False, hidden_dim=hidden_dim, channels=channels, causal_layers=2,
-        nheads=nheads, backbone="transformer",
+        data_dim=data_dim,
+        latent_dim=latent_dim,
+        j=1,
+        emb_time_dim=0,
+        use_mask=False,
+        hidden_dim=hidden_dim,
+        channels=channels,
+        causal_layers=2,
+        nheads=nheads,
+        backbone="transformer",
         fut_summary=partial(
-            TransformerFutureSummary, summary_dim=hidden_dim, nheads=nheads,
+            TransformerFutureSummary,
+            summary_dim=hidden_dim,
+            nheads=nheads,
             transformer_layers=1,
         ),
-        stochastic_state=stochastic_state, forward_message=forward_message,
-        fwd_summary=fwd, fwd_layers=2,
+        stochastic_state=stochastic_state,
+        forward_message=forward_message,
+        fwd_summary=fwd,
+        fwd_layers=2,
     )
 
 
 # (forward_message, stochastic_state) for the 3 shipped variants.
 _FWD_VARIANTS = [
-    ("fwd_summary", True),   # o1_flow
-    ("fwd_data", False),     # fb_mf
-    ("fwd_data", True),      # fb_flow
+    ("fwd_summary", True),  # o1_flow
+    ("fwd_data", False),  # fb_mf
+    ("fwd_data", True),  # fb_flow
 ]
 
 
@@ -445,8 +459,13 @@ def test_future_summary_time_direction(reverse_time: bool) -> None:
     # vs forward f_t = F(x_{1:t}). Perturb x at t_pert and check which steps move.
     T, D, t_pert = 6, 5, 2
     fs = TransformerFutureSummary(
-        data_dim=D, emb_time_dim=0, use_mask=False, summary_dim=16, nheads=2,
-        transformer_layers=1, reverse_time=reverse_time,
+        data_dim=D,
+        emb_time_dim=0,
+        use_mask=False,
+        summary_dim=16,
+        nheads=2,
+        transformer_layers=1,
+        reverse_time=reverse_time,
     )
     fs.eval()
     te = torch.zeros(1, T, 0)

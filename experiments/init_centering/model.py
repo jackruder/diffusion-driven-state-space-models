@@ -21,12 +21,11 @@ Default values reproduce the canonical cell from
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 import logging
 from functools import partial
 
 from hydra_zen import builds
-from omegaconf import MISSING
 
 from ddssm.model.dssd import DDSSM_base
 from ddssm.nn.diffnets import (
@@ -72,20 +71,26 @@ def _build_baseline(
     """Construct the baseline (μ_p) head for the requested form."""
     if baseline_form == "zero":
         return ZeroBaseline(
-            latent_dim=latent_dim, j=j,
-            hidden_dim=hidden_dim, n_layers=n_layers,
+            latent_dim=latent_dim,
+            j=j,
+            hidden_dim=hidden_dim,
+            n_layers=n_layers,
         )
     if baseline_form == "persistence":
         return PersistenceBaseline(
-            latent_dim=latent_dim, j=j,
-            hidden_dim=hidden_dim, n_layers=n_layers,
+            latent_dim=latent_dim,
+            j=j,
+            hidden_dim=hidden_dim,
+            n_layers=n_layers,
         )
     if baseline_form == "linear":
         return LinearBaseline(latent_dim=latent_dim, j=j)
     if baseline_form == "mlp":
         return MLPBaseline(
-            latent_dim=latent_dim, j=j,
-            hidden_dim=hidden_dim, n_layers=n_layers,
+            latent_dim=latent_dim,
+            j=j,
+            hidden_dim=hidden_dim,
+            n_layers=n_layers,
         )
     raise ValueError(
         f"baseline_form must be one of (zero, persistence, linear, mlp); "
@@ -120,8 +125,8 @@ def _build_init_centering_model(
     # locked in by CONTEXT.md § "Size axis". Set explicitly to override.
     channels: int | None = None,
     baseline_hidden_dim: int | None = None,  # ``None`` ⇒ 16 × latent_dim
-    encoder_hidden_dim: int | None = None,   # ``None`` ⇒ 16 × latent_dim
-    decoder_hidden_dim: int | None = None,   # ``None`` ⇒ 16 × latent_dim
+    encoder_hidden_dim: int | None = None,  # ``None`` ⇒ 16 × latent_dim
+    decoder_hidden_dim: int | None = None,  # ``None`` ⇒ 16 × latent_dim
     baseline_n_layers: int = 2,
     # σ_data² tracking-EMA decay (used only by global_ema / per_t tracking
     # modes; ignored when tracking_mode="fixed"). Distinct from the
@@ -182,15 +187,21 @@ def _build_init_centering_model(
     # ---- shared ingredients ----
     baseline = _build_baseline(
         baseline_form=baseline_form,
-        latent_dim=latent_dim, j=j,
-        hidden_dim=baseline_hidden_dim, n_layers=baseline_n_layers,
+        latent_dim=latent_dim,
+        j=j,
+        hidden_dim=baseline_hidden_dim,
+        n_layers=baseline_n_layers,
     )
     aux_posterior = AuxPosterior(
-        latent_dim=latent_dim, j=j,
-        hidden_dim=baseline_hidden_dim, n_layers=baseline_n_layers,
+        latent_dim=latent_dim,
+        j=j,
+        hidden_dim=baseline_hidden_dim,
+        n_layers=baseline_n_layers,
     )
     sigma_data = SigmaDataBuffer(
-        T_max=T_max, tracking_mode=tracking_mode, init_value=1.0,
+        T_max=T_max,
+        tracking_mode=tracking_mode,
+        init_value=1.0,
         ema_decay=sigma_data_ema_decay,
     )
 
@@ -237,12 +248,17 @@ def _build_init_centering_model(
 
     # ---- encoder / decoder built inline (no Small1D dependency) ----
     encoder = GaussianEncoder(
-        data_dim=data_dim, latent_dim=latent_dim, j=j,
-        emb_time_dim=emb_time_dim, use_mask=False,
+        data_dim=data_dim,
+        latent_dim=latent_dim,
+        j=j,
+        emb_time_dim=emb_time_dim,
+        use_mask=False,
         hidden_dim=encoder_hidden_dim,
     )
     decoder = GaussianDecoder(
-        data_dim=data_dim, latent_dim=latent_dim, j=j,
+        data_dim=data_dim,
+        latent_dim=latent_dim,
+        j=j,
         emb_time_dim=emb_time_dim,
         hidden_dim=decoder_hidden_dim,
     )
@@ -259,7 +275,7 @@ def _build_init_centering_model(
         # --- VHP-via-diffusion + baseline-centering ---
         aux_posterior=aux_posterior,
         baseline=baseline,
-        baseline_anchor=None,        # populated by the handoff
+        baseline_anchor=None,  # populated by the handoff
         baseline_mode=baseline_mode,
         sigma_data=sigma_data,
         stage1_transition=stage1_transition,

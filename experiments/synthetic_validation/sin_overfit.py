@@ -33,7 +33,7 @@ import dataclasses
 from experiments._make import experiment
 from ddssm.data.presets import HarmonicMixed
 from ddssm.experiment.stores import experiment_store
-from ddssm.experiment.builders import Eval, Hparams, Plot, Viz, Training
+from ddssm.experiment.builders import Viz, Eval, Plot, Hparams, Training
 from experiments.init_centering.hparams import StagesB
 from experiments.synthetic_validation.model import SynthValModel
 
@@ -120,8 +120,12 @@ sin_overfit = experiment(
     # channels=32 + diffusion_num_steps=32 keeps the diffusion-
     # transition capacity modest so the CPU run stays fast.
     model=SynthValModel(
-        data_dim=1, latent_dim=4, j=2,
-        hidden_dim=32, channels=32, diffusion_num_steps=32,
+        data_dim=1,
+        latent_dim=4,
+        j=2,
+        hidden_dim=32,
+        channels=32,
+        diffusion_num_steps=32,
         # k_sampling_mode defaults to "adaptive_is" via
         # DiffusionScheduleConfig — the loss-aware optimal IS density
         # per-t with live σ_d² (importance-sampling.org § Mean-

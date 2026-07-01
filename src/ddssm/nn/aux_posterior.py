@@ -28,8 +28,6 @@ construction is intentionally minimal.
 
 from __future__ import annotations
 
-from typing import Tuple
-
 import torch
 import torch.nn as nn
 
@@ -81,7 +79,7 @@ class AuxPosterior(nn.Module):
             init_logvar=init_logvar,
         )
 
-    def forward(self, z_init: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, z_init: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute ``q_Φ(z_{-j+1:0} | z_{1:j})`` parameters.
 
         Args:
@@ -108,7 +106,7 @@ class AuxPosterior(nn.Module):
 
     def sample(
         self, z_init: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Reparameterised draw from ``q_Φ(· | z_{1:j})``.
 
         Returns:

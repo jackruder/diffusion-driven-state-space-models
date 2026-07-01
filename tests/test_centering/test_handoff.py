@@ -41,7 +41,8 @@ class _DummyTrainer:
     def __init__(self, model: torch.nn.Module) -> None:
         self.model = model
         self.optimizer = torch.optim.AdamW(
-            [p for p in self.model.parameters() if p.requires_grad], lr=1e-3,
+            [p for p in self.model.parameters() if p.requires_grad],
+            lr=1e-3,
         )
         self._rebuild_called_with: Any = None
 
@@ -51,7 +52,8 @@ class _DummyTrainer:
         # optimizer.  Use a flat parameter group at the supplied lr.
         lr = float(getattr(lrs, "enc_lr", 1e-3))
         self.optimizer = torch.optim.AdamW(
-            [p for p in self.model.parameters() if p.requires_grad], lr=lr,
+            [p for p in self.model.parameters() if p.requires_grad],
+            lr=lr,
         )
 
 
@@ -71,7 +73,10 @@ def _make_model() -> torch.nn.Module:
         baseline_anchor=None,
         sigma_data=sigma_data,
         transition=BaselineGaussianTransition(
-            baseline=baseline, latent_dim=D, j=J, emb_time_dim=4,
+            baseline=baseline,
+            latent_dim=D,
+            j=J,
+            emb_time_dim=4,
         ),
     )
     # Add a fake `.parameters()` that yields union of submodule params.
@@ -165,7 +170,9 @@ def test_handoff_rebuilds_optimizer() -> None:
     model = _make_model()
     trainer = _DummyTrainer(model)
     lrs = SimpleNamespace(
-        enc_lr=2e-3, dec_lr=3e-3, trans_lr=5e-3,
+        enc_lr=2e-3,
+        dec_lr=3e-3,
+        trans_lr=5e-3,
     )
     perform_centering_handoff(
         trainer=trainer,
@@ -183,10 +190,13 @@ def test_handoff_resets_sigma_data_schedule_preserves_values() -> None:
     model = _make_model()
     # Advance the buffer state somehow.
     model.sigma_data.sigma_data2 = torch.tensor(
-        [1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8], dtype=torch.float32,
+        [1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8],
+        dtype=torch.float32,
     )
     model.sigma_data.ema_step = torch.full(
-        (T_MAX,), 7, dtype=torch.long,
+        (T_MAX,),
+        7,
+        dtype=torch.long,
     )
     pre_values = model.sigma_data.sigma_data2.clone()
     trainer = _DummyTrainer(model)
@@ -228,6 +238,8 @@ def test_handoff_raises_without_baseline() -> None:
             trainer=trainer,
             spec=CenteringHandoffConf(sigma_pert=0.0),
             new_lrs=SimpleNamespace(
-                enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
+                enc_lr=1e-3,
+                dec_lr=1e-3,
+                trans_lr=1e-3,
             ),
         )

@@ -22,8 +22,9 @@ Two batch formats are advertised so the experiment can pick the right
 from __future__ import annotations
 
 import abc
-from typing import Literal, Callable
+from typing import Literal
 from dataclasses import field, dataclass
+from collections.abc import Callable
 
 import numpy as np
 import torch
@@ -446,8 +447,11 @@ class GluonTSDataModule(WindowedSeriesDataModule):
         "wiki": "wiki2000_nips",
     }
     EXPECTED_K = {
-        "solar": 137, "electricity": 370, "traffic": 963,
-        "taxi": 1214, "wiki": 2000,
+        "solar": 137,
+        "electricity": 370,
+        "traffic": 963,
+        "taxi": 1214,
+        "wiki": 2000,
     }
 
     def __init__(
@@ -535,11 +539,11 @@ class GluonTSDataModule(WindowedSeriesDataModule):
 
 __all__ = [
     "BatchFormat",
-    "DataMetadata",
     "DDSSMDataModule",
+    "DataMetadata",
+    "GluonTSDataModule",
+    "KDDDataModule",
     "NullDataModule",
     "SyntheticDataModule",
     "WindowedSeriesDataModule",
-    "KDDDataModule",
-    "GluonTSDataModule",
 ]

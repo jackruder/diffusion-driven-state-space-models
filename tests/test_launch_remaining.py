@@ -10,15 +10,14 @@ project — see ``pyproject.toml``).
 
 from __future__ import annotations
 
-import datetime
 import os
 import sqlite3
+import datetime
 
 import optuna
-import pytest
 from optuna.trial import TrialState
 
-from ddssm.launch_remaining import compute_remaining, main
+from ddssm.launch_remaining import main, compute_remaining
 
 
 def _storage_url(tmp_path) -> tuple[str, str]:
@@ -34,7 +33,9 @@ def _age_trial(db_path: str, trial_id: int, seconds_ago: float) -> None:
     raw SQL is the project-stable lever and matches what the cleanup path
     has to handle in production (clocks drifting across SLURM nodes / NFS).
     """
-    aged = (datetime.datetime.now() - datetime.timedelta(seconds=seconds_ago)).isoformat()
+    aged = (
+        datetime.datetime.now() - datetime.timedelta(seconds=seconds_ago)
+    ).isoformat()
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(

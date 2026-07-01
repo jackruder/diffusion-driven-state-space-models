@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import glob
 import json
-import os
 
 
 def aggregate_summaries(runs_glob: str, out_dir: str) -> dict:
@@ -23,7 +23,7 @@ def aggregate_summaries(runs_glob: str, out_dir: str) -> dict:
     files = sorted(glob.glob(runs_glob))
     rows = []
     for path in files:
-        with open(path, "r") as f:
+        with open(path) as f:
             payload = json.load(f)
         rows.append({"path": path, "payload": payload})
 

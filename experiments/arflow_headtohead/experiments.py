@@ -47,8 +47,8 @@ from ddssm.experiment.stores import experiment_store
 from ddssm.experiment.builders import Eval, Objective
 from experiments.gluonts_forecast.model import GluonModel
 from experiments.gluonts_forecast.hparams import (
-    GluonHparams,
     GluonStages,
+    GluonHparams,
     GluonTraining,
 )
 
@@ -71,15 +71,18 @@ _ENCODERS = {
     # o1_flow = option-1 (forward pass over b → o_t) sent through the IAF flow;
     # fb_mf / fb_flow = [f_t, b_t] context with a mean-field / IAF head respectively.
     "o1_flow": dict(
-        encoder_type="arflow", arflow_stochastic_state=True,
+        encoder_type="arflow",
+        arflow_stochastic_state=True,
         arflow_forward_message="fwd_summary",
     ),
     "fb_mf": dict(
-        encoder_type="arflow", arflow_stochastic_state=False,
+        encoder_type="arflow",
+        arflow_stochastic_state=False,
         arflow_forward_message="fwd_data",
     ),
     "fb_flow": dict(
-        encoder_type="arflow", arflow_stochastic_state=True,
+        encoder_type="arflow",
+        arflow_stochastic_state=True,
         arflow_forward_message="fwd_data",
     ),
     # Pinned identity encoder/decoder (z=x, requires latent_dim==data_dim): the
@@ -134,27 +137,29 @@ _ENCODERS = {
 # eval_baselines/probe (which rebuild the model from the experiment NAME alone)
 # reconstruct the exact architecture.
 _KS = _ENCODERS["identity_csdilike"]
-_ENCODERS.update(
-    {
-        # noise-level sampling: uniform -> adaptive_is (the 24% anchor's value)
-        "identity_csdilike_ksamp": {
-            **_KS, "k_sampling_mode": "adaptive_is", "pk_floor": 1e-3,
-        },
-        # per-channel feature embedding: 16 -> 0 (off)
-        "identity_csdilike_embfeat": {**_KS, "emb_feature_dim": 0},
-        # time mixer: transformer (non-causal RoPE) -> conv (3-tap)
-        "identity_csdilike_timemix": {**_KS, "time_mixer": "conv"},
-        # sampler: EDM Heun+churn -> legacy pf_ode (deterministic VP Euler).
-        # Inference-only, so this cell re-scores the kitchen-sink checkpoint.
-        "identity_csdilike_sampler": {
-            **_KS, "diffusion_sampler": "pf_ode", "edm_s_churn": 0.0,
-        },
-        # baseline: zero (μ_p≡0) -> persistence (μ_p = z_{t-1})
-        "identity_csdilike_baseline": {**_KS, "baseline_type": "persistence"},
-        # FRAME TRANSFER: full kitchen-sink recipe on the learned gaussian frame
-        "gaussian_csdilike": {**_KS, "encoder_type": "gaussian"},
-    }
-)
+_ENCODERS.update({
+    # noise-level sampling: uniform -> adaptive_is (the 24% anchor's value)
+    "identity_csdilike_ksamp": {
+        **_KS,
+        "k_sampling_mode": "adaptive_is",
+        "pk_floor": 1e-3,
+    },
+    # per-channel feature embedding: 16 -> 0 (off)
+    "identity_csdilike_embfeat": {**_KS, "emb_feature_dim": 0},
+    # time mixer: transformer (non-causal RoPE) -> conv (3-tap)
+    "identity_csdilike_timemix": {**_KS, "time_mixer": "conv"},
+    # sampler: EDM Heun+churn -> legacy pf_ode (deterministic VP Euler).
+    # Inference-only, so this cell re-scores the kitchen-sink checkpoint.
+    "identity_csdilike_sampler": {
+        **_KS,
+        "diffusion_sampler": "pf_ode",
+        "edm_s_churn": 0.0,
+    },
+    # baseline: zero (μ_p≡0) -> persistence (μ_p = z_{t-1})
+    "identity_csdilike_baseline": {**_KS, "baseline_type": "persistence"},
+    # FRAME TRANSFER: full kitchen-sink recipe on the learned gaussian frame
+    "gaussian_csdilike": {**_KS, "encoder_type": "gaussian"},
+})
 
 # dataset key -> (data-module preset, obs dim). LGSSM exposes GT latents so
 # finalists can be scored on latent recovery + the analytic Kalman reference.
@@ -172,10 +177,18 @@ def _model(encoder_key: str, data_dim: int, j: int = 1):
         else {}
     )
     return GluonModel(
-        data_dim=data_dim, latent_dim=_LATENT_DIM, j=j, T_max=_T,
-        channels=48, nheads=2, summary_layers=1, diffusion_layers=3,
-        num_steps=64, grad_checkpoint=False,
-        **_ENCODERS[encoder_key], **caps,
+        data_dim=data_dim,
+        latent_dim=_LATENT_DIM,
+        j=j,
+        T_max=_T,
+        channels=48,
+        nheads=2,
+        summary_layers=1,
+        diffusion_layers=3,
+        num_steps=64,
+        grad_checkpoint=False,
+        **_ENCODERS[encoder_key],
+        **caps,
     )
 
 
@@ -198,15 +211,21 @@ def _phase2_cell(encoder_key: str, dataset_key: str, j: int = 1):
         # defaults for +sweep=h2h_full. Stage-2-only: the stage-1 knobs
         # (n_pretrain, sigma_pert, lambda_sigma_p, stage_1_*) are inert.
         stages=GluonStages(
-            run=["stage_2"], n_stage2=4000,
-            validate_every=100, log_every=50, checkpoint_every=1000,
+            run=["stage_2"],
+            n_stage2=4000,
+            validate_every=100,
+            log_every=50,
+            checkpoint_every=1000,
         ),
         # Per-trial objective eval: forecast CRPS-sum on the VAL split (select on
         # val, report on test). One forecast pass per trial; finalists get the
         # full {crps,energy,nll}-on-test eval via `python -m ddssm.evaluate`.
         eval=Eval(
-            metrics=["crps_sum"], split="val", num_samples=100,
-            T_split=_T_SPLIT, output_filename="metrics.json",
+            metrics=["crps_sum"],
+            split="val",
+            num_samples=100,
+            T_split=_T_SPLIT,
+            output_filename="metrics.json",
         ),
         objective=Objective(metric="crps_sum", source="json"),
     )
@@ -224,17 +243,25 @@ def _phase1_cell(encoder_key: str, dataset_key: str, j: int = 1):
             run=["stage_1"],
             n_pretrain=3000,
             # λ ≡ 0 (start=end=0) AND no σ_p regulariser → loss == pure recon.
-            stage_1_lambda_start=0.0, stage_1_lambda_end=0.0, lambda_sigma_p=0.0,
-            validate_every=100, log_every=50, checkpoint_every=1000,
-            early_stop_enabled=True, early_stop_window=500,
-            early_stop_min_improvement=1e-4, early_stop_warmup_steps=500,
+            stage_1_lambda_start=0.0,
+            stage_1_lambda_end=0.0,
+            lambda_sigma_p=0.0,
+            validate_every=100,
+            log_every=50,
+            checkpoint_every=1000,
+            early_stop_enabled=True,
+            early_stop_window=500,
+            early_stop_min_improvement=1e-4,
+            early_stop_warmup_steps=500,
         ),
         # CAPACITY METRIC = reconstruction MSE on the decoded posterior MEAN. λ=0
         # leaves the decoder σ unregularised, so the distortion NLL collapses to −∞
         # (σ_dec→0) — degenerate and non-discriminating. recon_mse scores μ_x only,
         # so it is bounded and stays a clean encoder-capacity measure.
         eval=Eval(
-            metrics=["recon_mse"], split="val", num_samples=1,
+            metrics=["recon_mse"],
+            split="val",
+            num_samples=1,
             output_filename="metrics.json",
         ),
         objective=Objective(metric="recon_mse", source="json"),
@@ -257,7 +284,13 @@ for _enc in ("gaussian_local", "o1_flow", "fb_mf", "fb_flow"):
 # j=1 cells above are structurally unable to model the 0.85/0.15 mode-weighting.
 # Same cells, only the transition/encoder conditioning order changes.
 for _enc in (
-    "gaussian", "gaussian_local", "iaf", "det", "o1_flow", "fb_mf", "fb_flow",
+    "gaussian",
+    "gaussian_local",
+    "iaf",
+    "det",
+    "o1_flow",
+    "fb_mf",
+    "fb_flow",
     "identity",
 ):
     experiment_store(_phase2_cell(_enc, "nlblmv", j=2), name=f"h2h__{_enc}__nlblmv__j2")

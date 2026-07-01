@@ -8,16 +8,19 @@ import pytest
 from ddssm.nn.fusions import DKSFusion, GatedFusion, ConcatLinearFusion
 
 B = 3
-H = 8           # hidden_dim
-HIST = 12       # aggregator out_features
-SUMMARY = 16    # h_fut dim
+H = 8  # hidden_dim
+HIST = 12  # aggregator out_features
+SUMMARY = 16  # h_fut dim
 
 
-@pytest.mark.parametrize("cls,out_factor", [
-    (ConcatLinearFusion, 2),
-    (DKSFusion, 1),
-    (GatedFusion, 1),
-])
+@pytest.mark.parametrize(
+    "cls,out_factor",
+    [
+        (ConcatLinearFusion, 2),
+        (DKSFusion, 1),
+        (GatedFusion, 1),
+    ],
+)
 def test_fusion_shape(cls, out_factor):
     fusion = cls(hist_features=HIST, summary_dim=SUMMARY, hidden_dim=H)
     h_fut = torch.randn(B, SUMMARY)

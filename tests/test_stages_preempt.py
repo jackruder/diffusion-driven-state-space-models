@@ -72,26 +72,43 @@ def _make_small_model() -> DDSSM_base:
         fusion=partial(ConcatLinearFusion),
     )
     enc = GaussianEncoder(
-        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        use_mask=True, hidden_dim=CHANNELS,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
+        use_mask=True,
+        hidden_dim=CHANNELS,
         combiner=combiner,
         dist_head=partial(GaussianDistHead),
         fut_summary=_FS,
     )
     dec = GaussianDecoder(
-        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM,
+        data_dim=DATA_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH,
+        context=_CTX,
+        gaussian_head=_GH,
     )
     trans = GaussianTransition(
-        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH,
+        context=_CTX,
+        gaussian_head=_GH,
     )
     aux = AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=CHANNELS, n_layers=1)
     return DDSSM_base(
-        encoder=enc, decoder=dec, transition=trans, aux_posterior=aux,
-        j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
+        encoder=enc,
+        decoder=dec,
+        transition=trans,
+        aux_posterior=aux,
+        j=J,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        emb_time_dim=EMB_TIME,
     )
 
 
@@ -203,14 +220,18 @@ def _two_stage_config() -> StagesConf:
         steps=10,
         trainable=StageTrainableConf(),
         lrs=StageLrsConf(enc_lr=1e-3),
-        log_every=5, val_every=10, checkpoint_every=10,
+        log_every=5,
+        val_every=10,
+        checkpoint_every=10,
         centering_handoff=CenteringHandoffConf(sigma_pert=0.0),
     )
     stage_2 = StageSpecConf(
         steps=20,
         trainable=StageTrainableConf(),
         lrs=StageLrsConf(enc_lr=2e-3),
-        log_every=5, val_every=10, checkpoint_every=10,
+        log_every=5,
+        val_every=10,
+        checkpoint_every=10,
     )
     return StagesConf(stage_1=stage_1, stage_2=stage_2, run=["stage_1", "stage_2"])
 

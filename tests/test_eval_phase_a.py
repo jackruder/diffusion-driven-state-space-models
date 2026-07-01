@@ -60,10 +60,16 @@ def test_wallclock_to_target_finds_first_crossing(tmp_path) -> None:
     ]
     _write_csv(csv_path, rows)
     ctx = EvalContext(
-        model=None, loader=None, device=torch.device("cpu"), csv_path=str(csv_path),
+        model=None,
+        loader=None,
+        device=torch.device("cpu"),
+        csv_path=str(csv_path),
     )
     out = eval_wallclock_to_target(
-        ctx, target_column="loss/total", target_value=1.0, direction="<=",
+        ctx,
+        target_column="loss/total",
+        target_value=1.0,
+        direction="<=",
     )
     assert out["wallclock_to_target_step"] == 4
     assert abs(out["wallclock_to_target_seconds"] - 5.0) < 1e-9
@@ -74,15 +80,26 @@ def test_wallclock_to_target_never_crosses(tmp_path) -> None:
     """When no row crosses, both step and seconds are ``None``."""
     csv_path = tmp_path / "metrics.csv"
     rows = [
-        {"split": "train", "step": str(i), "time/elapsed_s": str(i), "loss/total": "5.0"}
+        {
+            "split": "train",
+            "step": str(i),
+            "time/elapsed_s": str(i),
+            "loss/total": "5.0",
+        }
         for i in range(1, 6)
     ]
     _write_csv(csv_path, rows)
     ctx = EvalContext(
-        model=None, loader=None, device=torch.device("cpu"), csv_path=str(csv_path),
+        model=None,
+        loader=None,
+        device=torch.device("cpu"),
+        csv_path=str(csv_path),
     )
     out = eval_wallclock_to_target(
-        ctx, target_column="loss/total", target_value=1.0, direction="<=",
+        ctx,
+        target_column="loss/total",
+        target_value=1.0,
+        direction="<=",
     )
     assert out["wallclock_to_target_step"] is None
     assert out["wallclock_to_target_seconds"] is None
@@ -92,15 +109,26 @@ def test_wallclock_to_target_ge_direction(tmp_path) -> None:
     """``direction='>='`` finds the first upward crossing."""
     csv_path = tmp_path / "metrics.csv"
     rows = [
-        {"split": "train", "step": str(i), "time/elapsed_s": str(float(i)), "rate": str(0.1 * i)}
+        {
+            "split": "train",
+            "step": str(i),
+            "time/elapsed_s": str(float(i)),
+            "rate": str(0.1 * i),
+        }
         for i in range(1, 6)
     ]
     _write_csv(csv_path, rows)
     ctx = EvalContext(
-        model=None, loader=None, device=torch.device("cpu"), csv_path=str(csv_path),
+        model=None,
+        loader=None,
+        device=torch.device("cpu"),
+        csv_path=str(csv_path),
     )
     out = eval_wallclock_to_target(
-        ctx, target_column="rate", target_value=0.3, direction=">=",
+        ctx,
+        target_column="rate",
+        target_value=0.3,
+        direction=">=",
     )
     assert out["wallclock_to_target_step"] == 3
     assert abs(out["wallclock_to_target_seconds"] - 3.0) < 1e-9
@@ -109,7 +137,10 @@ def test_wallclock_to_target_ge_direction(tmp_path) -> None:
 def test_wallclock_to_target_invalid_direction_raises() -> None:
     """Unknown direction tokens raise ``ValueError``."""
     ctx = EvalContext(
-        model=None, loader=None, device=torch.device("cpu"), csv_path="",
+        model=None,
+        loader=None,
+        device=torch.device("cpu"),
+        csv_path="",
     )
     with pytest.raises(ValueError):
         eval_wallclock_to_target(ctx, direction="==")
@@ -118,7 +149,10 @@ def test_wallclock_to_target_invalid_direction_raises() -> None:
 def test_wallclock_to_target_missing_csv() -> None:
     """No CSV → both fields are ``None``."""
     ctx = EvalContext(
-        model=None, loader=None, device=torch.device("cpu"), csv_path="",
+        model=None,
+        loader=None,
+        device=torch.device("cpu"),
+        csv_path="",
     )
     out = eval_wallclock_to_target(ctx)
     assert out["wallclock_to_target_step"] is None
@@ -200,7 +234,10 @@ def test_nonlinear_bimodal_lift_kernel_samples_are_bimodal_1d() -> None:
     z_hist = np.full((B, d, j), z_prev, dtype=np.float32)
     samples = kernel(z_hist, S=S)
     assert samples.shape == (B, S, d)
-    expected_centers = np.array([np.tanh(z_prev) - NLBL_DELTA, np.tanh(z_prev) + NLBL_DELTA])
+    expected_centers = np.array([
+        np.tanh(z_prev) - NLBL_DELTA,
+        np.tanh(z_prev) + NLBL_DELTA,
+    ])
     # Bin around each expected centre; both should hold roughly half of
     # the samples (per-sample Rademacher sign).
     mid = np.tanh(z_prev)
@@ -392,7 +429,6 @@ def test_nll_returns_nan_when_model_or_loader_missing() -> None:
 
 def test_nll_propagates_knobs_to_log_prob_and_aggregates() -> None:
     """``eval_nll`` forwards its knobs to ``model.log_prob`` and averages."""
-
     captured: list[dict] = []
 
     class _FakeModel:
@@ -474,7 +510,6 @@ def test_nll_propagates_knobs_to_log_prob_and_aggregates() -> None:
 
 def test_nll_hutchinson_probes_ignored_under_exact_divergence() -> None:
     """In exact mode, ``num_hutchinson_probes`` collapses to a single call."""
-
     call_count = {"n": 0}
 
     class _FakeModel:
@@ -490,7 +525,9 @@ def test_nll_hutchinson_probes_ignored_under_exact_divergence() -> None:
         }
 
     ctx = EvalContext(
-        model=_FakeModel(), loader=_loader(), device=torch.device("cpu"),
+        model=_FakeModel(),
+        loader=_loader(),
+        device=torch.device("cpu"),
     )
     out = eval_nll(ctx, divergence_mode="exact", num_hutchinson_probes=8)
 
@@ -501,7 +538,9 @@ def test_nll_hutchinson_probes_ignored_under_exact_divergence() -> None:
 def test_nll_rejects_invalid_divergence_mode() -> None:
     """Mirrors the validation in ``solve_prob_flow_logdensity``."""
     ctx = EvalContext(
-        model=object(), loader=iter([]), device=torch.device("cpu"),
+        model=object(),
+        loader=iter([]),
+        device=torch.device("cpu"),
     )
     with pytest.raises(ValueError, match="divergence_mode"):
         eval_nll(ctx, divergence_mode="quadrature")
@@ -509,7 +548,9 @@ def test_nll_rejects_invalid_divergence_mode() -> None:
 
 def test_nll_rejects_non_positive_probe_count() -> None:
     ctx = EvalContext(
-        model=object(), loader=iter([]), device=torch.device("cpu"),
+        model=object(),
+        loader=iter([]),
+        device=torch.device("cpu"),
     )
     with pytest.raises(ValueError, match="num_hutchinson_probes"):
         eval_nll(ctx, num_hutchinson_probes=0)
@@ -558,7 +599,11 @@ def test_gt_latent_jsd_returns_unavailable_without_kernel() -> None:
 
     dm = SyntheticDataModule(
         mode="harmonic",  # no kernel registered
-        T=4, D=1, N_per_split=2, batch_size=1, expose_gt_latents=True,
+        T=4,
+        D=1,
+        N_per_split=2,
+        batch_size=1,
+        expose_gt_latents=True,
     )
     ctx = EvalContext(
         model=object(),

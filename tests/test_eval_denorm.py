@@ -33,7 +33,12 @@ def test_denorm_scales_metric_by_std_and_noop_when_absent() -> None:
     batch = {
         "observed_data": obs,
         "observation_mask": torch.ones_like(obs),
-        "timepoints": torch.arange(L1 + L2).float().unsqueeze(0).expand(2, L1 + L2).contiguous(),
+        "timepoints": torch
+        .arange(L1 + L2)
+        .float()
+        .unsqueeze(0)
+        .expand(2, L1 + L2)
+        .contiguous(),
     }
 
     def ctx(means, stds):

@@ -85,8 +85,11 @@ class Checkpoint:
 
     @classmethod
     def from_trainer(
-        cls, trainer, *, stage_prefix: str | None = None,
-    ) -> "Checkpoint":
+        cls,
+        trainer,
+        *,
+        stage_prefix: str | None = None,
+    ) -> Checkpoint:
         """Snapshot a trainer's state into a :class:`Checkpoint`.
 
         Scaler state is captured only when the GradScaler is enabled (a
@@ -101,7 +104,8 @@ class Checkpoint:
             model_config_yaml=getattr(trainer, "_model_config_yaml", None),
             optimizer_state=(
                 trainer.optimizer.state_dict()
-                if trainer.optimizer is not None else None
+                if trainer.optimizer is not None
+                else None
             ),
             ema_decay=trainer.ema_decay,
             ema_state=getattr(ema, "shadow", None),
@@ -114,11 +118,10 @@ class Checkpoint:
             # that the producer was running AMP fp16.
             scaler_state=(
                 scaler.state_dict()
-                if scaler is not None and scaler.is_enabled() else None
+                if scaler is not None and scaler.is_enabled()
+                else None
             ),
-            scheduler_state=(
-                scheduler.state_dict() if scheduler is not None else None
-            ),
+            scheduler_state=(scheduler.state_dict() if scheduler is not None else None),
         )
 
     def to_payload(self) -> dict:
@@ -140,7 +143,7 @@ class Checkpoint:
         _atomic_save(self.to_payload(), path)
 
     @classmethod
-    def load(cls, path: str, *, device: torch.device) -> "Checkpoint":
+    def load(cls, path: str, *, device: torch.device) -> Checkpoint:
         """Parse a ``.pth`` payload into a :class:`Checkpoint`.
 
         Tolerates legacy raw ``state_dict`` payloads (no ``model_state`` key)
@@ -155,8 +158,9 @@ class Checkpoint:
         fmt = payload.get("_format")
         if fmt is not None and fmt not in _SUPPORTED_FORMATS:
             log.warning(
-                "Unknown checkpoint _format=%r (supported: %s); loading "
-                "best-effort.", fmt, sorted(_SUPPORTED_FORMATS),
+                "Unknown checkpoint _format=%r (supported: %s); loading best-effort.",
+                fmt,
+                sorted(_SUPPORTED_FORMATS),
             )
         return cls(
             model_state=payload["model_state"],
@@ -214,12 +218,15 @@ def load_into_model(
 
     if ckpt.model_config_yaml is not None and expected_model_config_yaml is not None:
         if ckpt.model_config_yaml.strip() != expected_model_config_yaml.strip():
-            diff = "\n".join(difflib.unified_diff(
-                ckpt.model_config_yaml.splitlines(),
-                expected_model_config_yaml.splitlines(),
-                fromfile="checkpoint", tofile="experiment=",
-                lineterm="",
-            ))
+            diff = "\n".join(
+                difflib.unified_diff(
+                    ckpt.model_config_yaml.splitlines(),
+                    expected_model_config_yaml.splitlines(),
+                    fromfile="checkpoint",
+                    tofile="experiment=",
+                    lineterm="",
+                )
+            )
             log.warning(
                 "Model config drift between checkpoint and passed "
                 "experiment=. Loading state from checkpoint anyway "
@@ -262,9 +269,7 @@ def prepare_model(
     """
     model = experiment.model.to(device)
     if checkpoint_path is None:
-        log.warning(
-            "No checkpoint provided; using randomly-initialised weights."
-        )
+        log.warning("No checkpoint provided; using randomly-initialised weights.")
     else:
         # strict=False: a two-stage checkpoint carries the training-only
         # ``baseline_anchor.*`` submodule (snapshotted at the centering handoff,
@@ -273,9 +278,13 @@ def prepare_model(
         # only tolerates that dynamically-attached anchor (matches the
         # eval_baselines / probe loaders).
         load_into_model(
-            model, checkpoint_path, device=device,
+            model,
+            checkpoint_path,
+            device=device,
             expected_model_config_yaml=getattr(
-                experiment, "model_config_yaml", None,
+                experiment,
+                "model_config_yaml",
+                None,
             ),
             load_ema=load_ema,
             strict=False,

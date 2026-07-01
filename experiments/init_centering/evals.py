@@ -42,17 +42,19 @@ PilotObjective = Objective(
 # so Hydra-zen instantiates each ``ObjectiveSpec`` properly; the
 # returned list[float] is matched against the sweeper's
 # ``direction: [minimize, minimize]``.
-PilotMOObjective = Objectives(specs=[
-    Objective(
-        metric="wallclock_to_target_step",
-        source="json",
-        penalty="csv_tail_step",
-    ),
-    Objective(
-        metric="stage2_elbo_surrogate",
-        source="json",
-    ),
-])
+PilotMOObjective = Objectives(
+    specs=[
+        Objective(
+            metric="wallclock_to_target_step",
+            source="json",
+            penalty="csv_tail_step",
+        ),
+        Objective(
+            metric="stage2_elbo_surrogate",
+            source="json",
+        ),
+    ]
+)
 
 
 # Default ELBO target for the wallclock objective: steps to ``loss/total <= target``.

@@ -42,7 +42,9 @@ def _storage_url(tmp_path) -> str:
 def _make_study(tmp_path, name: str = "s") -> tuple[optuna.Study, str]:
     url = _storage_url(tmp_path)
     study = optuna.create_study(
-        study_name=name, storage=url, direction="minimize",
+        study_name=name,
+        storage=url,
+        direction="minimize",
     )
     return study, url
 
@@ -87,7 +89,9 @@ def test_find_current_trial_by_param_match(tmp_path) -> None:
 def test_find_current_trial_returns_none_on_ambiguous_match(tmp_path, caplog) -> None:
     """Two RUNNING trials with identical params → None + warning logged."""
     study, _ = _make_study(tmp_path)
-    dist = optuna.distributions.CategoricalDistribution([0.5])  # single value → deterministic
+    dist = optuna.distributions.CategoricalDistribution([
+        0.5
+    ])  # single value → deterministic
 
     # Two RUNNING trials, both forced to the same param value via enqueue.
     for _ in range(2):
@@ -261,7 +265,8 @@ def _preempt_cfg(url: str) -> OmegaConf:
 
 
 def test_load_study_retries_on_transient_sqlite_lock(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     """One transient ``sqlite3.OperationalError`` → retry → success."""
     monkeypatch.setenv("DDSSM_PREEMPTIVE", "1")
@@ -290,7 +295,8 @@ def test_load_study_retries_on_transient_sqlite_lock(
 
 
 def test_load_study_propagates_when_sqlite_lock_persists(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     """Persistent transient errors exhaust retries and re-raise — they do
     NOT silently fall through to plain training.
@@ -310,7 +316,9 @@ def test_load_study_propagates_when_sqlite_lock_persists(
 
 
 def test_load_study_keyerror_falls_through_to_plain_training(
-    tmp_path, monkeypatch, caplog,
+    tmp_path,
+    monkeypatch,
+    caplog,
 ) -> None:
     """``KeyError`` (study not yet created) → (None, None) + warning, no raise."""
     monkeypatch.setenv("DDSSM_PREEMPTIVE", "1")
@@ -331,7 +339,8 @@ def test_load_study_keyerror_falls_through_to_plain_training(
 
 
 def test_load_study_unexpected_exception_propagates(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     """Unexpected exceptions (e.g. ``ValueError``) must propagate — not get
     silently turned into "fall through to plain training", which burns the

@@ -36,7 +36,7 @@ Mapping CSDI's (B, K, L) conditional-imputation API onto the DDSSM transition:
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import torch
 
@@ -120,7 +120,9 @@ class CSDITransition(BaseTransition):
             return
         # zs: (B, S, d, T) -> per-feature over everything but d. In-place copy_ so
         # the buffer keeps its identity (a stable EMA shadow / state_dict slot).
-        z = zs.detach().permute(0, 1, 3, 2).reshape(-1, zs.shape[2]).float()  # (B*S*T, d)
+        z = (
+            zs.detach().permute(0, 1, 3, 2).reshape(-1, zs.shape[2]).float()
+        )  # (B*S*T, d)
         self.feat_mean.copy_(z.mean(dim=0))
         self.feat_std.copy_(z.std(dim=0) + 1e-6)
         self.calibrated.fill_(True)
@@ -148,9 +150,9 @@ class CSDITransition(BaseTransition):
         logq_paths: torch.Tensor,  # (B, S, T) — unused (CSDI cancels entropy)
         time_embed: torch.Tensor,  # (B, T, E_t) — unused (CSDI builds its own pos-emb)
         sigma_data: Any = None,
-        covariates: Optional[torch.Tensor] = None,
-        mc_override: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, torch.Tensor]:
+        covariates: torch.Tensor | None = None,
+        mc_override: dict[str, Any] | None = None,
+    ) -> dict[str, torch.Tensor]:
         del enc_stats, logq_paths, time_embed, sigma_data, covariates, mc_override
         B, S, d, T = zs.shape
         j = self.j
@@ -171,7 +173,8 @@ class CSDITransition(BaseTransition):
         cond_mask[..., -1] = 0.0  # last column = one-step-ahead target (imputed)
         observed_mask = torch.ones_like(cond_mask)
         observed_tp = (
-            torch.arange(L, device=zs.device, dtype=observed_data.dtype)
+            torch
+            .arange(L, device=zs.device, dtype=observed_data.dtype)
             .unsqueeze(0)
             .expand(N, -1)
         )
@@ -187,10 +190,10 @@ class CSDITransition(BaseTransition):
         enc_stats: Any,
         zs: torch.Tensor,
         aux_posterior: Any = None,
-        time_embed: Optional[torch.Tensor] = None,
+        time_embed: torch.Tensor | None = None,
         sigma_data: Any = None,
-        covariates: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+        covariates: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         # CSDI models only the conditional p(z_t | z_{t-j:t-1}); the j-step init
         # marginal is supplied from data at forecast time. Contribute nothing.
         del enc_stats, aux_posterior, time_embed, sigma_data, covariates
@@ -203,7 +206,7 @@ class CSDITransition(BaseTransition):
         self,
         z_hist: torch.Tensor,  # (BS, d, j)
         S: int = 1,
-        ctx: Optional[Dict[str, Any]] = None,
+        ctx: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         del S, ctx  # CSDI conditions on the window only; positional time is internal.
         self._ensure_device(z_hist)
@@ -213,10 +216,13 @@ class CSDITransition(BaseTransition):
         hist_std = self._standardize(z_hist)  # (BS, d, j)
         pad = hist_std.new_zeros(BS, d, 1)
         observed_data = torch.cat([hist_std, pad], dim=-1)  # (BS, d, L)
-        cond_mask = torch.ones(BS, d, L, device=z_hist.device, dtype=observed_data.dtype)
+        cond_mask = torch.ones(
+            BS, d, L, device=z_hist.device, dtype=observed_data.dtype
+        )
         cond_mask[..., -1] = 0.0
         observed_tp = (
-            torch.arange(L, device=z_hist.device, dtype=observed_data.dtype)
+            torch
+            .arange(L, device=z_hist.device, dtype=observed_data.dtype)
             .unsqueeze(0)
             .expand(BS, -1)
         )

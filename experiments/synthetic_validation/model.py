@@ -33,6 +33,7 @@ mixers, aggregators, fut-summaries) you can swap in.
 
 from __future__ import annotations
 
+from typing import Literal
 from functools import partial
 
 from hydra_zen import builds
@@ -42,14 +43,12 @@ from ddssm.nn.diffnets import CSDIUnet, FeatureMixerConfig, DiffResidualBlockCon
 from ddssm.model.decoder import GaussianDecoder
 from ddssm.model.encoder import GaussianEncoder
 from ddssm.nn.aux_posterior import AuxPosterior
-from typing import Literal
-
 from ddssm.model.centering.baselines import (
-    BaseBaseline,
-    LinearBaseline,
     MLPBaseline,
-    PersistenceBaseline,
+    BaseBaseline,
     ZeroBaseline,
+    LinearBaseline,
+    PersistenceBaseline,
 )
 
 
@@ -58,23 +57,37 @@ def _make_baseline(
 ) -> BaseBaseline:
     if form == "zero":
         return ZeroBaseline(
-            latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2,
+            latent_dim=latent_dim,
+            j=j,
+            hidden_dim=hidden_dim,
+            n_layers=2,
         )
     if form == "persistence":
         return PersistenceBaseline(
-            latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2,
+            latent_dim=latent_dim,
+            j=j,
+            hidden_dim=hidden_dim,
+            n_layers=2,
         )
     if form == "linear":
         return LinearBaseline(latent_dim=latent_dim, j=j)
     if form == "mlp":
         return MLPBaseline(
-            latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2,
+            latent_dim=latent_dim,
+            j=j,
+            hidden_dim=hidden_dim,
+            n_layers=2,
         )
     raise ValueError(
         f"baseline_form must be one of zero/persistence/linear/mlp; got {form!r}"
     )
+
+
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
-from ddssm.model.transitions.diffusion import DiffusionTransition, DiffusionScheduleConfig
+from ddssm.model.transitions.diffusion import (
+    DiffusionTransition,
+    DiffusionScheduleConfig,
+)
 from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 
@@ -135,7 +148,10 @@ def build_synthval_model(
         emb_time_dim = 0
     # --- shared ingredients: built once, passed by reference ---
     baseline = _make_baseline(
-        baseline_form, latent_dim=latent_dim, j=j, hidden_dim=hidden_dim,
+        baseline_form,
+        latent_dim=latent_dim,
+        j=j,
+        hidden_dim=hidden_dim,
     )
     aux_posterior = AuxPosterior(
         latent_dim=latent_dim, j=j, hidden_dim=hidden_dim, n_layers=2
@@ -175,12 +191,19 @@ def build_synthval_model(
     )
 
     encoder = GaussianEncoder(
-        data_dim=data_dim, latent_dim=latent_dim, j=j,
-        emb_time_dim=emb_time_dim, use_mask=False, hidden_dim=hidden_dim,
+        data_dim=data_dim,
+        latent_dim=latent_dim,
+        j=j,
+        emb_time_dim=emb_time_dim,
+        use_mask=False,
+        hidden_dim=hidden_dim,
     )
     decoder = GaussianDecoder(
-        data_dim=data_dim, latent_dim=latent_dim, j=j,
-        emb_time_dim=emb_time_dim, hidden_dim=hidden_dim,
+        data_dim=data_dim,
+        latent_dim=latent_dim,
+        j=j,
+        emb_time_dim=emb_time_dim,
+        hidden_dim=hidden_dim,
     )
 
     # Pre-allocate ``baseline_anchor`` so the state_dict has the same
@@ -214,4 +237,4 @@ def build_synthval_model(
 # hydra-zen wrapper so the preset can plug into ``experiment(model=...)``.
 SynthValModel = builds(build_synthval_model, populate_full_signature=True)
 
-__all__ = ["build_synthval_model", "SynthValModel"]
+__all__ = ["SynthValModel", "build_synthval_model"]

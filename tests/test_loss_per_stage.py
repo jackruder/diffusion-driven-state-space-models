@@ -48,12 +48,16 @@ class _DummyTrainer:
 
 def _make_2stage(loss_a: Loss | None, loss_b: Loss | None) -> StagesConf:
     stage_1 = StageSpecConf(
-        steps=10, trainable=StageTrainableConf(), lrs=StageLrsConf(),
+        steps=10,
+        trainable=StageTrainableConf(),
+        lrs=StageLrsConf(),
         lambda_ramp=LambdaRampConf(start=0.001, end=1.0, steps=10),
         loss=loss_a,
     )
     stage_2 = StageSpecConf(
-        steps=20, trainable=StageTrainableConf(), lrs=StageLrsConf(),
+        steps=20,
+        trainable=StageTrainableConf(),
+        lrs=StageLrsConf(),
         lambda_ramp=LambdaRampConf(start=0.1, end=1.0, steps=20),
         loss=loss_b,
     )
@@ -102,8 +106,10 @@ def test_step_within_stage_resets_at_boundary() -> None:
     stage_1_loss = trainer.installs[0][1]
     stage_2_loss = trainer.installs[1][1]
     components = LossComponents(
-        recon=torch.tensor(0.0), init_kl=torch.tensor(1.0),
-        trans_kl=torch.tensor(0.0), r_sigma_p=torch.tensor(0.0),
+        recon=torch.tensor(0.0),
+        init_kl=torch.tensor(1.0),
+        trans_kl=torch.tensor(0.0),
+        r_sigma_p=torch.tensor(0.0),
         r_mu_p=torch.tensor(0.0),
     )
     # Stage 1, step_within_stage=1 ⇒ very early in cosine ramp.

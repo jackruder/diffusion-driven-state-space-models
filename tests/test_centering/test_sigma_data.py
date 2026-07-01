@@ -53,7 +53,10 @@ def test_read_out_of_range_raises() -> None:
 def test_per_t_update_matches_analytic_estimator() -> None:
     """The per-t update reproduces ``(1/D)(E‖σ²‖ + tr Var[μ̂])``."""
     buf = SigmaDataBuffer(
-        T_max=T_MAX, tracking_mode="per_t", ema_decay=0.0, init_value=0.0,
+        T_max=T_MAX,
+        tracking_mode="per_t",
+        ema_decay=0.0,
+        init_value=0.0,
     )
     per_t = 6
     t_idx = torch.tensor([2, 4])  # two timesteps
@@ -97,20 +100,25 @@ def test_steady_state_is_batch_size_invariant() -> None:
     # the average should converge to the same value for any per_t.
     mu_scale = 0.7
     sigma2_true = torch.tensor([0.4, 0.5, 0.6])
-    true_target = (sigma2_true.sum().item() + D * mu_scale ** 2) / D
+    true_target = (sigma2_true.sum().item() + D * mu_scale**2) / D
 
     n_draws = 4000
     means = {}
     for per_t in (4, 16, 256):
         buf = SigmaDataBuffer(
-            T_max=T_MAX, tracking_mode="per_t", ema_decay=0.0, init_value=0.0,
+            T_max=T_MAX,
+            tracking_mode="per_t",
+            ema_decay=0.0,
+            init_value=0.0,
         )
         acc = 0.0
         for _ in range(n_draws):
             mu = torch.randn(per_t, D) * mu_scale
             s2 = sigma2_true.unsqueeze(0).expand(per_t, D).clone()
             buf.update(
-                t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2,
+                t_idx=torch.tensor([2]),
+                mu_hat_batch=mu,
+                sigma_t2_batch=s2,
             )
             acc += float(buf.read(2).item())
         means[per_t] = acc / n_draws
@@ -126,7 +134,10 @@ def test_steady_state_is_batch_size_invariant() -> None:
 def test_global_ema_updates_all_slots_uniformly() -> None:
     """Under ``"global_ema"`` every slot is updated to the same value."""
     buf = SigmaDataBuffer(
-        T_max=T_MAX, tracking_mode="global_ema", ema_decay=0.0, init_value=0.0,
+        T_max=T_MAX,
+        tracking_mode="global_ema",
+        ema_decay=0.0,
+        init_value=0.0,
     )
     per_t = 5
     t_idx = torch.tensor([1, 3])
@@ -141,7 +152,10 @@ def test_global_ema_updates_all_slots_uniformly() -> None:
 def test_fixed_mode_freezes_after_reset_schedule() -> None:
     """Under ``"fixed"``, updates are no-ops after ``reset_schedule``."""
     buf = SigmaDataBuffer(
-        T_max=T_MAX, tracking_mode="fixed", ema_decay=0.0, init_value=0.0,
+        T_max=T_MAX,
+        tracking_mode="fixed",
+        ema_decay=0.0,
+        init_value=0.0,
     )
     per_t = 4
     t_idx = torch.tensor([2])

@@ -9,7 +9,8 @@ smoke) are override hooks the orchestrator applies.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any
+from collections.abc import Mapping
 
 from ddssm.launch import PointLaunch, ResourceSpec, register_study
 from experiments._make import experiment
@@ -81,15 +82,13 @@ _UNSAFE_ACCOUNT = "--account=group-michaelwojnowicz"
 # cells (10 GPUs) oversubscribe the 6 b6000s and time-share them via the queue —
 # still well under the A100 headline cell's wall time. Only ``mlp_pinned`` stays
 # on the guaranteed A100 (gpupriority, now 4 CPU/worker).
-_B6000_CELLS = frozenset(
-    {
-        "init_mlp_learnable_per_t",
-        "init_linear_learnable_per_t",
-        "init_linear_pinned_per_t",
-        "init_persistence_pinned_per_t",
-        "init_zero_pinned_per_t",
-    }
-)
+_B6000_CELLS = frozenset({
+    "init_mlp_learnable_per_t",
+    "init_linear_learnable_per_t",
+    "init_linear_pinned_per_t",
+    "init_persistence_pinned_per_t",
+    "init_zero_pinned_per_t",
+})
 
 
 def _launch(point: StudyPoint) -> PointLaunch:

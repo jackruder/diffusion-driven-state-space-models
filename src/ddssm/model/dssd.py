@@ -5,7 +5,7 @@ autoregressive forecast rollout.
 """
 
 from types import SimpleNamespace
-from typing import Any, Dict, List, final
+from typing import Any, final
 from dataclasses import dataclass
 
 import torch
@@ -124,7 +124,7 @@ class DDSSM_base(nn.Module):
         emb_time_dim: int = 16,
         covariate_dim: int = 0,
         static_embed_dim: int = 0,
-        num_classes_per_static: List[int] | None = None,
+        num_classes_per_static: list[int] | None = None,
         use_observation_mask: bool = True,
         mask_emb_dim: int = 8,
         logvar_min: float = -7.0,
@@ -168,7 +168,9 @@ class DDSSM_base(nn.Module):
                 self.static_embeddings.append(
                     nn.Embedding(num_classes, self.static_embed_dim)
                 )
-            self.total_static_dim = len(self.num_classes_per_static) * self.static_embed_dim
+            self.total_static_dim = (
+                len(self.num_classes_per_static) * self.static_embed_dim
+            )
         else:
             self.total_static_dim = 0
 
@@ -249,7 +251,8 @@ class DDSSM_base(nn.Module):
             static_embed=static_embed,
         )
         detached_stats = {
-            k: v.detach() if isinstance(v, torch.Tensor) else v for k, v in enc_stats.items()
+            k: v.detach() if isinstance(v, torch.Tensor) else v
+            for k, v in enc_stats.items()
         }
         return ProbeBatch(
             zs=zs.detach(),
@@ -298,14 +301,20 @@ class DDSSM_base(nn.Module):
         )
         time_flat = time_embed.unsqueeze(1).expand(-1, S, -1, -1).reshape(BS, T, -1)
         cov_flat = (
-            covariates.unsqueeze(1).expand(-1, S, -1, -1)
+            covariates
+            .unsqueeze(1)
+            .expand(-1, S, -1, -1)
             .reshape(BS, covariates.shape[1], T)
-            if covariates is not None else None
+            if covariates is not None
+            else None
         )
         static_flat = (
-            static_embed.unsqueeze(1).expand(-1, S, -1, -1)
+            static_embed
+            .unsqueeze(1)
+            .expand(-1, S, -1, -1)
             .reshape(BS, D, static_embed.shape[2])
-            if static_embed is not None else None
+            if static_embed is not None
+            else None
         )
 
         # Per-t decode uses window z_{t-j+1:t} (length j). The per-t losses are
@@ -346,34 +355,58 @@ class DDSSM_base(nn.Module):
             m_c = mask_flat[:, :, t0:t1].permute(0, 2, 1).reshape(N, D)
             zh_c = windows[:, :, t0:t1, :].permute(0, 2, 1, 3).reshape(N, d, j)
             tidx = (
-                torch.arange(t0, t1, device=device, dtype=torch.long)
-                .view(1, cl).expand(BS, cl).reshape(N)
+                torch
+                .arange(t0, t1, device=device, dtype=torch.long)
+                .view(1, cl)
+                .expand(BS, cl)
+                .reshape(N)
             )
             te_c = (
-                time_flat.unsqueeze(1).expand(BS, cl, T, -1)
+                time_flat
+                .unsqueeze(1)
+                .expand(BS, cl, T, -1)
                 .reshape(N, T, time_flat.shape[-1])
             )
             cov_c = (
-                cov_flat.unsqueeze(1).expand(BS, cl, -1, -1)
+                cov_flat
+                .unsqueeze(1)
+                .expand(BS, cl, -1, -1)
                 .reshape(N, cov_flat.shape[1], T)
-                if cov_flat is not None else None
+                if cov_flat is not None
+                else None
             )
             st_c = (
-                static_flat.unsqueeze(1).expand(BS, cl, -1, -1)
+                static_flat
+                .unsqueeze(1)
+                .expand(BS, cl, -1, -1)
                 .reshape(N, D, static_flat.shape[2])
-                if static_flat is not None else None
+                if static_flat is not None
+                else None
             )
 
             def _decode(x_c, zh_c, te_c, tidx, m_c, cov_c, st_c):
                 return self.decoder.log_likelihood(
-                    x_t=x_c, z_hist=zh_c, time_embed=te_c, time_idx=tidx,
-                    observation_mask_t=m_c, covariates=cov_c, static_embed=st_c,
+                    x_t=x_c,
+                    z_hist=zh_c,
+                    time_embed=te_c,
+                    time_idx=tidx,
+                    observation_mask_t=m_c,
+                    covariates=cov_c,
+                    static_embed=st_c,
                 )
 
             if do_ckpt:
                 logp, mu_x, logvar_x, obs_c = checkpoint(
-                    _decode, x_c, zh_c, te_c, tidx, m_c, cov_c, st_c,
-                    use_reentrant=False, preserve_rng_state=False,
+                    _decode,
+                    x_c,
+                    zh_c,
+                    te_c,
+                    tidx,
+                    m_c,
+                    cov_c,
+                    st_c,
+                    use_reentrant=False,
+                    preserve_rng_state=False,
                 )
             else:
                 logp, mu_x, logvar_x, obs_c = _decode(
@@ -412,7 +445,7 @@ class DDSSM_base(nn.Module):
         enc_stats: dict,  # GaussianStats
         time_embed: torch.Tensor,  # (B, T, E_t)
         covariates: torch.Tensor | None = None,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         """Initialization loss for the first ``j`` latent steps.
 
         Pure pass-through to the active transition's hierarchical VHP init
@@ -434,10 +467,7 @@ class DDSSM_base(nn.Module):
 
     def _active_transition(self) -> nn.Module:
         """Return the transition picked by :attr:`stage_selector`."""
-        if (
-            self.stage_selector == "stage_1"
-            and self.stage1_transition is not None
-        ):
+        if self.stage_selector == "stage_1" and self.stage1_transition is not None:
             return self.stage1_transition
         return self.transition
 
@@ -477,9 +507,7 @@ class DDSSM_base(nn.Module):
             transition_kwargs["mc_override"] = mc_override
         return active.transition_kl(**transition_kwargs)
 
-    def _gather_z_hist_samples_for_regularizers(
-        self, zs: torch.Tensor
-    ) -> torch.Tensor:
+    def _gather_z_hist_samples_for_regularizers(self, zs: torch.Tensor) -> torch.Tensor:
         """Return ``(N, d, j)`` detached z_hist windows for the regularizers.
 
         Walks the transition-target range ``t = j … T-1`` (0-based code
@@ -492,13 +520,9 @@ class DDSSM_base(nn.Module):
         if j >= T:
             return torch.zeros(0, d, j, device=zs.device, dtype=zs.dtype)
         # (B, S, d, T - j + j - 1 + 1) -> unfold gives (B, S, d, T - j, j)
-        unfolded = zs.unfold(dimension=-1, size=j, step=1)[..., :T - j, :]
+        unfolded = zs.unfold(dimension=-1, size=j, step=1)[..., : T - j, :]
         # Permute to (B, S, T-j, d, j) and flatten leading dims.
-        return (
-            unfolded.permute(0, 1, 3, 2, 4)
-            .reshape(-1, d, j)
-            .detach()
-        )
+        return unfolded.permute(0, 1, 3, 2, 4).reshape(-1, d, j).detach()
 
     def _embed_static(
         self, static_covariates: torch.Tensor | None
@@ -606,8 +630,8 @@ class DDSSM_base(nn.Module):
         log_p_trans = torch.zeros(B, K_use, device=device, dtype=dtype)
         for t in range(j, T):
             if self.sigma_data is not None:
-                sigma_d2 = self.sigma_data.read(t + 1).expand(B).to(
-                    device=device, dtype=dtype
+                sigma_d2 = (
+                    self.sigma_data.read(t + 1).expand(B).to(device=device, dtype=dtype)
                 )
             else:
                 sigma_d2 = torch.ones(B, device=device, dtype=dtype)
@@ -718,9 +742,7 @@ class DDSSM_base(nn.Module):
         )
 
         L_init = init_terms["loss"]
-        L_vhp = init_terms.get(
-            "vhp", torch.tensor(0.0, device=observed_data.device)
-        )
+        L_vhp = init_terms.get("vhp", torch.tensor(0.0, device=observed_data.device))
         L_ent_init = init_terms.get(
             "entropy", torch.tensor(0.0, device=observed_data.device)
         )
@@ -840,7 +862,7 @@ class DDSSM_base(nn.Module):
         s_noise: float = 1.0,
         s_tmin: float = 0.0,
         s_tmax: float = float("inf"),
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         """Encode history, autoregressively roll out, and decode the future.
 
         Returns:
@@ -1043,6 +1065,7 @@ class DDSSM_base(nn.Module):
 # Default hyperparams namespace (used when no hyperparams object is provided)
 # ---------------------------------------------------------------------------
 
+
 def _default_hyperparams():
     """Return a SimpleNamespace with default training hyperparameters.
 
@@ -1088,5 +1111,3 @@ class DDSSMHyperParamsConf:
 
     logvar_min: float = -7.0
     logvar_max: float = 7.0
-
-

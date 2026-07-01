@@ -24,9 +24,7 @@ def test_vhp_log_prob_init_collapses_when_q_is_true_posterior() -> None:
     log_p_z1 = torch.tensor([0.5, -1.2, 2.0])
     log_p_z1_given_z0 = torch.randn(B, J)
     log_prior_z0 = torch.randn(B, J)
-    log_q_z0_given_z1 = (
-        log_p_z1_given_z0 + log_prior_z0 - log_p_z1.unsqueeze(-1)
-    )
+    log_q_z0_given_z1 = log_p_z1_given_z0 + log_prior_z0 - log_p_z1.unsqueeze(-1)
 
     vhp = vhp_log_prob_init(
         log_p_z1_given_z0=log_p_z1_given_z0,

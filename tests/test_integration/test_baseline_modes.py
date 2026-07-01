@@ -56,7 +56,8 @@ def _build_trainer_stub(model):
         def _rebuild_optimizer(self, lrs):  # noqa: ANN001
             lr = float(getattr(lrs, "enc_lr", 1e-3))
             self.optimizer = torch.optim.AdamW(
-                [p for p in self.model.parameters() if p.requires_grad], lr=lr,
+                [p for p in self.model.parameters() if p.requires_grad],
+                lr=lr,
             )
 
     return _Stub(model)
@@ -74,7 +75,9 @@ def test_pinned_baseline_params_frozen_after_handoff() -> None:
 
     trainer = _build_trainer_stub(model)
     new_lrs = SimpleNamespace(
-        enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
+        enc_lr=1e-3,
+        dec_lr=1e-3,
+        trans_lr=1e-3,
     )
     perform_centering_handoff(
         trainer=trainer,
@@ -84,7 +87,9 @@ def test_pinned_baseline_params_frozen_after_handoff() -> None:
     # Post-handoff: baseline frozen.
     assert all(not p.requires_grad for p in model.baseline.parameters())
     # And the rebuilt optimizer doesn't carry baseline params.
-    optimizer_params = {id(p) for g in trainer.optimizer.param_groups for p in g["params"]}
+    optimizer_params = {
+        id(p) for g in trainer.optimizer.param_groups for p in g["params"]
+    }
     baseline_ids = {id(p) for p in model.baseline.parameters()}
     assert baseline_ids.isdisjoint(optimizer_params), (
         "frozen baseline params leaked into the rebuilt optimizer"
@@ -102,7 +107,9 @@ def test_learnable_baseline_params_remain_trainable_after_handoff() -> None:
 
     trainer = _build_trainer_stub(model)
     new_lrs = SimpleNamespace(
-        enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
+        enc_lr=1e-3,
+        dec_lr=1e-3,
+        trans_lr=1e-3,
     )
     perform_centering_handoff(
         trainer=trainer,
@@ -126,7 +133,9 @@ def test_pinned_baseline_params_unchanged_in_stage2() -> None:
         model=model,
         stage="stage_1",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=4,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=20,
     )
@@ -137,7 +146,9 @@ def test_pinned_baseline_params_unchanged_in_stage2() -> None:
         trainer=trainer,
         spec=CenteringHandoffConf(sigma_pert=0.0),
         new_lrs=SimpleNamespace(
-            enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
+            enc_lr=1e-3,
+            dec_lr=1e-3,
+            trans_lr=1e-3,
         ),
     )
 
@@ -147,7 +158,9 @@ def test_pinned_baseline_params_unchanged_in_stage2() -> None:
         model=model,
         stage="stage_2",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=4,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=30,
         lr=1e-2,  # exaggerate any drift to make the test stricter
@@ -171,7 +184,9 @@ def test_learnable_baseline_params_drift_in_stage2() -> None:
         model=model,
         stage="stage_1",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=4,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=20,
     )
@@ -182,7 +197,9 @@ def test_learnable_baseline_params_drift_in_stage2() -> None:
         trainer=trainer,
         spec=CenteringHandoffConf(sigma_pert=0.0),
         new_lrs=SimpleNamespace(
-            enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
+            enc_lr=1e-3,
+            dec_lr=1e-3,
+            trans_lr=1e-3,
         ),
     )
 
@@ -192,7 +209,9 @@ def test_learnable_baseline_params_drift_in_stage2() -> None:
         model=model,
         stage="stage_2",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=4,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=30,
         lr=1e-2,
@@ -212,6 +231,7 @@ def test_learnable_anchor_resists_unanchored_drift() -> None:
     drift (the doc's "Without an anchor, the optimizer has a flat
     direction along which it can drift" argument).
     """
+
     def _drift_after_stage2(anchor_lambda: float) -> float:
         torch.manual_seed(7)
         model = make_vhp_model(
@@ -222,7 +242,9 @@ def test_learnable_anchor_resists_unanchored_drift() -> None:
             model=model,
             stage="stage_1",
             data_factory=lambda: make_smooth_sine_data(
-                n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+                n_seqs=4,
+                T=8,
+                seed=torch.randint(0, 10_000, (1,)).item(),
             ),
             n_steps=15,
         )
@@ -231,7 +253,9 @@ def test_learnable_anchor_resists_unanchored_drift() -> None:
             trainer=trainer,
             spec=CenteringHandoffConf(sigma_pert=0.0),
             new_lrs=SimpleNamespace(
-                enc_lr=1e-3, dec_lr=1e-3, trans_lr=1e-3,
+                enc_lr=1e-3,
+                dec_lr=1e-3,
+                trans_lr=1e-3,
             ),
         )
         pre = _snapshot_baseline_params(model)
@@ -239,7 +263,9 @@ def test_learnable_anchor_resists_unanchored_drift() -> None:
             model=model,
             stage="stage_2",
             data_factory=lambda: make_smooth_sine_data(
-                n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+                n_seqs=4,
+                T=8,
+                seed=torch.randint(0, 10_000, (1,)).item(),
             ),
             n_steps=30,
             lr=1e-2,

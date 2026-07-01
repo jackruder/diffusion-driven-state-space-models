@@ -8,14 +8,22 @@ is imported first; ``init_centering`` is the live model-v2 family;
 """
 
 from . import (
-    datasets,  # noqa: F401  -- registers library dataset presets
-    init_centering,  # noqa: F401  -- model-v2 VHP / centering family
-    gluonts_forecast,  # noqa: F401  -- CSDI/TimeGrad NIPS forecasting benchmark
-    synthetic_validation,  # noqa: F401  -- authoring-guide worked-example family
+    datasets,
+    init_centering,
+    gluonts_forecast,
+    synthetic_validation,
 )
 from ._make import run, to_yaml, override, from_yaml, save_yaml, experiment
 
 __all__ = [
-    "experiment", "run", "to_yaml", "save_yaml", "from_yaml", "override",
-    "datasets", "init_centering", "gluonts_forecast", "synthetic_validation",
+    "datasets",
+    "experiment",
+    "from_yaml",
+    "gluonts_forecast",
+    "init_centering",
+    "override",
+    "run",
+    "save_yaml",
+    "synthetic_validation",
+    "to_yaml",
 ]

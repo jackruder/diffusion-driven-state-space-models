@@ -44,7 +44,9 @@ _TRACKING_MODES = ("fixed", "global_ema", "per_t")
 def _cells():
     cells = []
     for form in _BASELINE_FORMS:
-        modes = ("pinned",) if form in ("zero", "persistence") else ("pinned", "learnable")
+        modes = (
+            ("pinned",) if form in ("zero", "persistence") else ("pinned", "learnable")
+        )
         for mode in modes:
             for tm in _TRACKING_MODES:
                 cells.append((form, mode, tm))
@@ -53,18 +55,30 @@ def _cells():
 
 def _hparams() -> SimpleNamespace:
     return SimpleNamespace(
-        S=1, batch_size=4, grad_accum_steps=1, ema_decay=0.999, weight_decay=1e-2,
-        enc_lr=5e-4, dec_lr=5e-4, trans_lr=5e-4,
+        S=1,
+        batch_size=4,
+        grad_accum_steps=1,
+        ema_decay=0.999,
+        weight_decay=1e-2,
+        enc_lr=5e-4,
+        dec_lr=5e-4,
+        trans_lr=5e-4,
     )
 
 
 @pytest.mark.parametrize("baseline_form,baseline_mode,tracking_mode", _cells())
 def test_cell_handoff_produces_consistent_baseline_freeze(
-    baseline_form, baseline_mode, tracking_mode, tmp_path,
+    baseline_form,
+    baseline_mode,
+    tracking_mode,
+    tmp_path,
 ) -> None:
     """Per cell, post-handoff baseline ``requires_grad`` matches ``baseline_mode``."""
     stages = _build_init_centering_stages(
-        baseline_mode=baseline_mode, n_pretrain=2, n_stage2=2, sigma_pert=1e-3,
+        baseline_mode=baseline_mode,
+        n_pretrain=2,
+        n_stage2=2,
+        sigma_pert=1e-3,
     )
     model = _build_init_centering_model(
         baseline_form=baseline_form,
@@ -77,11 +91,15 @@ def test_cell_handoff_produces_consistent_baseline_freeze(
 
     # Trainer is needed by the handoff (rebuilds the optimiser).
     trainer = DDSSMTrainer(
-        model=model, device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        model=model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     perform_centering_handoff(
-        trainer, CenteringHandoffConf(sigma_pert=1e-3), new_lrs=StageLrsConf(),
+        trainer,
+        CenteringHandoffConf(sigma_pert=1e-3),
+        new_lrs=StageLrsConf(),
     )
 
     # The orchestrator would then apply the stage-2 trainable mask.  When
@@ -114,7 +132,10 @@ def test_cell_handoff_produces_consistent_baseline_freeze(
 def test_cell_tracking_mode_freeze_semantics(tracking_mode, tmp_path) -> None:
     """``reset_schedule()`` freezes only the ``fixed`` mode."""
     stages = _build_init_centering_stages(
-        baseline_mode="pinned", n_pretrain=2, n_stage2=2, sigma_pert=1e-3,
+        baseline_mode="pinned",
+        n_pretrain=2,
+        n_stage2=2,
+        sigma_pert=1e-3,
     )
     model = _build_init_centering_model(
         baseline_form="mlp",
@@ -124,11 +145,15 @@ def test_cell_tracking_mode_freeze_semantics(tracking_mode, tmp_path) -> None:
     assert model.sigma_data.tracking_mode == tracking_mode
 
     trainer = DDSSMTrainer(
-        model=model, device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        model=model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     perform_centering_handoff(
-        trainer, CenteringHandoffConf(sigma_pert=1e-3), new_lrs=StageLrsConf(),
+        trainer,
+        CenteringHandoffConf(sigma_pert=1e-3),
+        new_lrs=StageLrsConf(),
     )
 
     if tracking_mode == "fixed":

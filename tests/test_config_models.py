@@ -1,5 +1,6 @@
 # tests/test_config_models.py
 """Tests for the hydra-zen configuration layer."""
+
 import pytest
 from omegaconf import OmegaConf
 
@@ -36,4 +37,3 @@ def test_yaml_roundtrip(tmp_path):
     reloaded = OmegaConf.create(yaml_str)
     assert reloaded.S == 2
     assert float(reloaded.dec_lr) == pytest.approx(1e-3)
-

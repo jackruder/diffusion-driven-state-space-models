@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 from dataclasses import dataclass
 
-from ddssm.data.presets import Solar, Electricity, Traffic, Taxi, Wiki
+from ddssm.data.presets import Taxi, Wiki, Solar, Traffic, Electricity
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,9 @@ class GluonDataset:
 # source of truth). Series counts are the published GP-copula dims.
 GLUONTS_DATASETS = [
     GluonDataset("solar", Solar, data_dim=137, L1=168, L2=24, batch_size=64),
-    GluonDataset("electricity", Electricity, data_dim=370, L1=168, L2=24, batch_size=64),
+    GluonDataset(
+        "electricity", Electricity, data_dim=370, L1=168, L2=24, batch_size=64
+    ),
     GluonDataset("traffic", Traffic, data_dim=963, L1=168, L2=24, batch_size=32),
     GluonDataset("taxi", Taxi, data_dim=1214, L1=48, L2=24, batch_size=32),
     GluonDataset("wiki", Wiki, data_dim=2000, L1=90, L2=30, batch_size=16),
@@ -43,4 +45,4 @@ GLUONTS_DATASETS = [
 
 GLUONTS_BY_LABEL = {d.label: d for d in GLUONTS_DATASETS}
 
-__all__ = ["GluonDataset", "GLUONTS_DATASETS", "GLUONTS_BY_LABEL"]
+__all__ = ["GLUONTS_BY_LABEL", "GLUONTS_DATASETS", "GluonDataset"]

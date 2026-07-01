@@ -9,8 +9,8 @@ dataset axis — nothing else needs editing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
+from dataclasses import dataclass
 
 from ddssm.data.presets import NonlinBimodalLift1D, NonlinBimodalLiftMV
 
@@ -19,10 +19,10 @@ from ddssm.data.presets import NonlinBimodalLift1D, NonlinBimodalLiftMV
 class AblationDataset:
     """One point on the study's dataset axis."""
 
-    label: str        # short axis label used in preset names, e.g. "1d" / "mv"
+    label: str  # short axis label used in preset names, e.g. "1d" / "mv"
     data_preset: Any  # the hydra-zen Synthetic config (D + expose_gt baked in)
-    data_dim: int     # observation dim D (must match ``data_preset``)
-    latent_dim: int   # model latent dim at the *tiny* size
+    data_dim: int  # observation dim D (must match ``data_preset``)
+    latent_dim: int  # model latent dim at the *tiny* size
 
 
 ABLATION_DATASETS: tuple[AblationDataset, ...] = (
@@ -59,9 +59,9 @@ def dataset_by_label(label: str) -> AblationDataset:
 
 
 __all__ = [
-    "AblationDataset",
     "ABLATION_DATASETS",
     "PAPER_LATENT_MULT",
-    "paper_latent",
+    "AblationDataset",
     "dataset_by_label",
+    "paper_latent",
 ]

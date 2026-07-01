@@ -11,9 +11,9 @@ import torch
 
 from ddssm.nn.diffnets import (
     CSDIUnet,
-    DiffResidualBlockConfig,
-    FeatureMixerConfig,
     MLPCSDIUnet,
+    FeatureMixerConfig,
+    DiffResidualBlockConfig,
 )
 
 _RB = DiffResidualBlockConfig(feature=FeatureMixerConfig(nheads=2, n_layers=1))

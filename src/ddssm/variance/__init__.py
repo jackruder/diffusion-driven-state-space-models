@@ -19,14 +19,14 @@ from ddssm.variance.metrics import (
 )
 
 __all__ = [
-    "ProbeCell",
-    "ProbeMetricSpec",
-    "ProbePlotSpec",
-    "ProbeSpec",
-    "ProbeContext",
-    "ProbePlotContext",
     "PROBE_METRIC_REGISTRY",
     "PROBE_PLOT_REGISTRY",
+    "ProbeCell",
+    "ProbeContext",
+    "ProbeMetricSpec",
+    "ProbePlotContext",
+    "ProbePlotSpec",
+    "ProbeSpec",
     "register_probe_metric",
     "register_probe_plot",
     "variance",

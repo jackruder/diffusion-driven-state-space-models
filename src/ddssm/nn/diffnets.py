@@ -31,7 +31,9 @@ class SmallTimeConv(nn.Module):
     residual no-op when ``L == 1``.
     """
 
-    def __init__(self, channels: int, k: int = 3, dilation: int = 1, causal: bool = False):
+    def __init__(
+        self, channels: int, k: int = 3, dilation: int = 1, causal: bool = False
+    ):
         super().__init__()
         # Causal: left-pad by dilation·(k-1) and use padding=0 in the conv so output[t]
         # depends only on input[≤t] (no peeking ahead). nn.Conv1d's `padding=` is
@@ -328,7 +330,9 @@ def build_time_layer(
     if time_type == "gru":
         return GRUTimeLayer(channels, gru_layers=gru_layers)
     if time_type == "transformer":
-        return TransformerTimeLayer(channels, nheads=nheads, layers=n_layers, dropout=dropout)
+        return TransformerTimeLayer(
+            channels, nheads=nheads, layers=n_layers, dropout=dropout
+        )
     if time_type == "identity":
         return IdentityLayer()
     raise ValueError(
@@ -336,15 +340,25 @@ def build_time_layer(
     )
 
 
-def build_feature_layer(feature_type: str, channels: int, nheads: int = 8, n_layers: int = 1, dropout: float = 0.1) -> FeatureLayer:
+def build_feature_layer(
+    feature_type: str,
+    channels: int,
+    nheads: int = 8,
+    n_layers: int = 1,
+    dropout: float = 0.1,
+) -> FeatureLayer:
     """Factory: create a FeatureLayer from a type string and shared ``channels``."""
     if feature_type == "transformer":
-        return TransformerFeatureLayer(channels, nheads=nheads, layers=n_layers, dropout=dropout)
+        return TransformerFeatureLayer(
+            channels, nheads=nheads, layers=n_layers, dropout=dropout
+        )
     if feature_type == "conv":
         return ConvFeatureLayer(channels)
     if feature_type == "identity":
         return IdentityLayer()
-    raise ValueError(f"Unknown feature_type: {feature_type!r}. Choose from 'transformer', 'conv', 'identity'.")
+    raise ValueError(
+        f"Unknown feature_type: {feature_type!r}. Choose from 'transformer', 'conv', 'identity'."
+    )
 
 
 @dataclass
@@ -582,28 +596,28 @@ class CSDIUnet(nn.Module):
         self.input_projection = Conv1d_with_init(2, self.channels, 1)
 
         self.residual_layers = nn.ModuleList([
-                DiffResidualBlock(
-                    side_dim=self.side_dim,
-                    channels=self.channels,
-                    diffusion_embedding_dim=self.diffusion_projection_dim,
-                    time_layer=build_time_layer(
-                        residual_block.time.type,
-                        channels,
-                        kernel_size=residual_block.time.kernel_size,
-                        gru_layers=residual_block.time.gru_layers,
-                        nheads=residual_block.time.nheads,
-                        n_layers=residual_block.time.n_layers,
-                        dropout=residual_block.time.dropout,
-                    ),
-                    feature_layer=build_feature_layer(
-                        residual_block.feature.type,
-                        channels,
-                        nheads=residual_block.feature.nheads,
-                        n_layers=residual_block.feature.n_layers,
-                        dropout=residual_block.feature.dropout,
-                    ),
-                )
-                for _ in range(self.n_layers)
+            DiffResidualBlock(
+                side_dim=self.side_dim,
+                channels=self.channels,
+                diffusion_embedding_dim=self.diffusion_projection_dim,
+                time_layer=build_time_layer(
+                    residual_block.time.type,
+                    channels,
+                    kernel_size=residual_block.time.kernel_size,
+                    gru_layers=residual_block.time.gru_layers,
+                    nheads=residual_block.time.nheads,
+                    n_layers=residual_block.time.n_layers,
+                    dropout=residual_block.time.dropout,
+                ),
+                feature_layer=build_feature_layer(
+                    residual_block.feature.type,
+                    channels,
+                    nheads=residual_block.feature.nheads,
+                    n_layers=residual_block.feature.n_layers,
+                    dropout=residual_block.feature.dropout,
+                ),
+            )
+            for _ in range(self.n_layers)
         ])
         self.output_projection1 = Conv1d_with_init(self.channels, self.channels, 1)
         self.output_projection2 = Conv1d_with_init(self.channels, 1, 1)
@@ -710,7 +724,10 @@ class MLPCSDIUnet(nn.Module):
         # every side-info channel into its input, so it has no separate
         # history/noise stream and ignores ``cond_mask_channel``.
         _ = (
-            diffusion_steps, embedding_dim, projection_dim, residual_block,
+            diffusion_steps,
+            embedding_dim,
+            projection_dim,
+            residual_block,
             cond_mask_channel,
         )
 
@@ -926,8 +943,8 @@ class ContextProducer(nn.Module):
         else:
             assert mask_embedded is not None
             Bm, H_mask, Lm = mask_embedded.shape
-        assert B == Bm
-        assert L == Lm
+        assert Bm == B
+        assert Lm == L
         assert self.combined_len == L
 
         assert H_seq == self.combined_dim
@@ -1070,7 +1087,9 @@ class MLPContextProducer(nn.Module):
             assert static_embedded.shape == (B, self.static_emb_dim, self.combined_dim)
             static_flat = static_embedded.reshape(B, -1)
         else:
-            static_flat = torch.zeros(B, 0, device=combined.device, dtype=combined.dtype)
+            static_flat = torch.zeros(
+                B, 0, device=combined.device, dtype=combined.dtype
+            )
 
         inp = torch.cat(
             [

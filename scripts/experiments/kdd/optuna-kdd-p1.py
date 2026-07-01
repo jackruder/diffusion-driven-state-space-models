@@ -14,16 +14,14 @@ Usage::
 Requires Optuna and (optionally) optuna-dashboard for live visualisation.
 """
 
-import argparse
-import json
 import csv
+import json
 import math
-import os
-import subprocess
 from pathlib import Path
+import argparse
+import subprocess
 
 import optuna
-import datetime
 from optuna.trial import FrozenTrial
 
 
@@ -66,7 +64,7 @@ def find_latest_metrics_json(eval_tag_dir: Path) -> Path:
 def _read_csv_column(csv_path: Path, col: str) -> list[float]:
     """Read a single numeric column from a CSV, skipping blank/unparseable rows."""
     values: list[float] = []
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         reader = csv.DictReader(f)
         for row in reader:
             raw = row.get(col, "")
@@ -94,7 +92,7 @@ def _find_train_csv(train_dir: Path) -> Path | None:
 
 def _pick_recon_column(csv_path: Path) -> str | None:
     """Return the first column name that looks like reconstruction loss."""
-    with open(csv_path, "r") as f:
+    with open(csv_path) as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
     # Prefer the exact distortion/rec key logged by DDSSM forward()
@@ -194,7 +192,7 @@ def objective_factory(args):
         S_k = 4
 
         overrides = [
-            f"hyperparams.lambda_schedule=cosine",
+            "hyperparams.lambda_schedule=cosine",
             f"hyperparams.lambda_warmup_steps={lambda_warmup_steps}",
             f"hyperparams.lambda_end={lambda_end}",
             f"hyperparams.enc_lr={vae_lr}",
@@ -281,7 +279,7 @@ def objective_factory(args):
         run_cmd(eval_cmd)
 
         metrics_path = find_latest_metrics_json(eval_dir)
-        with open(metrics_path, "r") as f:
+        with open(metrics_path) as f:
             m = json.load(f)
 
         for k in ("crps_sum", "mae"):

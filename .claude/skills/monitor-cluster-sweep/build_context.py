@@ -23,6 +23,7 @@ caches it as the per-experiment profile.
 Usage (on the cluster):
     python build_context.py --remote-dir <dir> --study-prefix <p> --suffix __mv
 """
+
 from __future__ import annotations
 
 import os
@@ -76,27 +77,34 @@ def main():
     remote = os.path.expanduser(args.remote_dir)
 
     import optuna
+
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     # pick a representative cell DB + a trial dir with resolved_config.yaml
-    dbs = sorted(glob.glob(os.path.join(
-        remote, "optuna", f"{args.study_prefix}_*{args.suffix}.db")))
+    dbs = sorted(
+        glob.glob(
+            os.path.join(remote, "optuna", f"{args.study_prefix}_*{args.suffix}.db")
+        )
+    )
     if not dbs:
-        print(f"FATAL: no DBs match {args.study_prefix}_*{args.suffix}.db", file=sys.stderr)
+        print(
+            f"FATAL: no DBs match {args.study_prefix}_*{args.suffix}.db",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
     rep_study = os.path.basename(dbs[0])[:-3]
     st = optuna.load_study(study_name=rep_study, storage=f"sqlite:///{dbs[0]}")
     directions = [d.name for d in st.directions]
     metric_names = list(getattr(st, "metric_names", None) or [])
-    param_names = sorted({k for t in st.get_trials(deepcopy=False)
-                          for k in t.params})
+    param_names = sorted({k for t in st.get_trials(deepcopy=False) for k in t.params})
 
     # find a resolved_config.yaml (any cell, any trial; also try *_topup)
     rc = None
     for base in [rep_study] + [os.path.basename(d)[:-3] for d in dbs]:
         for sd in (base, base + "_topup"):
-            hits = glob.glob(os.path.join(remote, "sweeps", sd, "*",
-                                          "resolved_config.yaml"))
+            hits = glob.glob(
+                os.path.join(remote, "sweeps", sd, "*", "resolved_config.yaml")
+            )
             if hits:
                 rc = hits[0]
                 break
@@ -106,6 +114,7 @@ def main():
     obj_names, target_value, eval_metrics, data_mode, penalties = [], None, [], None, []
     if rc:
         import yaml
+
         c = yaml.safe_load(open(rc))
         exp = c.get("experiment", c)
         obj = exp.get("objective") or {}
@@ -128,7 +137,10 @@ def main():
     for i, d in enumerate(directions):
         nm = names[i] if i < len(names) else f"obj{i}"
         objectives.append({
-            "idx": i, "name": nm, "direction": d, "short": short_label(nm or ""),
+            "idx": i,
+            "name": nm,
+            "direction": d,
+            "short": short_label(nm or ""),
             "penalty": penalties[i] if i < len(penalties) else None,
             "time_axis": is_time_axis(nm or ""),
         })
@@ -154,26 +166,41 @@ def main():
             stem = k[: -len("_seconds")]
             step_key = stem + "_step"
             derived.append({
-                "type": "hit_rate", "sec_key": k,
+                "type": "hit_rate",
+                "sec_key": k,
                 "step_key": step_key if step_key in keys else None,
-                "label": "hit%", "target_value": target_value,
+                "label": "hit%",
+                "target_value": target_value,
             })
 
     ctx = {
-        "study_prefix": args.study_prefix, "suffix": args.suffix,
+        "study_prefix": args.study_prefix,
+        "suffix": args.suffix,
         "remote_dir": args.remote_dir,
-        "objectives": objectives, "headline_obj_idx": headline,
-        "headline_short": head_short, "derived": derived,
-        "param_names": param_names, "eval_metrics": eval_metrics,
-        "data_mode": data_mode, "built_from": rc,
+        "objectives": objectives,
+        "headline_obj_idx": headline,
+        "headline_short": head_short,
+        "derived": derived,
+        "param_names": param_names,
+        "eval_metrics": eval_metrics,
+        "data_mode": data_mode,
+        "built_from": rc,
         "n_cells": len(dbs),
     }
     print("Context for", args.study_prefix, file=sys.stderr)
-    print(f"  objectives: " + ", ".join(
-        f"{o['short']}({o['direction'][:3]}){'*' if o['idx']==headline else ''}"
-        for o in objectives), file=sys.stderr)
-    print(f"  derived: {[d['label'] for d in derived] or 'none'}   "
-          f"target={target_value}   data={data_mode}", file=sys.stderr)
+    print(
+        "  objectives: "
+        + ", ".join(
+            f"{o['short']}({o['direction'][:3]}){'*' if o['idx'] == headline else ''}"
+            for o in objectives
+        ),
+        file=sys.stderr,
+    )
+    print(
+        f"  derived: {[d['label'] for d in derived] or 'none'}   "
+        f"target={target_value}   data={data_mode}",
+        file=sys.stderr,
+    )
     print("__JSON__" + json.dumps(ctx))
 
 

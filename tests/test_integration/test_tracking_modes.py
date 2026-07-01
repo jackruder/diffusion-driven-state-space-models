@@ -38,7 +38,9 @@ def test_global_ema_all_per_t_buffer_entries_equal() -> None:
         model=model,
         stage="stage_1",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=8, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=8,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=20,
     )
@@ -58,6 +60,7 @@ def test_per_t_buffer_diverges_more_than_global_ema() -> None:
     ``global_ema`` collapses every slot to a single scalar.  The
     comparison-against-global is the meaningful invariant.
     """
+
     def _run_and_get_buf(tracking_mode: str) -> torch.Tensor:
         torch.manual_seed(0)
         model = make_vhp_model(
@@ -70,7 +73,9 @@ def test_per_t_buffer_diverges_more_than_global_ema() -> None:
             model=model,
             stage="stage_1",
             data_factory=lambda: make_smooth_sine_data(
-                n_seqs=4, T=6, seed=int(torch.randint(0, 10_000, (1,)).item()),
+                n_seqs=4,
+                T=6,
+                seed=int(torch.randint(0, 10_000, (1,)).item()),
             ),
             n_steps=40,
         )
@@ -87,8 +92,7 @@ def test_per_t_buffer_diverges_more_than_global_ema() -> None:
     )
     # per_t should retain measurable spread.
     assert per_t_spread > 0.0, (
-        f"per_t spread should be > 0, got {per_t_spread:.2e} "
-        f"(buf={per_t_buf.tolist()})"
+        f"per_t spread should be > 0, got {per_t_spread:.2e} (buf={per_t_buf.tolist()})"
     )
 
 
@@ -105,7 +109,9 @@ def test_fixed_tracking_frozen_after_reset() -> None:
         model=model,
         stage="stage_1",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=4,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=20,
     )
@@ -120,7 +126,9 @@ def test_fixed_tracking_frozen_after_reset() -> None:
         model=model,
         stage="stage_2",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=4,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=10,
     )
@@ -145,7 +153,9 @@ def test_per_t_buffer_continues_to_update_in_stage2() -> None:
         model=model,
         stage="stage_1",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=4,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=10,
     )
@@ -160,7 +170,9 @@ def test_per_t_buffer_continues_to_update_in_stage2() -> None:
         model=model,
         stage="stage_2",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=4, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=4,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=10,
     )

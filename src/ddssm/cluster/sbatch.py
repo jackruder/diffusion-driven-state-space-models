@@ -24,10 +24,10 @@ all the way through to the in-flight trial).
 
 from __future__ import annotations
 
-from typing import Iterable
 import subprocess
 import dataclasses
 from dataclasses import dataclass
+from collections.abc import Iterable
 
 from ddssm.experiment import SBatch
 

@@ -8,22 +8,31 @@ owns the ``PUBLISHED`` reference numbers and the table formatter.
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 # Published CRPS-sum (normalized) from the source papers. Fill in / verify
 # against the exact tables when reporting (CSDI Table 1; TimeGrad; GP-Copula).
 PUBLISHED: dict[str, dict[str, float]] = {
     "CSDI": {
-        "solar": 0.338, "electricity": 0.041, "traffic": 0.073,
-        "taxi": 0.355, "wiki": 0.207,
+        "solar": 0.338,
+        "electricity": 0.041,
+        "traffic": 0.073,
+        "taxi": 0.355,
+        "wiki": 0.207,
     },
     "TimeGrad": {
-        "solar": 0.287, "electricity": 0.021, "traffic": 0.044,
-        "taxi": 0.114, "wiki": 0.0485,
+        "solar": 0.287,
+        "electricity": 0.021,
+        "traffic": 0.044,
+        "taxi": 0.114,
+        "wiki": 0.0485,
     },
     "GP-Copula": {
-        "solar": 0.337, "electricity": 0.024, "traffic": 0.078,
-        "taxi": 0.208, "wiki": 0.086,
+        "solar": 0.337,
+        "electricity": 0.024,
+        "traffic": 0.078,
+        "taxi": 0.208,
+        "wiki": 0.086,
     },
 }
 
@@ -52,4 +61,4 @@ def comparison_table(
     return "\n".join(rows)
 
 
-__all__ = ["PUBLISHED", "DATASET_ORDER", "comparison_table"]
+__all__ = ["DATASET_ORDER", "PUBLISHED", "comparison_table"]

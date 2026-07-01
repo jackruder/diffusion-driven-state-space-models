@@ -16,7 +16,12 @@ from ddssm.data.datamodule import SyntheticDataModule
 def test_legacy_no_gt_latent_field_by_default() -> None:
     """Default behaviour: no ``gt_latent`` key in items."""
     ds = SyntheticDataset(
-        mode="lgssm", split="val", N_per_split=4, T=8, D=1, dataset_seed=0,
+        mode="lgssm",
+        split="val",
+        N_per_split=4,
+        T=8,
+        D=1,
+        dataset_seed=0,
     )
     item = ds[0]
     assert "gt_latent" not in item
@@ -86,7 +91,7 @@ def test_nonlinear_bimodal_lift_1d_exposes_gt_latents() -> None:
 
 def test_nonlinear_bimodal_lift_mv_exposes_4d_gt_latent() -> None:
     """The MV variant exposes a 4-D latent and an 8-D observation."""
-    from ddssm.data.synthetic import NLBL_MV_LATENT_D, NLBL_MV_OBS_D
+    from ddssm.data.synthetic import NLBL_MV_OBS_D, NLBL_MV_LATENT_D
 
     ds = SyntheticDataset(
         mode="nonlinear-bimodal-lift-mv",
@@ -120,7 +125,7 @@ def test_nonlinear_bimodal_lift_mv_rejects_wrong_obs_dim() -> None:
 
 def test_henon_lift_exposes_2d_gt_latent() -> None:
     """The chaotic Hénon-lift mode exposes a 2-D latent and an 8-D observation."""
-    from ddssm.data.synthetic import HENON_LATENT_D, HENON_OBS_D
+    from ddssm.data.synthetic import HENON_OBS_D, HENON_LATENT_D
 
     ds = SyntheticDataset(
         mode="henon-lift",
@@ -143,7 +148,12 @@ def test_henon_lift_rejects_wrong_obs_dim() -> None:
 
     with pytest.raises(AssertionError, match="henon-lift"):
         SyntheticDataset(
-            mode="henon-lift", split="val", N_per_split=2, T=4, D=3, dataset_seed=0,
+            mode="henon-lift",
+            split="val",
+            N_per_split=2,
+            T=4,
+            D=3,
+            dataset_seed=0,
         )
 
 
@@ -151,7 +161,8 @@ def test_henon_lift_latent_stays_bounded() -> None:
     """Chaos safety: the clamped map + small process noise must never let a
     trajectory escape to the divergent region (which would blow up the lift
     and the per-dim standardisation). The whole latent path stays finite and
-    O(1) after standardisation."""
+    O(1) after standardisation.
+    """
     from ddssm.data.synthetic import HENON_OBS_D
 
     ds = SyntheticDataset(
@@ -171,7 +182,12 @@ def test_henon_lift_latent_stays_bounded() -> None:
 def test_data_module_threads_flag_to_dataset() -> None:
     """``SyntheticDataModule(expose_gt_latents=True)`` propagates the flag."""
     dm = SyntheticDataModule(
-        mode="lgssm", T=8, D=1, N_per_split=4, batch_size=2, expose_gt_latents=True,
+        mode="lgssm",
+        T=8,
+        D=1,
+        N_per_split=4,
+        batch_size=2,
+        expose_gt_latents=True,
     )
     batch = next(iter(dm.val_loader()))
     assert "gt_latent" in batch
@@ -181,7 +197,12 @@ def test_data_module_threads_flag_to_dataset() -> None:
 def test_parse_batch_threads_gt_latent_to_device() -> None:
     """``parse_batch`` (the data module's transform) carries ``gt_latent`` through."""
     dm = SyntheticDataModule(
-        mode="lgssm", T=8, D=1, N_per_split=4, batch_size=2, expose_gt_latents=True,
+        mode="lgssm",
+        T=8,
+        D=1,
+        N_per_split=4,
+        batch_size=2,
+        expose_gt_latents=True,
     )
     raw_batch = next(iter(dm.val_loader()))
     parsed = dm.batch_transform(raw_batch, torch.device("cpu"))
@@ -191,8 +212,9 @@ def test_parse_batch_threads_gt_latent_to_device() -> None:
 
 def test_dataset_splits_keep_gt_latents_disjoint() -> None:
     """train/val/test slices each retain their own gt_latents."""
-    common = dict(mode="lgssm", N_per_split=4, T=8, D=1, dataset_seed=0,
-                  expose_gt_latents=True)
+    common = dict(
+        mode="lgssm", N_per_split=4, T=8, D=1, dataset_seed=0, expose_gt_latents=True
+    )
     train = SyntheticDataset(split="train", **common)
     val = SyntheticDataset(split="val", **common)
     test = SyntheticDataset(split="test", **common)
@@ -211,7 +233,12 @@ def test_dataset_splits_keep_gt_latents_disjoint() -> None:
 def test_disabled_flag_preserves_legacy_behavior() -> None:
     """``expose_gt_latents=False`` (default) ⇒ no GT-latent state stored."""
     ds = SyntheticDataset(
-        mode="lgssm", split="val", N_per_split=4, T=8, D=1, dataset_seed=0,
+        mode="lgssm",
+        split="val",
+        N_per_split=4,
+        T=8,
+        D=1,
+        dataset_seed=0,
     )
     assert ds.gt_latents is None
     item = ds[0]

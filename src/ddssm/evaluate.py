@@ -64,7 +64,8 @@ def main(cfg: DictConfig):
 
     experiment = instantiate(cfg.experiment)
     experiment.model_config_yaml = OmegaConf.to_yaml(
-        cfg.experiment.model, resolve=True,
+        cfg.experiment.model,
+        resolve=True,
     )
     return experiment.evaluate(
         device=device,

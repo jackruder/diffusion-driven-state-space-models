@@ -12,8 +12,8 @@ infrastructure section) for the design contract.
 from __future__ import annotations
 
 import abc
-from typing import Callable
 from dataclasses import dataclass
+from collections.abc import Callable
 
 import torch
 
@@ -54,9 +54,7 @@ class Loss(abc.ABC):
     """
 
     @abc.abstractmethod
-    def __call__(
-        self, components: LossComponents, step: int
-    ) -> torch.Tensor:
+    def __call__(self, components: LossComponents, step: int) -> torch.Tensor:
         """Weight and sum ``components`` into the scalar to backprop.
 
         Args:
@@ -103,9 +101,7 @@ class FullELBO(Loss):
     def lambda_at(self, step: int) -> float | None:
         return float(self.rate_lambda(step))
 
-    def __call__(
-        self, components: LossComponents, step: int
-    ) -> torch.Tensor:
+    def __call__(self, components: LossComponents, step: int) -> torch.Tensor:
         lam = self.rate_lambda(step)
         rate = components.init_kl + components.trans_kl
         reg = (

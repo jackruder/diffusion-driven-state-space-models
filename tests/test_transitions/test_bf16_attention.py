@@ -5,19 +5,17 @@ product much larger than others) to guard against the softmax-backward NaN that
 occurs when unnormalized (post-norm) bf16 attention saturates.
 """
 
-import pytest
 import torch
+import pytest
 
-from ddssm.nn.net_utils import TransformerEncoder, get_torch_trans
 from ddssm.nn.diffnets import (
-    CausalTransformerTimeLayer,
     TransformerFeatureLayer,
+    CausalTransformerTimeLayer,
 )
+from ddssm.nn.net_utils import TransformerEncoder, get_torch_trans
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-SKIP_NO_CUDA = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="requires CUDA"
-)
+SKIP_NO_CUDA = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 
 
 def _peaky_input(B: int, T: int, C: int, scale: float = 50.0) -> torch.Tensor:
@@ -30,9 +28,9 @@ def _peaky_input(B: int, T: int, C: int, scale: float = 50.0) -> torch.Tensor:
 @SKIP_NO_CUDA
 @pytest.mark.parametrize("channels,nheads", [(64, 8), (48, 2), (128, 4)])
 def test_get_torch_trans_bf16_gradients(channels, nheads):
-    model = get_torch_trans(
-        heads=nheads, layers=1, channels=channels, dropout=0.0
-    ).to(DEVICE)
+    model = get_torch_trans(heads=nheads, layers=1, channels=channels, dropout=0.0).to(
+        DEVICE
+    )
     x = _peaky_input(4, 16, channels, scale=100.0).requires_grad_(True)
     with torch.amp.autocast("cuda", dtype=torch.bfloat16):
         y = model(x)

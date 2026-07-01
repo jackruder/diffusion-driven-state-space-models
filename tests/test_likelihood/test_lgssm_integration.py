@@ -76,7 +76,9 @@ def _backward_sample(m_filt, P_filt, K, generator):
 
     mT = m_filt[:, T - 1].unsqueeze(1).expand(B, K)
     PT = P_filt[:, T - 1].unsqueeze(1).expand(B, K)
-    z[:, :, T - 1] = mT + PT.sqrt() * torch.randn(B, K, generator=generator, dtype=dtype)
+    z[:, :, T - 1] = mT + PT.sqrt() * torch.randn(
+        B, K, generator=generator, dtype=dtype
+    )
     log_q = log_q + _normal_logpdf(z[:, :, T - 1], mT, PT)
 
     for t in range(T - 2, -1, -1):
@@ -127,9 +129,9 @@ def test_probflow_iwae_matches_kalman_loglik() -> None:
     )  # (B, K)
 
     # log p(x_t | z_t) — analytic emission, summed over t.
-    log_p_dec = _normal_logpdf(
-        x.unsqueeze(1), z, torch.tensor(R, dtype=dtype)
-    ).sum(dim=-1)  # (B, K)
+    log_p_dec = _normal_logpdf(x.unsqueeze(1), z, torch.tensor(R, dtype=dtype)).sum(
+        dim=-1
+    )  # (B, K)
 
     # log p(z_t | z_{t-1}) — via the probability-flow ODE, summed over t = 2..T.
     log_p_trans = torch.zeros(B, K, dtype=dtype)

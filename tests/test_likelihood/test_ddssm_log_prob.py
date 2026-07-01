@@ -49,64 +49,107 @@ T_MAX = 10
 
 def _make_stage2_model() -> DDSSM_base:
     ctx = partial(
-        ContextProducer, channels=CHANNELS, num_layers=1,
+        ContextProducer,
+        channels=CHANNELS,
+        num_layers=1,
         residual_block=ResidualBlockConfig(
             feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
         ),
     )
     agg = partial(
-        ContextProducerAggregator, channels=CHANNELS, num_layers=1,
+        ContextProducerAggregator,
+        channels=CHANNELS,
+        num_layers=1,
         residual_block=ResidualBlockConfig(
             feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
         ),
     )
     tiny_unet = partial(
-        CSDIUnet, channels=CHANNELS, n_layers=1, embedding_dim=CHANNELS,
+        CSDIUnet,
+        channels=CHANNELS,
+        n_layers=1,
+        embedding_dim=CHANNELS,
         residual_block=DiffResidualBlockConfig(
             feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
         ),
     )
     encoder = GaussianEncoder(
-        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J,
-        emb_time_dim=EMB_TIME, use_mask=True, hidden_dim=CHANNELS,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
+        use_mask=True,
+        hidden_dim=CHANNELS,
         combiner=partial(
-            CompoundCombiner, aggregator=agg, fusion=partial(ConcatLinearFusion),
+            CompoundCombiner,
+            aggregator=agg,
+            fusion=partial(ConcatLinearFusion),
         ),
         dist_head=partial(GaussianDistHead),
         fut_summary=partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1),
     )
     decoder = GaussianDecoder(
-        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J,
-        emb_time_dim=EMB_TIME, hidden_dim=CHANNELS,
-        context=ctx, gaussian_head=GaussianHead,
+        latent_dim=LATENT_DIM,
+        data_dim=DATA_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=ctx,
+        gaussian_head=GaussianHead,
     )
     baseline = MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
     schedule = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=20, beta_min=0.1, beta_max=20.0,
-        tau_min=1e-3, k_sampling_mode="uniform",
+        S_k=1,
+        k_chunk=1,
+        num_steps=20,
+        beta_min=0.1,
+        beta_max=20.0,
+        tau_min=1e-3,
+        k_sampling_mode="uniform",
     )
     stage1 = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        baseline=baseline,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
     )
     transition = DiffusionTransition(
-        baseline=baseline, latent_dim=LATENT_DIM, j=J,
-        emb_time_dim=EMB_TIME, T_max=T_MAX,
-        unet=tiny_unet, schedule=schedule,
+        baseline=baseline,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
+        T_max=T_MAX,
+        unet=tiny_unet,
+        schedule=schedule,
     )
     aux = AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed")
     hparams = SimpleNamespace(
-        S=1, ema_decay=0.999, weight_decay=1e-2, batch_size=2,
-        grad_accum_steps=1, t_chunk=4, clip_grad_norm=None,
-        enc_lr=1e-3, dec_lr=1e-3,
-        trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
+        S=1,
+        ema_decay=0.999,
+        weight_decay=1e-2,
+        batch_size=2,
+        grad_accum_steps=1,
+        t_chunk=4,
+        clip_grad_norm=None,
+        enc_lr=1e-3,
+        dec_lr=1e-3,
+        trans_lr=1e-3,
+        logvar_min=-7.0,
+        logvar_max=7.0,
     )
     model = DDSSM_base(
-        encoder=encoder, decoder=decoder, transition=transition,
-        j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM,
+        encoder=encoder,
+        decoder=decoder,
+        transition=transition,
+        j=J,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
         emb_time_dim=EMB_TIME,
-        aux_posterior=aux, baseline=baseline,
-        sigma_data=sigma_data, stage1_transition=stage1,
+        aux_posterior=aux,
+        baseline=baseline,
+        sigma_data=sigma_data,
+        stage1_transition=stage1,
     )
     model.stage_selector = "stage_2"
     return model
@@ -173,7 +216,9 @@ def test_log_prob_at_k1_equals_single_trajectory_iwae_weight() -> None:
     )
 
     torch.manual_seed(123)
-    time_embed = time_embedding(timepoints, model.emb_time_dim, device=observed_data.device)
+    time_embed = time_embedding(
+        timepoints, model.emb_time_dim, device=observed_data.device
+    )
     zs, logq_paths, _ = model._encode_latents(
         observed_data=observed_data,
         time_embed=time_embed,
@@ -209,13 +254,18 @@ def test_log_prob_at_k1_equals_single_trajectory_iwae_weight() -> None:
             "target_time_emb": time_embed[:, t : t + 1, :],
         }
         logp_t = transition.log_prob(
-            z=zs[:, 0, :, t], z_hist=zs[:, 0, :, t - j : t], ctx=ctx, sigma_d2=sigma_d2,
+            z=zs[:, 0, :, t],
+            z_hist=zs[:, 0, :, t - j : t],
+            ctx=ctx,
+            sigma_d2=sigma_d2,
         )
         log_p_trans[:, 0] = log_p_trans[:, 0] + logp_t
 
     log_p_init = transition.log_prob_init(
-        zs=zs, aux_posterior=model.aux_posterior,
-        time_embed=time_embed, sigma_data=model.sigma_data,
+        zs=zs,
+        aux_posterior=model.aux_posterior,
+        time_embed=time_embed,
+        sigma_data=model.sigma_data,
     )
 
     expected = (log_p_init + log_p_trans + log_p_dec - log_q_z).squeeze(-1)

@@ -24,10 +24,15 @@ def seed_everything(seed: int) -> None:
 
 
 def _p_k_for_mode(
-    transition: torch.nn.Module, mode: str, *, sigma_d2: float = 1.0,
+    transition: torch.nn.Module,
+    mode: str,
+    *,
+    sigma_d2: float = 1.0,
 ) -> torch.Tensor:
     if not hasattr(transition, "p_k"):
-        raise TypeError("Variance probe currently supports transitions with a p_k buffer.")
+        raise TypeError(
+            "Variance probe currently supports transitions with a p_k buffer."
+        )
     # The adaptive modes are computed per-row at loss-time, so their owning
     # transition has ``self.p_k = None``. Fall back to ``sigma_tilde`` to size
     # / dtype the static-mode tensors when that's the case.
@@ -37,7 +42,8 @@ def _p_k_for_mode(
         else:
             K = int(transition.sigma_tilde.numel())
             p_k = torch.full(
-                (K,), 1.0 / K,
+                (K,),
+                1.0 / K,
                 dtype=transition.sigma_tilde.dtype,
                 device=transition.sigma_tilde.device,
             )
@@ -53,11 +59,14 @@ def _p_k_for_mode(
         from ddssm.model.transitions.diffusion import _adaptive_is_density_meandom
 
         sd2 = torch.tensor(
-            [sigma_d2], dtype=transition.sigma_tilde.dtype,
+            [sigma_d2],
+            dtype=transition.sigma_tilde.dtype,
             device=transition.sigma_tilde.device,
         )
         p_k = _adaptive_is_density_meandom(
-            transition.sigma_tilde, sd2, floor=transition.gfloor,
+            transition.sigma_tilde,
+            sd2,
+            floor=transition.gfloor,
         ).squeeze(0)
     elif mode == "adaptive_is_full":
         from ddssm.model.transitions.diffusion import _adaptive_is_density_full
@@ -70,7 +79,11 @@ def _p_k_for_mode(
         sg2 = torch.tensor([1.0], dtype=dtype, device=device)
         mh2 = torch.tensor([1.0], dtype=dtype, device=device)
         p_k = _adaptive_is_density_full(
-            transition.sigma_tilde, sd2, sg2, mh2, floor=transition.gfloor,
+            transition.sigma_tilde,
+            sd2,
+            sg2,
+            mh2,
+            floor=transition.gfloor,
         ).squeeze(0)
     else:
         raise ValueError(f"Unsupported k_sampling_mode {mode!r}.")
@@ -135,7 +148,9 @@ def run_probe(
     # the sampling-path EMA shadows, matching training-time sampling
     # (ADR-0005).
     model = prepare_model(
-        experiment, checkpoint_path=checkpoint_path, device=device,
+        experiment,
+        checkpoint_path=checkpoint_path,
+        device=device,
     )
     _freeze_model(model, list(spec.freeze))
 
@@ -154,7 +169,9 @@ def run_probe(
     # mode is adaptive (the buffer is computed per-row at loss-time); fall
     # back to ``sigma_tilde`` for the dtype in that case.
     _pk_buf = model.transition.p_k
-    _pk_dtype = _pk_buf.dtype if _pk_buf is not None else model.transition.sigma_tilde.dtype
+    _pk_dtype = (
+        _pk_buf.dtype if _pk_buf is not None else model.transition.sigma_tilde.dtype
+    )
     p_k_by_mode = {
         mode: _p_k_for_mode(model.transition, mode).to(device=device, dtype=_pk_dtype)
         for mode in modes
@@ -179,10 +196,15 @@ def run_probe(
     log.info(
         "Probe run: %d seeds × %d batches × %d replicas × %d cells "
         "(force_per_k=%s, K_bins=%d, split=%r)",
-        n_seeds, n_batches, R, n_cells,
-        spec.force_per_k, int(getattr(model.transition, "num_steps", 0)), spec.split,
+        n_seeds,
+        n_batches,
+        R,
+        n_cells,
+        spec.force_per_k,
+        int(getattr(model.transition, "num_steps", 0)),
+        spec.split,
     )
-    log_every = max(1, R // 8)   # ~8 heartbeats per replica loop
+    log_every = max(1, R // 8)  # ~8 heartbeats per replica loop
     t_run_start = time.perf_counter()
 
     for seed_i, seed in enumerate(seeds, start=1):
@@ -199,7 +221,15 @@ def run_probe(
             log.info(
                 "  seed %d/%d batch %d/%d: %d replicas × %d cells "
                 "(bs=%d, d=%d, S_k=%d)",
-                seed_i, n_seeds, batch_idx + 1, n_batches, R, n_cells, bs, d, sk,
+                seed_i,
+                n_seeds,
+                batch_idx + 1,
+                n_batches,
+                R,
+                n_cells,
+                bs,
+                d,
+                sk,
             )
             t_batch_start = time.perf_counter()
 
@@ -209,14 +239,20 @@ def run_probe(
                     eta = elapsed * (R - replica) / replica
                     log.info(
                         "    replica %d/%d  elapsed %.1fs  eta %.1fs",
-                        replica, R, elapsed, eta,
+                        replica,
+                        R,
+                        elapsed,
+                        eta,
                     )
                 shared_eps = torch.randn(bs, d, sk, device=device)
                 shared_k_idx: dict[str, torch.Tensor] = {}
                 for mode, trans in transitions.items():
-                    shared_k_idx[mode] = torch.multinomial(
-                        p_k_by_mode[mode], bs * sk, replacement=True
-                    ).view(bs, sk).to(device=device, dtype=torch.long)
+                    shared_k_idx[mode] = (
+                        torch
+                        .multinomial(p_k_by_mode[mode], bs * sk, replacement=True)
+                        .view(bs, sk)
+                        .to(device=device, dtype=torch.long)
+                    )
 
                 for cell in spec.cells:
                     trans = transitions[cell.k_sampling_mode]
@@ -263,16 +299,22 @@ def run_probe(
             if spec.force_per_k:
                 k_max = int(getattr(model.transition, "num_steps", 0))
                 log.info(
-                    "    force_per_k: %d steps × %d cells", k_max, n_cells,
+                    "    force_per_k: %d steps × %d cells",
+                    k_max,
+                    n_cells,
                 )
                 t_pk_start = time.perf_counter()
                 for k in range(k_max):
                     if k > 0 and k % max(1, k_max // 4) == 0:
                         log.info(
                             "      force_per_k step %d/%d  elapsed %.1fs",
-                            k, k_max, time.perf_counter() - t_pk_start,
+                            k,
+                            k_max,
+                            time.perf_counter() - t_pk_start,
                         )
-                    forced_idx = torch.full((bs, sk), k, device=device, dtype=torch.long)
+                    forced_idx = torch.full(
+                        (bs, sk), k, device=device, dtype=torch.long
+                    )
                     forced_eps = torch.randn(bs, d, sk, device=device)
                     for cell in spec.cells:
                         trans = transitions[cell.k_sampling_mode]
@@ -290,9 +332,9 @@ def run_probe(
                         out["L_p"].backward()
                         g = _grad_vector(trans.diffmodel)
                         g_norm = float(g.norm().item())
-                        per_k_cell_grads[cell.objective, cell.k_sampling_mode, int(k)].append(
-                            g.cpu().numpy()
-                        )
+                        per_k_cell_grads[
+                            cell.objective, cell.k_sampling_mode, int(k)
+                        ].append(g.cpu().numpy())
                         per_sample = out["L_p_per_sample"].detach().cpu().numpy()
                         # Mean-per-batch loss (see the replica branch above):
                         # out["L_p"] is summed over the B·S batch samples.
@@ -313,7 +355,9 @@ def run_probe(
 
     log.info(
         "Probe loop done in %.1fs — %d rows across %d cells",
-        time.perf_counter() - t_run_start, len(rows), len(cell_grads),
+        time.perf_counter() - t_run_start,
+        len(rows),
+        len(cell_grads),
     )
 
     summary_cells: dict[str, dict[str, float]] = {}

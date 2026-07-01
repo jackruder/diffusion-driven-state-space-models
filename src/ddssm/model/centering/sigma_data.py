@@ -36,7 +36,7 @@ the doc's notation).  Internally the array is 0-based.
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import torch
 import torch.nn as nn
@@ -95,8 +95,7 @@ class SigmaDataBuffer(nn.Module):
             raise ValueError(f"T_max must be > 0; got {T_max}")
         if tracking_mode not in _TRACKING_MODES:
             raise ValueError(
-                f"tracking_mode must be one of {_TRACKING_MODES}; "
-                f"got {tracking_mode!r}"
+                f"tracking_mode must be one of {_TRACKING_MODES}; got {tracking_mode!r}"
             )
         if not 0.0 <= ema_decay < 1.0:
             raise ValueError(f"ema_decay must be in [0, 1); got {ema_decay}")
@@ -252,7 +251,9 @@ class SigmaDataBuffer(nn.Module):
         mu_blocks = mu_hat_batch.view(n, per_t, d)
         s2_blocks = sigma_t2_batch.view(n, per_t, d)
 
-        avg_post_var = s2_blocks.mean(dim=1).sum(dim=1)  # (n,) = E[‖σ_t‖²] = E[Σ_d σ²_d]
+        avg_post_var = s2_blocks.mean(dim=1).sum(
+            dim=1
+        )  # (n,) = E[‖σ_t‖²] = E[Σ_d σ²_d]
         # tr Var[μ̂_t] = sum_d Var_b[μ̂_{t,b,d}]. Use Bessel-corrected
         # (``unbiased=True``) so the EMA's steady-state target is the true
         # marginal variance regardless of ``per_t``. The biased (1/per_t)

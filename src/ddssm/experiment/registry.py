@@ -47,6 +47,7 @@ def register_experiments() -> None:
         return
 
     from hydra_zen import store
+
     store.add_to_hydra_store(overwrite_ok=True)
 
 

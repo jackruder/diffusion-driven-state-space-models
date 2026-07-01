@@ -31,7 +31,9 @@ from ddssm.experiment import Experiment, ObjectiveSpec
 from ddssm.experiment.stores import store
 from ddssm.experiment.registry import register_experiments
 
-CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
+CONF_DIR = (
+    Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf"
+).as_posix()
 
 
 @pytest.fixture(autouse=True)
@@ -107,9 +109,7 @@ def test_cell_baseline_mode_reaches_the_stage_builder() -> None:
     assert s2_learnable.trainable.baseline is True
     assert s2_learnable.loss.lambda_mu_p == pytest.approx(1e-2)
 
-    pinned = instantiate(
-        store["experiment"]["experiment", "init_smoke_simple"]
-    )
+    pinned = instantiate(store["experiment"]["experiment", "init_smoke_simple"])
     s2_pinned = pinned.training.stages.stage_2
     assert s2_pinned.trainable.baseline is False
     assert s2_pinned.loss.lambda_mu_p == 0.0

@@ -90,7 +90,9 @@ def _make_encoder() -> GaussianEncoder:
         use_mask=True,
         hidden_dim=CHANNELS,
         combiner=partial(
-            CompoundCombiner, aggregator=_AGG, fusion=partial(ConcatLinearFusion),
+            CompoundCombiner,
+            aggregator=_AGG,
+            fusion=partial(ConcatLinearFusion),
         ),
         dist_head=partial(GaussianDistHead),
         fut_summary=partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1),
@@ -142,10 +144,16 @@ def _make_stage2_model(
 ) -> DDSSM_base:
     baseline = MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
     schedule = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=20, k_sampling_mode="uniform",
+        S_k=1,
+        k_chunk=1,
+        num_steps=20,
+        k_sampling_mode="uniform",
     )
     stage1_transition = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        baseline=baseline,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
     )
     transition = DiffusionTransition(
         baseline=baseline,
@@ -212,7 +220,8 @@ def test_stage2_entropy_term_is_zero() -> None:
 def test_stage2_r_mu_p_zero_after_snapshot() -> None:
     """``R_μp = 0`` immediately after the baseline_anchor snapshot."""
     model = _make_stage2_model(
-        baseline_mode="learnable", snapshot_anchor=True,
+        baseline_mode="learnable",
+        snapshot_anchor=True,
     )
     batch = _make_batch(B=2, T=5)
     _, metrics, _ = model(
@@ -220,13 +229,16 @@ def test_stage2_r_mu_p_zero_after_snapshot() -> None:
         batch["observation_mask"],
         batch["timepoints"],
     )
-    assert torch.isclose(metrics["loss/rate/trans/r_mu_p"], torch.tensor(0.0), atol=1e-6)
+    assert torch.isclose(
+        metrics["loss/rate/trans/r_mu_p"], torch.tensor(0.0), atol=1e-6
+    )
 
 
 def test_stage2_r_mu_p_positive_after_drift() -> None:
     """After the baseline drifts from the anchor, ``R_μp > 0``."""
     model = _make_stage2_model(
-        baseline_mode="learnable", snapshot_anchor=True,
+        baseline_mode="learnable",
+        snapshot_anchor=True,
     )
     # Drift the baseline.
     with torch.no_grad():
@@ -244,7 +256,8 @@ def test_stage2_r_mu_p_positive_after_drift() -> None:
 def test_stage2_r_mu_p_zero_under_pinned_mode() -> None:
     """Under ``"pinned"`` mode, ``R_μp`` is always 0 regardless of drift."""
     model = _make_stage2_model(
-        baseline_mode="pinned", snapshot_anchor=True,
+        baseline_mode="pinned",
+        snapshot_anchor=True,
     )
     with torch.no_grad():
         for p in model.baseline.parameters():

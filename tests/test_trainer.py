@@ -17,7 +17,6 @@ from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.model.transitions.transitions import GaussianTransition
 
 DDSSMTrainerConf = builds(DDSSMTrainer, populate_full_signature=True)
-from types import SimpleNamespace
 
 from torch.utils.data import Dataset, DataLoader
 
@@ -52,26 +51,43 @@ def make_small_model():
         fusion=partial(ConcatLinearFusion),
     )
     enc = GaussianEncoder(
-        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        use_mask=True, hidden_dim=CHANNELS,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
+        use_mask=True,
+        hidden_dim=CHANNELS,
         combiner=combiner,
         dist_head=partial(GaussianDistHead),
         fut_summary=_FS,
     )
     dec = GaussianDecoder(
-        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM,
+        data_dim=DATA_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH,
+        context=_CTX,
+        gaussian_head=_GH,
     )
     trans = GaussianTransition(
-        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH,
+        context=_CTX,
+        gaussian_head=_GH,
     )
     aux = AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=CHANNELS, n_layers=1)
     return DDSSM_base(
-        encoder=enc, decoder=dec, transition=trans, aux_posterior=aux,
-        j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
+        encoder=enc,
+        decoder=dec,
+        transition=trans,
+        aux_posterior=aux,
+        j=J,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        emb_time_dim=EMB_TIME,
     )
 
 
@@ -145,7 +161,9 @@ def test_trainer_logs_time_elapsed_s_to_csv(small_model, tmp_path):
         f"missing time/elapsed_s column; got {fieldnames}"
     )
     # Each row's elapsed_s should be finite and non-negative.
-    elapsed_values = [float(r["time/elapsed_s"]) for r in rows if r.get("time/elapsed_s")]
+    elapsed_values = [
+        float(r["time/elapsed_s"]) for r in rows if r.get("time/elapsed_s")
+    ]
     assert elapsed_values, "no time/elapsed_s rows logged"
     for v in elapsed_values:
         assert v >= 0.0
@@ -247,7 +265,10 @@ def _make_model_with_baseline():
     base.aux_posterior = aux
     base.sigma_data = SigmaDataBuffer(T_max=8, tracking_mode="per_t")
     base.stage1_transition = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        baseline=baseline,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
     )
     return base
 
@@ -258,8 +279,10 @@ def test_set_trainable_baseline_field_flips_requires_grad(tmp_path):
 
     model = _make_model_with_baseline()
     trainer = DDSSMTrainer(
-        model=model, device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        model=model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     # Sanity: baseline params start trainable.
     assert all(p.requires_grad for p in model.baseline.parameters())
@@ -277,8 +300,10 @@ def test_rebuild_optimizer_picks_up_baseline_params(tmp_path):
 
     model = _make_model_with_baseline()
     trainer = DDSSMTrainer(
-        model=model, device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        model=model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     trainer._rebuild_optimizer(StageLrsConf())
     baseline_param_ids = {id(p) for p in model.baseline.parameters()}
@@ -295,18 +320,28 @@ def test_elbo_plateau_early_stop_triggers(small_model, tmp_path):
     from ddssm.training.stages import EarlyStopSpec
 
     trainer = DDSSMTrainer(
-        model=small_model, device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
     # ``min_improvement=10.0`` is impossible to meet ⇒ early-stop fires on the
     # first comparison after the warmup window.
     spec = EarlyStopSpec(
-        enabled=True, window=4, min_improvement=10.0, warmup_steps=2,
+        enabled=True,
+        window=4,
+        min_improvement=10.0,
+        warmup_steps=2,
     )
     final_step = trainer.fit(
-        train_loader=loader, val_loader=None, total_steps=200,
-        validate_every=0, log_every=1, checkpoint_every=None, amp=False,
+        train_loader=loader,
+        val_loader=None,
+        total_steps=200,
+        validate_every=0,
+        log_every=1,
+        checkpoint_every=None,
+        amp=False,
         early_stop=spec,
     )
     assert final_step < 200, (
@@ -319,8 +354,10 @@ def test_validation_runs_under_ema_swap(small_model, tmp_path):
     from contextlib import contextmanager
 
     trainer = DDSSMTrainer(
-        model=small_model, device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
 
@@ -335,8 +372,13 @@ def test_validation_runs_under_ema_swap(small_model, tmp_path):
 
     trainer.ema.swap = _spy_swap  # type: ignore[assignment]
     trainer.fit(
-        train_loader=loader, val_loader=loader, total_steps=2,
-        validate_every=1, log_every=1, checkpoint_every=None, amp=False,
+        train_loader=loader,
+        val_loader=loader,
+        total_steps=2,
+        validate_every=1,
+        log_every=1,
+        checkpoint_every=None,
+        amp=False,
     )
     assert entered, "validation did not enter the EMA swap"
 
@@ -347,9 +389,11 @@ def test_clip_grad_norm_bounds_global_grad_norm(small_model, tmp_path):
 
     clip = 0.5
     trainer = DDSSMTrainer(
-        model=small_model, device=torch.device("cpu"),
+        model=small_model,
+        device=torch.device("cpu"),
         hparams=DDSSMHyperParamsConf(clip_grad_norm=clip),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     assert trainer.clip_grad_norm == clip
 
@@ -359,9 +403,11 @@ def test_clip_grad_norm_bounds_global_grad_norm(small_model, tmp_path):
             p.grad = torch.ones_like(p)
 
     def _global_norm() -> torch.Tensor:
-        return torch.norm(torch.stack([
-            p.grad.norm() for p in small_model.parameters() if p.grad is not None
-        ]))
+        return torch.norm(
+            torch.stack([
+                p.grad.norm() for p in small_model.parameters() if p.grad is not None
+            ])
+        )
 
     assert _global_norm() > clip, "precondition: gradients must exceed the clip"
     scaler = torch.amp.GradScaler("cuda", enabled=False)
@@ -373,8 +419,10 @@ def test_clip_grad_norm_bounds_global_grad_norm(small_model, tmp_path):
 def test_clip_grad_norm_none_leaves_grads_untouched(small_model, tmp_path):
     """The default ``clip_grad_norm=None`` is a no-op (behavior-preserving)."""
     trainer = DDSSMTrainer(
-        model=small_model, device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     assert trainer.clip_grad_norm is None
     for p in small_model.parameters():
@@ -390,13 +438,20 @@ def test_clip_grad_norm_none_leaves_grads_untouched(small_model, tmp_path):
 def test_elbo_plateau_disabled_runs_full_budget(small_model, tmp_path):
     """``early_stop=None`` leaves the loop running until ``total_steps``."""
     trainer = DDSSMTrainer(
-        model=small_model, device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"), quiet=True,
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
     )
     loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
     final_step = trainer.fit(
-        train_loader=loader, val_loader=None, total_steps=6,
-        validate_every=0, log_every=1, checkpoint_every=None, amp=False,
+        train_loader=loader,
+        val_loader=None,
+        total_steps=6,
+        validate_every=0,
+        log_every=1,
+        checkpoint_every=None,
+        amp=False,
         early_stop=None,
     )
     assert final_step == 6

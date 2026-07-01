@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from dataclasses import dataclass
-from typing import Any, Callable
+from collections.abc import Callable
 
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 @dataclass
@@ -79,8 +80,7 @@ def _cell_style(cell: str) -> tuple[str, str]:
 
 def _plot_empty(save_path: str, message: str, figsize=(8, 5)) -> None:
     fig, ax = plt.subplots(figsize=figsize)
-    ax.text(0.5, 0.5, message, ha="center", va="center",
-            transform=ax.transAxes)
+    ax.text(0.5, 0.5, message, ha="center", va="center", transform=ax.transAxes)
     ax.set_axis_off()
     plt.tight_layout()
     plt.savefig(save_path)
@@ -121,9 +121,12 @@ def _plot_var_per_k(
         ys = np.array([float(v) for _, v in items], dtype=np.float64)
         colour, style = _cell_style(cell)
         ax.plot(
-            xs, ys,
-            color=colour, linestyle=style,
-            linewidth=1.5, alpha=0.85,
+            xs,
+            ys,
+            color=colour,
+            linestyle=style,
+            linewidth=1.5,
+            alpha=0.85,
             label=cell,
         )
     ax.set_xlabel(
@@ -143,10 +146,13 @@ def _plot_var_per_k(
     # information ("modes don't differ under forced k") rather than a
     # bug.
     fig.text(
-        0.01, 0.01,
+        0.01,
+        0.01,
         "Under forced k the k-sampling mode is not exercised — "
         "uniform / lsgm_is curves coincide.",
-        fontsize=7, style="italic", color="dimgrey",
+        fontsize=7,
+        style="italic",
+        color="dimgrey",
     )
     plt.tight_layout(rect=(0, 0.03, 1, 1))
     plt.savefig(save_path)
@@ -155,14 +161,17 @@ def _plot_var_per_k(
 
 @register_probe_plot("var_grad_vs_tau")
 def plot_var_grad_vs_tau(
-    ctx: ProbePlotContext, save_path: str,
-    *, ylim: tuple[float, float] | None = None,
+    ctx: ProbePlotContext,
+    save_path: str,
+    *,
+    ylim: tuple[float, float] | None = None,
     xlim: tuple[float, float] | None = None,
     **_: Any,
 ) -> None:
     """Gradient variance per τ-bin (forced k), one curve per cell."""
     _plot_var_per_k(
-        ctx, save_path,
+        ctx,
+        save_path,
         metric_key="grad_var_per_tau",
         title=r"Gradient variance per $\tau$-bin (forced $k$)",
         ylabel=(
@@ -170,31 +179,38 @@ def plot_var_grad_vs_tau(
             r"(\nabla_\theta \mathcal{L}_p)$"
             "\n(mean across score-net parameters)"
         ),
-        ylim=ylim, xlim=xlim,
+        ylim=ylim,
+        xlim=xlim,
     )
 
 
 @register_probe_plot("var_loss_vs_tau")
 def plot_var_loss_vs_tau(
-    ctx: ProbePlotContext, save_path: str,
-    *, ylim: tuple[float, float] | None = None,
+    ctx: ProbePlotContext,
+    save_path: str,
+    *,
+    ylim: tuple[float, float] | None = None,
     xlim: tuple[float, float] | None = None,
     **_: Any,
 ) -> None:
     """Loss variance per τ-bin (forced k), one curve per cell."""
     _plot_var_per_k(
-        ctx, save_path,
+        ctx,
+        save_path,
         metric_key="loss_var_per_tau",
         title=r"Loss variance per $\tau$-bin (forced $k$)",
         ylabel=r"$\mathrm{Var}_{\mathrm{seed,batch}}\,(\mathcal{L}_p)$",
-        ylim=ylim, xlim=xlim,
+        ylim=ylim,
+        xlim=xlim,
     )
 
 
 @register_probe_plot("ratio_vs_tau")
 def plot_ratio_vs_tau(
-    ctx: ProbePlotContext, save_path: str,
-    *, ylim: tuple[float, float] | None = None,
+    ctx: ProbePlotContext,
+    save_path: str,
+    *,
+    ylim: tuple[float, float] | None = None,
     xlim: tuple[float, float] | None = None,
     **_: Any,
 ) -> None:
@@ -216,10 +232,12 @@ def plot_ratio_vs_tau(
             xs = np.array([int(k) for k, _ in items], dtype=np.int64)
             ys = np.array([float(v) for _, v in items], dtype=np.float64)
             ax.plot(
-                xs, ys,
+                xs,
+                ys,
                 color=_KIND_COLOR[kind],
                 linestyle=_MODE_STYLE[mode],
-                linewidth=1.5, alpha=0.85,
+                linewidth=1.5,
+                alpha=0.85,
                 label=f"{kind} ratio ({mode})",
             )
             any_line = True
@@ -229,7 +247,11 @@ def plot_ratio_vs_tau(
         return
 
     ax.axhline(
-        1.0, color="grey", linestyle=":", linewidth=1.2, alpha=0.7,
+        1.0,
+        color="grey",
+        linestyle=":",
+        linewidth=1.2,
+        alpha=0.7,
         label="parity (ESM = DSM)",
     )
     ax.set_xlabel(r"$\tau$-bin index $k$")
@@ -243,11 +265,14 @@ def plot_ratio_vs_tau(
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(fontsize=8, loc="best")
     fig.text(
-        0.01, 0.01,
+        0.01,
+        0.01,
         "< 1 → ESM has lower variance at this k;   "
         "> 1 → DSM has lower variance.    "
         "uniform / lsgm_is coincide under forced k.",
-        fontsize=7, style="italic", color="dimgrey",
+        fontsize=7,
+        style="italic",
+        color="dimgrey",
     )
     plt.tight_layout(rect=(0, 0.03, 1, 1))
     plt.savefig(save_path)
@@ -270,8 +295,7 @@ def plot_summary_table(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
 def plot_var_grad_vs_step(ctx: ProbePlotContext, save_path: str, **_: Any) -> None:
     """Placeholder for the R2 checkpoint-sweep grad-variance-vs-step plot."""
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.text(0.5, 0.5, "R2 checkpoint-sweep plot placeholder",
-            ha="center", va="center")
+    ax.text(0.5, 0.5, "R2 checkpoint-sweep plot placeholder", ha="center", va="center")
     ax.axis("off")
     plt.tight_layout()
     plt.savefig(save_path)

@@ -52,10 +52,10 @@ class CenteringHandoffConf:
 
 @torch.no_grad()
 def perform_centering_handoff(
-    trainer: "DDSSMTrainer",
+    trainer: DDSSMTrainer,
     spec: CenteringHandoffConf,
     *,
-    new_lrs: "StageLrsConf",
+    new_lrs: StageLrsConf,
 ) -> None:
     """Execute the stage-1 → stage-2 handoff in order."""
     model = trainer.model

@@ -49,8 +49,8 @@ __all__ = [
     "data",
     "evals",
     "experiments",
-    "study",
     "hparams",
     "model",
+    "study",
     "sweeps",
 ]

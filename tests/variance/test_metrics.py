@@ -30,24 +30,49 @@ def _row(*, objective, mode, seed, batch_idx, replica, l_p, l_p_scalar):
 
 def _ctx(rows):
     return ProbeContext(
-        model=None, transitions={}, loader=None, device=None,
-        spec=None, run_dir="", rows=rows, summary={},
+        model=None,
+        transitions={},
+        loader=None,
+        device=None,
+        spec=None,
+        run_dir="",
+        rows=rows,
+        summary={},
     )
 
 
 def test_loss_var_uses_per_replica_scalar_not_per_sample_spread():
     """Two replicas (per-sample L_p deliberately noisy); variance is over the
-    per-replica L_p_scalar means, not the pooled per-sample values."""
+    per-replica L_p_scalar means, not the pooled per-sample values.
+    """
     rows = []
     # esm:uniform — replica 0 (L_p_scalar=1.0) and replica 1 (L_p_scalar=3.0);
     # per-sample L_p is wildly different so a per-sample pool would be huge.
     for s, lp in zip(range(3), (0.0, 1.0, 2.0)):
-        rows.append(_row(objective="esm", mode="uniform", seed=0, batch_idx=0,
-                         replica=0, l_p=lp, l_p_scalar=1.0))
+        rows.append(
+            _row(
+                objective="esm",
+                mode="uniform",
+                seed=0,
+                batch_idx=0,
+                replica=0,
+                l_p=lp,
+                l_p_scalar=1.0,
+            )
+        )
         rows[-1]["sample_idx"] = s
     for s, lp in zip(range(3), (10.0, 11.0, 12.0)):
-        rows.append(_row(objective="esm", mode="uniform", seed=0, batch_idx=0,
-                         replica=1, l_p=lp, l_p_scalar=3.0))
+        rows.append(
+            _row(
+                objective="esm",
+                mode="uniform",
+                seed=0,
+                batch_idx=0,
+                replica=1,
+                l_p=lp,
+                l_p_scalar=3.0,
+            )
+        )
         rows[-1]["sample_idx"] = s
 
     out = metric_loss_var(_ctx(rows))["loss_var"]
@@ -58,10 +83,24 @@ def test_loss_var_uses_per_replica_scalar_not_per_sample_spread():
 def test_loss_var_nan_for_single_replica():
     """A cell with one replica yields NaN, not a misleading 0.0."""
     rows = [
-        _row(objective="dsm", mode="uniform", seed=0, batch_idx=0, replica=0,
-             l_p=5.0, l_p_scalar=5.0),
-        _row(objective="dsm", mode="uniform", seed=0, batch_idx=0, replica=0,
-             l_p=6.0, l_p_scalar=5.0),
+        _row(
+            objective="dsm",
+            mode="uniform",
+            seed=0,
+            batch_idx=0,
+            replica=0,
+            l_p=5.0,
+            l_p_scalar=5.0,
+        ),
+        _row(
+            objective="dsm",
+            mode="uniform",
+            seed=0,
+            batch_idx=0,
+            replica=0,
+            l_p=6.0,
+            l_p_scalar=5.0,
+        ),
     ]
     out = metric_loss_var(_ctx(rows))["loss_var"]
     assert math.isnan(out["dsm:uniform"])

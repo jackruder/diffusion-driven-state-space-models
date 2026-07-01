@@ -11,23 +11,23 @@ gluonts_forecast``.
 """
 
 from . import (
-    datasets,  # noqa: F401  -- dataset axis
-    model,  # noqa: F401  -- registers GluonModel
-    hparams,  # noqa: F401  -- stages + hparams
-    evals,  # noqa: F401  -- eval + objective specs
-    sweeps,  # noqa: F401  -- registers the lean sweep
-    study,  # noqa: F401  -- registers the per-dataset presets
-    experiments,  # noqa: F401  -- registers gluonts_smoke
-    report,  # noqa: F401  -- comparison table
+    evals,
+    model,
+    study,
+    report,
+    sweeps,
+    hparams,
+    datasets,
+    experiments,
 )
 
 __all__ = [
     "datasets",
-    "model",
-    "hparams",
     "evals",
-    "sweeps",
-    "study",
     "experiments",
+    "hparams",
+    "model",
     "report",
+    "study",
+    "sweeps",
 ]

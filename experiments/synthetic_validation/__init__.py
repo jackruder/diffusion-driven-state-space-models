@@ -6,5 +6,7 @@ registers the ``synthval__<dataset>`` presets into the hydra-zen ``experiment``
 store; the import is triggered from :mod:`experiments`.
 """
 
-from . import study  # noqa: F401  -- registers the synthval study + synthval__* presets
-from . import sin_overfit  # noqa: F401  -- registers the sin_overfit sanity-check preset
+from . import (
+    study,  # noqa: F401  -- registers the synthval study + synthval__* presets
+    sin_overfit,  # noqa: F401  -- registers the sin_overfit sanity-check preset
+)

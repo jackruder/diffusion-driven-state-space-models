@@ -43,12 +43,14 @@ def _registered_names() -> list[str]:
 
 def _get_experiment_node(name: str) -> Any:
     register_experiments()
-    if "experiment" not in store or (("experiment", name)) not in dict(store["experiment"]):
+    if "experiment" not in store or (("experiment", name)) not in dict(
+        store["experiment"]
+    ):
         names = _registered_names()
         raise SystemExit(
             f"Unknown experiment {name!r}. Registered: {', '.join(names) or '<none>'}"
         )
-    return store["experiment"][("experiment", name)]
+    return store["experiment"]["experiment", name]
 
 
 def _cmd_list(_args: argparse.Namespace) -> int:
@@ -109,9 +111,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "run", help="Run a named experiment locally (writes to runs/<name>)."
     )
     pr.add_argument("name")
-    pr.add_argument("--run-dir", default=None, help="Output directory (default runs/<name>).")
     pr.add_argument(
-        "overrides", nargs=argparse.REMAINDER,
+        "--run-dir", default=None, help="Output directory (default runs/<name>)."
+    )
+    pr.add_argument(
+        "overrides",
+        nargs=argparse.REMAINDER,
         help="Hydra-style overrides, e.g. 'training.steps=200'.",
     )
 
@@ -119,7 +124,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "sbatch", help="Render an sbatch submit script for an experiment."
     )
     ps.add_argument("name")
-    ps.add_argument("--out", default=None, help="Write the script here (default stdout).")
+    ps.add_argument(
+        "--out", default=None, help="Write the script here (default stdout)."
+    )
     ps.add_argument("--partition", default=None)
     ps.add_argument("--time", default=None)
     ps.add_argument("--gpus", type=int, default=None)
@@ -129,7 +136,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--job-name", default=None)
     ps.add_argument("--output", default=None, help="Slurm --output= log pattern.")
     ps.add_argument(
-        "overrides", nargs=argparse.REMAINDER,
+        "overrides",
+        nargs=argparse.REMAINDER,
         help="Hydra overrides baked into the generated script.",
     )
     return p

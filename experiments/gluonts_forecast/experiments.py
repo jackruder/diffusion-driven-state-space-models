@@ -13,12 +13,12 @@ import dataclasses
 
 from experiments._make import experiment
 from ddssm.experiment.stores import experiment_store
-from experiments.gluonts_forecast.model import GluonModel
 from experiments.gluonts_forecast.evals import GluonEval, ValElboObjective
+from experiments.gluonts_forecast.model import GluonModel
 from experiments.gluonts_forecast.hparams import (
     GluonStages,
-    GluonTraining,
     GluonHparams,
+    GluonTraining,
 )
 from experiments.gluonts_forecast.datasets import GLUONTS_BY_LABEL
 
@@ -30,8 +30,11 @@ gluonts_smoke = experiment(
     hparams=dataclasses.replace(GluonHparams, batch_size=16),
     training=GluonTraining,
     stages=GluonStages(
-        n_pretrain=20, n_stage2=20, log_every=5,
-        validate_every=10, checkpoint_every=100,
+        n_pretrain=20,
+        n_stage2=20,
+        log_every=5,
+        validate_every=10,
+        checkpoint_every=100,
     ),
     eval=GluonEval,
     objective=ValElboObjective,

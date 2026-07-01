@@ -21,8 +21,8 @@ from ddssm.experiment.experiment import (
 
 __all__ = [
     "Experiment",
-    "Objectives",
     "ObjectiveSpec",
+    "Objectives",
     "SBatch",
     "TrainingScalars",
     "_as_objective_spec",

@@ -36,9 +36,10 @@ centered ESM target.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Callable, Optional, final
+from typing import Any, final
 from functools import partial
 from dataclasses import dataclass
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -61,7 +62,7 @@ def _compute_vp_schedule_buffers(
     beta_max: float,
     tau_min: float,
     tau_max: float = 1.0,
-) -> Dict[str, torch.Tensor]:
+) -> dict[str, torch.Tensor]:
     """Precompute the VP-SDE grid quantities for a given schedule.
 
     Returns a dict of float32 tensors keyed by the names the rest of the
@@ -117,8 +118,8 @@ def _compute_vp_schedule_buffers(
 
 
 def _adaptive_is_density_meandom(
-    sigma_tilde: torch.Tensor,   # (K,)
-    sigma_d2: torch.Tensor,      # (n_t,)
+    sigma_tilde: torch.Tensor,  # (K,)
+    sigma_d2: torch.Tensor,  # (n_t,)
     floor: float = 1e-12,
 ) -> torch.Tensor:
     """Mean-dominated adaptive IS density per (importance-sampling.org § Mean-
@@ -132,17 +133,17 @@ def _adaptive_is_density_meandom(
     encoder posterior variance stays near σ_d² across samples — the (σ²−σ_d²)²
     term in the full formula vanishes and the (σ²+s²) factor cancels.
     """
-    s = sigma_tilde.to(torch.float32)                                 # (K,)
-    sd2 = sigma_d2.to(torch.float32).clamp_min(floor).unsqueeze(-1)   # (n_t, 1)
-    raw = (s / (sd2 + s * s).pow(2)).clamp_min(floor)                 # (n_t, K)
+    s = sigma_tilde.to(torch.float32)  # (K,)
+    sd2 = sigma_d2.to(torch.float32).clamp_min(floor).unsqueeze(-1)  # (n_t, 1)
+    raw = (s / (sd2 + s * s).pow(2)).clamp_min(floor)  # (n_t, K)
     return raw / raw.sum(dim=-1, keepdim=True)
 
 
 def _adaptive_is_density_full(
-    sigma_tilde: torch.Tensor,   # (K,)
-    sigma_d2: torch.Tensor,      # (N,)
-    sigma2: torch.Tensor,        # (N,)
-    mu_hat2: torch.Tensor,       # (N,)
+    sigma_tilde: torch.Tensor,  # (K,)
+    sigma_d2: torch.Tensor,  # (N,)
+    sigma2: torch.Tensor,  # (N,)
+    mu_hat2: torch.Tensor,  # (N,)
     floor: float = 1e-12,
 ) -> torch.Tensor:
     """Full per-sample adaptive IS density (importance-sampling.org line 319,
@@ -155,14 +156,15 @@ def _adaptive_is_density_full(
     Returns shape ``(N, K)`` with each row normalised to sum to 1. At
     ``σ²=σ_d²`` the second numerator term vanishes and the ``(σ²+s²)``
     factor cancels, collapsing to the mean-dom form modulo a per-row
-    scalar (which is absorbed by the normalisation)."""
-    s = sigma_tilde.to(torch.float32)                                 # (K,)
-    s2 = s * s                                                        # (K,)
-    sd2 = sigma_d2.to(torch.float32).clamp_min(floor).unsqueeze(-1)   # (N, 1)
-    sg2 = sigma2.to(torch.float32).clamp_min(floor).unsqueeze(-1)     # (N, 1)
-    mh2 = mu_hat2.to(torch.float32).unsqueeze(-1)                     # (N, 1)
-    num = s * (mh2 * (sg2 + s2) + (sg2 - sd2).pow(2))                 # (N, K)
-    den = (sd2 + s2).pow(2) * (sg2 + s2)                              # (N, K)
+    scalar (which is absorbed by the normalisation).
+    """
+    s = sigma_tilde.to(torch.float32)  # (K,)
+    s2 = s * s  # (K,)
+    sd2 = sigma_d2.to(torch.float32).clamp_min(floor).unsqueeze(-1)  # (N, 1)
+    sg2 = sigma2.to(torch.float32).clamp_min(floor).unsqueeze(-1)  # (N, 1)
+    mh2 = mu_hat2.to(torch.float32).unsqueeze(-1)  # (N, 1)
+    num = s * (mh2 * (sg2 + s2) + (sg2 - sd2).pow(2))  # (N, K)
+    den = (sd2 + s2).pow(2) * (sg2 + s2)  # (N, K)
     raw = (num / den.clamp_min(floor)).clamp_min(floor)
     return raw / raw.sum(dim=-1, keepdim=True)
 
@@ -272,7 +274,7 @@ class DiffusionTransition(BaseTransition):
         unet: Callable[..., CSDIUnet] | None = None,
         schedule: DiffusionScheduleConfig | None = None,
         grad_checkpoint: bool = False,
-        sampling_schedule: "DiffusionSamplingScheduleConfig | None" = None,
+        sampling_schedule: DiffusionSamplingScheduleConfig | None = None,
         emb_feature_dim: int | None = None,
         sampler: str = "edm",
         edm_s_churn: float = 0.0,
@@ -342,7 +344,10 @@ class DiffusionTransition(BaseTransition):
 
         if unet is None:
             unet = partial(
-                CSDIUnet, channels=64, n_layers=4, embedding_dim=128,
+                CSDIUnet,
+                channels=64,
+                n_layers=4,
+                embedding_dim=128,
             )
         # Side-info channel layout is [time(+cov), feat, cond_mask, padding_mask],
         # so the conditioning mask is the second-to-last channel. Pass the index
@@ -445,16 +450,16 @@ class DiffusionTransition(BaseTransition):
         self,
         z: torch.Tensor,
         z_hist: torch.Tensor,
-        ctx: Optional[Dict[str, Any]] = None,
-        mc_override: Optional[Dict[str, Any]] = None,
+        ctx: dict[str, Any] | None = None,
+        mc_override: dict[str, Any] | None = None,
         *,
-        sigma_d2: Optional[torch.Tensor] = None,
-        padding_mask: Optional[torch.Tensor] = None,
+        sigma_d2: torch.Tensor | None = None,
+        padding_mask: torch.Tensor | None = None,
         rtol: float = 1e-5,
         atol: float = 1e-5,
         method: str = "dopri5",
         divergence_mode: str = "exact",
-        generator: Optional[torch.Generator] = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """Native-coord per-transition log-density ``log p_ψ^ode(z | z_hist)``.
 
@@ -491,7 +496,9 @@ class DiffusionTransition(BaseTransition):
             sigma_d2 = torch.ones(B, device=z.device, dtype=z.dtype)
 
         def score_fn(z_curr: torch.Tensor, tau_curr: torch.Tensor) -> torch.Tensor:
-            tau_b = tau_curr.expand(z_curr.shape[0]) if tau_curr.dim() == 0 else tau_curr
+            tau_b = (
+                tau_curr.expand(z_curr.shape[0]) if tau_curr.dim() == 0 else tau_curr
+            )
             return self.score(
                 z=z_curr,
                 tau=tau_b,
@@ -520,14 +527,14 @@ class DiffusionTransition(BaseTransition):
     def transition_kl(
         self,
         enc_stats: GaussianStats,
-        zs: torch.Tensor,             # (B, S, d, T)
-        logq_paths: torch.Tensor,     # (B, S, T)  — unused
-        time_embed: torch.Tensor,     # (B, T, E_t)
+        zs: torch.Tensor,  # (B, S, d, T)
+        logq_paths: torch.Tensor,  # (B, S, T)  — unused
+        time_embed: torch.Tensor,  # (B, T, E_t)
         sigma_data: SigmaDataBuffer,
-        covariates: Optional[torch.Tensor] = None,
-        mc_override: Optional[Dict[str, Any]] = None,
+        covariates: torch.Tensor | None = None,
+        mc_override: dict[str, Any] | None = None,
         return_per_sample: bool = False,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         """Centered ESM/EDM loss over ``t = j+1 … T``.
 
         Returns ``{"kl": ...}``.  ``R_μp`` is added at the
@@ -559,7 +566,7 @@ class DiffusionTransition(BaseTransition):
         device = zs.device
         dtype = zs.dtype
         kl_sum = torch.zeros((), device=device, dtype=dtype)
-        per_sample_acc: Optional[torch.Tensor] = None
+        per_sample_acc: torch.Tensor | None = None
         n_target_steps = max(0, T - j)
         if n_target_steps == 0:
             if return_per_sample:
@@ -577,7 +584,7 @@ class DiffusionTransition(BaseTransition):
             t_start,
             t_end,
             _z_target_flat,
-            z_hist_flat,   # (N, d, j)
+            z_hist_flat,  # (N, d, j)
             ctx,
         ) in self._iter_window_chunks(
             zs,
@@ -587,14 +594,9 @@ class DiffusionTransition(BaseTransition):
         ):
             N = B_ * S_ * chunk_len
             # Slice encoder stats for the chunk's targets.
-            mu_t_flat = (
-                mus[..., t_start:t_end].permute(0, 1, 3, 2).reshape(N, d)
-            )
+            mu_t_flat = mus[..., t_start:t_end].permute(0, 1, 3, 2).reshape(N, d)
             sigma2_t_flat = (
-                logvars[..., t_start:t_end]
-                .exp()
-                .permute(0, 1, 3, 2)
-                .reshape(N, d)
+                logvars[..., t_start:t_end].exp().permute(0, 1, 3, 2).reshape(N, d)
             )
 
             # Per-row σ_data²(t).  Row r → c = r % chunk_len → t = t_start + c (0-based).
@@ -603,7 +605,8 @@ class DiffusionTransition(BaseTransition):
             )  # 1-based, (chunk_len,)
             sigma_d2_per_t = sigma_data.read(t_idx).to(dtype=dtype)  # (chunk_len,)
             sigma_d2_per_row = (
-                sigma_d2_per_t.view(1, 1, chunk_len)
+                sigma_d2_per_t
+                .view(1, 1, chunk_len)
                 .expand(B_, S_, chunk_len)
                 .reshape(N)
             )
@@ -624,7 +627,8 @@ class DiffusionTransition(BaseTransition):
             if return_per_sample:
                 # chunk_loss is the per-sample (N=B*S,) vector for this t.
                 per_sample_acc = (
-                    chunk_loss if per_sample_acc is None
+                    chunk_loss
+                    if per_sample_acc is None
                     else per_sample_acc + chunk_loss
                 )
                 kl_sum = kl_sum + chunk_loss.sum()
@@ -638,7 +642,10 @@ class DiffusionTransition(BaseTransition):
                 sigma_data=sigma_data,
                 mu_hat=mu_hat,
                 sigma2_t=sigma2_t_flat,
-                B=B_, S=S_, chunk_len=chunk_len, d=d,
+                B=B_,
+                S=S_,
+                chunk_len=chunk_len,
+                d=d,
                 t_start_external=t_start + 1,
             )
 
@@ -651,7 +658,7 @@ class DiffusionTransition(BaseTransition):
         if return_per_sample:
             return {
                 "kl": kl,
-                "L_p": kl_sum,            # unnormalised summed ESM loss
+                "L_p": kl_sum,  # unnormalised summed ESM loss
                 "L_p_per_sample": per_sample_acc,
             }
         return {"kl": kl}
@@ -673,10 +680,10 @@ class DiffusionTransition(BaseTransition):
         self,
         *,
         step: int,
-        z_t: torch.Tensor,            # (BS, d)  unused (history already shifted by base)
-        z_hist: torch.Tensor,         # (BS, d, j)
+        z_t: torch.Tensor,  # (BS, d)  unused (history already shifted by base)
+        z_hist: torch.Tensor,  # (BS, d, j)
         enc_stats: GaussianStats,
-        time_embed: torch.Tensor,     # (B, T, E_t)
+        time_embed: torch.Tensor,  # (B, T, E_t)
         sigma_data: SigmaDataBuffer,
         B: int,
         S: int,
@@ -733,15 +740,15 @@ class DiffusionTransition(BaseTransition):
         zs: torch.Tensor,
         aux_posterior: AuxPosterior,
         time_embed: torch.Tensor,
-        sigma_data: Optional[SigmaDataBuffer] = None,
-        covariates: Optional[torch.Tensor] = None,
+        sigma_data: SigmaDataBuffer | None = None,
+        covariates: torch.Tensor | None = None,
         *,
         J: int = 1,
         rtol: float = 1e-5,
         atol: float = 1e-5,
         method: str = "dopri5",
         divergence_mode: str = "exact",
-        generator: Optional[torch.Generator] = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """VHP importance-sampled ``log p_ψ(z_{1:j})`` per trajectory.
 
@@ -809,9 +816,7 @@ class DiffusionTransition(BaseTransition):
             ).sum(dim=(1, 2))  # (B,)
             log_prior = -0.5 * (z_aux.pow(2) + log_2pi).sum(dim=(1, 2))  # (B,)
 
-            z_hist = (
-                z_aux.unsqueeze(1).expand(B, S, d, j).reshape(BS, d, j).clone()
-            )
+            z_hist = z_aux.unsqueeze(1).expand(B, S, d, j).reshape(BS, d, j).clone()
             log_p = torch.zeros(BS, device=device, dtype=dtype)
             for step in range(j):
                 if sigma_data is not None:
@@ -831,12 +836,13 @@ class DiffusionTransition(BaseTransition):
                 hist_te = time_embed.index_select(1, hist_idx)  # (B, j, E_t)
                 tgt_te = time_embed[:, tgt_idx : tgt_idx + 1, :]  # (B, 1, E_t)
                 time_win = (
-                    torch.cat([hist_te, tgt_te], dim=1)
+                    torch
+                    .cat([hist_te, tgt_te], dim=1)
                     .unsqueeze(1)
                     .expand(B, S, j + 1, self.emb_time_dim)
                     .reshape(BS, j + 1, self.emb_time_dim)
                 )
-                ctx_step: Dict[str, torch.Tensor] = {
+                ctx_step: dict[str, torch.Tensor] = {
                     "hist_time_emb": time_win[:, :j, :],
                     "target_time_emb": time_win[:, j : j + 1, :],
                 }
@@ -876,13 +882,13 @@ class DiffusionTransition(BaseTransition):
     # ------------------------------------------------------------------
     def _esm_chunk_loss(
         self,
-        mu_t: torch.Tensor,           # (N, d)
-        sigma2_t: torch.Tensor,       # (N, d)
-        z_hist: torch.Tensor,         # (N, d, j)
-        ctx: Dict[str, torch.Tensor],
+        mu_t: torch.Tensor,  # (N, d)
+        sigma2_t: torch.Tensor,  # (N, d)
+        z_hist: torch.Tensor,  # (N, d, j)
+        ctx: dict[str, torch.Tensor],
         sigma_d2_per_row: torch.Tensor,  # (N,)
-        padding_mask: torch.Tensor,   # (N, j+1)
-        mc_override: Optional[Dict[str, Any]] = None,
+        padding_mask: torch.Tensor,  # (N, j+1)
+        mc_override: dict[str, Any] | None = None,
         return_per_sample: bool = False,
     ) -> torch.Tensor:
         """Centered ESM regression: ``E_τ E_q[w · ‖F_ψ − F*‖²]``.
@@ -944,7 +950,9 @@ class DiffusionTransition(BaseTransition):
         # ``weights = wtilde / p_k`` step below does a row-aware gather.
         if self.k_sampling_mode == "adaptive_is":
             p_k_per_row = _adaptive_is_density_meandom(
-                self.sigma_tilde, sigma_d2_per_row, floor=self.gfloor,
+                self.sigma_tilde,
+                sigma_d2_per_row,
+                floor=self.gfloor,
             )  # (N, K)
         elif self.k_sampling_mode == "adaptive_is_full":
             # Per-coordinate means so these match σ_d²'s per-coordinate scale
@@ -952,7 +960,7 @@ class DiffusionTransition(BaseTransition):
             # would over-scale by ~d and break the collapse to mean-dom at
             # real calibration for d > 1.
             mu_hat2_row = mu_hat_t.pow(2).mean(dim=1)  # (N,)
-            sigma2_row = sigma2_t.mean(dim=1)          # (N,)
+            sigma2_row = sigma2_t.mean(dim=1)  # (N,)
             p_k_per_row = _adaptive_is_density_full(
                 self.sigma_tilde,
                 sigma_d2=sigma_d2_per_row,
@@ -996,13 +1004,12 @@ class DiffusionTransition(BaseTransition):
             z_in_exp = z_in.unsqueeze(2)  # (N, d, 1, kc)
             latent_w = torch.cat([z_hist_rep, z_in_exp], dim=2)  # (N, d, j+1, kc)
             latent_w = (
-                latent_w.permute(0, 3, 1, 2)
-                .reshape(N * kc, d, self.j + 1)
-                .contiguous()
+                latent_w.permute(0, 3, 1, 2).reshape(N * kc, d, self.j + 1).contiguous()
             )
 
             side_w = (
-                side_win.unsqueeze(1)
+                side_win
+                .unsqueeze(1)
                 .expand(N, kc, -1, -1, -1)
                 .reshape(N * kc, self.side_dim, d, self.j + 1)
                 .contiguous()
@@ -1034,9 +1041,7 @@ class DiffusionTransition(BaseTransition):
             # We store wtilde_base = (1/2·dτ) · β / (1 − α²), so:
             #   wtilde(k;t) = wtilde_base[k] · σ_d² / (σ̃² + σ_d²)
             wtilde_full = (
-                wtilde_base_flat
-                * sd2_flat
-                / (st2_flat + sd2_flat).clamp_min(eps_dtype)
+                wtilde_base_flat * sd2_flat / (st2_flat + sd2_flat).clamp_min(eps_dtype)
             )
             # Importance-sampling correction. ``wtilde_base`` already bakes in
             # the (½·dτ) Riemann measure, so this is the standard estimator of
@@ -1047,9 +1052,7 @@ class DiffusionTransition(BaseTransition):
             # and shrinks the per-t ESM loss by a factor of K. ``gather``
             # picks each row's p_k at the row-specific sampled k.
             p_k_at_sample = p_k_per_row.gather(1, k_idx).reshape(N * kc)
-            weights = (
-                wtilde_full / p_k_at_sample.clamp_min(eps_dtype)
-            ).detach()
+            weights = (wtilde_full / p_k_at_sample.clamp_min(eps_dtype)).detach()
 
             if (
                 self.grad_checkpoint
@@ -1088,10 +1091,10 @@ class DiffusionTransition(BaseTransition):
     # ------------------------------------------------------------------
     def _vp_precondition(
         self,
-        mu_hat_t: torch.Tensor,        # (N, d) — CENTERED mean
-        sigma2_t: torch.Tensor,        # (N, d)
-        k_idx: torch.Tensor,           # (N, S_k)
-        eps: torch.Tensor,             # (N, d, S_k)
+        mu_hat_t: torch.Tensor,  # (N, d) — CENTERED mean
+        sigma2_t: torch.Tensor,  # (N, d)
+        k_idx: torch.Tensor,  # (N, S_k)
+        eps: torch.Tensor,  # (N, d, S_k)
         sigma_d2_per_row: torch.Tensor,  # (N,)
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Build ``(z_in, F_target)`` in centered coordinates.
@@ -1103,7 +1106,7 @@ class DiffusionTransition(BaseTransition):
         Reduce to V2's σ_data ≡ 1 constants in the unit limit.
         """
         eps_dtype = torch.finfo(mu_hat_t.dtype).eps
-        sigma_tilde = self.sigma_tilde[k_idx]               # (N, S_k)
+        sigma_tilde = self.sigma_tilde[k_idx]  # (N, S_k)
         sigma_tilde2 = sigma_tilde * sigma_tilde
 
         sd2 = sigma_d2_per_row.view(-1, 1).clamp_min(eps_dtype)  # (N, 1)
@@ -1111,9 +1114,9 @@ class DiffusionTransition(BaseTransition):
         denom = (sigma_tilde2 + sd2).clamp_min(eps_dtype)  # (N, S_k)
         sqrt_denom = denom.sqrt()
 
-        c_skip = sd2 / denom                            # (N, S_k)
-        c_out = (sigma_tilde * sd) / sqrt_denom         # (N, S_k)
-        c_in = 1.0 / sqrt_denom                         # (N, S_k)
+        c_skip = sd2 / denom  # (N, S_k)
+        c_out = (sigma_tilde * sd) / sqrt_denom  # (N, S_k)
+        c_in = 1.0 / sqrt_denom  # (N, S_k)
 
         # Broadcast to (N, 1, S_k) for the latent dim.
         st2_ = sigma_tilde2.unsqueeze(1)
@@ -1121,11 +1124,11 @@ class DiffusionTransition(BaseTransition):
         cout_ = c_out.unsqueeze(1).clamp_min(eps_dtype)
         cin_ = c_in.unsqueeze(1)
 
-        sigma2_t_ = sigma2_t.unsqueeze(-1)              # (N, d, 1)
-        mu_hat_t_ = mu_hat_t.unsqueeze(-1)              # (N, d, 1)
+        sigma2_t_ = sigma2_t.unsqueeze(-1)  # (N, d, 1)
+        mu_hat_t_ = mu_hat_t.unsqueeze(-1)  # (N, d, 1)
 
         var_total = (sigma2_t_ + st2_).clamp_min(eps_dtype)  # (N, d, S_k)
-        z_hat = mu_hat_t_ + var_total.sqrt() * eps           # centered residual
+        z_hat = mu_hat_t_ + var_total.sqrt() * eps  # centered residual
 
         s_q_hat = -(z_hat - mu_hat_t_) / var_total
         D_star = z_hat + st2_ * s_q_hat
@@ -1142,9 +1145,9 @@ class DiffusionTransition(BaseTransition):
         z: torch.Tensor,
         tau: torch.Tensor,
         z_hist: torch.Tensor,
-        ctx: Dict[str, Any],
+        ctx: dict[str, Any],
         sigma_d2: torch.Tensor,
-        padding_mask: Optional[torch.Tensor] = None,
+        padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Native-coordinate score ``s_ψ(z, τ, z_{t-1})`` for the prob-flow ODE.
 
@@ -1241,9 +1244,9 @@ class DiffusionTransition(BaseTransition):
     # ------------------------------------------------------------------
     def sample(
         self,
-        z_hist: torch.Tensor,           # (B, d, j)
+        z_hist: torch.Tensor,  # (B, d, j)
         S: int = 1,
-        ctx: Optional[Dict[str, Any]] = None,
+        ctx: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Reverse-SDE sample at ``t ≥ j+1`` in centered coords + add μ_p back.
 
@@ -1269,7 +1272,7 @@ class DiffusionTransition(BaseTransition):
         dtype = z_hist.dtype
 
         # σ_data² lookup for this t.
-        sigma_data: Optional[SigmaDataBuffer] = ctx.get("sigma_data")
+        sigma_data: SigmaDataBuffer | None = ctx.get("sigma_data")
         t_external = int(ctx.get("t", self.j + 1))
         if sigma_data is not None:
             # Constant extrapolation beyond the trained horizon
@@ -1306,11 +1309,15 @@ class DiffusionTransition(BaseTransition):
         mu_p = self.baseline.mean(z_hist)  # (B, d) — added back at end
         if self.sampler == "edm":
             z_hat_sample = self._edm_sample_centered(
-                z_hist=z_hist, side_win=side_win, sigma_d2=sd2_scalar,
+                z_hist=z_hist,
+                side_win=side_win,
+                sigma_d2=sd2_scalar,
             )
         else:
             z_hat_sample = self._vp_pf_sample_centered(
-                z_hist=z_hist, side_win=side_win, sigma_d2=sd2_scalar,
+                z_hist=z_hist,
+                side_win=side_win,
+                sigma_d2=sd2_scalar,
             )
         z_sample = z_hat_sample + mu_p
         return z_sample.unsqueeze(1)  # (B, 1, d)
@@ -1318,7 +1325,7 @@ class DiffusionTransition(BaseTransition):
     @torch.no_grad()
     def _vp_pf_sample_centered(
         self,
-        z_hist: torch.Tensor,    # (B, d, j)
+        z_hist: torch.Tensor,  # (B, d, j)
         side_win: torch.Tensor,  # (B, side_dim, d, j+1)
         sigma_d2: float,
     ) -> torch.Tensor:
@@ -1361,9 +1368,7 @@ class DiffusionTransition(BaseTransition):
             z_tilde = x / max(alpha_i, eps_dtype)
             z_in = (c_in_i * z_tilde).unsqueeze(2)  # (B, d, 1)
             latent_w = torch.cat([z_hist, z_in], dim=2)
-            c_noise_vec = torch.full(
-                (B,), c_noise_i, device=device, dtype=dtype
-            )
+            c_noise_vec = torch.full((B,), c_noise_i, device=device, dtype=dtype)
             F_pred = self.diffmodel(latent_w, side_win, c_noise_vec).squeeze(-1)
             D_pred = c_skip_i * z_tilde + c_out_i * F_pred
             # Score in VE coords; native-coord score = s_tilde / α.
@@ -1371,9 +1376,7 @@ class DiffusionTransition(BaseTransition):
             s_native = s_tilde / max(alpha_i, eps_dtype)
 
             beta_i = float(self.sample_beta[i].item())
-            d_tau = float(
-                (self.sample_tau[i - 1] - self.sample_tau[i]).item()
-            )  # < 0
+            d_tau = float((self.sample_tau[i - 1] - self.sample_tau[i]).item())  # < 0
             drift = -0.5 * beta_i * x - 0.5 * beta_i * s_native
             x = x + d_tau * drift
 
@@ -1382,7 +1385,7 @@ class DiffusionTransition(BaseTransition):
     @torch.no_grad()
     def _edm_sample_centered(
         self,
-        z_hist: torch.Tensor,    # (B, d, j)
+        z_hist: torch.Tensor,  # (B, d, j)
         side_win: torch.Tensor,  # (B, side_dim, d, j+1)
         sigma_d2: float,
     ) -> torch.Tensor:
@@ -1448,17 +1451,16 @@ class DiffusionTransition(BaseTransition):
         for i in range(N):
             sigma_cur = sigmas[i]
             sigma_next = sigmas[i + 1]
-            gamma = (
-                churn
-                if (self.edm_s_tmin <= sigma_cur <= self.edm_s_tmax)
-                else 0.0
-            )
+            gamma = churn if (self.edm_s_tmin <= sigma_cur <= self.edm_s_tmax) else 0.0
             sigma_hat = min(sigma_cur * (1.0 + gamma), sigma_max)
             if sigma_hat > sigma_cur:
                 noise = torch.randn(B, d, device=device, dtype=dtype)
-                x = x + math.sqrt(
-                    max(sigma_hat * sigma_hat - sigma_cur * sigma_cur, 0.0)
-                ) * self.edm_s_noise * noise
+                x = (
+                    x
+                    + math.sqrt(max(sigma_hat * sigma_hat - sigma_cur * sigma_cur, 0.0))
+                    * self.edm_s_noise
+                    * noise
+                )
             d_cur = (x - denoise(x, sigma_hat)) / max(sigma_hat, eps_dtype)
             x_next = x + (sigma_next - sigma_hat) * d_cur
             if sigma_next > 0.0:
@@ -1477,8 +1479,8 @@ class DiffusionTransition(BaseTransition):
 def _update_sigma_data_blocked(
     *,
     sigma_data: SigmaDataBuffer,
-    mu_hat: torch.Tensor,       # (B*S*chunk_len, d) — (B, S, chunk_len) order
-    sigma2_t: torch.Tensor,     # (B*S*chunk_len, d)
+    mu_hat: torch.Tensor,  # (B*S*chunk_len, d) — (B, S, chunk_len) order
+    sigma2_t: torch.Tensor,  # (B*S*chunk_len, d)
     B: int,
     S: int,
     chunk_len: int,
@@ -1487,12 +1489,14 @@ def _update_sigma_data_blocked(
 ) -> None:
     """Reorganise (B, S, chunk_len) flattened input into (chunk_len, B*S) blocks."""
     mu_hat_b = (
-        mu_hat.view(B, S, chunk_len, d)
+        mu_hat
+        .view(B, S, chunk_len, d)
         .permute(2, 0, 1, 3)
         .reshape(chunk_len * B * S, d)
     )
     sigma2_b = (
-        sigma2_t.view(B, S, chunk_len, d)
+        sigma2_t
+        .view(B, S, chunk_len, d)
         .permute(2, 0, 1, 3)
         .reshape(chunk_len * B * S, d)
     )

@@ -15,12 +15,12 @@ from functools import partial
 import torch
 import pytest
 
+from ddssm.nn.futsum import TransformerFutureSummary
 from ddssm.nn.diffnets import (
     CSDIUnet,
     FeatureMixerConfig,
     DiffResidualBlockConfig,
 )
-from ddssm.nn.futsum import TransformerFutureSummary
 from ddssm.model.encoder import GaussianEncoder
 from ddssm.model.centering.baselines import MLPBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
@@ -57,7 +57,9 @@ def _make_diffusion(time_chunk_size: int | None = None) -> DiffusionTransition:
                 # dropout=0.0 mirrors the gluonts score-net: the checkpoint uses
                 # preserve_rng_state=False, which is only correct for a
                 # deterministic forward.
-                feature=FeatureMixerConfig(type="transformer", nheads=2, n_layers=1, dropout=0.0)
+                feature=FeatureMixerConfig(
+                    type="transformer", nheads=2, n_layers=1, dropout=0.0
+                )
             ),
         ),
         schedule=DiffusionScheduleConfig(
@@ -117,7 +119,8 @@ def test_diffusion_grad_checkpoint_equivalence(time_chunk_size: int | None) -> N
 def test_recon_chunk_invariance_and_grad_checkpoint() -> None:
     """The vectorized decoder recon (deterministic gluonts decoder, dropout=0) is
     invariant to the time-chunk size, and its checkpoint is grad-exact. Run on
-    CPU so there's no atomic-reduction noise to confound the comparison."""
+    CPU so there's no atomic-reduction noise to confound the comparison.
+    """
     from experiments.gluonts_forecast.model import build_gluonts_model
 
     torch.manual_seed(0)

@@ -11,17 +11,24 @@ Parses the raw TSF file, aligns multivariate series, optionally filters by
 station/city/measurement, and writes a (K, T) float32 array.
 """
 
+from pathlib import Path
 import argparse
-import pandas as pd
+
 import numpy as np
 import torch
-from pathlib import Path
+import pandas as pd
 
 
-def preprocess(tsf_path: str, out_path: str, station_name: str = None, city: str = None, measurement: str = None):
+def preprocess(
+    tsf_path: str,
+    out_path: str,
+    station_name: str = None,
+    city: str = None,
+    measurement: str = None,
+):
     print(f"Reading {tsf_path}...")
     series_data = []
-    with open(tsf_path, "r", encoding="utf-8") as f:
+    with open(tsf_path, encoding="utf-8") as f:
         data_started = False
         for raw in f:
             line = raw.strip()
@@ -40,11 +47,11 @@ def preprocess(tsf_path: str, out_path: str, station_name: str = None, city: str
             # Filter by station if specified
             if station_name and parts[2] != station_name:
                 continue
-            
+
             # Filter by city if specified
             if city and parts[1] != city:
                 continue
-                
+
             # Filter by measurement if specified
             if measurement and parts[3] != measurement:
                 continue
@@ -124,4 +131,6 @@ if __name__ == "__main__":
     p.add_argument("--city", type=str, default=None)
     p.add_argument("--measurement", type=str, default=None)
     args = p.parse_args()
-    preprocess(args.tsf_path, args.out_path, args.station_name, args.city, args.measurement)
+    preprocess(
+        args.tsf_path, args.out_path, args.station_name, args.city, args.measurement
+    )

@@ -75,7 +75,7 @@ def _annotate_frame(png_path: str, step: int) -> Image.Image:
     draw = ImageDraw.Draw(img)
     try:
         font = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
-    except (OSError, IOError):
+    except OSError:
         font = ImageFont.load_default()
     text = f"step {step}"
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -110,8 +110,12 @@ def _collect_pos_values(d, out: list[float]) -> None:
         out.append(x)
 
 
-def _global_ylim(metric_dicts: list[dict], metric_key: str,
-                 pad: float = 3.0, anchors: tuple[float, ...] = ()) -> tuple[float, float] | None:
+def _global_ylim(
+    metric_dicts: list[dict],
+    metric_key: str,
+    pad: float = 3.0,
+    anchors: tuple[float, ...] = (),
+) -> tuple[float, float] | None:
     """Compute a stable [low, high] log-axis bound across many metric snapshots.
 
     ``pad`` multiplies above the max and divides below the min so the
@@ -165,10 +169,7 @@ def _render_ratio_trajectory(
     step_curves: list[tuple[int, np.ndarray, np.ndarray]] = []
     for step, data in per_step_data:
         kvals = (
-            data.get("metrics", {})
-                .get("ratio_per_tau", {})
-                .get(kind, {})
-                .get(mode, {})
+            data.get("metrics", {}).get("ratio_per_tau", {}).get(kind, {}).get(mode, {})
         )
         if not kvals:
             continue
@@ -179,7 +180,9 @@ def _render_ratio_trajectory(
 
     if not step_curves:
         log.warning(
-            "No ratio_per_tau[%s][%s] data — skipping trajectory plot", kind, mode,
+            "No ratio_per_tau[%s][%s] data — skipping trajectory plot",
+            kind,
+            mode,
         )
         return
 
@@ -189,7 +192,8 @@ def _render_ratio_trajectory(
     # (lightest) checkpoint isn't near-white on a white background.
     base = plt.colormaps["YlOrRd"]
     cmap = LinearSegmentedColormap.from_list(
-        "ylorrd_warm", base(np.linspace(0.25, 1.0, 256)),
+        "ylorrd_warm",
+        base(np.linspace(0.25, 1.0, 256)),
     )
     steps = [s for s, _, _ in step_curves]
     vmin = min(steps) if len(set(steps)) > 1 else min(steps) - 1
@@ -198,14 +202,19 @@ def _render_ratio_trajectory(
 
     for step, xs, ys in step_curves:
         ax.plot(
-            xs, ys,
+            xs,
+            ys,
             color=cmap(norm(step)),
             linewidth=1.4,
             alpha=0.85,
         )
 
     ax.axhline(
-        1.0, color="grey", linestyle=":", linewidth=1.2, alpha=0.7,
+        1.0,
+        color="grey",
+        linestyle=":",
+        linewidth=1.2,
+        alpha=0.7,
         label="parity (ESM = DSM)",
     )
     ax.set_xlabel(r"$\tau$-bin index $k$")
@@ -228,10 +237,13 @@ def _render_ratio_trajectory(
     cbar.ax.tick_params(labelsize=8)
 
     fig.text(
-        0.01, 0.01,
+        0.01,
+        0.01,
         "Lines run from light (early training) to dark (late). "
         "< 1 → ESM has lower variance; > 1 → DSM has lower variance.",
-        fontsize=7, style="italic", color="dimgrey",
+        fontsize=7,
+        style="italic",
+        color="dimgrey",
     )
     plt.tight_layout(rect=(0, 0.03, 1, 1))
 
@@ -242,8 +254,11 @@ def _render_ratio_trajectory(
 
 
 def _compile_gif(
-    plot_name: str, step_frames: list[tuple[int, str]], out_path: str,
-    *, frame_ms: int = 600,
+    plot_name: str,
+    step_frames: list[tuple[int, str]],
+    out_path: str,
+    *,
+    frame_ms: int = 600,
 ) -> None:
     """Stitch per-step PNGs of one plot type into an animated GIF."""
     frames = []
@@ -285,7 +300,8 @@ def _probe_per_step(experiment, device: torch.device, run_dir: str) -> dict:
 
     log.info(
         "Per-step probe: %d checkpoints (steps %s)",
-        len(step_ckpts), [s for s, _ in step_ckpts],
+        len(step_ckpts),
+        [s for s, _ in step_ckpts],
     )
     per_step_dir = os.path.join(run_dir, "probe")
     os.makedirs(per_step_dir, exist_ok=True)
@@ -330,8 +346,10 @@ def _probe_per_step(experiment, device: torch.device, run_dir: str) -> dict:
 
     log.info("Stitching GIFs across %d step(s)", len(step_outputs))
     for plot_name in _PLOT_NAMES:
-        frames = [(step, os.path.join(sub_dir, f"{plot_name}.png"))
-                  for step, sub_dir in step_outputs]
+        frames = [
+            (step, os.path.join(sub_dir, f"{plot_name}.png"))
+            for step, sub_dir in step_outputs
+        ]
         gif_path = os.path.join(run_dir, f"{plot_name}.gif")
         _compile_gif(plot_name, frames, gif_path)
 
@@ -342,15 +360,14 @@ def _probe_per_step(experiment, device: torch.device, run_dir: str) -> dict:
     return {
         "per_step_dir": per_step_dir,
         "steps": [s for s, _ in step_outputs],
-        "gifs": {
-            name: os.path.join(run_dir, f"{name}.gif") for name in _PLOT_NAMES
-        },
+        "gifs": {name: os.path.join(run_dir, f"{name}.gif") for name in _PLOT_NAMES},
     }
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 @hydra.main(config_path="../conf", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
@@ -362,7 +379,8 @@ def main(cfg: DictConfig):
     os.makedirs(run_dir, exist_ok=True)
     experiment = instantiate(cfg.experiment)
     experiment.model_config_yaml = OmegaConf.to_yaml(
-        cfg.experiment.model, resolve=True,
+        cfg.experiment.model,
+        resolve=True,
     )
 
     # Per-step sweep mode — auto-trains if no step checkpoints exist

@@ -27,7 +27,7 @@ _model = SweepSpace(target=GluonModel, prefix="experiment.model")
 _model.raw("latent_dim", "choice(16, 32, 64, 128, 256, 512)")
 
 _stages = SweepSpace(target=GluonStages, prefix="experiment.training.stages")
-_stages.log("base_lr", 1e-4, 2e-3)   # encoder LR; dec/trans via multipliers
+_stages.log("base_lr", 1e-4, 2e-3)  # encoder LR; dec/trans via multipliers
 _stages.log("dec_mult", 0.3, 3.0)
 _stages.log("trans_mult", 0.5, 3.0)
 
@@ -58,7 +58,9 @@ _pilot_stages.log("trans_mult", 0.5, 3.0)
 _pilot_hparams = SweepSpace(target=Hparams, prefix="experiment.hparams")
 _pilot_hparams.raw("batch_size", "choice(32, 64)")
 _pilot_params = {
-    **_pilot_model.params(), **_pilot_stages.params(), **_pilot_hparams.params()
+    **_pilot_model.params(),
+    **_pilot_stages.params(),
+    **_pilot_hparams.params(),
 }
 GluonPilotSweep = make_config(
     hydra_defaults=["_self_", {"override /hydra/sweeper": "ddssm_optuna"}],

@@ -75,64 +75,111 @@ T_MAX = 10
 
 def _make_scalar_stage2_model() -> DDSSM_base:
     """Tiny d=1, j=1 stage-2 diffusion model.  Leaf modules are placeholders —
-    the test monkey-patches encoder/decoder/score/init to ground truth."""
+    the test monkey-patches encoder/decoder/score/init to ground truth.
+    """
     d, data, j = 1, 1, 1
     ctx = partial(
-        ContextProducer, channels=CHANNELS, num_layers=1,
+        ContextProducer,
+        channels=CHANNELS,
+        num_layers=1,
         residual_block=ResidualBlockConfig(
             feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
         ),
     )
     agg = partial(
-        ContextProducerAggregator, channels=CHANNELS, num_layers=1,
+        ContextProducerAggregator,
+        channels=CHANNELS,
+        num_layers=1,
         residual_block=ResidualBlockConfig(
             feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
         ),
     )
     tiny_unet = partial(
-        CSDIUnet, channels=CHANNELS, n_layers=1, embedding_dim=CHANNELS,
+        CSDIUnet,
+        channels=CHANNELS,
+        n_layers=1,
+        embedding_dim=CHANNELS,
         residual_block=DiffResidualBlockConfig(
             feature=FeatureMixerConfig(nheads=NHEADS, n_layers=1)
         ),
     )
     encoder = GaussianEncoder(
-        data_dim=data, latent_dim=d, j=j, emb_time_dim=EMB_TIME,
-        use_mask=True, hidden_dim=CHANNELS,
+        data_dim=data,
+        latent_dim=d,
+        j=j,
+        emb_time_dim=EMB_TIME,
+        use_mask=True,
+        hidden_dim=CHANNELS,
         combiner=partial(
-            CompoundCombiner, aggregator=agg, fusion=partial(ConcatLinearFusion),
+            CompoundCombiner,
+            aggregator=agg,
+            fusion=partial(ConcatLinearFusion),
         ),
         dist_head=partial(GaussianDistHead),
         fut_summary=partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1),
     )
     decoder = GaussianDecoder(
-        latent_dim=d, data_dim=data, j=j, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS, context=ctx, gaussian_head=GaussianHead,
+        latent_dim=d,
+        data_dim=data,
+        j=j,
+        emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=ctx,
+        gaussian_head=GaussianHead,
     )
     baseline = MLPBaseline(latent_dim=d, j=j, hidden_dim=8, n_layers=2)
     schedule = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=20, beta_min=BETA_MIN, beta_max=BETA_MAX,
-        tau_min=1e-3, k_sampling_mode="uniform",
+        S_k=1,
+        k_chunk=1,
+        num_steps=20,
+        beta_min=BETA_MIN,
+        beta_max=BETA_MAX,
+        tau_min=1e-3,
+        k_sampling_mode="uniform",
     )
     stage1 = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=d, j=j, emb_time_dim=EMB_TIME,
+        baseline=baseline,
+        latent_dim=d,
+        j=j,
+        emb_time_dim=EMB_TIME,
     )
     transition = DiffusionTransition(
-        baseline=baseline, latent_dim=d, j=j, emb_time_dim=EMB_TIME,
-        T_max=T_MAX, unet=tiny_unet, schedule=schedule,
+        baseline=baseline,
+        latent_dim=d,
+        j=j,
+        emb_time_dim=EMB_TIME,
+        T_max=T_MAX,
+        unet=tiny_unet,
+        schedule=schedule,
     )
     aux = AuxPosterior(latent_dim=d, j=j, hidden_dim=8, n_layers=2)
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed", init_value=1.0)
     hparams = SimpleNamespace(
-        S=1, ema_decay=0.999, weight_decay=1e-2, batch_size=2,
-        grad_accum_steps=1, t_chunk=4, clip_grad_norm=None,
-        enc_lr=1e-3, dec_lr=1e-3,
-        trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
+        S=1,
+        ema_decay=0.999,
+        weight_decay=1e-2,
+        batch_size=2,
+        grad_accum_steps=1,
+        t_chunk=4,
+        clip_grad_norm=None,
+        enc_lr=1e-3,
+        dec_lr=1e-3,
+        trans_lr=1e-3,
+        logvar_min=-7.0,
+        logvar_max=7.0,
     )
     model = DDSSM_base(
-        encoder=encoder, decoder=decoder, transition=transition,
-        j=j, data_dim=data, latent_dim=d, emb_time_dim=EMB_TIME,
-        aux_posterior=aux, baseline=baseline,
-        sigma_data=sigma_data, stage1_transition=stage1,
+        encoder=encoder,
+        decoder=decoder,
+        transition=transition,
+        j=j,
+        data_dim=data,
+        latent_dim=d,
+        emb_time_dim=EMB_TIME,
+        aux_posterior=aux,
+        baseline=baseline,
+        sigma_data=sigma_data,
+        stage1_transition=stage1,
     )
     model.stage_selector = "stage_2"
     return model
@@ -171,8 +218,13 @@ def test_full_model_log_prob_matches_kalman_loglik() -> None:
     R_t = torch.tensor(R, dtype=dtype)
 
     def mock_decoder(
-        x_t, z_hist, time_embed, time_idx,
-        observation_mask_t=None, covariates=None, static_embed=None,
+        x_t,
+        z_hist,
+        time_embed,
+        time_idx,
+        observation_mask_t=None,
+        covariates=None,
+        static_embed=None,
     ):
         z_t = z_hist[..., -1]  # (B, d)
         lp = _normal_logpdf(x_t, z_t, R_t).sum(dim=-1)  # (B,)
@@ -197,7 +249,9 @@ def test_full_model_log_prob_matches_kalman_loglik() -> None:
     M0_t = torch.tensor(M0, dtype=dtype)
     P0_t = torch.tensor(P0, dtype=dtype)
 
-    def mock_log_prob_init(zs, aux_posterior, time_embed, sigma_data=None, covariates=None, **kw):
+    def mock_log_prob_init(
+        zs, aux_posterior, time_embed, sigma_data=None, covariates=None, **kw
+    ):
         z1 = zs[:, :, 0, 0]  # (B, K) — d=1, t=0
         return _normal_logpdf(z1, M0_t, P0_t)
 

@@ -18,17 +18,16 @@ that the three surfaces above wire together correctly.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-import optuna
 import torch
+import optuna
 from optuna.trial import TrialState
 
 from ddssm.app import (
     _enqueue_preempt_retry,
-    _find_current_running_trial_by_params,
     _get_resume_from_user_attrs,
+    _find_current_running_trial_by_params,
 )
 
 
@@ -36,7 +35,9 @@ def _tiny_storage(tmp_path: Path) -> str:
     return f"sqlite:///{tmp_path / 'e2e.db'}"
 
 
-def _new_trial_with_params(study: optuna.Study, params: dict[str, float]) -> optuna.Trial:
+def _new_trial_with_params(
+    study: optuna.Study, params: dict[str, float]
+) -> optuna.Trial:
     trial = study.ask()
     for name, value in params.items():
         trial.suggest_float(name, value, value)
@@ -46,7 +47,9 @@ def _new_trial_with_params(study: optuna.Study, params: dict[str, float]) -> opt
 def test_preempt_retry_chain_carries_resume_from_across_trials(tmp_path) -> None:
     """A preempted trial's ``resume_from`` reaches the retry via ``user_attrs``."""
     study = optuna.create_study(
-        study_name="chain", storage=_tiny_storage(tmp_path), direction="minimize",
+        study_name="chain",
+        storage=_tiny_storage(tmp_path),
+        direction="minimize",
     )
     params = {"x": 0.42, "y": -1.5}
     original = _new_trial_with_params(study, params)
@@ -60,18 +63,24 @@ def test_preempt_retry_chain_carries_resume_from_across_trials(tmp_path) -> None
     _enqueue_preempt_retry(study, original, resume_from=ckpt)
     study.tell(original, state=TrialState.FAIL)
 
-    waiting = [t for t in study.get_trials(deepcopy=False) if t.state == TrialState.WAITING]
+    waiting = [
+        t for t in study.get_trials(deepcopy=False) if t.state == TrialState.WAITING
+    ]
     assert len(waiting) == 1, f"expected exactly one WAITING retry; got {len(waiting)}"
     retry = waiting[0]
     assert retry.params == original.params, "retry inherits hparams"
     assert _get_resume_from_user_attrs(retry) == ckpt, "retry carries the ckpt path"
-    assert retry.user_attrs.get("retried_from") == original_number, "retry tracks lineage"
+    assert retry.user_attrs.get("retried_from") == original_number, (
+        "retry tracks lineage"
+    )
 
 
 def test_preempt_retry_chain_walks_forward_across_two_preempts(tmp_path) -> None:
     """A retry that itself preempts produces a second retry whose resume_from steps forward."""
     study = optuna.create_study(
-        study_name="walk", storage=_tiny_storage(tmp_path), direction="minimize",
+        study_name="walk",
+        storage=_tiny_storage(tmp_path),
+        direction="minimize",
     )
     params = {"x": 0.1}
     trial_a = _new_trial_with_params(study, params)
@@ -92,8 +101,12 @@ def test_preempt_retry_chain_walks_forward_across_two_preempts(tmp_path) -> None
     _enqueue_preempt_retry(study, _freeze(trial_b, study), resume_from=ckpt_b)
     study.tell(trial_b, state=TrialState.FAIL)
 
-    waiting = [t for t in study.get_trials(deepcopy=False) if t.state == TrialState.WAITING]
-    assert len(waiting) == 1, "exactly one new WAITING retry chained off the second preempt"
+    waiting = [
+        t for t in study.get_trials(deepcopy=False) if t.state == TrialState.WAITING
+    ]
+    assert len(waiting) == 1, (
+        "exactly one new WAITING retry chained off the second preempt"
+    )
     assert _get_resume_from_user_attrs(waiting[0]) == ckpt_b, (
         "the chain's resume_from advances to the latest preempted trial's ckpt"
     )
@@ -113,7 +126,9 @@ def test_preempt_chain_trainer_resume_continues_global_step(tmp_path) -> None:
     """
     storage = _tiny_storage(tmp_path)
     study = optuna.create_study(
-        study_name="resume_chain", storage=storage, direction="minimize",
+        study_name="resume_chain",
+        storage=storage,
+        direction="minimize",
     )
 
     # Invocation 1: a trial starts, the trainer's signal handler fires
@@ -142,7 +157,9 @@ def test_preempt_chain_trainer_resume_continues_global_step(tmp_path) -> None:
 def test_find_current_running_trial_picks_unique_match(tmp_path) -> None:
     """The orchestrator's app-side lookup finds the right trial among siblings."""
     study = optuna.create_study(
-        study_name="lookup", storage=_tiny_storage(tmp_path), direction="minimize",
+        study_name="lookup",
+        storage=_tiny_storage(tmp_path),
+        direction="minimize",
     )
     a = _new_trial_with_params(study, {"x": 0.1})
     b = _new_trial_with_params(study, {"x": 0.5})
@@ -157,8 +174,9 @@ def test_find_current_running_trial_picks_unique_match(tmp_path) -> None:
 
 def test_apply_preempt_hooks_is_noop_without_env_var(tmp_path, monkeypatch) -> None:
     """The whole preempt path is gated on ``DDSSM_PREEMPTIVE=1``."""
-    from ddssm.app import apply_preempt_hooks
     from omegaconf import OmegaConf
+
+    from ddssm.app import apply_preempt_hooks
 
     monkeypatch.delenv("DDSSM_PREEMPTIVE", raising=False)
     cfg = OmegaConf.create({"experiment": {"training": {}}})

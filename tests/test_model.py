@@ -9,11 +9,9 @@ from ddssm.nn.futsum import GRUFutureSummary
 from ddssm.model.dssd import DDSSM_base
 from ddssm.nn.fusions import ConcatLinearFusion
 from ddssm.nn.diffnets import (
-    CSDIUnet,
     ContextProducer,
     FeatureMixerConfig,
     ResidualBlockConfig,
-    DiffResidualBlockConfig,
 )
 from ddssm.nn.combiners import CompoundCombiner
 from ddssm.nn.gaussians import GaussianHead
@@ -63,8 +61,12 @@ _DIST_HEAD = partial(GaussianDistHead)
 
 def make_encoder():
     return GaussianEncoder(
-        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        use_mask=True, hidden_dim=CHANNELS,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
+        use_mask=True,
+        hidden_dim=CHANNELS,
         combiner=partial(CompoundCombiner, aggregator=_AGG, fusion=_FUSION),
         dist_head=_DIST_HEAD,
         fut_summary=_FS,
@@ -73,9 +75,13 @@ def make_encoder():
 
 def make_decoder():
     return GaussianDecoder(
-        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM,
+        data_dim=DATA_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH,
+        context=_CTX,
+        gaussian_head=_GH,
     )
 
 
@@ -85,32 +91,50 @@ def make_aux():
 
 def make_gaussian_transition():
     return GaussianTransition(
-        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH,
+        context=_CTX,
+        gaussian_head=_GH,
     )
 
 
 def make_hyperparams():
     return SimpleNamespace(
-        S=1, ema_decay=0.999, weight_decay=1e-2, batch_size=2, grad_accum_steps=1,
-        t_chunk=4, clip_grad_norm=None, enc_lr=1e-3, dec_lr=1e-3,
-        trans_lr=1e-3, logvar_min=-7.0, logvar_max=7.0,
+        S=1,
+        ema_decay=0.999,
+        weight_decay=1e-2,
+        batch_size=2,
+        grad_accum_steps=1,
+        t_chunk=4,
+        clip_grad_norm=None,
+        enc_lr=1e-3,
+        dec_lr=1e-3,
+        trans_lr=1e-3,
+        logvar_min=-7.0,
+        logvar_max=7.0,
     )
 
 
 @pytest.fixture
 def model():
     return DDSSM_base(
-        encoder=make_encoder(), decoder=make_decoder(),
-        transition=make_gaussian_transition(), aux_posterior=make_aux(),
-        j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
+        encoder=make_encoder(),
+        decoder=make_decoder(),
+        transition=make_gaussian_transition(),
+        aux_posterior=make_aux(),
+        j=J,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        emb_time_dim=EMB_TIME,
     )
 
 
 # ---------------------------------------------------------------------------
 # net_utils utilities
 # ---------------------------------------------------------------------------
+
 
 def test_time_embedding_shapes():
     B, L, D = 2, 4, 6
@@ -132,6 +156,7 @@ def test_get_side_info_shapes():
 # ---------------------------------------------------------------------------
 # Module shape tests
 # ---------------------------------------------------------------------------
+
 
 def test_encoder_sample_paths():
     enc = make_encoder()
@@ -169,6 +194,7 @@ def test_gaussian_transition_prior_params():
 # transition_kl: dict contract for the Gaussian transition
 # ---------------------------------------------------------------------------
 
+
 def _make_inputs(B=2, S=2, T=5):
     torch.manual_seed(0)
     zs = torch.randn(B, S, LATENT_DIM, T)
@@ -184,7 +210,10 @@ def test_gaussian_transition_kl_closed_form():
     zs, logq, mus, logvars, time_emb = _make_inputs()
     enc_stats = {"mus": mus, "logvars": logvars}
     out = trans.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq, time_embed=time_emb,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq,
+        time_embed=time_emb,
     )
     # Closed-form path returns only "kl" (no L_p / L_q sub-components)
     assert set(out.keys()) == {"kl"}
@@ -197,7 +226,10 @@ def test_gaussian_transition_kl_mc_fallback():
     trans = make_gaussian_transition()
     zs, logq, _mus, _lv, time_emb = _make_inputs()
     out = trans.transition_kl(
-        enc_stats={}, zs=zs, logq_paths=logq, time_embed=time_emb,
+        enc_stats={},
+        zs=zs,
+        logq_paths=logq,
+        time_embed=time_emb,
     )
     assert set(out.keys()) == {"kl", "L_p", "L_q"}
     for v in out.values():
@@ -209,6 +241,7 @@ def test_gaussian_transition_kl_mc_fallback():
 # ---------------------------------------------------------------------------
 # DDSSM_base forward pass
 # ---------------------------------------------------------------------------
+
 
 def test_ddssm_forward(model):
     B, T = 2, 5
@@ -231,6 +264,7 @@ def test_ddssm_forward(model):
 # ---------------------------------------------------------------------------
 # Encoder with each aggregator backbone — end-to-end ELBO smoke test
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("agg_name", ["identity", "gru", "mlp", "attention", "context"])
 def test_ddssm_forward_with_each_aggregator(agg_name):
@@ -255,7 +289,10 @@ def test_ddssm_forward_with_each_aggregator(agg_name):
         "mlp": partial(MLPAggregator, num_layers=2),
         "attention": partial(AttentionAggregator, nheads=NHEADS, num_attn_layers=1),
         "context": partial(
-            ContextProducerAggregator, channels=CHANNELS, num_layers=1, residual_block=rb,
+            ContextProducerAggregator,
+            channels=CHANNELS,
+            num_layers=1,
+            residual_block=rb,
         ),
     }
     combiner = partial(
@@ -265,26 +302,45 @@ def test_ddssm_forward_with_each_aggregator(agg_name):
     )
 
     enc = GaussianEncoder(
-        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=j, emb_time_dim=EMB_TIME,
-        use_mask=True, hidden_dim=CHANNELS,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        j=j,
+        emb_time_dim=EMB_TIME,
+        use_mask=True,
+        hidden_dim=CHANNELS,
         combiner=combiner,
         dist_head=partial(GaussianDistHead),
         fut_summary=_FS,
     )
     # Decoder / transition keep their original ContextProducer.
     dec = GaussianDecoder(
-        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=j, emb_time_dim=EMB_TIME,
-        hidden_dim=CHANNELS, context=_CTX, gaussian_head=_GH,
+        latent_dim=LATENT_DIM,
+        data_dim=DATA_DIM,
+        j=j,
+        emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=_CTX,
+        gaussian_head=_GH,
     )
     aux = AuxPosterior(latent_dim=LATENT_DIM, j=j, hidden_dim=CHANNELS, n_layers=1)
     trans = GaussianTransition(
-        latent_dim=LATENT_DIM, j=j, emb_time_dim=EMB_TIME, hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH,
+        latent_dim=LATENT_DIM,
+        j=j,
+        emb_time_dim=EMB_TIME,
+        hidden_dim=CHANNELS,
+        context=_CTX,
+        gaussian_head=_GH,
     )
 
     model = DDSSM_base(
-        encoder=enc, decoder=dec, transition=trans, aux_posterior=aux,
-        j=j, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
+        encoder=enc,
+        decoder=dec,
+        transition=trans,
+        aux_posterior=aux,
+        j=j,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        emb_time_dim=EMB_TIME,
     )
 
     B, T = 2, 5
@@ -292,7 +348,9 @@ def test_ddssm_forward_with_each_aggregator(agg_name):
     mask = torch.ones(B, DATA_DIM, T)
     timepoints = torch.arange(T).unsqueeze(0).expand(B, -1)
     components, _metrics, _stats = model(
-        observed_data=x, observation_mask=mask, timepoints=timepoints,
+        observed_data=x,
+        observation_mask=mask,
+        timepoints=timepoints,
     )
     loss = components.total()
     assert loss.ndim == 0
@@ -302,6 +360,7 @@ def test_ddssm_forward_with_each_aggregator(agg_name):
 # ---------------------------------------------------------------------------
 # eval metrics that run a real model (regression guard for forward's arity)
 # ---------------------------------------------------------------------------
+
 
 def test_recon_mse_metric_runs_on_real_model(model):
     """recon_mse must unpack model.forward's 3-tuple, not a 5-tuple.
@@ -320,7 +379,9 @@ def test_recon_mse_metric_runs_on_real_model(model):
         "timepoints": torch.arange(T).unsqueeze(0).expand(B, -1),
     }
     ctx = EvalContext(
-        model=model, loader=[batch], device=torch.device("cpu"),
+        model=model,
+        loader=[batch],
+        device=torch.device("cpu"),
     )
     out = eval_recon_mse(ctx)
     assert "recon_mse" in out

@@ -27,7 +27,8 @@ was dropped from the ablation — only ``fixed`` (σ_data² = 1) and
 
 from __future__ import annotations
 
-from typing import Iterator, NamedTuple
+from typing import NamedTuple
+from collections.abc import Iterator
 
 BASELINE_FORMS: tuple[str, ...] = ("zero", "persistence", "linear", "mlp")
 BASELINE_MODES: tuple[str, ...] = ("pinned", "learnable")
@@ -80,8 +81,8 @@ __all__ = [
     "BASELINE_FORMS",
     "BASELINE_MODES",
     "CANONICAL_CELL",
-    "Cell",
     "TRACKING_MODES",
+    "Cell",
     "cell_name",
     "iter_cells",
 ]

@@ -41,7 +41,11 @@ GluonHparams = Hparams(
 # ``training.validate_every > 0`` (experiment.py), and the val ELBO is the sweep
 # objective. The per-stage ``val_every`` then controls the in-stage cadence.
 GluonTraining = Training(
-    steps=20000, log_every=100, validate_every=500, checkpoint_every=2000, amp=True,
+    steps=20000,
+    log_every=100,
+    validate_every=500,
+    checkpoint_every=2000,
+    amp=True,
 )
 
 
@@ -81,13 +85,19 @@ def _build_gluonts_stages(
     )
     # Persistence μ_p is param-free → baseline never trainable (pinned).
     trainable = StageTrainableConf(
-        encoder=True, decoder=True, transition=True, baseline=False,
+        encoder=True,
+        decoder=True,
+        transition=True,
+        baseline=False,
     )
     # Stage-2 mask: optionally freeze the learned frame (enc+dec) so only the
     # transition trains against a static latent target.
     stage2_trainable = (
         StageTrainableConf(
-            encoder=False, decoder=False, transition=True, baseline=False,
+            encoder=False,
+            decoder=False,
+            transition=True,
+            baseline=False,
         )
         if stage_2_freeze_frame
         else trainable
@@ -99,16 +109,22 @@ def _build_gluonts_stages(
         warmup_steps=early_stop_warmup_steps,
     )
     stage1_lambda = LambdaRampConf(
-        start=float(stage_1_lambda_start), end=1.0,
-        steps=max(1, int(round(stage_1_warmup_frac * n_pretrain))), delay=0,
+        start=float(stage_1_lambda_start),
+        end=1.0,
+        steps=max(1, int(round(stage_1_warmup_frac * n_pretrain))),
+        delay=0,
     )
     stage2_lambda = LambdaRampConf(
-        start=float(stage_2_lambda_start), end=1.0,
-        steps=max(1, int(round(stage_2_warmup_frac * n_stage2))), delay=0,
+        start=float(stage_2_lambda_start),
+        end=1.0,
+        steps=max(1, int(round(stage_2_warmup_frac * n_stage2))),
+        delay=0,
     )
     stage1_loss = FullELBO(
         rate_lambda=make_lambda_cosine(
-            stage1_lambda, total_steps=int(n_pretrain), default_end=1.0,
+            stage1_lambda,
+            total_steps=int(n_pretrain),
+            default_end=1.0,
         ),
         lambda_sigma_p=lambda_sigma_p,
         lambda_mu_p=0.0,
@@ -116,7 +132,9 @@ def _build_gluonts_stages(
     # Persistence baseline: R_μp anchor (λ_μp) is moot — μ_p has no parameters.
     stage2_loss = FullELBO(
         rate_lambda=make_lambda_cosine(
-            stage2_lambda, total_steps=int(n_stage2), default_end=1.0,
+            stage2_lambda,
+            total_steps=int(n_stage2),
+            default_end=1.0,
         ),
         lambda_sigma_p=0.0,
         lambda_mu_p=0.0,

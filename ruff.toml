@@ -31,7 +31,7 @@ exclude = [
 # Same as Black.
 line-length = 88
 indent-width = 4
-target-version = "py312"
+target-version = "py313"
 fix = true
 
 [lint]
@@ -46,6 +46,7 @@ select = [
     "TD006", "TD004", "TD007", "TD001",
     "NPY",
     "RUF",
+    "UP",
 ]
 ignore = ["D206", "D300", "COM812", "COM819", "RET504", "N806", "N803", "RUF002"]
 preview = true

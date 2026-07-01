@@ -12,7 +12,7 @@ The combiner composes a :class:`~ddssm.nn.aggregators.BaseHistoryAggregator`
 from __future__ import annotations
 
 import abc
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -48,8 +48,7 @@ class BaseEncoderCombiner(nn.Module, metaclass=abc.ABCMeta):
 
     @property
     @abc.abstractmethod
-    def out_features(self) -> int:
-        ...
+    def out_features(self) -> int: ...
 
     @abc.abstractmethod
     def forward(
@@ -59,7 +58,7 @@ class BaseEncoderCombiner(nn.Module, metaclass=abc.ABCMeta):
         z_hist: torch.Tensor,  # (B, d, j) — left-padded
         hist_time_emb: torch.Tensor,  # (B, j, emb_time_dim) — history steps only
         pad_mask_hist: torch.Tensor,  # (B, j) — 1 if real history, 0 if padded
-        static_context: Optional[torch.Tensor] = None,  # (B, E_s, hidden_dim)
+        static_context: torch.Tensor | None = None,  # (B, E_s, hidden_dim)
     ) -> torch.Tensor:  # (B, out_features)
         ...
 
@@ -124,7 +123,7 @@ class CompoundCombiner(BaseEncoderCombiner):
         z_hist: torch.Tensor,
         hist_time_emb: torch.Tensor,
         pad_mask_hist: torch.Tensor,
-        static_context: Optional[torch.Tensor] = None,
+        static_context: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # hist_time_emb is length j (no h_fut slot under the new contract).
         z_hist_feat = self.aggregator(

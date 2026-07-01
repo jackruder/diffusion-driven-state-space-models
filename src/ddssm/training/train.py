@@ -10,11 +10,12 @@ import math
 import pickle
 import shutil
 import signal
-from typing import TYPE_CHECKING, Any, Callable, final
+from typing import TYPE_CHECKING, Any, final
 import logging
 import tempfile
 from contextlib import nullcontext, contextmanager
 from collections import deque
+from collections.abc import Callable
 
 import torch
 
@@ -159,6 +160,7 @@ class DDSSMTrainer:
         # working without spelling out optimisation knobs.
         if hparams is None:
             from ddssm.model.dssd import _default_hyperparams
+
             hparams = _default_hyperparams()
         self.hparams = hparams
 
@@ -188,6 +190,7 @@ class DDSSMTrainer:
         # ADR-0004: active loss object (installed by orchestrator per
         # stage; constructed lazily at fit() start otherwise).
         from ddssm.model.losses import Loss
+
         self._active_loss: Loss | None = None
 
         self.optimizer = optimizer
@@ -350,7 +353,10 @@ class DDSSMTrainer:
     # Serialization / Checkpoint  (schema owned by ddssm.training.checkpoint)
     # ------------------------
     def save_checkpoint(
-        self, path: str, *, stage_prefix: str | None = None,
+        self,
+        path: str,
+        *,
+        stage_prefix: str | None = None,
     ) -> None:
         """Persist trainer state via :mod:`ddssm.training.checkpoint`.
 
@@ -358,6 +364,7 @@ class DDSSMTrainer:
         (ADR-0009) can identify the originating stage on retry.
         """
         from ddssm.training.checkpoint import save as _save
+
         _save(self, path, stage_prefix=stage_prefix)
 
     def restore_from_checkpoint(self, path: str, strict: bool = True) -> dict:
@@ -376,7 +383,11 @@ class DDSSMTrainer:
         from ddssm.training.checkpoint import load_into_model
 
         ckpt = load_into_model(
-            self.model, path, device=self.device, strict=strict, load_ema=False,
+            self.model,
+            path,
+            device=self.device,
+            strict=strict,
+            load_ema=False,
         )
         if ckpt.optimizer_state is not None and self.optimizer is not None:
             self.optimizer.load_state_dict(ckpt.optimizer_state)
@@ -385,10 +396,21 @@ class DDSSMTrainer:
                 "[restore] Warning: optimizer state not found in checkpoint "
                 "or optimizer is None."
             )
-        if ckpt.ema_state is not None and hasattr(self, "ema"):
-            self.ema.shadow = ckpt.ema_state
-            if ckpt.ema_decay is not None:
-                self.ema_decay = ckpt.ema_decay
+        if hasattr(self, "ema"):
+            if ckpt.ema_state is not None:
+                self.ema.shadow = ckpt.ema_state
+                if ckpt.ema_decay is not None:
+                    self.ema_decay = ckpt.ema_decay
+            else:
+                # Live transition weights were just overwritten from the
+                # checkpoint, but ``self.ema.shadow`` still holds the *init*
+                # snapshot from ``EMA.__init__`` (which ran before restore).
+                # Re-snapshot from live so ``EMA.swap`` doesn't validate an
+                # untrained denoiser on the next epoch end.
+                self.ema.shadow = {
+                    k: p.detach().clone()
+                    for k, p in self.model.transition.state_dict().items()
+                }
         # GradScaler contract guard. A non-None saved state means the
         # producer was running fp16 AMP; silently dropping it on a
         # disabled-scaler live trainer would bias the restart, so raise.
@@ -529,7 +551,12 @@ class DDSSMTrainer:
         if self.scheduler is not None:
             self.scheduler.step()
 
-        if hasattr(self, "ema") and self.ema is not None:
+        if hasattr(self, "ema") and self.ema is not None and any(
+            p.requires_grad for p in self.model.transition.parameters()
+        ):
+            # Skip while the transition is frozen: live weights don't move,
+            # so blending shadows toward them is a no-op that would drain any
+            # warm-started EMA lag over the length of the frozen stage.
             with torch.no_grad():
                 self.ema.update()
 
@@ -596,9 +623,7 @@ class DDSSMTrainer:
         # for the duration of the loop and restores the live weights on
         # exit so training continues unperturbed.
         ema_ctx = (
-            self.ema.swap()
-            if getattr(self, "ema", None) is not None
-            else nullcontext()
+            self.ema.swap() if getattr(self, "ema", None) is not None else nullcontext()
         )
         with torch.no_grad(), ema_ctx:
             for vbatch in val_loader:
@@ -684,7 +709,10 @@ class DDSSMTrainer:
         # shared FS (Lustre/NFS) the Tempest cluster runs on.
         d = os.path.dirname(latest_name) or "."
         f = tempfile.NamedTemporaryFile(
-            prefix="tmp_latest_", suffix=".pth", dir=d, delete=False,
+            prefix="tmp_latest_",
+            suffix=".pth",
+            dir=d,
+            delete=False,
         )
         tmppath = f.name
         f.close()
@@ -716,13 +744,13 @@ class DDSSMTrainer:
     # path: a 6-hour stage-2 trial that hits a schema-incompatible ckpt
     # would otherwise lose all progress without a trace).
     _RESUME_NO_CKPT_EXCEPTIONS: tuple[type[BaseException], ...] = (
-        FileNotFoundError,    # missing file
-        IsADirectoryError,    # path points to a directory
-        EOFError,             # truncated pickle stream
+        FileNotFoundError,  # missing file
+        IsADirectoryError,  # path points to a directory
+        EOFError,  # truncated pickle stream
         pickle.UnpicklingError,  # malformed pickle
-        RuntimeError,         # torch.load corrupt-zip / state_dict shape drift
-        KeyError,             # payload missing expected keys
-        AttributeError,       # payload structure unexpected (e.g. not a dict)
+        RuntimeError,  # torch.load corrupt-zip / state_dict shape drift
+        KeyError,  # payload missing expected keys
+        AttributeError,  # payload structure unexpected (e.g. not a dict)
     )
 
     def _safe_resume(self, resume_from: str | None):
@@ -739,7 +767,9 @@ class DDSSMTrainer:
             log.warning(
                 "[resume] FALLBACK TO FRESH START — failed to load "
                 "checkpoint %r: %s: %s. global_step reset to 0.",
-                resume_from, type(e).__name__, e,
+                resume_from,
+                type(e).__name__,
+                e,
             )
 
     def fit(

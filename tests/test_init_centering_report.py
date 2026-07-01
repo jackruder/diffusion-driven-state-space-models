@@ -53,7 +53,10 @@ _TEST_CELLS = [
 
 
 def _fake_metrics_payload(
-    *, elbo: float, wallclock: float, sigma_t_max: int = 6,
+    *,
+    elbo: float,
+    wallclock: float,
+    sigma_t_max: int = 6,
 ) -> dict:
     """A complete fake ``metrics.json`` matching the Phase-A schema."""
     return {
@@ -104,7 +107,8 @@ def _build_fake_sweep_layout(
             trial_dir = sweep_dir / str(k)
             trial_dir.mkdir()
             payload = _fake_metrics_payload(
-                elbo=0.5 + 0.01 * k, wallclock=120.0 + 5 * k,
+                elbo=0.5 + 0.01 * k,
+                wallclock=120.0 + 5 * k,
             )
             with open(trial_dir / "metrics.json", "w") as f:
                 json.dump(payload, f)
@@ -134,10 +138,14 @@ def _build_optuna_dbs(
                 params={"n_pretrain": 100 + 50 * k, "sigma_pert": 1e-3 * (k + 1)},
                 distributions={
                     "n_pretrain": optuna.distributions.IntDistribution(
-                        50, 2000, log=True,
+                        50,
+                        2000,
+                        log=True,
                     ),
                     "sigma_pert": optuna.distributions.FloatDistribution(
-                        1e-4, 1e-1, log=True,
+                        1e-4,
+                        1e-1,
+                        log=True,
                     ),
                 },
                 value=0.5 + 0.01 * k,
@@ -156,7 +164,9 @@ def test_aggregate_returns_one_record_per_trial(tmp_path: Path) -> None:
     _build_optuna_dbs(optuna_dir)
 
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     # 2 cells × 3 trials = 6 records, all tagged with the 1d dataset.
     assert len(records) == 2 * 3
@@ -168,7 +178,9 @@ def test_aggregate_lifts_headline_scalars_from_metrics_json(tmp_path: Path) -> N
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     _build_optuna_dbs(optuna_dir)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     for r in records:
         if not r.is_control:
@@ -189,7 +201,9 @@ def test_aggregate_joins_optuna_metadata(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     _build_optuna_dbs(optuna_dir)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     for r in records:
         if not r.is_control:
@@ -204,7 +218,9 @@ def test_aggregate_skips_missing_optuna_db_gracefully(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     # Intentionally do not build the DBs.
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     for r in records:
         if not r.is_control:
@@ -219,7 +235,9 @@ def test_aggregate_emits_no_control_records_post_adr_0002(tmp_path: Path) -> Non
     """No record carries ``is_control=True`` since the controls were dropped."""
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     assert all(not r.is_control for r in records)
 
@@ -233,7 +251,9 @@ def test_save_artifacts_writes_summary_and_jsonl(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     _build_optuna_dbs(optuna_dir)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_dir = tmp_path / "report"
     summary, jsonl = save_artifacts(records, str(out_dir))
@@ -256,7 +276,9 @@ def test_load_records_round_trips(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     _build_optuna_dbs(optuna_dir)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_dir = tmp_path / "report"
     _, jsonl = save_artifacts(records, str(out_dir))
@@ -279,7 +301,9 @@ def test_load_records_round_trips(tmp_path: Path) -> None:
 def test_plot_sigma_data_drift_writes_nonempty_png(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_png = tmp_path / "plots" / "sigma_data_drift.png"
     plot_sigma_data_drift(records, str(out_png))
@@ -290,7 +314,9 @@ def test_plot_sigma_data_drift_writes_nonempty_png(tmp_path: Path) -> None:
 def test_plot_wallclock_writes_nonempty_png(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_png = tmp_path / "plots" / "wallclock.png"
     plot_wallclock_to_target(records, str(out_png))
@@ -301,7 +327,9 @@ def test_plot_wallclock_writes_nonempty_png(tmp_path: Path) -> None:
 def test_write_headline_table_emits_markdown(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_md = tmp_path / "headline.md"
     write_headline_table(records, str(out_md))
@@ -316,7 +344,9 @@ def test_write_distribution_panel_emits_median_iqr_table(tmp_path: Path) -> None
     """Distribution panel has one row per cell with median + [Q1, Q3] cells."""
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_md = tmp_path / "distribution.md"
     write_distribution_panel(records, str(out_md))
@@ -333,7 +363,9 @@ def test_write_distribution_panel_emits_median_iqr_table(tmp_path: Path) -> None
 def test_plot_baseline_form_ablation_writes_png(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_png = tmp_path / "pairwise" / "form.png"
     plot_baseline_form_ablation(records, str(out_png))
@@ -343,7 +375,9 @@ def test_plot_baseline_form_ablation_writes_png(tmp_path: Path) -> None:
 def test_plot_baseline_mode_ablation_writes_png(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_png = tmp_path / "pairwise" / "mode.png"
     plot_baseline_mode_ablation(records, str(out_png))
@@ -353,7 +387,9 @@ def test_plot_baseline_mode_ablation_writes_png(tmp_path: Path) -> None:
 def test_plot_tracking_mode_ablation_writes_png(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_png = tmp_path / "pairwise" / "tracking.png"
     plot_tracking_mode_ablation(records, str(out_png))
@@ -374,7 +410,9 @@ def test_plot_only_reads_artifacts_no_aggregation(tmp_path: Path) -> None:
     sweeps_root, optuna_dir = _build_fake_sweep_layout(tmp_path)
     _build_optuna_dbs(optuna_dir)
     records = aggregate(
-        str(sweeps_root), optuna_dir=str(optuna_dir), study_prefix="phase_d",
+        str(sweeps_root),
+        optuna_dir=str(optuna_dir),
+        study_prefix="phase_d",
     )
     out_dir = tmp_path / "report"
     _, jsonl = save_artifacts(records, str(out_dir))
@@ -407,10 +445,14 @@ def test_cli_all_end_to_end(tmp_path: Path) -> None:
     out_dir = tmp_path / "report"
     rc = main([
         "all",
-        "--sweeps-root", str(sweeps_root),
-        "--optuna-dir", str(optuna_dir),
-        "--study-prefix", "phase_d",
-        "--out", str(out_dir),
+        "--sweeps-root",
+        str(sweeps_root),
+        "--optuna-dir",
+        str(optuna_dir),
+        "--study-prefix",
+        "phase_d",
+        "--out",
+        str(out_dir),
     ])
     assert rc == 0
     assert (out_dir / SUMMARY_FILENAME).is_file()

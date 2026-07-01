@@ -24,9 +24,10 @@ point) is part of the per-point launch intent, not an axis. **Replication**
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Mapping, Callable, Sequence
+from typing import TYPE_CHECKING, Any
 from itertools import product
 from dataclasses import field, dataclass
+from collections.abc import Mapping, Callable, Sequence
 
 if TYPE_CHECKING:
     from ddssm.launch import PointLaunch
@@ -77,8 +78,10 @@ class Study:
 
     name: str
     points: tuple[StudyPoint, ...]
-    launch: Callable[[StudyPoint], "PointLaunch"]
-    variants: Mapping[str, Callable[[StudyPoint], list[str]]] = field(default_factory=dict)
+    launch: Callable[[StudyPoint], PointLaunch]
+    variants: Mapping[str, Callable[[StudyPoint], list[str]]] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         # Point names become preset names; a collision (axis keys / name_point
@@ -99,12 +102,12 @@ class Study:
         *,
         axes: Sequence[Axis],
         build: Callable[[Mapping[str, Any]], Any],
-        launch: Callable[[StudyPoint], "PointLaunch"],
+        launch: Callable[[StudyPoint], PointLaunch],
         name_point: Callable[[Mapping[str, str]], str] | None = None,
         variants: Mapping[str, Callable[[StudyPoint], list[str]]] | None = None,
         filter: Callable[[Mapping[str, Any]], bool] | None = None,
         prefix: str = "",
-    ) -> "Study":
+    ) -> Study:
         """Build a study as the (filtered) cross-product of ``axes``.
 
         ``build(coords)`` maps ``{axis_name: value}`` to an experiment config;
@@ -123,9 +126,16 @@ class Study:
                 if axis.tags is not None:
                     tags.update(axis.tags(val))
             points.append(
-                StudyPoint(name=namer(tags), config=build(coords), tags=tags, coords=coords)
+                StudyPoint(
+                    name=namer(tags), config=build(coords), tags=tags, coords=coords
+                )
             )
-        return cls(name=name, points=tuple(points), launch=launch, variants=dict(variants or {}))
+        return cls(
+            name=name,
+            points=tuple(points),
+            launch=launch,
+            variants=dict(variants or {}),
+        )
 
     @classmethod
     def from_points(
@@ -133,11 +143,16 @@ class Study:
         name: str,
         points: Sequence[StudyPoint],
         *,
-        launch: Callable[[StudyPoint], "PointLaunch"],
+        launch: Callable[[StudyPoint], PointLaunch],
         variants: Mapping[str, Callable[[StudyPoint], list[str]]] | None = None,
-    ) -> "Study":
+    ) -> Study:
         """Escape hatch for irregular studies that don't fit a clean cross-product."""
-        return cls(name=name, points=tuple(points), launch=launch, variants=dict(variants or {}))
+        return cls(
+            name=name,
+            points=tuple(points),
+            launch=launch,
+            variants=dict(variants or {}),
+        )
 
     def register(self, store: Callable[..., Any]) -> None:
         """Register every point's config into a ``ddssm.experiment.stores`` store."""

@@ -60,26 +60,43 @@ def _make_small_model() -> DDSSM_base:
         fusion=partial(ConcatLinearFusion),
     )
     enc = GaussianEncoder(
-        data_dim=DATA_DIM, latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
-        use_mask=True, hidden_dim=CHANNELS,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
+        use_mask=True,
+        hidden_dim=CHANNELS,
         combiner=combiner,
         dist_head=partial(GaussianDistHead),
         fut_summary=_FS,
     )
     dec = GaussianDecoder(
-        latent_dim=LATENT_DIM, data_dim=DATA_DIM, j=J, emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM,
+        data_dim=DATA_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH,
+        context=_CTX,
+        gaussian_head=_GH,
     )
     trans = GaussianTransition(
-        latent_dim=LATENT_DIM, j=J, emb_time_dim=EMB_TIME,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
         hidden_dim=CHANNELS,
-        context=_CTX, gaussian_head=_GH,
+        context=_CTX,
+        gaussian_head=_GH,
     )
     aux = AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=CHANNELS, n_layers=1)
     return DDSSM_base(
-        encoder=enc, decoder=dec, transition=trans, aux_posterior=aux,
-        j=J, data_dim=DATA_DIM, latent_dim=LATENT_DIM, emb_time_dim=EMB_TIME,
+        encoder=enc,
+        decoder=dec,
+        transition=trans,
+        aux_posterior=aux,
+        j=J,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        emb_time_dim=EMB_TIME,
     )
 
 
@@ -265,10 +282,7 @@ def test_sigint_handler_only_installed_under_DDSSM_PREEMPTIVE_env(
             signal.getsignal(signal.SIGINT),
             trainer_env,
             "_handle_preempt_signal",
-        ), (
-            "SIGINT must be routed through the trainer handler under "
-            "DDSSM_PREEMPTIVE=1"
-        )
+        ), "SIGINT must be routed through the trainer handler under DDSSM_PREEMPTIVE=1"
     finally:
         # Restore original SIGINT to avoid cross-test contamination.
         try:
@@ -290,13 +304,16 @@ def test_periodic_checkpoint_pair_is_atomic_on_fault(tmp_path, monkeypatch) -> N
     trainer = _make_trainer(tmp_path)
     # Establish a first valid pair so ``ckpt_latest`` exists on disk and is
     # loadable. This is the "N-K" snapshot the resume path would fall back to.
-    first_latest = trainer._save_periodic_checkpoint(step=5, checkpoint_prefix="atom_test")
+    first_latest = trainer._save_periodic_checkpoint(
+        step=5, checkpoint_prefix="atom_test"
+    )
     assert os.path.isfile(first_latest)
     prior_payload = torch.load(first_latest, map_location="cpu", weights_only=False)
     assert prior_payload.get("global_step") == 0
     latest_path = first_latest
     step_n_path = os.path.join(
-        trainer.checkpoint_dir, "ckpt_atom_test_step10.pth",
+        trainer.checkpoint_dir,
+        "ckpt_atom_test_step10.pth",
     )
 
     # Bump trainer state so the would-be step-N ckpt is distinguishable from
@@ -309,6 +326,7 @@ def test_periodic_checkpoint_pair_is_atomic_on_fault(tmp_path, monkeypatch) -> N
     # is fragile; instead, patch by the target path so only the
     # ``ckpt_*_latest.pth`` transition raises.
     import os as _os
+
     real_replace = _os.replace
 
     def _faulty_replace(src, dst, *args, **kwargs):
@@ -324,9 +342,7 @@ def test_periodic_checkpoint_pair_is_atomic_on_fault(tmp_path, monkeypatch) -> N
     # Invariant: ``ckpt_latest`` still points to a fully-written, loadable
     # checkpoint. It may be either the prior snapshot (preferred — that's
     # what the fix guarantees) or step-N, but never a half-written tmp file.
-    assert os.path.isfile(latest_path), (
-        "ckpt_latest must still exist after the fault"
-    )
+    assert os.path.isfile(latest_path), "ckpt_latest must still exist after the fault"
     payload = torch.load(latest_path, map_location="cpu", weights_only=False)
     assert isinstance(payload, dict) and "model_state" in payload, (
         "ckpt_latest must remain a fully-written, loadable checkpoint"
@@ -344,7 +360,8 @@ def test_periodic_checkpoint_pair_is_atomic_on_fault(tmp_path, monkeypatch) -> N
     # No leftover tmp file in the checkpoint dir — the fault path must clean
     # up its same-dir tmp so a sweep-of-sweeps doesn't leak disk on Lustre.
     leftovers = [
-        n for n in os.listdir(trainer.checkpoint_dir)
+        n
+        for n in os.listdir(trainer.checkpoint_dir)
         if n.startswith("tmp_latest_") or n.startswith("tmp_save_")
     ]
     assert not leftovers, f"leftover tmp files after fault: {leftovers}"
@@ -362,9 +379,7 @@ def test_periodic_checkpoint_pair_is_atomic_on_fault(tmp_path, monkeypatch) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_safe_resume_corrupt_ckpt_falls_back_with_warning(
-    tmp_path, caplog
-) -> None:
+def test_safe_resume_corrupt_ckpt_falls_back_with_warning(tmp_path, caplog) -> None:
     """A garbage-bytes ckpt → fresh start (step=0) + WARNING naming the file."""
     import logging
 
@@ -395,9 +410,7 @@ def test_safe_resume_corrupt_ckpt_falls_back_with_warning(
     )
 
 
-def test_safe_resume_missing_file_falls_back_with_warning(
-    tmp_path, caplog
-) -> None:
+def test_safe_resume_missing_file_falls_back_with_warning(tmp_path, caplog) -> None:
     """Nonexistent ckpt path → fresh start (step=0) + WARNING."""
     import logging
 
@@ -437,9 +450,7 @@ def test_safe_resume_valid_ckpt_restores_normally(tmp_path, caplog) -> None:
     )
 
 
-def test_safe_resume_reraises_unexpected_exception(
-    tmp_path, monkeypatch
-) -> None:
+def test_safe_resume_reraises_unexpected_exception(tmp_path, monkeypatch) -> None:
     """A ``MemoryError`` from torch.load must propagate, NOT be swallowed.
 
     Pre-fix the bare ``except Exception`` caught everything including

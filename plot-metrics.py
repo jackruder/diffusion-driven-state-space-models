@@ -1,8 +1,9 @@
+import os
 import csv
 import math
-import os
-import matplotlib.pyplot as plt
 import argparse
+
+import matplotlib.pyplot as plt
 
 
 def plot_metrics(csv_path, save_path, keys=None):
@@ -18,7 +19,7 @@ def plot_metrics(csv_path, save_path, keys=None):
     steps = []
 
     try:
-        with open(csv_path, "r") as f:
+        with open(csv_path) as f:
             reader = csv.DictReader(f)
             if reader.fieldnames:
                 valid_keys = [k for k in keys if k in reader.fieldnames]

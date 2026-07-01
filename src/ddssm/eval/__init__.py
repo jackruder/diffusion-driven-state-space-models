@@ -20,9 +20,9 @@ from ddssm.eval.runner import EvalSpec, evaluate
 from ddssm.eval.metrics import METRIC_REGISTRY, EvalContext, register_metric
 
 __all__ = [
+    "METRIC_REGISTRY",
     "EvalContext",
     "EvalSpec",
-    "METRIC_REGISTRY",
     "evaluate",
     "register_metric",
 ]

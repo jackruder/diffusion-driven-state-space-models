@@ -21,15 +21,14 @@ Layout detection:
 
 from __future__ import annotations
 
-import os
 import csv
 import sys
 import json
 import math
 import time
-import argparse
 from typing import Any
 from pathlib import Path
+import argparse
 
 # ----- Discovery ----------------------------------------------------------
 
@@ -49,15 +48,22 @@ def detect_layout(p: Path) -> str:
     if (p / "metrics.csv").is_file():
         return "SINGLE_RUN"
     children = [c for c in p.iterdir() if c.is_dir()]
-    has_numeric_trial = any(c.name.isdigit() and (c / "metrics.csv").is_file() for c in children)
+    has_numeric_trial = any(
+        c.name.isdigit() and (c / "metrics.csv").is_file() for c in children
+    )
     if has_numeric_trial:
         return "SWEEP"
     has_named_cell = sum(1 for c in children if (c / "metrics.csv").is_file()) >= 2
     if has_named_cell:
         return "MULTI_CELL"
     has_sweep_child = any(
-        any(g.name.isdigit() and (g / "metrics.csv").is_file() for g in c.iterdir() if c.is_dir())
-        for c in children if c.is_dir()
+        any(
+            g.name.isdigit() and (g / "metrics.csv").is_file()
+            for g in c.iterdir()
+            if c.is_dir()
+        )
+        for c in children
+        if c.is_dir()
     )
     if has_sweep_child:
         return "MULTI_SWEEP"
@@ -96,7 +102,9 @@ def _safe_float(s: str) -> float | None:
         return None
 
 
-def load_csv(p: Path, limit: int | None = None) -> tuple[list[str], list[dict[str, str]]]:
+def load_csv(
+    p: Path, limit: int | None = None
+) -> tuple[list[str], list[dict[str, str]]]:
     """Read a metrics CSV.
 
     Args:
@@ -129,7 +137,9 @@ def group_columns(fields: list[str]) -> dict[str, list[str]]:
     return groups
 
 
-def head_tail(rows: list[dict[str, str]], col: str, *, head_n: int = 20, tail_n: int = 20) -> dict[str, Any]:
+def head_tail(
+    rows: list[dict[str, str]], col: str, *, head_n: int = 20, tail_n: int = 20
+) -> dict[str, Any]:
     """Summarise one column's head vs tail to gauge training direction.
 
     Args:
@@ -157,7 +167,7 @@ def head_tail(rows: list[dict[str, str]], col: str, *, head_n: int = 20, tail_n:
     if not vals:
         return {"n": 0, "nans": nans}
     head = vals[: min(head_n, len(vals))]
-    tail = vals[-min(tail_n, len(vals)):]
+    tail = vals[-min(tail_n, len(vals)) :]
     h = sum(head) / len(head)
     t = sum(tail) / len(tail)
     return {
@@ -197,13 +207,16 @@ def lambda_state(rows: list[dict[str, str]]) -> dict[str, Any] | None:
             cross_step = int(r["step"]) if r.get("step") else None
             break
     return {
-        "first": first, "last": last,
+        "first": first,
+        "last": last,
         "warmup_complete": last >= 0.99,
         "warmup_cross_step": cross_step,
     }
 
 
-def sigma_data_summary(rows: list[dict[str, str]], fields: list[str]) -> dict[str, Any] | None:
+def sigma_data_summary(
+    rows: list[dict[str, str]], fields: list[str]
+) -> dict[str, Any] | None:
     """Summarise the last-row per-t ``diag/sigma_data2`` spread.
 
     Args:
@@ -227,7 +240,7 @@ def sigma_data_summary(rows: list[dict[str, str]], fields: list[str]) -> dict[st
     return {
         "n_t": len(sd_cols),
         "mean": mu,
-        "std": var ** 0.5,
+        "std": var**0.5,
         "min": min(vals),
         "max": max(vals),
         "drift_from_1": abs(mu - 1.0),
@@ -268,11 +281,17 @@ def report_single_run(run_dir: Path, *, head_n: int = 20, tail_n: int = 20) -> N
     fresh = is_actively_writing(csv_path)
 
     print(f"== SINGLE_RUN  {run_dir}")
-    print(f"   rows={len(rows)}  last_step={last_step}  csv_age={int(time.time() - csv_path.stat().st_mtime)}s  active={fresh}")
+    print(
+        f"   rows={len(rows)}  last_step={last_step}  csv_age={int(time.time() - csv_path.stat().st_mtime)}s  active={fresh}"
+    )
     if json_path.is_file():
         try:
             j = json.loads(json_path.read_text())
-            scalar_keys = [k for k, v in j.items() if isinstance(v, (int, float)) and "buffer" not in k]
+            scalar_keys = [
+                k
+                for k, v in j.items()
+                if isinstance(v, (int, float)) and "buffer" not in k
+            ]
             picks = [k for k in scalar_keys if k.startswith("stage")] or scalar_keys[:6]
             for k in picks[:8]:
                 print(f"   metrics.json :: {k} = {j[k]}")
@@ -286,18 +305,30 @@ def report_single_run(run_dir: Path, *, head_n: int = 20, tail_n: int = 20) -> N
     lam = lambda_state(rows)
     if lam is not None:
         flag = "OK" if lam["warmup_complete"] else "WARMUP"
-        cross = f"crossed @ step {lam['warmup_cross_step']}" if lam["warmup_cross_step"] is not None else "not yet @1.0"
+        cross = (
+            f"crossed @ step {lam['warmup_cross_step']}"
+            if lam["warmup_cross_step"] is not None
+            else "not yet @1.0"
+        )
         print(f"   lambda :: {flag}  last={lam['last']:.4g}  {cross}")
 
     # σ_data drift
     sd = sigma_data_summary(rows, fields)
     if sd is not None:
-        verdict = "OK" if sd["drift_from_1"] < 0.15 else ("DRIFT" if sd["drift_from_1"] < 0.5 else "BAD_DRIFT")
-        print(f"   sigma_data² :: {verdict}  mean={sd['mean']:.3f} ± {sd['std']:.3f}  range=[{sd['min']:.3f}, {sd['max']:.3f}]  drift|μ-1|={sd['drift_from_1']:.3f}")
+        verdict = (
+            "OK"
+            if sd["drift_from_1"] < 0.15
+            else ("DRIFT" if sd["drift_from_1"] < 0.5 else "BAD_DRIFT")
+        )
+        print(
+            f"   sigma_data² :: {verdict}  mean={sd['mean']:.3f} ± {sd['std']:.3f}  range=[{sd['min']:.3f}, {sd['max']:.3f}]  drift|μ-1|={sd['drift_from_1']:.3f}"
+        )
     print()
 
     # Per-loss head/tail summary
-    print(f"   {'column':<36} {'head':>10} {'tail':>10} {'Δ':>10} {'rel%':>8} {'last':>10}  flag")
+    print(
+        f"   {'column':<36} {'head':>10} {'tail':>10} {'Δ':>10} {'rel%':>8} {'last':>10}  flag"
+    )
     for col in PRIMARY_LOSS_COLS:
         if col not in fields:
             continue
@@ -316,7 +347,7 @@ def report_single_run(run_dir: Path, *, head_n: int = 20, tail_n: int = 20) -> N
             flag += f" nans={s['nans']}"
         print(
             f"   {col:<36} {s['head_mean']:>10.3g} {s['tail_mean']:>10.3g} "
-            f"{s['delta']:>+10.3g} {100*s['rel_delta']:>7.1f}% {s['last']:>10.3g}  {flag}"
+            f"{s['delta']:>+10.3g} {100 * s['rel_delta']:>7.1f}% {s['last']:>10.3g}  {flag}"
         )
 
     # Any other column with NaNs we haven't surfaced
@@ -329,7 +360,10 @@ def report_single_run(run_dir: Path, *, head_n: int = 20, tail_n: int = 20) -> N
             nan_cols.append((col, s["nans"]))
     if nan_cols:
         print()
-        print("   NaN/Inf in other columns:", ", ".join(f"{c}({n})" for c, n in nan_cols[:8]))
+        print(
+            "   NaN/Inf in other columns:",
+            ", ".join(f"{c}({n})" for c, n in nan_cols[:8]),
+        )
 
 
 # ----- Sweep report -------------------------------------------------------
@@ -369,7 +403,9 @@ def _optuna_best(db_path: Path) -> dict[str, Any] | None:
             "SELECT COUNT(*) FROM trials WHERE state IN ('FAIL', 'PRUNED')"
         ).fetchone()[0]
         return {
-            "n_complete": n_complete, "n_running": n_running, "n_failed": n_failed,
+            "n_complete": n_complete,
+            "n_running": n_running,
+            "n_failed": n_failed,
             "best": ({"trial": row[1], "value": row[3]} if row else None),
         }
     finally:
@@ -385,14 +421,25 @@ def find_optuna_db_for(sweep_dir: Path, repo_root: Path) -> Path | None:
     return None
 
 
-def report_sweep(sweep_dir: Path, repo_root: Path, *, max_trials: int = 10, head_n: int = 20, tail_n: int = 20) -> None:
+def report_sweep(
+    sweep_dir: Path,
+    repo_root: Path,
+    *,
+    max_trials: int = 10,
+    head_n: int = 20,
+    tail_n: int = 20,
+) -> None:
     """Print a per-trial table for a Hydra-multirun sweep plus Optuna db state.
 
     Joins the on-disk trial dirs with the matching Optuna sqlite db (if found)
     and emits sweep-level red flags (loss increasing, σ_data² drift, λ stalled).
     """
     trials = sorted(
-        [c for c in sweep_dir.iterdir() if c.is_dir() and c.name.isdigit() and (c / "metrics.csv").is_file()],
+        [
+            c
+            for c in sweep_dir.iterdir()
+            if c.is_dir() and c.name.isdigit() and (c / "metrics.csv").is_file()
+        ],
         key=lambda p: int(p.name),
     )
     print(f"== SWEEP  {sweep_dir}")
@@ -402,9 +449,13 @@ def report_sweep(sweep_dir: Path, repo_root: Path, *, max_trials: int = 10, head
         info = _optuna_best(db)
         if info is not None:
             print(f"   optuna db    : {db.name}")
-            print(f"   optuna state : complete={info['n_complete']} running={info['n_running']} failed={info['n_failed']}")
+            print(
+                f"   optuna state : complete={info['n_complete']} running={info['n_running']} failed={info['n_failed']}"
+            )
             if info["best"] is not None:
-                print(f"   optuna best  : trial #{info['best']['trial']}  value={info['best']['value']:.5g}")
+                print(
+                    f"   optuna best  : trial #{info['best']['trial']}  value={info['best']['value']:.5g}"
+                )
     print()
 
     rows_out: list[tuple[str, dict[str, Any]]] = []
@@ -422,31 +473,40 @@ def report_sweep(sweep_dir: Path, repo_root: Path, *, max_trials: int = 10, head
                 elbo = json.loads(jp.read_text()).get("stage2_elbo_surrogate")
             except Exception:
                 elbo = None
-        s_total = head_tail(rows, "loss/total", head_n=head_n, tail_n=tail_n) if "loss/total" in fields else {}
+        s_total = (
+            head_tail(rows, "loss/total", head_n=head_n, tail_n=tail_n)
+            if "loss/total" in fields
+            else {}
+        )
         lam = lambda_state(rows) or {}
         sd = sigma_data_summary(rows, fields) or {}
-        rows_out.append((tdir.name, {
-            "n_rows": len(rows),
-            "last_step": last_step,
-            "elbo": elbo,
-            "active": is_actively_writing(tdir / "metrics.csv"),
-            "loss_head": s_total.get("head_mean"),
-            "loss_tail": s_total.get("tail_mean"),
-            "loss_rel": s_total.get("rel_delta"),
-            "lambda_last": lam.get("last"),
-            "sd_mean": sd.get("mean"),
-            "sd_drift": sd.get("drift_from_1"),
-        }))
+        rows_out.append((
+            tdir.name,
+            {
+                "n_rows": len(rows),
+                "last_step": last_step,
+                "elbo": elbo,
+                "active": is_actively_writing(tdir / "metrics.csv"),
+                "loss_head": s_total.get("head_mean"),
+                "loss_tail": s_total.get("tail_mean"),
+                "loss_rel": s_total.get("rel_delta"),
+                "lambda_last": lam.get("last"),
+                "sd_mean": sd.get("mean"),
+                "sd_drift": sd.get("drift_from_1"),
+            },
+        ))
 
-    print(f"   {'trial':<6} {'rows':>6} {'step':>6} {'elbo':>10} {'L_head':>10} {'L_tail':>10} {'L_rel%':>8} {'λ':>6} {'σd̄':>6} {'live':>5}")
+    print(
+        f"   {'trial':<6} {'rows':>6} {'step':>6} {'elbo':>10} {'L_head':>10} {'L_tail':>10} {'L_rel%':>8} {'λ':>6} {'σd̄':>6} {'live':>5}"
+    )
     for name, r in rows_out[:max_trials]:
         if "error" in r:
             print(f"   {name:<6}  ERROR  {r['error']}")
             continue
         print(
-            f"   {name:<6} {r['n_rows']:>6} {str(r['last_step']):>6} "
+            f"   {name:<6} {r['n_rows']:>6} {r['last_step']!s:>6} "
             f"{_fmt(r['elbo'], 4):>10} {_fmt(r['loss_head'], 3):>10} {_fmt(r['loss_tail'], 3):>10} "
-            f"{(f'{100*r['loss_rel']:.1f}' if r['loss_rel'] is not None else '-'):>8} "
+            f"{(f'{100 * r["loss_rel"]:.1f}' if r['loss_rel'] is not None else '-'):>8} "
             f"{_fmt(r['lambda_last'], 3):>6} {_fmt(r['sd_mean'], 3):>6} {('Y' if r['active'] else '.'):>5}"
         )
     if len(rows_out) > max_trials:
@@ -455,10 +515,22 @@ def report_sweep(sweep_dir: Path, repo_root: Path, *, max_trials: int = 10, head
     # Sweep-level red flags
     print()
     actives = [r for _, r in rows_out if r.get("active")]
-    incs = [n for n, r in rows_out if r.get("loss_rel") is not None and r["loss_rel"] > 0.05]
-    bad_sd = [n for n, r in rows_out if r.get("sd_drift") is not None and r["sd_drift"] > 0.5]
-    stuck_lam = [n for n, r in rows_out if r.get("lambda_last") is not None and r["lambda_last"] < 0.5 and r["n_rows"] > 200]
-    print(f"   summary :: active={len(actives)} loss_increasing={len(incs)} sigma_data_bad_drift={len(bad_sd)} lambda_stuck<0.5={len(stuck_lam)}")
+    incs = [
+        n for n, r in rows_out if r.get("loss_rel") is not None and r["loss_rel"] > 0.05
+    ]
+    bad_sd = [
+        n for n, r in rows_out if r.get("sd_drift") is not None and r["sd_drift"] > 0.5
+    ]
+    stuck_lam = [
+        n
+        for n, r in rows_out
+        if r.get("lambda_last") is not None
+        and r["lambda_last"] < 0.5
+        and r["n_rows"] > 200
+    ]
+    print(
+        f"   summary :: active={len(actives)} loss_increasing={len(incs)} sigma_data_bad_drift={len(bad_sd)} lambda_stuck<0.5={len(stuck_lam)}"
+    )
     if incs:
         print(f"   ⚠ loss_increasing trials: {incs[:8]}")
     if bad_sd:
@@ -481,10 +553,14 @@ def _fmt(x: float | int | None, digits: int = 3) -> str:
 
 def report_multi_cell(parent: Path, *, head_n: int = 20, tail_n: int = 20) -> None:
     """Print one summary row per named cell under a multi-cell parent dir."""
-    cells = sorted([c for c in parent.iterdir() if c.is_dir() and (c / "metrics.csv").is_file()])
+    cells = sorted([
+        c for c in parent.iterdir() if c.is_dir() and (c / "metrics.csv").is_file()
+    ])
     print(f"== MULTI_CELL  {parent}")
     print(f"   cells={len(cells)}")
-    print(f"   {'cell':<40} {'rows':>6} {'step':>6} {'elbo':>10} {'L_head':>10} {'L_tail':>10} {'L_rel%':>8} {'λ':>6} {'σd̄':>6} {'live':>5}")
+    print(
+        f"   {'cell':<40} {'rows':>6} {'step':>6} {'elbo':>10} {'L_head':>10} {'L_tail':>10} {'L_rel%':>8} {'λ':>6} {'σd̄':>6} {'live':>5}"
+    )
     for cdir in cells:
         try:
             fields, rows = load_csv(cdir / "metrics.csv")
@@ -499,15 +575,19 @@ def report_multi_cell(parent: Path, *, head_n: int = 20, tail_n: int = 20) -> No
                 elbo = json.loads(jp.read_text()).get("stage2_elbo_surrogate")
             except Exception:
                 elbo = None
-        s = head_tail(rows, "loss/total", head_n=head_n, tail_n=tail_n) if "loss/total" in fields else {}
+        s = (
+            head_tail(rows, "loss/total", head_n=head_n, tail_n=tail_n)
+            if "loss/total" in fields
+            else {}
+        )
         lam = lambda_state(rows) or {}
         sd = sigma_data_summary(rows, fields) or {}
         active = is_actively_writing(cdir / "metrics.csv")
         rel = s.get("rel_delta")
         print(
-            f"   {cdir.name:<40} {len(rows):>6} {str(last_step):>6} "
+            f"   {cdir.name:<40} {len(rows):>6} {last_step!s:>6} "
             f"{_fmt(elbo, 4):>10} {_fmt(s.get('head_mean'), 3):>10} {_fmt(s.get('tail_mean'), 3):>10} "
-            f"{(f'{100*rel:.1f}' if rel is not None else '-'):>8} "
+            f"{(f'{100 * rel:.1f}' if rel is not None else '-'):>8} "
             f"{_fmt(lam.get('last'), 3):>6} {_fmt(sd.get('mean'), 3):>6} {('Y' if active else '.'):>5}"
         )
 
@@ -518,20 +598,37 @@ def report_multi_cell(parent: Path, *, head_n: int = 20, tail_n: int = 20) -> No
 def report_multi_sweep(parent: Path, repo_root: Path) -> None:
     """Print one row per child sweep dir (newest first) with Optuna db state."""
     children = sorted(
-        [c for c in parent.iterdir() if c.is_dir() and any(
-            g.name.isdigit() and (g / "metrics.csv").is_file() for g in c.iterdir() if c.is_dir()
-        )],
+        [
+            c
+            for c in parent.iterdir()
+            if c.is_dir()
+            and any(
+                g.name.isdigit() and (g / "metrics.csv").is_file()
+                for g in c.iterdir()
+                if c.is_dir()
+            )
+        ],
         key=lambda p: -p.stat().st_mtime,
     )
     print(f"== MULTI_SWEEP  {parent}")
     print(f"   sweep_dirs={len(children)}  (showing newest first)")
     for sd in children[:12]:
-        n_trials = sum(1 for g in sd.iterdir() if g.is_dir() and g.name.isdigit() and (g / "metrics.csv").is_file())
+        n_trials = sum(
+            1
+            for g in sd.iterdir()
+            if g.is_dir() and g.name.isdigit() and (g / "metrics.csv").is_file()
+        )
         age = int(time.time() - sd.stat().st_mtime)
         db = find_optuna_db_for(sd, repo_root)
         opt = _optuna_best(db) if db else None
-        best = (f"  best#{opt['best']['trial']}={opt['best']['value']:.4g}" if opt and opt["best"] else "")
-        state = (f"  complete={opt['n_complete']} running={opt['n_running']}" if opt else "")
+        best = (
+            f"  best#{opt['best']['trial']}={opt['best']['value']:.4g}"
+            if opt and opt["best"]
+            else ""
+        )
+        state = (
+            f"  complete={opt['n_complete']} running={opt['n_running']}" if opt else ""
+        )
         print(f"   {sd.name:<60}  trials={n_trials:>3}  age={age}s{state}{best}")
 
 
@@ -550,7 +647,9 @@ def slurm_and_process_scan(repo_root: Path) -> None:
     try:
         out = subprocess.run(
             ["squeue", "--me", "--format=%i %j %T %M %R", "--noheader"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if out.returncode == 0 and out.stdout.strip():
             print("== SLURM (squeue --me)")
@@ -564,8 +663,14 @@ def slurm_and_process_scan(repo_root: Path) -> None:
     # nvidia-smi
     try:
         out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
+            [
+                "nvidia-smi",
+                "--query-gpu=index,utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if out.returncode == 0 and out.stdout.strip():
             print("== GPU (nvidia-smi)")
@@ -576,7 +681,9 @@ def slurm_and_process_scan(repo_root: Path) -> None:
 
     # ddssm processes
     try:
-        out = subprocess.run(["pgrep", "-af", "ddssm"], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(
+            ["pgrep", "-af", "ddssm"], capture_output=True, text=True, timeout=5
+        )
         if out.returncode == 0 and out.stdout.strip():
             print("== Local ddssm processes")
             for line in out.stdout.strip().splitlines()[:8]:
@@ -610,12 +717,21 @@ def main(argv: list[str] | None = None) -> int:
         Process exit code: 0 on success, 1 for empty/unrecognised layouts, 2
         for a missing path or no discoverable target.
     """
-    ap = argparse.ArgumentParser(description="Auto-discover DDSSM run output and print structured diagnostics.")
-    ap.add_argument("path", nargs="?", default=None, help="Run / sweep / parent dir (default: newest under runs/)")
+    ap = argparse.ArgumentParser(
+        description="Auto-discover DDSSM run output and print structured diagnostics."
+    )
+    ap.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Run / sweep / parent dir (default: newest under runs/)",
+    )
     ap.add_argument("--head-rows", type=int, default=20)
     ap.add_argument("--tail-rows", type=int, default=20)
     ap.add_argument("--max-trials", type=int, default=10)
-    ap.add_argument("--no-slurm", action="store_true", help="Skip squeue/nvidia-smi/pgrep scans")
+    ap.add_argument(
+        "--no-slurm", action="store_true", help="Skip squeue/nvidia-smi/pgrep scans"
+    )
     args = ap.parse_args(argv)
 
     here = Path(__file__).resolve()
@@ -640,7 +756,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if layout == "EMPTY":
         print(f"path has no recognisable metrics.csv layout: {target}")
-        children = sorted([c for c in target.iterdir() if c.is_dir()], key=lambda p: -p.stat().st_mtime)[:10]
+        children = sorted(
+            [c for c in target.iterdir() if c.is_dir()],
+            key=lambda p: -p.stat().st_mtime,
+        )[:10]
         print("  newest subdirs:")
         for c in children:
             age = int(time.time() - c.stat().st_mtime)
@@ -649,7 +768,13 @@ def main(argv: list[str] | None = None) -> int:
     if layout == "SINGLE_RUN":
         report_single_run(target, head_n=args.head_rows, tail_n=args.tail_rows)
     elif layout == "SWEEP":
-        report_sweep(target, repo_root, max_trials=args.max_trials, head_n=args.head_rows, tail_n=args.tail_rows)
+        report_sweep(
+            target,
+            repo_root,
+            max_trials=args.max_trials,
+            head_n=args.head_rows,
+            tail_n=args.tail_rows,
+        )
     elif layout == "MULTI_CELL":
         report_multi_cell(target, head_n=args.head_rows, tail_n=args.tail_rows)
     elif layout == "MULTI_SWEEP":

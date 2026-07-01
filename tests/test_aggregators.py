@@ -35,7 +35,10 @@ def _inputs(*, B: int, d: int, j: int, e_t: int):
 @pytest.mark.parametrize("j", [1])
 def test_identity_aggregator_shape(j):
     agg = IdentityAggregator(
-        latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T,
+        latent_dim=D,
+        j=j,
+        hidden_dim=H,
+        emb_time_dim=E_T,
     )
     z, t, m = _inputs(B=B, d=D, j=j, e_t=E_T)
     out = agg(z_hist=z, hist_time_emb=t, pad_mask=m)
@@ -51,7 +54,11 @@ def test_identity_aggregator_rejects_j_gt_1():
 @pytest.mark.parametrize("j", [1, 2, 4])
 def test_gru_aggregator_shape(j):
     agg = GRUAggregator(
-        latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T, num_gru_layers=1,
+        latent_dim=D,
+        j=j,
+        hidden_dim=H,
+        emb_time_dim=E_T,
+        num_gru_layers=1,
     )
     z, t, m = _inputs(B=B, d=D, j=j, e_t=E_T)
     out = agg(z_hist=z, hist_time_emb=t, pad_mask=m)
@@ -62,7 +69,11 @@ def test_gru_aggregator_shape(j):
 @pytest.mark.parametrize("j", [1, 2, 4])
 def test_mlp_aggregator_shape(j):
     agg = MLPAggregator(
-        latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T, num_layers=2,
+        latent_dim=D,
+        j=j,
+        hidden_dim=H,
+        emb_time_dim=E_T,
+        num_layers=2,
     )
     z, t, m = _inputs(B=B, d=D, j=j, e_t=E_T)
     out = agg(z_hist=z, hist_time_emb=t, pad_mask=m)
@@ -73,8 +84,12 @@ def test_mlp_aggregator_shape(j):
 @pytest.mark.parametrize("j", [1, 2, 4])
 def test_attention_aggregator_shape(j):
     agg = AttentionAggregator(
-        latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T,
-        nheads=NHEADS, num_attn_layers=1,
+        latent_dim=D,
+        j=j,
+        hidden_dim=H,
+        emb_time_dim=E_T,
+        nheads=NHEADS,
+        num_attn_layers=1,
     )
     z, t, m = _inputs(B=B, d=D, j=j, e_t=E_T)
     out = agg(z_hist=z, hist_time_emb=t, pad_mask=m)
@@ -91,8 +106,12 @@ def test_attention_aggregator_ignores_padded_positions():
     """
     j = 4
     agg = AttentionAggregator(
-        latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T,
-        nheads=NHEADS, num_attn_layers=1,
+        latent_dim=D,
+        j=j,
+        hidden_dim=H,
+        emb_time_dim=E_T,
+        nheads=NHEADS,
+        num_attn_layers=1,
     )
     agg.eval()
     torch.manual_seed(0)
@@ -115,8 +134,12 @@ def test_attention_aggregator_handles_fully_padded_row():
     """A fully-padded row yields a finite, zero pooled feature (no NaN)."""
     j = 4
     agg = AttentionAggregator(
-        latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T,
-        nheads=NHEADS, num_attn_layers=1,
+        latent_dim=D,
+        j=j,
+        hidden_dim=H,
+        emb_time_dim=E_T,
+        nheads=NHEADS,
+        num_attn_layers=1,
     )
     agg.eval()
     torch.manual_seed(0)
@@ -135,8 +158,13 @@ def test_attention_aggregator_handles_fully_padded_row():
 def test_context_producer_aggregator_shape(j):
     rb = ResidualBlockConfig(feature=FeatureMixerConfig(nheads=1, n_layers=1))
     agg = ContextProducerAggregator(
-        latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T,
-        channels=8, num_layers=1, residual_block=rb,
+        latent_dim=D,
+        j=j,
+        hidden_dim=H,
+        emb_time_dim=E_T,
+        channels=8,
+        num_layers=1,
+        residual_block=rb,
     )
     z, t, m = _inputs(B=B, d=D, j=j, e_t=E_T)
     out = agg(z_hist=z, hist_time_emb=t, pad_mask=m)
@@ -144,16 +172,23 @@ def test_context_producer_aggregator_shape(j):
     assert agg.out_features == 8 * H
 
 
-@pytest.mark.parametrize("agg_cls,extra", [
-    (GRUAggregator, {"num_gru_layers": 1}),
-    (MLPAggregator, {"num_layers": 2}),
-    (AttentionAggregator, {"nheads": NHEADS, "num_attn_layers": 1}),
-])
+@pytest.mark.parametrize(
+    "agg_cls,extra",
+    [
+        (GRUAggregator, {"num_gru_layers": 1}),
+        (MLPAggregator, {"num_layers": 2}),
+        (AttentionAggregator, {"nheads": NHEADS, "num_attn_layers": 1}),
+    ],
+)
 def test_simple_aggregators_reject_static_emb(agg_cls, extra):
     with pytest.raises(AssertionError):
         agg_cls(
-            latent_dim=D, j=2, hidden_dim=H, emb_time_dim=E_T,
-            static_emb_dim=2, **extra,
+            latent_dim=D,
+            j=2,
+            hidden_dim=H,
+            emb_time_dim=E_T,
+            static_emb_dim=2,
+            **extra,
         )
 
 
@@ -165,10 +200,17 @@ def test_aggregator_backprop():
         (GRUAggregator, {"num_gru_layers": 1}),
         (MLPAggregator, {"num_layers": 2}),
         (AttentionAggregator, {"nheads": NHEADS, "num_attn_layers": 1}),
-        (ContextProducerAggregator, {"channels": 8, "num_layers": 1, "residual_block": rb}),
+        (
+            ContextProducerAggregator,
+            {"channels": 8, "num_layers": 1, "residual_block": rb},
+        ),
     ]:
         agg = agg_cls(
-            latent_dim=D, j=j, hidden_dim=H, emb_time_dim=E_T, **extra,
+            latent_dim=D,
+            j=j,
+            hidden_dim=H,
+            emb_time_dim=E_T,
+            **extra,
         )
         z = torch.randn(B, D, j, requires_grad=True)
         t = torch.randn(B, j, E_T)

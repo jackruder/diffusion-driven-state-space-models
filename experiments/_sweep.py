@@ -13,8 +13,8 @@ cluster). :class:`SweepSpace` validates each field against a target hydra-zen
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Any
+import dataclasses
 
 from hydra_zen import make_config
 
@@ -52,24 +52,26 @@ class SweepSpace:
         return repr(x)
 
     # --- distribution helpers (return self for chaining) ---
-    def log(self, field: str, lo: float, hi: float) -> "SweepSpace":
+    def log(self, field: str, lo: float, hi: float) -> SweepSpace:
         """Log-uniform float over ``[lo, hi]``."""
-        self._params[self._path(field)] = f"tag(log, interval({self._n(lo)}, {self._n(hi)}))"
+        self._params[self._path(field)] = (
+            f"tag(log, interval({self._n(lo)}, {self._n(hi)}))"
+        )
         return self
 
-    def log_int(self, field: str, lo: int, hi: int) -> "SweepSpace":
+    def log_int(self, field: str, lo: int, hi: int) -> SweepSpace:
         """Log-uniform integer over ``[lo, hi]``."""
         self._params[self._path(field)] = (
             f"tag(log, int(interval({self._n(lo)}, {self._n(hi)})))"
         )
         return self
 
-    def uniform(self, field: str, lo: float, hi: float) -> "SweepSpace":
+    def uniform(self, field: str, lo: float, hi: float) -> SweepSpace:
         """Uniform float over ``[lo, hi]``."""
         self._params[self._path(field)] = f"interval({self._n(lo)}, {self._n(hi)})"
         return self
 
-    def raw(self, field: str, distribution: str) -> "SweepSpace":
+    def raw(self, field: str, distribution: str) -> SweepSpace:
         """Escape hatch: a raw Optuna distribution string (path still validated)."""
         self._params[self._path(field)] = distribution
         return self

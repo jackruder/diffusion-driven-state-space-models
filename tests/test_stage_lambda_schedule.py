@@ -45,9 +45,12 @@ def test_init_centering_factory_wires_stage_lambda_ramps() -> None:
     from experiments.init_centering.hparams import _build_init_centering_stages
 
     stages = _build_init_centering_stages(
-        n_pretrain=200, n_stage2=600,
-        stage_1_warmup_frac=0.25, stage_2_warmup_frac=0.10,
-        stage_1_lambda_start=0.001, stage_2_lambda_start=0.1,
+        n_pretrain=200,
+        n_stage2=600,
+        stage_1_warmup_frac=0.25,
+        stage_2_warmup_frac=0.10,
+        stage_1_lambda_start=0.001,
+        stage_2_lambda_start=0.1,
     )
     assert stages.stage_1.lambda_ramp.steps == 50  # 0.25 * 200
     assert stages.stage_1.lambda_ramp.start == pytest.approx(0.001)
@@ -63,8 +66,10 @@ def test_warmup_frac_rounds_to_at_least_one_step() -> None:
     from experiments.init_centering.hparams import _build_init_centering_stages
 
     stages = _build_init_centering_stages(
-        n_pretrain=10, n_stage2=10,
-        stage_1_warmup_frac=0.001, stage_2_warmup_frac=0.001,
+        n_pretrain=10,
+        n_stage2=10,
+        stage_1_warmup_frac=0.001,
+        stage_2_warmup_frac=0.001,
     )
     assert stages.stage_1.lambda_ramp.steps >= 1
     assert stages.stage_2.lambda_ramp.steps >= 1

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Any
 from dataclasses import dataclass
-from typing import Any, Callable
+from collections.abc import Callable
 
 import numpy as np
 
@@ -83,9 +84,7 @@ def metric_loss_var(ctx: ProbeContext) -> dict[str, Any]:
     for r in rows:
         key = f"{r['objective']}:{r['k_sampling_mode']}"
         replica = (r["seed"], r["batch_idx"], r["replica"])
-        by_cell.setdefault(key, {})[replica] = float(
-            r.get("L_p_scalar", r["L_p"])
-        )
+        by_cell.setdefault(key, {})[replica] = float(r.get("L_p_scalar", r["L_p"]))
     # NaN for <2 replicas: np.var would report a confident 0.0 for a single
     # replica, which reads as a flat estimator rather than an undersampled one
     # (matches the guard on grad_var / _loss_var_per_tau).
@@ -120,10 +119,14 @@ def metric_ratio_esm_dsm(ctx: ProbeContext) -> dict[str, Any]:
         d_loss = loss_var.get(d_key, np.nan)
         d_grad = grad_var.get(d_key, np.nan)
         out["loss"][mode] = (
-            float(np.nan) if not np.isfinite(d_loss) else float(loss_var.get(e_key, np.nan) / max(d_loss, MIN_DIVISOR))
+            float(np.nan)
+            if not np.isfinite(d_loss)
+            else float(loss_var.get(e_key, np.nan) / max(d_loss, MIN_DIVISOR))
         )
         out["grad"][mode] = (
-            float(np.nan) if not np.isfinite(d_grad) else float(grad_var.get(e_key, np.nan) / max(d_grad, MIN_DIVISOR))
+            float(np.nan)
+            if not np.isfinite(d_grad)
+            else float(grad_var.get(e_key, np.nan) / max(d_grad, MIN_DIVISOR))
         )
     return {"ratio_esm_dsm": out}
 
@@ -139,7 +142,9 @@ def _loss_var_per_tau(ctx: ProbeContext) -> dict[str, dict[str, float]]:
     bucket: dict[str, dict[int, list[float]]] = {}
     for r in rows:
         key = f"{r['objective']}:{r['k_sampling_mode']}"
-        bucket.setdefault(key, {}).setdefault(int(r["k_idx"]), []).append(float(r["L_p"]))
+        bucket.setdefault(key, {}).setdefault(int(r["k_idx"]), []).append(
+            float(r["L_p"])
+        )
     out: dict[str, dict[str, float]] = {}
     for cell, kmap in bucket.items():
         out[cell] = {
@@ -202,7 +207,5 @@ def metric_ratio_per_tau(ctx: ProbeContext) -> dict[str, Any]:
                     ratios[k_str] = float("nan")
                 else:
                     ratios[k_str] = float(ev / dv)
-            out[kind][mode] = dict(sorted(
-                ratios.items(), key=lambda kv: int(kv[0])
-            ))
+            out[kind][mode] = dict(sorted(ratios.items(), key=lambda kv: int(kv[0])))
     return {"ratio_per_tau": out}

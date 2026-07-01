@@ -13,14 +13,15 @@ The per-point launch intent is a single training run (no Optuna sweep) — a
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any
+from collections.abc import Mapping
 
 from ddssm.launch import PointLaunch, register_study
-from ddssm.data.presets import LGSSM, Bimodal, Harmonic
 from experiments._make import experiment
+from ddssm.data.presets import LGSSM, Bimodal, Harmonic
 from ddssm.cluster.study import Axis, Study, StudyPoint
-from ddssm.experiment.builders import Eval, Hparams, Objective, Training
 from ddssm.experiment.stores import experiment_store
+from ddssm.experiment.builders import Eval, Hparams, Training, Objective
 from experiments.init_centering.hparams import StagesB
 from experiments.synthetic_validation.model import SynthValModel
 
@@ -29,8 +30,13 @@ DATASETS = {"harmonic": Harmonic, "lgssm": LGSSM, "bimodal": Bimodal}
 
 # One model shape / hparams / training spec, shared across datasets.
 _HPARAMS = Hparams(
-    S=1, batch_size=32, grad_accum_steps=1,
-    enc_lr=5e-4, dec_lr=5e-4, trans_lr=5e-4, ema_decay=0.997,
+    S=1,
+    batch_size=32,
+    grad_accum_steps=1,
+    enc_lr=5e-4,
+    dec_lr=5e-4,
+    trans_lr=5e-4,
+    ema_decay=0.997,
 )
 # `steps` is ignored under `stages`; kept > 0 (sanity convention).
 _TRAINING = Training(steps=400, log_every=25, amp=True)
@@ -79,4 +85,4 @@ SYNTHVAL_STUDY = register_study(
     into=experiment_store,
 )
 
-__all__ = ["SYNTHVAL_STUDY", "DATASETS"]
+__all__ = ["DATASETS", "SYNTHVAL_STUDY"]

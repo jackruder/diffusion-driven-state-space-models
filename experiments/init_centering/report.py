@@ -49,10 +49,11 @@ import os
 import csv
 import sys
 import json
-from typing import Any, Iterable, Iterator
+from typing import Any
 import logging
 import argparse
 from dataclasses import field, asdict, dataclass
+from collections.abc import Iterable, Iterator
 
 from experiments.init_centering.study import INIT_CENTERING_STUDY
 
@@ -208,22 +209,28 @@ def _populate_metrics(record: TrialRecord, payload: dict[str, Any]) -> None:
 def _load_optuna_trials(db_path: str, study_name: str) -> list[Any] | None:
     """Load all trials for a study; ``None`` if the DB is missing/broken."""
     if not os.path.isfile(db_path):
-        log.info("Optuna DB %s missing; skipping trial-level join for %s",
-                 db_path, study_name)
+        log.info(
+            "Optuna DB %s missing; skipping trial-level join for %s",
+            db_path,
+            study_name,
+        )
         return None
     try:
         import optuna
     except ImportError:
-        log.warning("optuna not installed; cannot join trial metadata for %s",
-                    study_name)
+        log.warning(
+            "optuna not installed; cannot join trial metadata for %s", study_name
+        )
         return None
     try:
         study = optuna.load_study(
-            study_name=study_name, storage=f"sqlite:///{db_path}",
+            study_name=study_name,
+            storage=f"sqlite:///{db_path}",
         )
     except (KeyError, ValueError) as exc:
-        log.warning("Could not load Optuna study %s from %s: %s",
-                    study_name, db_path, exc)
+        log.warning(
+            "Could not load Optuna study %s from %s: %s", study_name, db_path, exc
+        )
         return None
     return list(study.trials)
 
@@ -316,7 +323,8 @@ def iter_trial_records(
             hydra_yaml = os.path.join(p, ".hydra", "hydra.yaml")
             start_time = (
                 os.path.getmtime(hydra_yaml)
-                if os.path.isfile(hydra_yaml) else os.path.getmtime(p)
+                if os.path.isfile(hydra_yaml)
+                else os.path.getmtime(p)
             )
             candidates.append((start_time, entry, p))
         candidates.sort()
@@ -338,11 +346,19 @@ def iter_trial_records(
             trial_dirs = [(0, sweep_dir)]
             for trial_number, run_dir in trial_dirs:
                 metrics_path = os.path.join(run_dir, "metrics.json")
-                payload = _safe_load_metrics_json(metrics_path) if os.path.isfile(metrics_path) else None
+                payload = (
+                    _safe_load_metrics_json(metrics_path)
+                    if os.path.isfile(metrics_path)
+                    else None
+                )
                 record = TrialRecord(
-                    cell_name=cell, dataset=ds_label, baseline_form=form,
-                    baseline_mode=mode, tracking_mode=tracking,
-                    trial_number=trial_number, run_dir=run_dir,
+                    cell_name=cell,
+                    dataset=ds_label,
+                    baseline_form=form,
+                    baseline_mode=mode,
+                    tracking_mode=tracking,
+                    trial_number=trial_number,
+                    run_dir=run_dir,
                     is_control=is_control,
                 )
                 if payload is not None:
@@ -362,11 +378,19 @@ def iter_trial_records(
                 trial_number = i
 
             metrics_path = os.path.join(run_dir, "metrics.json")
-            payload = _safe_load_metrics_json(metrics_path) if os.path.isfile(metrics_path) else None
+            payload = (
+                _safe_load_metrics_json(metrics_path)
+                if os.path.isfile(metrics_path)
+                else None
+            )
             record = TrialRecord(
-                cell_name=cell, dataset=ds_label, baseline_form=form,
-                baseline_mode=mode, tracking_mode=tracking,
-                trial_number=trial_number, run_dir=run_dir,
+                cell_name=cell,
+                dataset=ds_label,
+                baseline_form=form,
+                baseline_mode=mode,
+                tracking_mode=tracking,
+                trial_number=trial_number,
+                run_dir=run_dir,
                 is_control=is_control,
             )
             if payload is not None:
@@ -593,18 +617,7 @@ def write_headline_table(records: list[TrialRecord], out_path: str) -> str:
         trials = grouped[cell]
         best = _best_trial(trials)
         lines.append(
-            "| {cell} | {form} | {mode} | {tracking} | {elbo} | {wc} | {crps} | {jsd} | {sd} | {n} |".format(
-                cell=cell,
-                form=best.baseline_form,
-                mode=best.baseline_mode,
-                tracking=best.tracking_mode,
-                elbo=_fmt(best.stage2_elbo_surrogate),
-                wc=_fmt(best.wallclock_to_target_seconds, 3),
-                crps=_fmt(best.crps_sum_latent_mean),
-                jsd=_fmt(best.gt_latent_jsd_mean),
-                sd=_fmt(best.sigma_data2_buffer_mean),
-                n=len(trials),
-            )
+            f"| {cell} | {best.baseline_form} | {best.baseline_mode} | {best.tracking_mode} | {_fmt(best.stage2_elbo_surrogate)} | {_fmt(best.wallclock_to_target_seconds, 3)} | {_fmt(best.crps_sum_latent_mean)} | {_fmt(best.gt_latent_jsd_mean)} | {_fmt(best.sigma_data2_buffer_mean)} | {len(trials)} |"
         )
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -721,7 +734,8 @@ _TRACKING_MODES = ("fixed", "per_t")
 
 
 def plot_baseline_form_ablation(
-    records: list[TrialRecord], out_path: str,
+    records: list[TrialRecord],
+    out_path: str,
 ) -> str:
     """Baseline-form ablation: ``stage2_elbo_surrogate`` by form, faceted by (mode, tracking).
 
@@ -737,9 +751,11 @@ def plot_baseline_form_ablation(
     cols = _TRACKING_MODES
     rows = _BASELINE_MODES
     fig, axes = plt.subplots(
-        len(rows), len(cols),
+        len(rows),
+        len(cols),
         figsize=(3.5 * len(cols), 3.0 * len(rows)),
-        sharey=True, squeeze=False,
+        sharey=True,
+        squeeze=False,
     )
     for ri, mode in enumerate(rows):
         for ci, tracking in enumerate(cols):
@@ -749,7 +765,11 @@ def plot_baseline_form_ablation(
             for form in _BASELINE_FORMS:
                 # Pinned-only cells: skip the (param-free, learnable) entry
                 # since it auto-degenerates and the data lives under pinned.
-                lookup_mode = "pinned" if form in ("zero", "persistence") and mode == "learnable" else mode
+                lookup_mode = (
+                    "pinned"
+                    if form in ("zero", "persistence") and mode == "learnable"
+                    else mode
+                )
                 rec = by_axes.get((form, lookup_mode, tracking))
                 if rec is None or rec.stage2_elbo_surrogate is None:
                     continue
@@ -772,7 +792,8 @@ def plot_baseline_form_ablation(
 
 
 def plot_baseline_mode_ablation(
-    records: list[TrialRecord], out_path: str,
+    records: list[TrialRecord],
+    out_path: str,
 ) -> str:
     """Baseline-mode ablation: Pinned vs Learnable for parametric forms.
 
@@ -787,9 +808,11 @@ def plot_baseline_mode_ablation(
     cols = _TRACKING_MODES
     rows = ("linear", "mlp")
     fig, axes = plt.subplots(
-        len(rows), len(cols),
+        len(rows),
+        len(cols),
         figsize=(3.5 * len(cols), 3.0 * len(rows)),
-        sharey=True, squeeze=False,
+        sharey=True,
+        squeeze=False,
     )
     for ri, form in enumerate(rows):
         for ci, tracking in enumerate(cols):
@@ -818,7 +841,8 @@ def plot_baseline_mode_ablation(
 
 
 def plot_tracking_mode_ablation(
-    records: list[TrialRecord], out_path: str,
+    records: list[TrialRecord],
+    out_path: str,
 ) -> str:
     """Tracking-mode ablation: fixed / per_t at every (form, mode).
 
@@ -841,9 +865,11 @@ def plot_tracking_mode_ablation(
     n_cols = 3
     n_rows = (len(panels) + n_cols - 1) // n_cols
     fig, axes = plt.subplots(
-        n_rows, n_cols,
+        n_rows,
+        n_cols,
         figsize=(3.5 * n_cols, 3.0 * n_rows),
-        sharey=True, squeeze=False,
+        sharey=True,
+        squeeze=False,
     )
     for i, (form, mode) in enumerate(panels):
         ax = axes[i // n_cols][i % n_cols]
@@ -897,7 +923,8 @@ def _pareto_front_indices(points: list[tuple[float, float]]) -> list[int]:
 
 
 def plot_pareto_front(
-    records: list[TrialRecord], out_path: str,
+    records: list[TrialRecord],
+    out_path: str,
 ) -> str:
     """Per-cell Pareto front: (wallclock_to_target_seconds, stage2_elbo_surrogate).
 
@@ -917,7 +944,8 @@ def plot_pareto_front(
     n_cols = min(3, len(cells))
     n_rows = (len(cells) + n_cols - 1) // n_cols
     fig, axes = plt.subplots(
-        n_rows, n_cols,
+        n_rows,
+        n_cols,
         figsize=(4.0 * n_cols, 3.5 * n_rows),
         squeeze=False,
     )
@@ -950,8 +978,15 @@ def plot_pareto_front(
             order = sorted(range(len(fxs)), key=lambda k: fxs[k])
             fxs = [fxs[k] for k in order]
             fys = [fys[k] for k in order]
-            ax.plot(fxs, fys, "-o", color="C3", markersize=6,
-                    linewidth=1.5, label=f"front (n={len(fxs)})")
+            ax.plot(
+                fxs,
+                fys,
+                "-o",
+                color="C3",
+                markersize=6,
+                linewidth=1.5,
+                label=f"front (n={len(fxs)})",
+            )
         ax.set_xlabel("wallclock to target (s)", fontsize=8)
         ax.set_ylabel("stage2_elbo_surrogate", fontsize=8)
         ax.set_title(cell.replace("init_", ""), fontsize=9)
@@ -1000,13 +1035,16 @@ def _cmd_plot(args: argparse.Namespace) -> int:
     write_headline_table(records, os.path.join(out_dir, "headline_table.md"))
     write_distribution_panel(records, os.path.join(out_dir, "distribution_panel.md"))
     plot_baseline_form_ablation(
-        records, os.path.join(out_dir, "pairwise_baseline_form.png"),
+        records,
+        os.path.join(out_dir, "pairwise_baseline_form.png"),
     )
     plot_baseline_mode_ablation(
-        records, os.path.join(out_dir, "pairwise_baseline_mode.png"),
+        records,
+        os.path.join(out_dir, "pairwise_baseline_mode.png"),
     )
     plot_tracking_mode_ablation(
-        records, os.path.join(out_dir, "pairwise_tracking_mode.png"),
+        records,
+        os.path.join(out_dir, "pairwise_tracking_mode.png"),
     )
     plot_pareto_front(records, os.path.join(out_dir, "pareto_front.png"))
     print(f"Wrote plots + headline + distribution + pairwise panels to {out_dir}")
@@ -1034,19 +1072,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     agg_common = argparse.ArgumentParser(add_help=False)
     agg_common.add_argument(
-        "--sweeps-root", default="runs/sweeps",
+        "--sweeps-root",
+        default="runs/sweeps",
         help="Root dir holding {study_prefix}_{cell}/ subdirs (default runs/sweeps).",
     )
     agg_common.add_argument(
-        "--optuna-dir", default="runs/optuna",
+        "--optuna-dir",
+        default="runs/optuna",
         help="Dir holding the per-cell {study_prefix}_{cell}.db files (default runs/optuna).",
     )
     agg_common.add_argument(
-        "--study-prefix", default="phase_d",
+        "--study-prefix",
+        default="phase_d",
         help="Study-name + sweep-dir prefix (default phase_d).",
     )
     agg_common.add_argument(
-        "--dataset", default=None,
+        "--dataset",
+        default=None,
         help=(
             "Dataset label appended as '__{dataset}' to each cell key "
             "by `python -m ddssm.launch init_centering` (e.g. 'mv', '1d'). "
@@ -1054,23 +1096,36 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     agg_common.add_argument(
-        "--out", required=True,
+        "--out",
+        required=True,
         help="Where to write summary.csv + records.jsonl.",
     )
 
-    p_agg = sub.add_parser("aggregate", parents=[agg_common],
-                            help="Scan disk + Optuna DBs, write summary.csv + records.jsonl.")
+    p_agg = sub.add_parser(
+        "aggregate",
+        parents=[agg_common],
+        help="Scan disk + Optuna DBs, write summary.csv + records.jsonl.",
+    )
 
-    p_plot = sub.add_parser("plot", help="Render plots + headline table from saved artifacts.")
-    p_plot.add_argument("--in", dest="in_dir", default=None,
-                        help="Dir holding records.jsonl (alternative to --records).")
-    p_plot.add_argument("--records", default=None,
-                        help="Explicit path to records.jsonl.")
-    p_plot.add_argument("--out", default=None,
-                        help="Where to write plots (default <in>/plots).")
+    p_plot = sub.add_parser(
+        "plot", help="Render plots + headline table from saved artifacts."
+    )
+    p_plot.add_argument(
+        "--in",
+        dest="in_dir",
+        default=None,
+        help="Dir holding records.jsonl (alternative to --records).",
+    )
+    p_plot.add_argument(
+        "--records", default=None, help="Explicit path to records.jsonl."
+    )
+    p_plot.add_argument(
+        "--out", default=None, help="Where to write plots (default <in>/plots)."
+    )
 
-    p_all = sub.add_parser("all", parents=[agg_common],
-                            help="Aggregate then plot in one go.")
+    p_all = sub.add_parser(
+        "all", parents=[agg_common], help="Aggregate then plot in one go."
+    )
 
     return p
 

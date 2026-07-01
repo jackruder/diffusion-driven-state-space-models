@@ -44,7 +44,9 @@ def test_parametric_baseline_param_norm_moves_in_stage1(baseline_form: str) -> N
         model=model,
         stage="stage_1",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=8, T=8, seed=torch.randint(0, 10_000, (1,)).item(),
+            n_seqs=8,
+            T=8,
+            seed=torch.randint(0, 10_000, (1,)).item(),
         ),
         n_steps=80,
         lr=3e-3,
@@ -52,7 +54,9 @@ def test_parametric_baseline_param_norm_moves_in_stage1(baseline_form: str) -> N
     post_params = [p.detach().clone() for p in model.baseline.parameters()]
 
     # Some parameter must have changed.
-    diffs = [(post - pre).abs().max().item() for pre, post in zip(pre_params, post_params)]
+    diffs = [
+        (post - pre).abs().max().item() for pre, post in zip(pre_params, post_params)
+    ]
     assert any(d > 1e-4 for d in diffs), (
         f"baseline={baseline_form}: no parameter moved (max abs diff per tensor: {diffs})"
     )

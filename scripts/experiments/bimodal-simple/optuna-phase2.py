@@ -15,19 +15,15 @@ Usage::
 Requires Optuna; results can be monitored with optuna-dashboard.
 """
 
-import argparse
 import json
 import math
-import os
-import subprocess
 from pathlib import Path
+import argparse
+import subprocess
 
-import optuna
-import datetime
-from optuna.trial import FrozenTrial
-
-import numpy as np
 import torch
+import optuna
+from optuna.trial import FrozenTrial
 
 
 def run_cmd(cmd: list[str]) -> None:
@@ -196,10 +192,10 @@ def objective_factory(args):
         run_cmd(jsd_cmd)
 
         metrics_path = find_latest_metrics_json(eval_dir / args.mode / "joint")
-        with open(metrics_path, "r") as f:
+        with open(metrics_path) as f:
             m = json.load(f)
 
-        with open(jsd_json, "r") as f:
+        with open(jsd_json) as f:
             jsd_data = json.load(f)
 
         for k in ("sum_crps", "energy_score_mean", "mae_mean"):

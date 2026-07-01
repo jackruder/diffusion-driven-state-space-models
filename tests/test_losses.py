@@ -62,9 +62,7 @@ def test_full_elbo_keeps_anchors_live_at_lambda_zero() -> None:
     out = loss_sigma(components, step=0)
     # recon (1.0) + λ·rate (0.0) + λ_σp · r_sigma_p (1·7).
     assert torch.allclose(out, torch.tensor(8.0))
-    assert out.item() != components.recon.item(), (
-        "σ_p anchor must survive λ=0 warmup"
-    )
+    assert out.item() != components.recon.item(), "σ_p anchor must survive λ=0 warmup"
 
     # Same for μ_p anchor with r_sigma_p zero.
     components_mu = LossComponents(
@@ -135,7 +133,9 @@ def test_full_elbo_reproduces_pre_refactor_loss() -> None:
     """
     LAMBDA_SIGMA_P = 0.01
     LAMBDA_MU_P = 0.0
-    EXPECTED_LOSS = 20.757253646850586  # recaptured: custom TransformerBlock (RMSNorm + SwiGLU)
+    EXPECTED_LOSS = (
+        20.757253646850586  # recaptured: custom TransformerBlock (RMSNorm + SwiGLU)
+    )
 
     torch.manual_seed(0)
     model = _make_vhp_model(lambda_sigma_p=LAMBDA_SIGMA_P)
@@ -169,9 +169,7 @@ def test_loss_selection_actually_selects() -> None:
     class ReconOnly(Loss):
         """Toy loss object — only the recon term contributes."""
 
-        def __call__(
-            self, components: LossComponents, step: int
-        ) -> torch.Tensor:
+        def __call__(self, components: LossComponents, step: int) -> torch.Tensor:
             return components.recon
 
     components = LossComponents(

@@ -22,7 +22,6 @@ Five backbones are provided:
 from __future__ import annotations
 
 import abc
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -67,7 +66,7 @@ class BaseHistoryAggregator(nn.Module, metaclass=abc.ABCMeta):
         z_hist: torch.Tensor,  # (B, d, j) — left-padded by caller
         hist_time_emb: torch.Tensor,  # (B, j, E_t)
         pad_mask: torch.Tensor,  # (B, j) — 1 if real history, 0 if padded
-        static_context: Optional[torch.Tensor] = None,  # (B, E_s, H)
+        static_context: torch.Tensor | None = None,  # (B, E_s, H)
     ) -> torch.Tensor:  # (B, out_features)
         ...
 
@@ -103,7 +102,9 @@ class IdentityAggregator(BaseHistoryAggregator):
             static_emb_dim=static_emb_dim,
         )
         self.z_proj = nn.Linear(latent_dim, hidden_dim)
-        self.time_proj = nn.Linear(emb_time_dim, hidden_dim) if emb_time_dim > 0 else None
+        self.time_proj = (
+            nn.Linear(emb_time_dim, hidden_dim) if emb_time_dim > 0 else None
+        )
         self.pad_mask_proj = nn.Linear(1, hidden_dim)
         self._out_features = hidden_dim
 
@@ -117,7 +118,7 @@ class IdentityAggregator(BaseHistoryAggregator):
         z_hist: torch.Tensor,
         hist_time_emb: torch.Tensor,
         pad_mask: torch.Tensor,
-        static_context: Optional[torch.Tensor] = None,
+        static_context: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # z_hist: (B, d, 1); time: (B, 1, E_t); mask: (B, 1)
         z = z_hist.squeeze(-1)  # (B, d)
@@ -145,7 +146,9 @@ class _PerStepProj(nn.Module):
     ) -> None:
         super().__init__()
         self.z_proj = nn.Linear(latent_dim, hidden_dim)
-        self.time_proj = nn.Linear(emb_time_dim, hidden_dim) if emb_time_dim > 0 else None
+        self.time_proj = (
+            nn.Linear(emb_time_dim, hidden_dim) if emb_time_dim > 0 else None
+        )
         self.pad_mask_proj = nn.Linear(1, hidden_dim)
 
     def forward(
@@ -180,9 +183,7 @@ class GRUAggregator(BaseHistoryAggregator):
         static_emb_dim: int = 0,
         num_gru_layers: int = 1,
     ) -> None:
-        assert static_emb_dim == 0, (
-            "GRUAggregator does not consume static_context"
-        )
+        assert static_emb_dim == 0, "GRUAggregator does not consume static_context"
         super().__init__(
             latent_dim=latent_dim,
             j=j,
@@ -214,7 +215,7 @@ class GRUAggregator(BaseHistoryAggregator):
         z_hist: torch.Tensor,
         hist_time_emb: torch.Tensor,
         pad_mask: torch.Tensor,
-        static_context: Optional[torch.Tensor] = None,
+        static_context: torch.Tensor | None = None,
     ) -> torch.Tensor:
         x = self.per_step(z_hist=z_hist, hist_time_emb=hist_time_emb, pad_mask=pad_mask)
         # TODO(masking): unlike AttentionAggregator (which hard-masks padded
@@ -241,9 +242,7 @@ class MLPAggregator(BaseHistoryAggregator):
         static_emb_dim: int = 0,
         num_layers: int = 2,
     ) -> None:
-        assert static_emb_dim == 0, (
-            "MLPAggregator does not consume static_context"
-        )
+        assert static_emb_dim == 0, "MLPAggregator does not consume static_context"
         super().__init__(
             latent_dim=latent_dim,
             j=j,
@@ -282,7 +281,7 @@ class MLPAggregator(BaseHistoryAggregator):
         z_hist: torch.Tensor,
         hist_time_emb: torch.Tensor,
         pad_mask: torch.Tensor,
-        static_context: Optional[torch.Tensor] = None,
+        static_context: torch.Tensor | None = None,
     ) -> torch.Tensor:
         x = self.per_step(z_hist=z_hist, hist_time_emb=hist_time_emb, pad_mask=pad_mask)
         # TODO(masking): like GRUAggregator, padded history is only flagged via
@@ -357,7 +356,7 @@ class AttentionAggregator(BaseHistoryAggregator):
         z_hist: torch.Tensor,
         hist_time_emb: torch.Tensor,
         pad_mask: torch.Tensor,
-        static_context: Optional[torch.Tensor] = None,
+        static_context: torch.Tensor | None = None,
     ) -> torch.Tensor:
         x = self.per_step(z_hist=z_hist, hist_time_emb=hist_time_emb, pad_mask=pad_mask)
 
@@ -403,7 +402,7 @@ class ContextProducerAggregator(BaseHistoryAggregator):
         static_emb_dim: int = 0,
         channels: int = 8,
         num_layers: int = 2,
-        residual_block: Optional[ResidualBlockConfig] = None,
+        residual_block: ResidualBlockConfig | None = None,
     ) -> None:
         super().__init__(
             latent_dim=latent_dim,
@@ -437,7 +436,7 @@ class ContextProducerAggregator(BaseHistoryAggregator):
         z_hist: torch.Tensor,
         hist_time_emb: torch.Tensor,
         pad_mask: torch.Tensor,
-        static_context: Optional[torch.Tensor] = None,
+        static_context: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # z_hist: (B, d, j), hist_time_emb: (B, j, E_t), pad_mask: (B, j)
         z = z_hist.permute(0, 2, 1)  # (B, j, d)

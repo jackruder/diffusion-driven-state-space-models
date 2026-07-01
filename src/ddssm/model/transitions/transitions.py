@@ -21,8 +21,9 @@ Defines the ``BaseTransition`` interface and the concrete ``GaussianTransition``
 """
 
 import math
-from typing import TYPE_CHECKING, Any, Dict, Tuple, Callable, Iterator, Optional
+from typing import TYPE_CHECKING, Any
 from functools import partial
+from collections.abc import Callable, Iterator
 
 import torch
 import torch.nn as nn
@@ -58,8 +59,8 @@ class BaseTransition(nn.Module):
     """Abstract transition interface."""
 
     def prior_params(
-        self, z_hist: torch.Tensor, ctx: Optional[Dict[str, Any]] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self, z_hist: torch.Tensor, ctx: dict[str, Any] | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return (p_mu, p_logvar) conditioned on z_hist/context.
 
         Optional helper for diagnostics. Implementors may raise NotImplementedError.
@@ -70,10 +71,14 @@ class BaseTransition(nn.Module):
         self,
         zs: torch.Tensor,  # (B, S, d, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
-        time_chunk_num: Optional[int] = None,
-        time_chunk_size: Optional[int] = None,
-        covariates: Optional[torch.Tensor] = None,
-    ) -> Iterator[Tuple[int, int, int, int, int, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]]:
+        time_chunk_num: int | None = None,
+        time_chunk_size: int | None = None,
+        covariates: torch.Tensor | None = None,
+    ) -> Iterator[
+        tuple[
+            int, int, int, int, int, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]
+        ]
+    ]:
         """Yield per-chunk window tensors + context for the time loop.
 
         Yields tuples ``(B, S, current_chunk_len, t_start, t_end, z_target_flat,
@@ -155,7 +160,7 @@ class BaseTransition(nn.Module):
                 .reshape(BS_chunk, 1, self.emb_time_dim)
             )
 
-            ctx: Dict[str, torch.Tensor] = {
+            ctx: dict[str, torch.Tensor] = {
                 "hist_time_emb": t_hist_flat,
                 "target_time_emb": t_target_flat,
             }
@@ -179,10 +184,10 @@ class BaseTransition(nn.Module):
         self,
         zs: torch.Tensor,  # (B, S, d, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
-        time_chunk_num: Optional[int] = None,
-        time_chunk_size: Optional[int] = None,
-        covariates: Optional[torch.Tensor] = None,
-        mc_override: Optional[Dict[str, Any]] = None,
+        time_chunk_num: int | None = None,
+        time_chunk_size: int | None = None,
+        covariates: torch.Tensor | None = None,
+        mc_override: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Compute ``sum_{t=j}^{T-1} E_q[ log p_psi(z_t | z_{t-j:t-1}) ]``
         (or a bound thereof) over chunks to bound peak memory.
@@ -226,7 +231,9 @@ class BaseTransition(nn.Module):
             time_chunk_size=time_chunk_size,
             covariates=covariates,
         ):
-            log_p_flat = self.log_prob(z=z_target_flat, z_hist=z_hist_flat, ctx=ctx, mc_override=mc_override)
+            log_p_flat = self.log_prob(
+                z=z_target_flat, z_hist=z_hist_flat, ctx=ctx, mc_override=mc_override
+            )
             log_p = log_p_flat.view(B_, S_, current_chunk_len)
 
             # Sum over time in chunk, Mean over S
@@ -241,8 +248,8 @@ class BaseTransition(nn.Module):
         zs: torch.Tensor,  # (B, S, d, T)
         logq_paths: torch.Tensor,  # (B, S, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
-        covariates: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+        covariates: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         """Compute the transition KL contribution to the ELBO rate.
 
         Implementations must return a dict containing at least ``"kl"`` (the
@@ -260,12 +267,12 @@ class BaseTransition(nn.Module):
     def transition_kl_init(
         self,
         enc_stats: GaussianStats,
-        zs: torch.Tensor,                 # (B, S, d, T)
+        zs: torch.Tensor,  # (B, S, d, T)
         aux_posterior: "AuxPosterior",
-        time_embed: torch.Tensor,         # (B, T, E_t)
-        sigma_data: "Optional[SigmaDataBuffer]" = None,
-        covariates: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+        time_embed: torch.Tensor,  # (B, T, E_t)
+        sigma_data: "SigmaDataBuffer | None" = None,
+        covariates: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         """Hierarchical VHP init term over ``t = 1 … j`` (shared walk).
 
         Samples the auxiliary previous states ``z_aux ~ q_Φ(·|z_{1:j})``,
@@ -286,7 +293,7 @@ class BaseTransition(nn.Module):
         j = self.j
         if d != self.latent_dim:
             raise ValueError(f"zs latent dim {d} != self.latent_dim {self.latent_dim}")
-        if T < j:
+        if j > T:
             raise ValueError(f"zs has T={T} < j={j}")
         device, dtype = zs.device, zs.dtype
         BS = B * S
@@ -294,16 +301,21 @@ class BaseTransition(nn.Module):
         # Aux latents conditioned on the S-averaged encoder samples.
         z_init = zs[..., :j].mean(dim=1)  # (B, d, j)
         z_aux, aux_mu, aux_logvar = aux_posterior.sample(z_init)
-        z_hist = (
-            z_aux.unsqueeze(1).expand(B, S, d, j).reshape(BS, d, j).clone()
-        )
+        z_hist = z_aux.unsqueeze(1).expand(B, S, d, j).reshape(BS, d, j).clone()
 
         total = torch.zeros((), device=device, dtype=dtype)
         for step in range(j):
             z_t = zs[:, :, :, step].reshape(BS, d)
             total = total + self._score_init_step(
-                step=step, z_t=z_t, z_hist=z_hist, enc_stats=enc_stats,
-                time_embed=time_embed, sigma_data=sigma_data, B=B, S=S, T=T,
+                step=step,
+                z_t=z_t,
+                z_hist=z_hist,
+                enc_stats=enc_stats,
+                time_embed=time_embed,
+                sigma_data=sigma_data,
+                B=B,
+                S=S,
+                T=T,
             )
             # Shift history: drop oldest, append the real z_t.
             if j > 1:
@@ -327,11 +339,11 @@ class BaseTransition(nn.Module):
         self,
         *,
         step: int,
-        z_t: torch.Tensor,            # (BS, d) encoder sample at this init step
-        z_hist: torch.Tensor,        # (BS, d, j) mixed aux→real history
+        z_t: torch.Tensor,  # (BS, d) encoder sample at this init step
+        z_hist: torch.Tensor,  # (BS, d, j) mixed aux→real history
         enc_stats: GaussianStats,
-        time_embed: torch.Tensor,    # (B, T, E_t)
-        sigma_data: "Optional[SigmaDataBuffer]",
+        time_embed: torch.Tensor,  # (B, T, E_t)
+        sigma_data: "SigmaDataBuffer | None",
         B: int,
         S: int,
         T: int,
@@ -353,8 +365,13 @@ class BaseTransition(nn.Module):
         return -gaussian_entropy(lv_init).mean()
 
     def _init_step_time_ctx(
-        self, step: int, time_embed: torch.Tensor, B: int, S: int, T: int,
-    ) -> Dict[str, torch.Tensor]:
+        self,
+        step: int,
+        time_embed: torch.Tensor,
+        B: int,
+        S: int,
+        T: int,
+    ) -> dict[str, torch.Tensor]:
         """Build the ``(BS, j, E_t)`` history + ``(BS, 1, E_t)`` target time windows.
 
         Shared by the transitions whose init scoring is time-conditioned
@@ -364,12 +381,12 @@ class BaseTransition(nn.Module):
         j = self.j
         E = self.emb_time_dim
         device = time_embed.device
-        hist_idx = torch.arange(
-            step - j, step, device=device, dtype=torch.long
-        ).clamp(min=0, max=T - 1)
-        hist_te = time_embed.index_select(1, hist_idx)        # (B, j, E)
-        tgt_te = time_embed[:, step : step + 1, :]            # (B, 1, E)
-        win = torch.cat([hist_te, tgt_te], dim=1)             # (B, j+1, E)
+        hist_idx = torch.arange(step - j, step, device=device, dtype=torch.long).clamp(
+            min=0, max=T - 1
+        )
+        hist_te = time_embed.index_select(1, hist_idx)  # (B, j, E)
+        tgt_te = time_embed[:, step : step + 1, :]  # (B, 1, E)
+        win = torch.cat([hist_te, tgt_te], dim=1)  # (B, j+1, E)
         win = win.unsqueeze(1).expand(B, S, j + 1, E).reshape(B * S, j + 1, E)
         return {
             "hist_time_emb": win[:, :j, :],
@@ -380,8 +397,8 @@ class BaseTransition(nn.Module):
         self,
         z: torch.Tensor,
         z_hist: torch.Tensor,
-        ctx: Optional[Dict[str, Any]] = None,
-        mc_override: Optional[Dict[str, Any]] = None,
+        ctx: dict[str, Any] | None = None,
+        mc_override: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Log p(z | z_hist, ctx).
 
@@ -393,7 +410,7 @@ class BaseTransition(nn.Module):
         self,
         z_hist: torch.Tensor,
         S: int = 1,
-        ctx: Optional[Dict[str, Any]] = None,
+        ctx: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Draw samples from p(z_t | z_hist, ctx).
 
@@ -406,7 +423,7 @@ class BaseTransition(nn.Module):
         z_hist: torch.Tensor,
         steps: int,
         S: int = 1,
-        ctx: Optional[Dict[str, Any]] = None,
+        ctx: dict[str, Any] | None = None,
     ):
         """Draw autoregressive sample trajectories from the transition prior.
 
@@ -421,7 +438,6 @@ class BaseTransition(nn.Module):
         Returns:
             Sampled latent trajectories, shape ``(B, S, d, steps)``.
         """
-
         z_hist = self._ensure_seq(z_hist)  # (B, d, j)
         B, d, j = z_hist.shape
         assert j == self.j
@@ -463,7 +479,7 @@ class BaseTransition(nn.Module):
                 raise ValueError(
                     f"hist_valid_len must be (B,); got {tuple(hist_valid_len.shape)}"
                 )
-            mask = (  # Todo fix this. incorrect
+            mask = (  # TODO fix this. incorrect
                 torch.arange(self.j, device=device).view(1, 1, 1, self.j)
                 >= hist_valid_len.view(B, 1, 1, 1).clamp(max=self.j)
             )
@@ -610,8 +626,8 @@ class GaussianTransition(BaseTransition):
     def prior_params(
         self,
         z_hist: torch.Tensor,
-        ctx: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        ctx: dict[str, Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute p_mu, p_logvar for p(z_t | z_hist, ctx).
 
         Expects:
@@ -672,8 +688,8 @@ class GaussianTransition(BaseTransition):
         self,
         z: torch.Tensor,
         z_hist: torch.Tensor,
-        ctx: Optional[Dict[str, Any]] = None,
-        mc_override: Optional[Dict[str, Any]] = None,
+        ctx: dict[str, Any] | None = None,
+        mc_override: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         """Log p(z | z_hist, ctx) summed over latent dims.
 
@@ -718,11 +734,11 @@ class GaussianTransition(BaseTransition):
         self,
         *,
         step: int,
-        z_t: torch.Tensor,            # (BS, d)
-        z_hist: torch.Tensor,         # (BS, d, j)
+        z_t: torch.Tensor,  # (BS, d)
+        z_hist: torch.Tensor,  # (BS, d, j)
         enc_stats: GaussianStats,
-        time_embed: torch.Tensor,     # (B, T, E_t)
-        sigma_data: "Optional[SigmaDataBuffer]",
+        time_embed: torch.Tensor,  # (B, T, E_t)
+        sigma_data: "SigmaDataBuffer | None",
         B: int,
         S: int,
         T: int,
@@ -745,9 +761,9 @@ class GaussianTransition(BaseTransition):
         zs: torch.Tensor,  # (B, S, d, T)
         logq_paths: torch.Tensor,  # (B, S, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
-        sigma_data: "Optional[SigmaDataBuffer]" = None,  # accepted for the uniform interface; unused
-        covariates: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+        sigma_data: "SigmaDataBuffer | None" = None,  # accepted for the uniform interface; unused
+        covariates: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         """Transition KL term for the Gaussian prior.
 
         Two paths:
@@ -788,7 +804,9 @@ class GaussianTransition(BaseTransition):
                     z_hist_flat,
                     ctx,
                 ) in self._iter_window_chunks(
-                    zs, time_embed, covariates=covariates,
+                    zs,
+                    time_embed,
+                    covariates=covariates,
                 ):
                     # prior params for the chunk's targets, shape (N, d) where
                     # N = B*S*chunk_len
@@ -796,15 +814,9 @@ class GaussianTransition(BaseTransition):
 
                     # encoder stats slices for the same targets:
                     # (B, S, d, chunk_len) -> (B, S, chunk_len, d) -> (N, d)
-                    q_mu = (
-                        mus[..., t_start:t_end]
-                        .permute(0, 1, 3, 2)
-                        .reshape(-1, d)
-                    )
+                    q_mu = mus[..., t_start:t_end].permute(0, 1, 3, 2).reshape(-1, d)
                     q_logvar = (
-                        logvars[..., t_start:t_end]
-                        .permute(0, 1, 3, 2)
-                        .reshape(-1, d)
+                        logvars[..., t_start:t_end].permute(0, 1, 3, 2).reshape(-1, d)
                     )
 
                     kl_flat = gaussian_kl_divergence(
@@ -827,8 +839,8 @@ class GaussianTransition(BaseTransition):
         self,
         z_hist: torch.Tensor,
         S: int = 1,
-        ctx: Optional[Dict[str, Any]] = None,
-        hist_valid_len: Optional[torch.Tensor] = None,  # ignored, kept for API
+        ctx: dict[str, Any] | None = None,
+        hist_valid_len: torch.Tensor | None = None,  # ignored, kept for API
     ) -> torch.Tensor:
         """Draw from p(z_t | z_hist). Returns (B, S, d)."""
         mu, logvar = self.prior_params(z_hist, ctx=ctx)
@@ -836,5 +848,3 @@ class GaussianTransition(BaseTransition):
         B, d = mu.shape
         eps = torch.randn(B, S, d, device=mu.device, dtype=mu.dtype)
         return mu.unsqueeze(1) + sigma.unsqueeze(1) * eps
-
-

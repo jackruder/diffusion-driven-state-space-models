@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import os
 import math
-from typing import TYPE_CHECKING, List, Callable
+from typing import TYPE_CHECKING
 import logging
 from dataclasses import field, dataclass
+from collections.abc import Callable
 
 import torch
 from omegaconf import MISSING
@@ -147,10 +148,12 @@ class StagesConf:
     stage_1: StageSpecConf | None = None
     stage_2: StageSpecConf | None = None
     stage_3: StageSpecConf | None = None
-    run: List[str] = field(default_factory=lambda: ["stage_1", "stage_2"])
+    run: list[str] = field(default_factory=lambda: ["stage_1", "stage_2"])
 
 
-def make_lambda_cosine(spec: LambdaRampConf, total_steps: int, default_end: float) -> Callable[[int], float]:
+def make_lambda_cosine(
+    spec: LambdaRampConf, total_steps: int, default_end: float
+) -> Callable[[int], float]:
     """Build a cosine λ-ramp schedule from a ``LambdaRamp`` spec.
 
     Args:
@@ -192,13 +195,11 @@ class StageOrchestrator:
        next stage skips its own ``_rebuild_optimizer`` step.
     """
 
-    def __init__(self, trainer: "DDSSMTrainer", stages: "StagesConf") -> None:
+    def __init__(self, trainer: DDSSMTrainer, stages: StagesConf) -> None:
         self.trainer = trainer
         self.stages = stages
 
-    def _resolve_resume(
-        self, resume_from: str | None
-    ) -> tuple[list[str], str | None]:
+    def _resolve_resume(self, resume_from: str | None) -> tuple[list[str], str | None]:
         """Validate ``resume_from`` and return (ordered stage keys, resume-into key).
 
         Returns the list of stage keys to iterate (``stages.run`` filtered to
@@ -214,13 +215,13 @@ class StageOrchestrator:
         if resume_from is None:
             return ordered, None
         if not os.path.isfile(resume_from):
-            raise FileNotFoundError(
-                f"resume_from path not found: {resume_from!r}"
-            )
+            raise FileNotFoundError(f"resume_from path not found: {resume_from!r}")
         # Lightweight payload peek — we only need ``stage_prefix``. ``torch.load``
         # with ``map_location=cpu`` keeps tensors off-device.
         payload = torch.load(
-            resume_from, map_location=torch.device("cpu"), weights_only=False,
+            resume_from,
+            map_location=torch.device("cpu"),
+            weights_only=False,
         )
         stage_prefix = (
             payload.get("stage_prefix") if isinstance(payload, dict) else None
@@ -267,9 +268,7 @@ class StageOrchestrator:
         """
         stages = self.stages
         if stages is None:
-            raise AttributeError(
-                "StageOrchestrator.run requires a StagesConf"
-            )
+            raise AttributeError("StageOrchestrator.run requires a StagesConf")
 
         ordered, resume_stage_key = self._resolve_resume(resume_from)
 
@@ -278,7 +277,9 @@ class StageOrchestrator:
         # first iteration of the resumed run; it threads ``resume_from`` into
         # the trainer's fit (the post-loop handoff needs no resume suppression,
         # since a stage's ckpts always pre-date its own handoff).
-        start_idx = ordered.index(resume_stage_key) if resume_stage_key is not None else 0
+        start_idx = (
+            ordered.index(resume_stage_key) if resume_stage_key is not None else 0
+        )
         # Set True by a stage's post-loop centering handoff (which rebuilds the
         # optimizer with the *next* stage's LRs) so that next stage skips its
         # own rebuild.
@@ -390,6 +391,8 @@ class StageOrchestrator:
             if stage.centering_handoff is not None and has_next:
                 next_stage: StageSpecConf = getattr(stages, ordered[abs_idx + 1])
                 perform_centering_handoff(
-                    self.trainer, stage.centering_handoff, new_lrs=next_stage.lrs,
+                    self.trainer,
+                    stage.centering_handoff,
+                    new_lrs=next_stage.lrs,
                 )
                 skip_next_rebuild = True

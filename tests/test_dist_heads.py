@@ -25,7 +25,8 @@ def test_gaussian_dist_head_forward_shape():
 
 def test_gaussian_dist_head_mean_offset_shifts_mu():
     """mean_offset adds the persistence frame: μ = free-μ + offset (exactly), with
-    σ and the sampling noise unchanged. Backs the GaussianEncoder additive frame."""
+    σ and the sampling noise unchanged. Backs the GaussianEncoder additive frame.
+    """
     head = GaussianDistHead(in_features=IN, latent_dim=D)
     x = torch.randn(B, IN)
     offset = torch.randn(B, D)
@@ -65,5 +66,3 @@ def test_gaussian_dist_head_entropy():
     assert e_init.ndim == 0
     assert e_trans.ndim == 0
     assert torch.isfinite(e_init) and torch.isfinite(e_trans)
-
-

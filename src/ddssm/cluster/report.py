@@ -49,7 +49,7 @@ def _head_tail(vals: list[float], n: int = 20) -> dict[str, float | None]:
     if not vals:
         return {"head": None, "tail": None, "last": None}
     head = sum(vals[: min(n, len(vals))]) / min(n, len(vals))
-    tail = sum(vals[-min(n, len(vals)):]) / min(n, len(vals))
+    tail = sum(vals[-min(n, len(vals)) :]) / min(n, len(vals))
     return {"head": head, "tail": tail, "last": vals[-1]}
 
 
@@ -100,14 +100,18 @@ def summarize_run(run_dir: str | Path, *, tail_n: int = 20) -> dict[str, Any]:
     # σ_data² across the per-t buffer slots (last row): mean + drift vs first row.
     sd_cols = sorted(c for c in fields if c.startswith("diag/sigma_data2/t="))
     if sd_cols and train:
+
         def _meanrow(r: dict[str, str]) -> float | None:
             vals = [_safe_float(r.get(c, "")) for c in sd_cols]
             vals = [v for v in vals if v is not None]
             return sum(vals) / len(vals) if vals else None
+
         first_m, last_m = _meanrow(train[0]), _meanrow(train[-1])
         summary["sigma_data2"] = {
             "mean_last": last_m,
-            "drift": (last_m - first_m) if (first_m is not None and last_m is not None) else None,
+            "drift": (last_m - first_m)
+            if (first_m is not None and last_m is not None)
+            else None,
         }
 
     # Stages observed + run health.
@@ -150,17 +154,27 @@ def _print_single(summary: dict[str, Any]) -> None:
         return
     lt = summary["loss_total"]
     print(f"run: {summary['run_dir']}")
-    print(f"  rows={summary['rows']}  final_step={_fmt(summary['final_step'])}  "
-          f"stages={summary['stages_run']}  elapsed_s={_fmt(summary['elapsed_s'])}")
-    print(f"  loss/total   head={_fmt(lt['head'])} tail={_fmt(lt['tail'])} last={_fmt(lt['last'])}")
+    print(
+        f"  rows={summary['rows']}  final_step={_fmt(summary['final_step'])}  "
+        f"stages={summary['stages_run']}  elapsed_s={_fmt(summary['elapsed_s'])}"
+    )
+    print(
+        f"  loss/total   head={_fmt(lt['head'])} tail={_fmt(lt['tail'])} last={_fmt(lt['last'])}"
+    )
     if "lambda" in summary:
         lam = summary["lambda"]
-        print(f"  lambda       last={_fmt(lam['last'])} warmup_complete={lam['warmup_complete']}")
+        print(
+            f"  lambda       last={_fmt(lam['last'])} warmup_complete={lam['warmup_complete']}"
+        )
     if "sigma_data2" in summary:
         sd = summary["sigma_data2"]
-        print(f"  sigma_data2  mean_last={_fmt(sd['mean_last'])} drift={_fmt(sd['drift'])}")
-    print(f"  val_loss/total last={_fmt(summary['val_loss_total_last'])}  "
-          f"nonfinite_total={summary['nonfinite_total']}")
+        print(
+            f"  sigma_data2  mean_last={_fmt(sd['mean_last'])} drift={_fmt(sd['drift'])}"
+        )
+    print(
+        f"  val_loss/total last={_fmt(summary['val_loss_total_last'])}  "
+        f"nonfinite_total={summary['nonfinite_total']}"
+    )
 
 
 def _print_parent(parent: Path) -> None:
@@ -168,23 +182,31 @@ def _print_parent(parent: Path) -> None:
     if not runs:
         print(f"no run dirs (with metrics.csv) under {parent}")
         return
-    print(f"{'run':<40} {'step':>7} {'L_tail':>10} {'val':>10} {'λ':>6} {'σd̄':>7} {'nf':>4}")
+    print(
+        f"{'run':<40} {'step':>7} {'L_tail':>10} {'val':>10} {'λ':>6} {'σd̄':>7} {'nf':>4}"
+    )
     for d in runs:
         s = summarize_run(d)
         lam = s.get("lambda", {}).get("last") if "lambda" in s else None
         sd = s.get("sigma_data2", {}).get("mean_last") if "sigma_data2" in s else None
-        print(f"{d.name:<40} {_fmt(s['final_step']):>7} {_fmt(s['loss_total']['tail']):>10} "
-              f"{_fmt(s['val_loss_total_last']):>10} {_fmt(lam):>6} {_fmt(sd):>7} "
-              f"{s['nonfinite_total']:>4}")
+        print(
+            f"{d.name:<40} {_fmt(s['final_step']):>7} {_fmt(s['loss_total']['tail']):>10} "
+            f"{_fmt(s['val_loss_total_last']):>10} {_fmt(lam):>6} {_fmt(sd):>7} "
+            f"{s['nonfinite_total']:>4}"
+        )
 
 
 def main(argv: list[str] | None = None) -> None:
     """CLI entry: print one run's summary, or a table over a parent of run dirs."""
     import argparse
 
-    ap = argparse.ArgumentParser(description="Summarize DDSSM run health from metrics.csv.")
+    ap = argparse.ArgumentParser(
+        description="Summarize DDSSM run health from metrics.csv."
+    )
     ap.add_argument("path", help="a run dir (metrics.csv) or a parent of run dirs")
-    ap.add_argument("--json", action="store_true", help="print the summary dict as JSON")
+    ap.add_argument(
+        "--json", action="store_true", help="print the summary dict as JSON"
+    )
     args = ap.parse_args(argv)
 
     p = Path(args.path)

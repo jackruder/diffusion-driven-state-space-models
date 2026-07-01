@@ -90,7 +90,9 @@ def visualize(
     from ddssm.training.checkpoint import prepare_model
 
     model = prepare_model(
-        experiment, checkpoint_path=checkpoint_path, device=device,
+        experiment,
+        checkpoint_path=checkpoint_path,
+        device=device,
     )
 
     loader = experiment.data.loader(spec.split)
@@ -115,7 +117,8 @@ def visualize(
     from ddssm.training.loggers import resume_run_from_dir
 
     wandb_mod = resume_run_from_dir(
-        run_dir, getattr(experiment, "wandb_config", None),
+        run_dir,
+        getattr(experiment, "wandb_config", None),
     )
 
     saved: list[str] = []
@@ -132,11 +135,11 @@ def visualize(
         if wandb_mod is not None:
             try:
                 wandb_mod.log({f"viz/{plot.name}": wandb_mod.Image(out_path)})
-            except Exception as e:  # noqa: BLE001 — best-effort
+            except Exception as e:
                 log.warning("wandb image log failed for %s: %s", plot.name, e)
     if wandb_mod is not None:
         try:
             wandb_mod.finish()
-        except Exception:  # noqa: BLE001 — best-effort
+        except Exception:
             pass
     return saved

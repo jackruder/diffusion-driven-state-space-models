@@ -6,8 +6,8 @@ diagonal-Gaussian observation model for ``x_t``.
 
 import abc
 import math
-from typing import Tuple, Callable
 from functools import partial
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -39,7 +39,7 @@ class BaseDecoder(nn.Module, metaclass=abc.ABCMeta):
         time_idx: torch.Tensor,
         covariates: torch.Tensor | None = None,
         static_embed: torch.Tensor | None = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return ``(mu, logvar)`` Gaussian observation params, each ``(B, D)``."""
         ...
 
@@ -143,7 +143,7 @@ class GaussianDecoder(BaseDecoder):
         time_idx: torch.Tensor,  # (B,) current time index t
         covariates: torch.Tensor | None = None,  # (B, V, T)
         static_embed: torch.Tensor | None = None,  # (B, D, V_s) or None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Decode latent history to observation parameters.
 
         Args:
@@ -268,7 +268,7 @@ class GaussianDecoder(BaseDecoder):
         time_idx: torch.Tensor,  # (B,) current time index t
         covariates: torch.Tensor | None = None,
         static_embed: torch.Tensor | None = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass with automatic zero-padding for missing history.
 
         For early timestamps where we have fewer than j latents,
@@ -407,7 +407,7 @@ class IdentityDecoder(BaseDecoder):
         time_idx: torch.Tensor,
         covariates: torch.Tensor | None = None,
         static_embed: torch.Tensor | None = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         B, d, _k = z.shape
         assert d == self.latent_dim, f"z latent dim {d} != {self.latent_dim}"
         mu = z[:, :, -1]  # (B, D) = z_t

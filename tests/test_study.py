@@ -56,7 +56,7 @@ def test_from_axes_cross_product_tags_and_select() -> None:
     assert len(s.points) == 4
     p = s.point("1_a")
     assert p.coords == {"x": 1, "y": "a"}
-    assert p.config == {"x": 1, "y": "a"}            # build received raw values
+    assert p.config == {"x": 1, "y": "a"}  # build received raw values
     assert p.tags == {"x": "1", "y": "a", "y_upper": "A"}  # axis.tags merged in
     assert {pt.name for pt in s.select(x="1")} == {"1_a", "1_b"}
     assert {pt.name for pt in s.select(y_upper="B")} == {"1_b", "2_b"}
@@ -92,21 +92,34 @@ def test_init_study_has_24_points_with_full_tags() -> None:
     assert len(set(INIT_CENTERING_STUDY.names())) == 24
     for p in INIT_CENTERING_STUDY.points:
         assert p.name == f"{p.tags['cell']}__{p.tags['dataset']}"
-        assert {"cell", "baseline_form", "baseline_mode", "tracking_mode", "dataset"} <= set(p.tags)
+        assert {
+            "cell",
+            "baseline_form",
+            "baseline_mode",
+            "tracking_mode",
+            "dataset",
+        } <= set(p.tags)
 
 
 def test_init_study_select_filters() -> None:
-    assert len(INIT_CENTERING_STUDY.select(baseline_form="mlp")) == 8   # 2 modes × 2 tracking × 2 ds
+    assert (
+        len(INIT_CENTERING_STUDY.select(baseline_form="mlp")) == 8
+    )  # 2 modes × 2 tracking × 2 ds
     assert len(INIT_CENTERING_STUDY.select(dataset="mv")) == 12
-    assert len(INIT_CENTERING_STUDY.select(baseline_form="zero", dataset="1d")) == 2  # 2 tracking
+    assert (
+        len(INIT_CENTERING_STUDY.select(baseline_form="zero", dataset="1d")) == 2
+    )  # 2 tracking
 
 
 def test_init_points_bake_real_dataset_and_dims() -> None:
-    expect = {"1d": ("nonlinear-bimodal-lift", 1, 1), "mv": ("nonlinear-bimodal-lift-mv", 8, 4)}
+    expect = {
+        "1d": ("nonlinear-bimodal-lift", 1, 1),
+        "mv": ("nonlinear-bimodal-lift-mv", 8, 4),
+    }
     for p in INIT_CENTERING_STUDY.points:
         mode, data_dim, latent = expect[p.tags["dataset"]]
         assert p.config.data.mode == mode
-        assert p.config.data.D == data_dim
+        assert data_dim == p.config.data.D
         assert p.config.model.data_dim == data_dim
         assert p.config.model.latent_dim == latent
 
@@ -129,7 +142,8 @@ def test_one_point_forward_backward_is_finite_with_grads() -> None:
     B, D, T = 2, model.data_dim, 8
     torch.manual_seed(0)
     components, _m, _ = model(
-        torch.randn(B, D, T), torch.ones(B, D, T),
+        torch.randn(B, D, T),
+        torch.ones(B, D, T),
         torch.arange(T).expand(B, T).clone().long(),
     )
     loss = components.total()
@@ -137,5 +151,6 @@ def test_one_point_forward_backward_is_finite_with_grads() -> None:
     loss.backward()
     assert any(
         q.grad is not None and torch.isfinite(q.grad).all() and q.grad.abs().sum() > 0
-        for q in model.parameters() if q.requires_grad
+        for q in model.parameters()
+        if q.requires_grad
     )

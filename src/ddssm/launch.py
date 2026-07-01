@@ -20,11 +20,12 @@ import os
 import abc
 import sys
 import math
+from typing import Any
 import argparse
 import subprocess
 import dataclasses
-from typing import Any, Callable
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from ddssm.experiment import SBatch
 from ddssm.cluster.study import Study, StudyPoint
@@ -185,8 +186,7 @@ class LaunchStrategy(abc.ABC):
         ctx: LaunchContext,
         *,
         worker_idx: int = 0,
-    ) -> list[str]:
-        ...
+    ) -> list[str]: ...
 
 
 class SingleJob(LaunchStrategy):
@@ -263,7 +263,8 @@ class _MultiWorkerOptunaBase(LaunchStrategy):
         # gets a ~1/n_workers share, so ``n_trials`` means the same thing
         # regardless of ``preemptive`` (it is NOT per-worker).
         n_trials_value = (
-            "__N_PER_WORKER__" if pl.preemptive
+            "__N_PER_WORKER__"
+            if pl.preemptive
             else str(math.ceil(pl.n_trials / max(1, pl.n_workers)))
         )
         subdir = (
@@ -374,9 +375,7 @@ _STRATEGIES: dict[str, LaunchStrategy] = {
 STUDY_REGISTRY: dict[str, Study] = {}
 
 
-def register_study(
-    study: Study, into: Callable[..., Any] | None = None
-) -> Study:
+def register_study(study: Study, into: Callable[..., Any] | None = None) -> Study:
     """Register a study so ``python -m ddssm.launch <name>`` can find it.
 
     Pass ``into=<store>`` (e.g. ``ddssm.experiment.stores.experiment_store``) to also
@@ -442,8 +441,11 @@ class StudyOrchestrator:
         into ``render_sbatch``.
         """
         ctx = LaunchContext(
-            self.study_prefix, self.storage_dir, self.sweeps_root,
-            seed=seed, storage_url=self.storage_url,
+            self.study_prefix,
+            self.storage_dir,
+            self.sweeps_root,
+            seed=seed,
+            storage_url=self.storage_url,
         )
         out: list[tuple[str, str]] = []
         for point in points:
@@ -470,8 +472,7 @@ class StudyOrchestrator:
             # Group workers into sbatch jobs: one-per-job for the historical
             # shapes (per_job == 1), or ``workers_per_gpu``-sized packs.
             groups = [
-                list(range(i, min(i + per_job, n_w)))
-                for i in range(0, n_w, per_job)
+                list(range(i, min(i + per_job, n_w))) for i in range(0, n_w, per_job)
             ]
             for g_idx, w_idxs in enumerate(groups):
                 # ``experiment=<point.name>`` is the registered preset; the
@@ -487,7 +488,8 @@ class StudyOrchestrator:
                 # count (n_w), not the per-job group size.
                 preempt = (
                     self._make_preempt_spec(pl, ctx, point, n_w, w_idxs[0])
-                    if pl.preemptive else None
+                    if pl.preemptive
+                    else None
                 )
                 if per_job == 1:
                     script = render_sbatch(
@@ -568,8 +570,11 @@ class StudyOrchestrator:
         so the same cell's subdirs never collide across its GPU jobs.
         """
         ctx = LaunchContext(
-            self.study_prefix, self.storage_dir, self.sweeps_root,
-            seed=seed, storage_url=self.storage_url,
+            self.study_prefix,
+            self.storage_dir,
+            self.sweeps_root,
+            seed=seed,
+            storage_url=self.storage_url,
         )
         pts = list(points)
         k = max(1, workers_per_cell_per_gpu)
@@ -601,8 +606,10 @@ class StudyOrchestrator:
                         ov.append(f"experiment.seed={seed}")
                     cell_workers.append(
                         CellWorker(
-                            experiment=point.name, cell_key=job,
-                            worker_idx=w_idx, overrides=ov,
+                            experiment=point.name,
+                            cell_key=job,
+                            worker_idx=w_idx,
+                            overrides=ov,
                         )
                     )
                 if preemptive:
@@ -624,8 +631,16 @@ class StudyOrchestrator:
             out.append((gpu_job, script))
         return out
 
-    def launch(self, points, *, size=None, seeds=(None,), write_dir=None,
-               submit=False, launch_override=None) -> int:
+    def launch(
+        self,
+        points,
+        *,
+        size=None,
+        seeds=(None,),
+        write_dir=None,
+        submit=False,
+        launch_override=None,
+    ) -> int:
         """Render (and optionally write/submit) sbatch for points × seeds."""
         if submit and write_dir is None:
             raise ValueError("submit=True requires write_dir")
@@ -655,8 +670,11 @@ class StudyOrchestrator:
                     print(submit_sbatch(path))
                     submitted += 1
         if write_dir is not None:
-            tail = (f"# Submitted {submitted} job(s)." if submit
-                    else f'# Submit all with: for f in {write_dir}/*.sbatch; do sbatch "$f"; done')
+            tail = (
+                f"# Submitted {submitted} job(s)."
+                if submit
+                else f'# Submit all with: for f in {write_dir}/*.sbatch; do sbatch "$f"; done'
+            )
             print(f"\n{tail}", file=sys.stderr)
         return 0
 
@@ -693,10 +711,20 @@ class StudyOrchestrator:
                 seen.add(db)
                 RDBStorage(f"sqlite:///{db}")
         if seen:
-            print(f"# Pre-created Optuna schema for {len(seen)} cell DB(s).", file=sys.stderr)
+            print(
+                f"# Pre-created Optuna schema for {len(seen)} cell DB(s).",
+                file=sys.stderr,
+            )
 
-    def run_local(self, points, *, size=None, seeds=(None,), out_dir="runs/local",
-                  launch_override=None) -> int:
+    def run_local(
+        self,
+        points,
+        *,
+        size=None,
+        seeds=(None,),
+        out_dir="runs/local",
+        launch_override=None,
+    ) -> int:
         """Run each (point × seed) locally.
 
         Single-worker strategies (``single_job``, ``optuna_single_node``) run as
@@ -709,9 +737,12 @@ class StudyOrchestrator:
         failures: list[tuple[str, int]] = []
         for seed in seeds:
             ctx = LaunchContext(
-            self.study_prefix, self.storage_dir, self.sweeps_root,
-            seed=seed, storage_url=self.storage_url,
-        )
+                self.study_prefix,
+                self.storage_dir,
+                self.sweeps_root,
+                seed=seed,
+                storage_url=self.storage_url,
+            )
             for point in points:
                 pl = self._point_launch(point, launch_override)
                 strategy = _STRATEGIES[pl.strategy]
@@ -729,7 +760,9 @@ class StudyOrchestrator:
                     run_dir = os.path.join(out_dir, f"{self.study_prefix}_{base_name}")
                     os.makedirs(run_dir, exist_ok=True)
                     cmd = [
-                        sys.executable, "-m", "ddssm.app",
+                        sys.executable,
+                        "-m",
+                        "ddssm.app",
                         f"experiment={point.name}",
                         f"hydra.run.dir={run_dir}",
                         *self._variant_overrides(point, size),
@@ -742,7 +775,9 @@ class StudyOrchestrator:
                     # n_trials substitution is needed.
                     print(f"[local] {base_name} ...", flush=True)
                     rc = subprocess.run(
-                        cmd, check=False, env=_preempt_env(pl, worker_idx=0),
+                        cmd,
+                        check=False,
+                        env=_preempt_env(pl, worker_idx=0),
                     ).returncode
                     if rc != 0:
                         failures.append((base_name, rc))
@@ -756,7 +791,9 @@ class StudyOrchestrator:
                     )
                     procs: list[tuple[str, subprocess.Popen]] = []
                     for w_idx in range(n_w):
-                        overrides = strategy.hydra_overrides(point, pl, ctx, worker_idx=w_idx)
+                        overrides = strategy.hydra_overrides(
+                            point, pl, ctx, worker_idx=w_idx
+                        )
                         overrides += self._variant_overrides(point, size)
                         overrides += list(pl.extra_overrides)
                         if seed is not None:
@@ -769,19 +806,26 @@ class StudyOrchestrator:
                         ]
                         if n_per_worker_literal is not None:
                             overrides = [
-                                o.replace(_N_PER_WORKER_PLACEHOLDER, n_per_worker_literal)
+                                o.replace(
+                                    _N_PER_WORKER_PLACEHOLDER, n_per_worker_literal
+                                )
                                 for o in overrides
                             ]
                         cmd = [
-                            sys.executable, "-m", "ddssm.app",
+                            sys.executable,
+                            "-m",
+                            "ddssm.app",
                             f"experiment={point.name}",
                             *overrides,
                         ]
                         job = f"{base_name}_w{w_idx}"
                         print(f"[local] {job} ...", flush=True)
-                        procs.append(
-                            (job, subprocess.Popen(cmd, env=_preempt_env(pl, worker_idx=w_idx)))
-                        )
+                        procs.append((
+                            job,
+                            subprocess.Popen(
+                                cmd, env=_preempt_env(pl, worker_idx=w_idx)
+                            ),
+                        ))
                     for job, proc in procs:
                         rc = proc.wait()
                         if rc != 0:
@@ -822,23 +866,48 @@ def main(argv: list[str] | None = None) -> int:
     """
     p = argparse.ArgumentParser(prog="python -m ddssm.launch")
     p.add_argument("study", help="registered study name (e.g. init_centering)")
-    p.add_argument("--select", nargs="+", default=None, metavar="K=V",
-                   help="filter points by tag, e.g. --select baseline_form=mlp dataset=mv")
-    p.add_argument("--size", default=None, help="variant to apply (e.g. tiny/paper/smoke)")
-    p.add_argument("--seeds", type=int, nargs="+", default=None,
-                   help="replicate each point with these experiment.seed values")
+    p.add_argument(
+        "--select",
+        nargs="+",
+        default=None,
+        metavar="K=V",
+        help="filter points by tag, e.g. --select baseline_form=mlp dataset=mv",
+    )
+    p.add_argument(
+        "--size", default=None, help="variant to apply (e.g. tiny/paper/smoke)"
+    )
+    p.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=None,
+        help="replicate each point with these experiment.seed values",
+    )
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true", help="print sbatch to stdout (default)")
-    mode.add_argument("--write-dir", default=None, help="write one .sbatch per job here")
-    mode.add_argument("--local", action="store_true", help="run each point locally (smoke/debug)")
-    p.add_argument("--submit", action="store_true", help="submit written scripts (needs --write-dir)")
+    mode.add_argument(
+        "--dry-run", action="store_true", help="print sbatch to stdout (default)"
+    )
+    mode.add_argument(
+        "--write-dir", default=None, help="write one .sbatch per job here"
+    )
+    mode.add_argument(
+        "--local", action="store_true", help="run each point locally (smoke/debug)"
+    )
+    p.add_argument(
+        "--submit",
+        action="store_true",
+        help="submit written scripts (needs --write-dir)",
+    )
     p.add_argument("--study-prefix", default="study")
     p.add_argument("--storage-dir", default="runs/optuna")
     p.add_argument("--sweeps-root", default="runs/sweeps")
-    p.add_argument("--storage-url", default=None,
-                   help="shared Optuna storage URL (e.g. postgresql://host/db). "
-                        "When set, ALL cells land in this one DB as distinct "
-                        "studies; --storage-dir is then ignored for the DB path.")
+    p.add_argument(
+        "--storage-url",
+        default=None,
+        help="shared Optuna storage URL (e.g. postgresql://host/db). "
+        "When set, ALL cells land in this one DB as distinct "
+        "studies; --storage-dir is then ignored for the DB path.",
+    )
     p.add_argument("--out-dir", default="runs/local", help="--local run-dir root")
     args = p.parse_args(argv)
 
@@ -855,11 +924,17 @@ def main(argv: list[str] | None = None) -> int:
         p.error(f"unknown study {args.study!r}; known: {', '.join(sorted(registry))}")
     study = registry[args.study]
 
-    points = study.select(**_parse_select(args.select)) if args.select else list(study.points)
+    points = (
+        study.select(**_parse_select(args.select))
+        if args.select
+        else list(study.points)
+    )
     seeds = tuple(args.seeds) if args.seeds else (None,)
     orch = StudyOrchestrator(
-        study, study_prefix=args.study_prefix,
-        storage_dir=args.storage_dir, sweeps_root=args.sweeps_root,
+        study,
+        study_prefix=args.study_prefix,
+        storage_dir=args.storage_dir,
+        sweeps_root=args.sweeps_root,
         storage_url=args.storage_url,
     )
 
@@ -867,8 +942,13 @@ def main(argv: list[str] | None = None) -> int:
         # Local backend: single-worker strategies run one subprocess per point;
         # local_parallel spawns n_workers sharing a local SQLite DB.
         return orch.run_local(points, size=args.size, seeds=seeds, out_dir=args.out_dir)
-    return orch.launch(points, size=args.size, seeds=seeds,
-                       write_dir=args.write_dir, submit=args.submit)
+    return orch.launch(
+        points,
+        size=args.size,
+        seeds=seeds,
+        write_dir=args.write_dir,
+        submit=args.submit,
+    )
 
 
 if __name__ == "__main__":

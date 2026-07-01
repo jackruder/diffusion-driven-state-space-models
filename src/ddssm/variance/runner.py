@@ -84,12 +84,14 @@ class ProbeSpec:
 
     # Keep as untyped ``list`` so OmegaConf/hydra-zen accepts both ProbeCell
     # and Builds_ProbeCell instances in structured configs.
-    cells: list = field(default_factory=lambda: [
-        ProbeCell("esm", "uniform"),
-        ProbeCell("dsm", "uniform"),
-        ProbeCell("esm", "adaptive_is"),
-        ProbeCell("dsm", "adaptive_is"),
-    ])
+    cells: list = field(
+        default_factory=lambda: [
+            ProbeCell("esm", "uniform"),
+            ProbeCell("dsm", "uniform"),
+            ProbeCell("esm", "adaptive_is"),
+            ProbeCell("dsm", "adaptive_is"),
+        ]
+    )
     R: int = 128
     B_var: int = 16
     n_batches: int = 1
@@ -97,23 +99,29 @@ class ProbeSpec:
     force_per_k: bool = True
     split: str = "train"
     seeds: list[int] = field(default_factory=lambda: [0, 1, 2])
-    freeze: list[str] = field(default_factory=lambda: ["encoder", "decoder", "embed_layer"])
+    freeze: list[str] = field(
+        default_factory=lambda: ["encoder", "decoder", "embed_layer"]
+    )
     # Same rationale as ``cells`` above.
-    metrics: list = field(default_factory=lambda: [
-        ProbeMetricSpec("loss_var"),
-        ProbeMetricSpec("grad_var"),
-        ProbeMetricSpec("ratio_esm_dsm"),
-        ProbeMetricSpec("loss_var_per_tau"),
-        ProbeMetricSpec("grad_var_per_tau"),
-        ProbeMetricSpec("ratio_per_tau"),
-    ])
+    metrics: list = field(
+        default_factory=lambda: [
+            ProbeMetricSpec("loss_var"),
+            ProbeMetricSpec("grad_var"),
+            ProbeMetricSpec("ratio_esm_dsm"),
+            ProbeMetricSpec("loss_var_per_tau"),
+            ProbeMetricSpec("grad_var_per_tau"),
+            ProbeMetricSpec("ratio_per_tau"),
+        ]
+    )
     # Same rationale as ``cells`` above.
-    plots: list = field(default_factory=lambda: [
-        ProbePlotSpec("var_grad_vs_tau"),
-        ProbePlotSpec("var_loss_vs_tau"),
-        ProbePlotSpec("ratio_vs_tau"),
-        ProbePlotSpec("summary_table"),
-    ])
+    plots: list = field(
+        default_factory=lambda: [
+            ProbePlotSpec("var_grad_vs_tau"),
+            ProbePlotSpec("var_loss_vs_tau"),
+            ProbePlotSpec("ratio_vs_tau"),
+            ProbePlotSpec("summary_table"),
+        ]
+    )
     raw_filename: str = "variance_raw.csv"
     summary_filename: str = "variance_summary.json"
     checkpoint_path: str | None = None
@@ -210,7 +218,8 @@ def variance(
     from ddssm.training.loggers import resume_run_from_dir
 
     wandb_mod = resume_run_from_dir(
-        run_dir, getattr(experiment, "wandb_config", None),
+        run_dir,
+        getattr(experiment, "wandb_config", None),
     )
 
     for plot in spec.plots:
@@ -222,15 +231,13 @@ def variance(
         log.info("  saved %s", out_path)
         if wandb_mod is not None:
             try:
-                wandb_mod.log(
-                    {f"variance/{plot.name}": wandb_mod.Image(out_path)}
-                )
-            except Exception as e:  # noqa: BLE001 — best-effort
+                wandb_mod.log({f"variance/{plot.name}": wandb_mod.Image(out_path)})
+            except Exception as e:
                 log.warning("wandb image log failed for %s: %s", plot.name, e)
     if wandb_mod is not None:
         try:
             wandb_mod.finish()
-        except Exception:  # noqa: BLE001 — best-effort
+        except Exception:
             pass
     log.info("Variance probe complete.")
     return summary_out

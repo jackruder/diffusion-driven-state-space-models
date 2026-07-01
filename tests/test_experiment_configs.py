@@ -28,7 +28,9 @@ from ddssm.experiment import Experiment, ObjectiveSpec, TrainingScalars
 from ddssm.data.datamodule import DDSSMDataModule
 from ddssm.experiment.registry import register_experiments
 
-CONF_DIR = (Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf").as_posix()
+CONF_DIR = (
+    Path(__file__).resolve().parent.parent / "src" / "ddssm" / "conf"
+).as_posix()
 
 
 def _registered_names(group: str) -> list[str]:
@@ -130,11 +132,16 @@ def test_default_experiment_is_init_smoke_simple() -> None:
     assert cfg.experiment.model.tracking_mode == "fixed"
 
 
-@pytest.mark.parametrize("name,expected_data_dim,expected_latent", [
-    ("init_smoke_simple", 1, 1),
-    ("init_smoke_high_surface", 8, 4),
-])
-def test_experiment_shape_baked_in(name: str, expected_data_dim: int, expected_latent: int) -> None:
+@pytest.mark.parametrize(
+    "name,expected_data_dim,expected_latent",
+    [
+        ("init_smoke_simple", 1, 1),
+        ("init_smoke_high_surface", 8, 4),
+    ],
+)
+def test_experiment_shape_baked_in(
+    name: str, expected_data_dim: int, expected_latent: int
+) -> None:
     """Factory shape kwargs resolve to concrete ints, not interpolation strings."""
     exp = _exp(name)
     assert exp.model.data_dim == expected_data_dim

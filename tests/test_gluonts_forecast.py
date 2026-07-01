@@ -13,7 +13,7 @@ import torch
 from ddssm.nn.futsum import TransformerFutureSummary
 from ddssm.model.centering.baselines import PersistenceBaseline
 from experiments.gluonts_forecast.model import build_gluonts_model
-from experiments.gluonts_forecast.datasets import GLUONTS_DATASETS, GLUONTS_BY_LABEL
+from experiments.gluonts_forecast.datasets import GLUONTS_BY_LABEL, GLUONTS_DATASETS
 
 
 def test_width_rule_is_two_times_latent() -> None:
@@ -40,7 +40,9 @@ def test_persistence_pinned_and_checkpointing() -> None:
     # time_chunk=16), and the decoder must be deterministic (dropout=0) for that.
     assert m._recon_time_chunk == 16
     assert m._recon_grad_checkpoint is True
-    dec_drops = [mod.p for mod in m.decoder.modules() if isinstance(mod, torch.nn.Dropout)]
+    dec_drops = [
+        mod.p for mod in m.decoder.modules() if isinstance(mod, torch.nn.Dropout)
+    ]
     assert dec_drops and all(p == 0.0 for p in dec_drops)
 
 
@@ -52,11 +54,7 @@ def test_score_net_csdi_dims_and_dropout_free() -> None:
     assert m.transition.num_steps == 128
     # Score-net feature transformer must be deterministic (dropout=0) so the
     # gradient checkpoint's preserve_rng_state=False recompute stays exact.
-    drops = [
-        mod.p
-        for mod in unet.modules()
-        if isinstance(mod, torch.nn.Dropout)
-    ]
+    drops = [mod.p for mod in unet.modules() if isinstance(mod, torch.nn.Dropout)]
     assert drops and all(p == 0.0 for p in drops), f"score-net dropout(s)={drops}"
 
 

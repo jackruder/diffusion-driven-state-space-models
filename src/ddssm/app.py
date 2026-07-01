@@ -90,7 +90,8 @@ _LOAD_STUDY_RETRY_BACKOFFS_S = (0.5, 1.0, 2.0)
 
 
 def _load_study_with_retry(
-    study_name: str, storage: str,
+    study_name: str,
+    storage: str,
 ) -> optuna.Study:
     """``optuna.load_study`` with bounded retry on transient storage errors.
 
@@ -109,7 +110,10 @@ def _load_study_with_retry(
             log.warning(
                 "Preempt: transient storage error loading study (attempt "
                 "%d/%d): %s. Sleeping %.2fs before retry.",
-                attempt + 1, len(_LOAD_STUDY_RETRY_BACKOFFS_S) + 1, e, backoff,
+                attempt + 1,
+                len(_LOAD_STUDY_RETRY_BACKOFFS_S) + 1,
+                e,
+                backoff,
             )
             time.sleep(backoff)
     # Final attempt: let any exception propagate so the caller can decide.
@@ -135,8 +139,10 @@ def _params_equal(a: dict[str, Any], b: dict[str, Any]) -> bool:
         if isinstance(va, float) or isinstance(vb, float):
             try:
                 if not math.isclose(
-                    float(va), float(vb),
-                    rel_tol=_PARAM_FLOAT_RTOL, abs_tol=_PARAM_FLOAT_ATOL,
+                    float(va),
+                    float(vb),
+                    rel_tol=_PARAM_FLOAT_RTOL,
+                    abs_tol=_PARAM_FLOAT_ATOL,
                 ):
                     return False
             except (TypeError, ValueError):
@@ -148,7 +154,8 @@ def _params_equal(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 
 def _find_current_running_trial_by_params(
-    study: optuna.Study, hparams: dict[str, Any],
+    study: optuna.Study,
+    hparams: dict[str, Any],
 ) -> FrozenTrial | None:
     """Find the unique RUNNING trial whose params match ``hparams``.
 
@@ -232,12 +239,14 @@ def _enqueue_preempt_retry(
     study.add_trial(retry)
     log.info(
         "Preempt: enqueued retry trial (retried_from=%d) with resume_from=%s",
-        current_trial.number, resume_from,
+        current_trial.number,
+        resume_from,
     )
 
 
 def _collect_sampled_hparams_from_cfg(
-    cfg: DictConfig, param_keys: list[str],
+    cfg: DictConfig,
+    param_keys: list[str],
 ) -> dict[str, Any]:
     """Extract the values of ``param_keys`` from ``cfg`` via dot-paths.
 
@@ -309,9 +318,10 @@ def apply_preempt_hooks(
         study = _load_study_with_retry(study_name, storage)
     except KeyError as e:
         log.warning(
-            "Preempt: study %r not found at %r: %s. "
-            "Falling back to plain training.",
-            study_name, storage, e,
+            "Preempt: study %r not found at %r: %s. Falling back to plain training.",
+            study_name,
+            storage,
+            e,
         )
         return None, None
 
@@ -345,11 +355,15 @@ def apply_preempt_hooks(
     resume_from = _get_resume_from_user_attrs(current_trial)
     if resume_from is not None:
         OmegaConf.update(
-            cfg, "experiment.training.resume_from", resume_from, merge=False,
+            cfg,
+            "experiment.training.resume_from",
+            resume_from,
+            merge=False,
         )
         log.info(
             "Preempt: resuming trial %d from ckpt %s",
-            current_trial.number, resume_from,
+            current_trial.number,
+            resume_from,
         )
 
     return current_trial, study
@@ -396,7 +410,8 @@ def main(cfg: DictConfig):
     # persist it into checkpoints (and post-training stages can diff
     # against it on load).
     experiment.model_config_yaml = OmegaConf.to_yaml(
-        cfg.experiment.model, resolve=True,
+        cfg.experiment.model,
+        resolve=True,
     )
     # Push the fully-resolved experiment dict into ``wandb.config`` so
     # the W&B UI's hparam table is populated and sweep parallel-coords
@@ -404,7 +419,9 @@ def main(cfg: DictConfig):
     # forwards this through to ``wandb.init(config=...)``.
     if getattr(experiment, "wandb_config", None) is not None:
         resolved_exp = OmegaConf.to_container(
-            cfg.experiment, resolve=True, throw_on_missing=False,
+            cfg.experiment,
+            resolve=True,
+            throw_on_missing=False,
         )
         cfg_slot = experiment.wandb_config.setdefault("config", {})
         cfg_slot.update(resolved_exp or {})
@@ -417,7 +434,7 @@ def main(cfg: DictConfig):
         if current_trial is not None and study is not None:
             try:
                 _enqueue_preempt_retry(study, current_trial, e.resume_from)
-            except Exception as enqueue_err:  # noqa: BLE001 — best-effort
+            except Exception as enqueue_err:
                 log.error(
                     "Preempt: failed to enqueue retry trial: %s. "
                     "The trial will be marked FAILED but no retry is queued.",

@@ -46,7 +46,9 @@ def test_sigma_data_converges_near_one_after_stage1(baseline_form: str) -> None:
 
     def _factory():
         return make_smooth_sine_data(
-            n_seqs=4, T=6, seed=int(torch.randint(0, 10_000, (1,)).item()),
+            n_seqs=4,
+            T=6,
+            seed=int(torch.randint(0, 10_000, (1,)).item()),
         )
 
     run_stage(
@@ -81,7 +83,9 @@ def test_sigma_data_buffer_actually_moves_in_stage1(tracking_mode: str) -> None:
         model=model,
         stage="stage_1",
         data_factory=lambda: make_smooth_sine_data(
-            n_seqs=4, T=6, seed=int(torch.randint(0, 10_000, (1,)).item()),
+            n_seqs=4,
+            T=6,
+            seed=int(torch.randint(0, 10_000, (1,)).item()),
         ),
         n_steps=20,
     )

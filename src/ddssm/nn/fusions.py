@@ -37,8 +37,7 @@ class BaseEncoderFusion(nn.Module, metaclass=abc.ABCMeta):
 
     @property
     @abc.abstractmethod
-    def out_features(self) -> int:
-        ...
+    def out_features(self) -> int: ...
 
     @abc.abstractmethod
     def forward(

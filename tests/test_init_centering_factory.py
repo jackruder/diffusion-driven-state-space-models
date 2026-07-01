@@ -71,9 +71,7 @@ def test_baseline_form_dispatch(form, expected_cls) -> None:
 @pytest.mark.parametrize("form", ["zero", "persistence"])
 def test_param_free_forms_autoclamp_learnable_to_pinned(form, caplog) -> None:
     """``zero`` and ``persistence`` clamp ``baseline_mode='learnable'`` to ``'pinned'``."""
-    with caplog.at_level(
-        logging.WARNING, logger="experiments.init_centering.model"
-    ):
+    with caplog.at_level(logging.WARNING, logger="experiments.init_centering.model"):
         model = _build_init_centering_model(
             baseline_form=form,
             baseline_mode="learnable",
@@ -112,16 +110,20 @@ def test_invalid_baseline_form_raises() -> None:
     """Unknown ``baseline_form`` raises ``ValueError``."""
     with pytest.raises(ValueError, match="baseline_form must be one of"):
         _build_init_centering_model(
-            baseline_form="quadratic",   # not a registered form
+            baseline_form="quadratic",  # not a registered form
         )
 
 
-@pytest.mark.parametrize("baseline_mode,expected_stage2_baseline", [
-    ("pinned", False),
-    ("learnable", True),
-])
+@pytest.mark.parametrize(
+    "baseline_mode,expected_stage2_baseline",
+    [
+        ("pinned", False),
+        ("learnable", True),
+    ],
+)
 def test_stages_factory_baseline_mask_matches_mode(
-    baseline_mode, expected_stage2_baseline,
+    baseline_mode,
+    expected_stage2_baseline,
 ) -> None:
     """The stages factory wires stage-2's baseline trainable in lockstep with the mode."""
     stages = _build_init_centering_stages(
@@ -151,7 +153,8 @@ def test_stages_factory_early_stop_disabled_by_default() -> None:
 def test_stages_factory_early_stop_enables_on_stage1() -> None:
     """``early_stop_enabled=True`` populates stage 1 only (Phase-C sweep target)."""
     stages = _build_init_centering_stages(
-        n_pretrain=10, n_stage2=10,
+        n_pretrain=10,
+        n_stage2=10,
         early_stop_enabled=True,
         early_stop_window=20,
         early_stop_min_improvement=1e-3,

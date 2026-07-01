@@ -17,6 +17,7 @@ Emits one JSON line (``__JSON__`` prefixed) plus a human ranking to stderr.
 Usage (on the cluster):
     python discover.py --remote-dir ~/diffusion-driven-state-space-models --days 3
 """
+
 from __future__ import annotations
 
 import os
@@ -33,7 +34,9 @@ def squeue_jobs(user):
     """[(jobid, name, state)] for the user, names with any TU_ prefix stripped."""
     out = subprocess.run(
         ["squeue", "-u", user, "-h", "-O", "JobID:18,Name:60,StateCompact:8"],
-        capture_output=True, text=True).stdout
+        capture_output=True,
+        text=True,
+    ).stdout
     jobs = []
     for line in out.splitlines():
         parts = line.split()
@@ -68,8 +71,9 @@ def main():
     db_dir = os.path.join(remote, "optuna")
     dbs = {os.path.basename(p)[:-3]: p for p in glob.glob(os.path.join(db_dir, "*.db"))}
 
-    exps = defaultdict(lambda: {"cells": set(), "running": 0, "pending": 0,
-                                "suffix": "", "mtime": 0.0})
+    exps = defaultdict(
+        lambda: {"cells": set(), "running": 0, "pending": 0, "suffix": "", "mtime": 0.0}
+    )
     matched_dbs = set()
 
     # 1. squeue-driven grouping
@@ -93,8 +97,11 @@ def main():
 
     # 2. idle fallback: recent DBs not matched to a running job
     cutoff = time.time() - args.days * 86400
-    leftover = [(s, p) for s, p in dbs.items()
-                if s not in matched_dbs and os.path.getmtime(p) > cutoff]
+    leftover = [
+        (s, p)
+        for s, p in dbs.items()
+        if s not in matched_dbs and os.path.getmtime(p) > cutoff
+    ]
     if leftover:
         names = [s for s, _ in leftover]
         lcp = os.path.commonprefix(names).rstrip("_")
@@ -107,18 +114,26 @@ def main():
     out = []
     for prefix, e in exps.items():
         out.append({
-            "study_prefix": prefix, "suffix": e["suffix"],
-            "n_cells": len(e["cells"]), "cells": sorted(e["cells"]),
-            "running": e["running"], "pending": e["pending"],
-            "age_min": round((time.time() - e["mtime"]) / 60, 1) if e["mtime"] else None,
+            "study_prefix": prefix,
+            "suffix": e["suffix"],
+            "n_cells": len(e["cells"]),
+            "cells": sorted(e["cells"]),
+            "running": e["running"],
+            "pending": e["pending"],
+            "age_min": round((time.time() - e["mtime"]) / 60, 1)
+            if e["mtime"]
+            else None,
         })
     out.sort(key=lambda r: (r["running"], -(r["age_min"] or 1e9)), reverse=True)
 
     print("Experiments found (ranked by live activity):", file=sys.stderr)
     for r in out:
-        print(f"  {r['study_prefix']:40s} cells={r['n_cells']:2d} "
-              f"run={r['running']:2d} pend={r['pending']:2d} "
-              f"suffix={r['suffix'] or '-':6s} age={r['age_min']}m", file=sys.stderr)
+        print(
+            f"  {r['study_prefix']:40s} cells={r['n_cells']:2d} "
+            f"run={r['running']:2d} pend={r['pending']:2d} "
+            f"suffix={r['suffix'] or '-':6s} age={r['age_min']}m",
+            file=sys.stderr,
+        )
     if not out:
         print("  (none — no DBs and no jobs)", file=sys.stderr)
     print("__JSON__" + json.dumps({"experiments": out}))

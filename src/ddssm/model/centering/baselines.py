@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import abc
 import copy
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -61,16 +60,14 @@ class BaseBaseline(nn.Module, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def mean_and_logvar(
         self, z_hist: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return ``(μ_p, log σ_p²)``, each ``(B, d)``."""
 
-    def forward(
-        self, z_hist: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, z_hist: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Drop-in replacement for ``GaussianHead.forward``."""
         return self.mean_and_logvar(z_hist)
 
-    def snapshot(self) -> "BaseBaseline":
+    def snapshot(self) -> BaseBaseline:
         """Return a deep-copied, frozen eval-mode copy.
 
         Used as the anchor target μ_p^(0) for the Learnable
@@ -91,9 +88,7 @@ class BaseBaseline(nn.Module, metaclass=abc.ABCMeta):
 
 def _validate_z_hist(z_hist: torch.Tensor, latent_dim: int, j: int) -> None:
     if z_hist.dim() != 3:
-        raise ValueError(
-            f"z_hist must be (B, d, j); got shape {tuple(z_hist.shape)}"
-        )
+        raise ValueError(f"z_hist must be (B, d, j); got shape {tuple(z_hist.shape)}")
     if z_hist.shape[1] != latent_dim or z_hist.shape[2] != j:
         raise ValueError(
             "z_hist shape mismatch: expected (B, "
@@ -167,7 +162,7 @@ class ZeroBaseline(BaseBaseline):
 
     def mean_and_logvar(
         self, z_hist: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         mu = torch.zeros(
             z_hist.shape[0], self.latent_dim, device=z_hist.device, dtype=z_hist.dtype
@@ -210,7 +205,7 @@ class PersistenceBaseline(BaseBaseline):
 
     def mean_and_logvar(
         self, z_hist: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         mu = z_hist[..., -1]
         logvar = self.sigma_head(z_hist)
@@ -225,9 +220,7 @@ class LinearBaseline(BaseBaseline):
     linear projections (DKF "two-headed" convention).
     """
 
-    def __init__(
-        self, latent_dim: int, j: int, init_logvar: float = 0.0
-    ) -> None:
+    def __init__(self, latent_dim: int, j: int, init_logvar: float = 0.0) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.j = int(j)
@@ -255,7 +248,7 @@ class LinearBaseline(BaseBaseline):
 
     def mean_and_logvar(
         self, z_hist: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         flat = self._flatten(z_hist)
         return self.mu_head(flat), self.logvar_head(flat)
@@ -310,7 +303,7 @@ class MLPBaseline(BaseBaseline):
 
     def mean_and_logvar(
         self, z_hist: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         h = self._hidden(z_hist)
         return self.mu_head(h), self.logvar_head(h)

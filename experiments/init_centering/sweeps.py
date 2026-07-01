@@ -66,7 +66,7 @@ _ablation.log_int("n_pretrain", 5, 500)
 _ablation.log("sigma_pert", 1e-3, 5e-2)
 _ablation.log("anchor_lambda", 1e-4, 1e-1)
 _ablation.log("lambda_sigma_p", 1e-3, 1e-1)
-_ablation.log("base_lr", 1e-5, 1e-3)        # encoder LR; dec/trans via multipliers
+_ablation.log("base_lr", 1e-5, 1e-3)  # encoder LR; dec/trans via multipliers
 _ablation.log("dec_mult", 0.1, 10.0)
 _ablation.log("trans_mult", 0.1, 10.0)
 # Per-stage λ-warmup fractions (CONTEXT.md § "lambda_warmup redesign"):
@@ -111,9 +111,9 @@ _ablation_r2.log_int("n_pretrain", 5, 500)
 _ablation_r2.log("sigma_pert", 1e-3, 5e-2)
 _ablation_r2.log("anchor_lambda", 1e-4, 1e-1)
 _ablation_r2.log("lambda_sigma_p", 1e-3, 1e-1)
-_ablation_r2.log("base_lr", 1e-4, 1e-3)     # narrowed: dead bottom dropped
-_ablation_r2.log("dec_mult", 0.3, 10.0)     # narrowed: dead bottom dropped
-_ablation_r2.log("trans_mult", 0.5, 10.0)   # narrowed: weak bottom dropped
+_ablation_r2.log("base_lr", 1e-4, 1e-3)  # narrowed: dead bottom dropped
+_ablation_r2.log("dec_mult", 0.3, 10.0)  # narrowed: dead bottom dropped
+_ablation_r2.log("trans_mult", 0.5, 10.0)  # narrowed: weak bottom dropped
 _ablation_r2.log("stage_1_warmup_frac", 0.05, 0.5)
 _ablation_r2.log("stage_2_warmup_frac", 0.02, 0.25)
 

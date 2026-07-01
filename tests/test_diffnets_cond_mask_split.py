@@ -147,8 +147,13 @@ def test_transition_wires_cond_mask_channel() -> None:
             ),
         ),
         schedule=DiffusionScheduleConfig(
-            S_k=1, k_chunk=1, num_steps=20, beta_min=0.1, beta_max=20.0,
-            tau_min=1e-3, k_sampling_mode="uniform",
+            S_k=1,
+            k_chunk=1,
+            num_steps=20,
+            beta_min=0.1,
+            beta_max=20.0,
+            tau_min=1e-3,
+            k_sampling_mode="uniform",
         ),
     )
     assert transition.diffmodel.cond_mask_channel == transition.side_dim - 2

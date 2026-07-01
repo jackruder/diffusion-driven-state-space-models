@@ -82,7 +82,10 @@ def test_transition_kl_matches_analytic(j: int) -> None:
     zs, enc_stats, time_embed, logq_paths = _make_enc_stats(j)
 
     out = transition.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths, time_embed=time_embed,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
     )
     assert "kl" in out
     kl = out["kl"]
@@ -188,7 +191,10 @@ def test_transition_kl_no_buffer_no_update() -> None:
     transition = _make_transition(baseline, j=1)
     zs, enc_stats, time_embed, logq_paths = _make_enc_stats(1)
     transition.transition_kl(
-        enc_stats=enc_stats, zs=zs, logq_paths=logq_paths, time_embed=time_embed,
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
     )  # no buffer — should not raise
 
 
@@ -236,7 +242,10 @@ def test_transition_kl_init_walks_mixed_history() -> None:
 
     with patch.object(baseline, "mean_and_logvar", side_effect=_capture):
         transition.transition_kl_init(
-            enc_stats=enc_stats, zs=zs, aux_posterior=aux, time_embed=time_embed,
+            enc_stats=enc_stats,
+            zs=zs,
+            aux_posterior=aux,
+            time_embed=time_embed,
         )
 
     # We see j = 2 calls inside the init loop.
@@ -289,7 +298,10 @@ def test_transition_kl_init_grad_flows_to_aux_posterior() -> None:
     zs, enc_stats, time_embed, _ = _make_enc_stats(j)
 
     out = transition.transition_kl_init(
-        enc_stats=enc_stats, zs=zs, aux_posterior=aux, time_embed=time_embed,
+        enc_stats=enc_stats,
+        zs=zs,
+        aux_posterior=aux,
+        time_embed=time_embed,
     )
     (out["loss_init"] + out["kl_aux"]).backward()
     aux_grads = [p.grad for p in aux.parameters() if p.grad is not None]

@@ -978,7 +978,9 @@ def test_precreate_storage_creates_schema_before_submit(tmp_path) -> None:
     import sqlite3
 
     orch = StudyOrchestrator(
-        INIT_CENTERING_STUDY, study_prefix="t", storage_dir=str(tmp_path),
+        INIT_CENTERING_STUDY,
+        study_prefix="t",
+        storage_dir=str(tmp_path),
         sweeps_root=str(tmp_path),
     )
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="mv")
@@ -987,7 +989,8 @@ def test_precreate_storage_creates_schema_before_submit(tmp_path) -> None:
     assert db.exists()
     tables = {
         r[0]
-        for r in sqlite3.connect(str(db))
+        for r in sqlite3
+        .connect(str(db))
         .execute("SELECT name FROM sqlite_master WHERE type='table'")
         .fetchall()
     }
@@ -1008,7 +1011,12 @@ def test_strategy_uses_shared_storage_url_when_set() -> None:
         (OptunaSingleNode(), PointLaunch(strategy="optuna_single_node", sweep="sw")),
         (
             OptunaPackedNode(),
-            PointLaunch(strategy="optuna_packed_node", sweep="sw", n_workers=4, workers_per_gpu=4),
+            PointLaunch(
+                strategy="optuna_packed_node",
+                sweep="sw",
+                n_workers=4,
+                workers_per_gpu=4,
+            ),
         ),
     ):
         ov = strat.hydra_overrides(sp, pl, ctx)
@@ -1023,10 +1031,14 @@ def test_two_cells_share_db_distinct_studies() -> None:
     """
     ctx = LaunchContext("pre", "store", "sweeps", storage_url="postgresql://h/db")
     ov_a = OptunaSingleNode().hydra_overrides(
-        StudyPoint("cellA", {}, {}, {}), PointLaunch(strategy="optuna_single_node", sweep="sw"), ctx
+        StudyPoint("cellA", {}, {}, {}),
+        PointLaunch(strategy="optuna_single_node", sweep="sw"),
+        ctx,
     )
     ov_b = OptunaSingleNode().hydra_overrides(
-        StudyPoint("cellB", {}, {}, {}), PointLaunch(strategy="optuna_single_node", sweep="sw"), ctx
+        StudyPoint("cellB", {}, {}, {}),
+        PointLaunch(strategy="optuna_single_node", sweep="sw"),
+        ctx,
     )
     assert "hydra.sweeper.storage=postgresql://h/db" in ov_a
     assert "hydra.sweeper.storage=postgresql://h/db" in ov_b
@@ -1055,15 +1067,19 @@ def test_precreate_storage_inits_shared_url_once(tmp_path) -> None:
 
     shared = tmp_path / "shared.db"
     orch = StudyOrchestrator(
-        INIT_CENTERING_STUDY, study_prefix="t", storage_dir=str(tmp_path),
-        sweeps_root=str(tmp_path), storage_url=f"sqlite:///{shared}",
+        INIT_CENTERING_STUDY,
+        study_prefix="t",
+        storage_dir=str(tmp_path),
+        sweeps_root=str(tmp_path),
+        storage_url=f"sqlite:///{shared}",
     )
     pts = INIT_CENTERING_STUDY.select(dataset="mv", tracking_mode="per_t")
     orch._precreate_storage(pts, (None,))
     assert shared.exists()
     tables = {
         r[0]
-        for r in sqlite3.connect(str(shared))
+        for r in sqlite3
+        .connect(str(shared))
         .execute("SELECT name FROM sqlite_master WHERE type='table'")
         .fetchall()
     }
@@ -1074,8 +1090,12 @@ def test_precreate_storage_inits_shared_url_once(tmp_path) -> None:
 
 def test_cli_storage_url_flag(capsys) -> None:
     rc = L.main([
-        "init_centering", "--select", "cell=init_mlp_pinned_per_t",
-        "--storage-url", "postgresql://h/db", "--dry-run",
+        "init_centering",
+        "--select",
+        "cell=init_mlp_pinned_per_t",
+        "--storage-url",
+        "postgresql://h/db",
+        "--dry-run",
     ])
     assert rc == 0
     out = capsys.readouterr().out
@@ -1089,7 +1109,9 @@ def test_render_packed_nonpreempt_inits_schema_before_workers() -> None:
     "table studies already exists". The init must precede the worker loop.
     """
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
-    jobs = _orch().render(pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8))
+    jobs = _orch().render(
+        pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8)
+    )
     _, script = jobs[0]
     lines = script.splitlines()
     init_idx = next(i for i, ln in enumerate(lines) if "RDBStorage(" in ln)
@@ -1106,7 +1128,8 @@ def test_render_packed_preempt_skips_redundant_schema_init() -> None:
     """
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
     jobs = _orch().render(
-        pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8, preemptive=True)
+        pts,
+        launch_override=_force_packed(n_workers=8, workers_per_gpu=8, preemptive=True),
     )
     _, script = jobs[0]
     assert "RDBStorage(" not in script
@@ -1132,8 +1155,12 @@ def test_render_packed_multi_group_splits_into_g_suffixed_jobs() -> None:
     assert "DDSSM_WORKER_ID=2 OMP_NUM_THREADS=4" in g1
     assert "DDSSM_WORKER_ID=3 OMP_NUM_THREADS=4" in g1
     # Seed term carries the GLOBAL worker index (2,3 in g1), not a per-group reset.
-    assert "hydra.sweeper.sampler.seed=$(( (SLURM_JOB_ID * 100 + 2) % 2000000000 ))" in g1
-    assert "hydra.sweeper.sampler.seed=$(( (SLURM_JOB_ID * 100 + 3) % 2000000000 ))" in g1
+    assert (
+        "hydra.sweeper.sampler.seed=$(( (SLURM_JOB_ID * 100 + 2) % 2000000000 ))" in g1
+    )
+    assert (
+        "hydra.sweeper.sampler.seed=$(( (SLURM_JOB_ID * 100 + 3) % 2000000000 ))" in g1
+    )
 
 
 def test_render_packed_preemptive_shares_preamble_and_fans_out_trap() -> None:

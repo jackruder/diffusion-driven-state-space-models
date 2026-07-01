@@ -9,8 +9,8 @@ synthetic data.  All tests in this directory should be marked
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Callable
 from functools import partial
+from collections.abc import Callable
 
 import torch
 
@@ -90,7 +90,9 @@ def _make_encoder() -> GaussianEncoder:
         use_mask=False,
         hidden_dim=CHANNELS,
         combiner=partial(
-            CompoundCombiner, aggregator=_AGG, fusion=partial(ConcatLinearFusion),
+            CompoundCombiner,
+            aggregator=_AGG,
+            fusion=partial(ConcatLinearFusion),
         ),
         dist_head=partial(GaussianDistHead),
         fut_summary=partial(GRUFutureSummary, summary_dim=CHANNELS, num_layers=1),
@@ -109,7 +111,9 @@ def _make_decoder() -> GaussianDecoder:
     )
 
 
-def _make_hparams(lambda_sigma_p: float = 1e-2, batch_size: int = 16) -> SimpleNamespace:
+def _make_hparams(
+    lambda_sigma_p: float = 1e-2, batch_size: int = 16
+) -> SimpleNamespace:
     return SimpleNamespace(
         S=1,
         ema_decay=0.999,
@@ -151,7 +155,10 @@ def make_vhp_model(
     """Build a small DDSSM with the VHP-via-diffusion path wired."""
     baseline = _make_baseline(baseline_form)
     aux_posterior = AuxPosterior(
-        latent_dim=LATENT_DIM, j=J, hidden_dim=16, n_layers=2,
+        latent_dim=LATENT_DIM,
+        j=J,
+        hidden_dim=16,
+        n_layers=2,
     )
     sigma_data = SigmaDataBuffer(
         T_max=T_MAX,
@@ -159,7 +166,10 @@ def make_vhp_model(
         init_value=sigma_data_init,
     )
     schedule = DiffusionScheduleConfig(
-        S_k=1, k_chunk=1, num_steps=20, k_sampling_mode="uniform",
+        S_k=1,
+        k_chunk=1,
+        num_steps=20,
+        k_sampling_mode="uniform",
     )
     stage1_transition = BaselineGaussianTransition(
         baseline=baseline,

@@ -17,7 +17,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 project = "DDSSM"
 author = "Jack Ruder"
-copyright = "2026, Jack Ruder"  # noqa: A001 - Sphinx-mandated config name
+copyright = "2026, Jack Ruder"
 release = "0.1.0"
 
 extensions = [

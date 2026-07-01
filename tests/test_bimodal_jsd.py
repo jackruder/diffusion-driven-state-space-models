@@ -26,8 +26,9 @@ def test_jsd_self_is_zero():
     """JSD(p, p) = 0 (sanity check on the helper)."""
     edges = np.linspace(-5.0, 5.0, 51)
     centers = 0.5 * (edges[:-1] + edges[1:])
-    p = _bimodal_truth_mass(centers, x_prev=1.0, a=0.9, step_size=4.0,
-                            sigma=0.2, center_coef=0.9)
+    p = _bimodal_truth_mass(
+        centers, x_prev=1.0, a=0.9, step_size=4.0, sigma=0.2, center_coef=0.9
+    )
     assert abs(_jsd_discrete(p, p)) < 1e-12
 
 
@@ -35,10 +36,12 @@ def test_jsd_symmetric_and_bounded():
     """JSD is symmetric and lies in [0, log(2)]."""
     edges = np.linspace(-5.0, 5.0, 51)
     centers = 0.5 * (edges[:-1] + edges[1:])
-    p = _bimodal_truth_mass(centers, x_prev=1.0, a=0.9, step_size=4.0,
-                            sigma=0.2, center_coef=0.9)
-    q = _bimodal_truth_mass(centers, x_prev=1.0, a=0.9, step_size=4.0,
-                            sigma=0.2, center_coef=0.0)  # different shift
+    p = _bimodal_truth_mass(
+        centers, x_prev=1.0, a=0.9, step_size=4.0, sigma=0.2, center_coef=0.9
+    )
+    q = _bimodal_truth_mass(
+        centers, x_prev=1.0, a=0.9, step_size=4.0, sigma=0.2, center_coef=0.0
+    )  # different shift
     pq = _jsd_discrete(p, q)
     qp = _jsd_discrete(q, p)
     assert abs(pq - qp) < 1e-12
@@ -85,7 +88,8 @@ def _make_bimodal_loader(B: int, T: int, seed: int = 0) -> DataLoader:
     timepoints = torch.arange(T, dtype=torch.float32).unsqueeze(0).expand(B, -1)
 
     class _DictDataset(torch.utils.data.Dataset):
-        def __len__(self): return B
+        def __len__(self):
+            return B
 
         def __getitem__(self, i):
             return {
@@ -107,8 +111,8 @@ def test_bimodal_jsd_low_for_truth_drawn_samples(tmp_path):
         model=_StubBimodalForecaster(),
         loader=loader,
         device=torch.device("cpu"),
-        T_split=7,         # one-step horizon
-        num_samples=512,   # enough for stable histogram
+        T_split=7,  # one-step horizon
+        num_samples=512,  # enough for stable histogram
         run_dir=str(tmp_path),
     )
     out = eval_bimodal_jsd(ctx)
@@ -135,7 +139,8 @@ def test_bimodal_jsd_high_for_constant_predictor(tmp_path):
         model=_LocfForecaster(),
         loader=loader,
         device=torch.device("cpu"),
-        T_split=7, num_samples=512,
+        T_split=7,
+        num_samples=512,
         run_dir=str(tmp_path),
     )
     out = eval_bimodal_jsd(ctx)
@@ -152,14 +157,22 @@ def test_bimodal_jsd_writes_npz(tmp_path):
         model=_StubBimodalForecaster(),
         loader=loader,
         device=torch.device("cpu"),
-        T_split=7, num_samples=64,
+        T_split=7,
+        num_samples=64,
         run_dir=str(tmp_path),
     )
     out = eval_bimodal_jsd(ctx, npz_path="bimodal.npz")
     assert (tmp_path / "bimodal.npz").is_file()
     npz = np.load(tmp_path / "bimodal.npz")
-    for key in ("sample_idx", "x_prev", "xhat_samples",
-                "edges", "centers", "model_mass", "truth_mass"):
+    for key in (
+        "sample_idx",
+        "x_prev",
+        "xhat_samples",
+        "edges",
+        "centers",
+        "model_mass",
+        "truth_mass",
+    ):
         assert key in npz.files, f"missing NPZ key: {key}"
     assert npz["xhat_samples"].shape == (8, 64)
     assert npz["model_mass"].shape == npz["truth_mass"].shape
@@ -173,8 +186,11 @@ def test_bimodal_jsd_npz_path_absolute(tmp_path):
     torch.manual_seed(0)
     loader = _make_bimodal_loader(B=4, T=8)
     ctx = EvalContext(
-        model=_StubBimodalForecaster(), loader=loader,
-        device=torch.device("cpu"), T_split=7, num_samples=32,
+        model=_StubBimodalForecaster(),
+        loader=loader,
+        device=torch.device("cpu"),
+        T_split=7,
+        num_samples=32,
         run_dir=str(tmp_path / "run"),
     )
     eval_bimodal_jsd(ctx, npz_path=str(target))
@@ -183,7 +199,11 @@ def test_bimodal_jsd_npz_path_absolute(tmp_path):
 
 def test_bimodal_jsd_requires_t_split():
     """Missing T_split must raise — the metric is forecasting-based."""
-    ctx = EvalContext(model=_StubBimodalForecaster(), loader=None,
-                      device=torch.device("cpu"), T_split=None)
+    ctx = EvalContext(
+        model=_StubBimodalForecaster(),
+        loader=None,
+        device=torch.device("cpu"),
+        T_split=None,
+    )
     with pytest.raises(ValueError):
         eval_bimodal_jsd(ctx)

@@ -4,29 +4,29 @@ q_ϕ(z_{1:T} | x_{1:T}, u_{1:T}).
 """
 
 import abc
-from typing import Tuple, Literal, Callable, Optional
+from typing import Literal
 from functools import partial
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from ddssm.nn.futsum import FutureSummary, GRUFutureSummary
 from ddssm.nn.fusions import ConcatLinearFusion
 from ddssm.nn.diffnets import (
-    ContextProducer as ContextProducer,  # re-exported (see transitions.py)
     ConvTimeLayer,
-    CausalTransformerTimeLayer,
     ResidualBlock,
+    ContextProducer as ContextProducer,  # re-exported (see transitions.py)
+    CausalTransformerTimeLayer,
     build_feature_layer,
-    )
+)
 from ddssm.nn.combiners import CompoundCombiner, BaseEncoderCombiner
 from ddssm.nn.gaussians import (
     GaussianHead as GaussianHead,  # re-exported (see transitions.py / decoder.py)
     GaussianStats,
-    gaussian_log_prob,
     gaussian_entropy,
+    gaussian_log_prob,
 )
 from ddssm.nn.net_utils import TransformerEncoder, hist_abs_time_tokens
 from ddssm.nn.dist_heads import BaseDistHead, GaussianDistHead
@@ -50,9 +50,9 @@ class BaseEncoder(nn.Module, metaclass=abc.ABCMeta):
         observed_data: torch.Tensor,  # (B, D, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
         S: int = 1,
-        cond_mask: Optional[torch.Tensor] = None,
-        covariates: Optional[torch.Tensor] = None,
-        static_embed: Optional[torch.Tensor] = None,
+        cond_mask: torch.Tensor | None = None,
+        covariates: torch.Tensor | None = None,
+        static_embed: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, GaussianStats]:
         """Sample ``S`` latent paths and their per-step encoder log-densities.
 
@@ -148,9 +148,7 @@ class GaussianEncoder(BaseEncoder):
         if combiner is None:
             combiner = partial(
                 CompoundCombiner,
-                aggregator=partial(
-                    ContextProducerAggregator, channels=8, num_layers=2
-                ),
+                aggregator=partial(ContextProducerAggregator, channels=8, num_layers=2),
                 fusion=partial(ConcatLinearFusion),
             )
         if dist_head is None:
@@ -227,14 +225,14 @@ class GaussianEncoder(BaseEncoder):
         self,
         *,
         z_prev: torch.Tensor,  # (B, d, k) k <= j, encoder-sampled latent history z_{t-k:t-1}
-        z_padding: Optional[torch.Tensor] = None,  # (B, d, j)
+        z_padding: torch.Tensor | None = None,  # (B, d, j)
         h_fut: torch.Tensor,  # (B, C_summary) # fut summary at t
         time_embed: torch.Tensor,  # (B, T, E_t) time embeddings
         time_idx: torch.Tensor,  # (B,) current time index t
-        cond_mask: Optional[torch.Tensor] = None,  # (B,D,T-t) optional conditioning mask
-        covariates: Optional[torch.Tensor] = None,
-        static_context: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, dict]:
+        cond_mask: torch.Tensor | None = None,  # (B,D,T-t) optional conditioning mask
+        covariates: torch.Tensor | None = None,
+        static_context: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
         """One-step inference: returns (z_t, logq_t, step_params).
 
         Args:
@@ -324,9 +322,9 @@ class GaussianEncoder(BaseEncoder):
         observed_data: torch.Tensor,  # (B, D, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
         S: int = 1,
-        cond_mask: Optional[torch.Tensor] = None,
-        covariates: Optional[torch.Tensor] = None,
-        static_embed: Optional[torch.Tensor] = None,
+        cond_mask: torch.Tensor | None = None,
+        covariates: torch.Tensor | None = None,
+        static_embed: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, dict]:
         device = observed_data.device
         B, D, T = observed_data.shape
@@ -391,7 +389,9 @@ class GaussianEncoder(BaseEncoder):
                 "static_embed required when static_proj_context is defined"
             )
             se_perms = static_embed.permute(0, 2, 1)  # (B, E_static, D)
-            static_context = self.static_proj_context(se_perms)  # (B, E_static, hidden_dim)
+            static_context = self.static_proj_context(
+                se_perms
+            )  # (B, E_static, hidden_dim)
             E_s = static_context.size(1)
             static_context_expanded = (
                 static_context
@@ -418,7 +418,7 @@ class GaussianEncoder(BaseEncoder):
             z_prev = z_prev_paths
             k = z_prev.shape[-1]
             if k > self.j:
-                z_prev_input = z_prev[:, :, -self.j:]
+                z_prev_input = z_prev[:, :, -self.j :]
             else:
                 z_prev_input = z_prev  # (BS, d, k) k <= j
 
@@ -437,7 +437,7 @@ class GaussianEncoder(BaseEncoder):
 
             z_prev_paths = torch.cat([z_prev_paths, z_t_sample.unsqueeze(-1)], dim=-1)
             if z_prev_paths.shape[-1] > self.j:
-                z_prev_paths = z_prev_paths[..., -self.j:]
+                z_prev_paths = z_prev_paths[..., -self.j :]
 
             zs_list.append(z_t_sample)
             logqs_list.append(logq_t)
@@ -451,9 +451,7 @@ class GaussianEncoder(BaseEncoder):
 
         # Head stacks per-step params along the new last (T) axis; reshape BS -> (B, S).
         stats_bs = self.dist_head.stack_stats(step_params_list)
-        stats: dict = {
-            k: v.view(B, S, *v.shape[1:]) for k, v in stats_bs.items()
-        }
+        stats: dict = {k: v.view(B, S, *v.shape[1:]) for k, v in stats_bs.items()}
         return zs, logqs, stats
 
     def entropy_transition(self, stats: dict, j: int) -> torch.Tensor:
@@ -660,8 +658,10 @@ class ARFlowEncoder(BaseEncoder):
             # f_t = forward-causal summary of x_{1:t}; c = [f_t, b_t].
             if fwd_summary is None:
                 fwd_summary = partial(
-                    GRUFutureSummary, summary_dim=self.summary_dim,
-                    num_layers=2, reverse_time=False,
+                    GRUFutureSummary,
+                    summary_dim=self.summary_dim,
+                    num_layers=2,
+                    reverse_time=False,
                 )
             self.fwd_sum_module = fwd_summary(
                 data_dim=data_dim,
@@ -674,9 +674,13 @@ class ARFlowEncoder(BaseEncoder):
         elif forward_message == "fwd_summary":
             # o_t = forward-causal pass over the backward summary b; c = o_t.
             self.fwd_refiner = TransformerEncoder(
-                d_model=self.summary_dim, nheads=nheads, num_layers=fwd_layers,
+                d_model=self.summary_dim,
+                nheads=nheads,
+                num_layers=fwd_layers,
                 dim_feedforward=max(self.summary_dim, 4 * self.summary_dim),
-                dropout=0.0, causal=True, rope=True,
+                dropout=0.0,
+                causal=True,
+                rope=True,
             )
             context_dim = self.summary_dim
             self.fwd_refiner = maybe_compile(self.fwd_refiner, dynamic=True)
@@ -709,9 +713,9 @@ class ARFlowEncoder(BaseEncoder):
         observed_data: torch.Tensor,  # (B, D, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
         S: int = 1,
-        cond_mask: Optional[torch.Tensor] = None,
-        covariates: Optional[torch.Tensor] = None,
-        static_embed: Optional[torch.Tensor] = None,
+        cond_mask: torch.Tensor | None = None,
+        covariates: torch.Tensor | None = None,
+        static_embed: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, dict]:
         device = observed_data.device
         dtype = observed_data.dtype
@@ -750,13 +754,20 @@ class ARFlowEncoder(BaseEncoder):
         if self.forward_message == "fwd_data":
             if self.grad_checkpoint and self.training and torch.is_grad_enabled():
                 f = checkpoint(
-                    self.fwd_sum_module, obs_perm, mask_perm, h_time_embed,
-                    static_embed, use_reentrant=False, preserve_rng_state=False,
+                    self.fwd_sum_module,
+                    obs_perm,
+                    mask_perm,
+                    h_time_embed,
+                    static_embed,
+                    use_reentrant=False,
+                    preserve_rng_state=False,
                 )  # f_t = F_ϕ(x_{1:t})
             else:
                 f = self.fwd_sum_module(
-                    observed_data=obs_perm, observed_mask=mask_perm,
-                    t_emb=h_time_embed, static_embed=static_embed,
+                    observed_data=obs_perm,
+                    observed_mask=mask_perm,
+                    t_emb=h_time_embed,
+                    static_embed=static_embed,
                 )
             context = torch.cat([f, h], dim=-1)  # (B, T, 2·summary_dim)
         elif self.forward_message == "fwd_summary":
@@ -844,15 +855,15 @@ class IdentityEncoder(BaseEncoder):
         observed_data: torch.Tensor,  # (B, D, T)
         time_embed: torch.Tensor,  # (B, T, E_t)
         S: int = 1,
-        cond_mask: Optional[torch.Tensor] = None,
-        covariates: Optional[torch.Tensor] = None,
-        static_embed: Optional[torch.Tensor] = None,
+        cond_mask: torch.Tensor | None = None,
+        covariates: torch.Tensor | None = None,
+        static_embed: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, dict]:
         device = observed_data.device
         dtype = observed_data.dtype
         B, D, T = observed_data.shape
         d = self.latent_dim
-        assert D == d, f"IdentityEncoder data_dim {D} != latent_dim {d}"
+        assert d == D, f"IdentityEncoder data_dim {D} != latent_dim {d}"
         BS = B * S
 
         mus = observed_data.unsqueeze(1).expand(B, S, d, T)  # (B,S,d,T) = x

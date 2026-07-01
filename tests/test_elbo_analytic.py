@@ -42,7 +42,6 @@ from __future__ import annotations
 import types
 
 import torch
-import pytest
 import torch.nn as nn
 
 from ddssm.model.dssd import DDSSM_base
@@ -51,13 +50,13 @@ from ddssm.model.centering.baselines import ZeroBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
-D = 2     # latent dim
-J = 1     # history window
-EMB = 4   # time-embedding dim
-T = 4     # sequence length for the single-shape tests
-T_MAX = 8 # ``sigma_data`` buffer capacity — large enough for the longest test
-B = 3     # batch
-S = 2     # sample paths
+D = 2  # latent dim
+J = 1  # history window
+EMB = 4  # time-embedding dim
+T = 4  # sequence length for the single-shape tests
+T_MAX = 8  # ``sigma_data`` buffer capacity — large enough for the longest test
+B = 3  # batch
+S = 2  # sample paths
 DATA_DIM = 1
 
 
@@ -70,9 +69,14 @@ def _zero_sigma_head(baseline: ZeroBaseline) -> None:
                 layer.bias.zero_()
 
 
-def _stub_encode_returns_standard_normal(self, observed_data, time_embed,
-                                         observation_mask, covariates=None,
-                                         static_embed=None):
+def _stub_encode_returns_standard_normal(
+    self,
+    observed_data,
+    time_embed,
+    observation_mask,
+    covariates=None,
+    static_embed=None,
+):
     """Replacement for ``DDSSM_base._encode_latents`` — q ≡ N(0, I).
 
     Returns deterministic ``zs = 0`` samples and ``(mus = 0, logvars = 0)``
@@ -105,8 +109,14 @@ class _StubDecoder(nn.Module):
         self.data_dim = data_dim
 
     def log_likelihood(
-        self, x_t, z_hist, time_embed, time_idx,
-        observation_mask_t=None, covariates=None, static_embed=None,
+        self,
+        x_t,
+        z_hist,
+        time_embed,
+        time_idx,
+        observation_mask_t=None,
+        covariates=None,
+        static_embed=None,
     ):
         bsz = z_hist.shape[0]
         device = z_hist.device
@@ -114,20 +124,24 @@ class _StubDecoder(nn.Module):
         mu_x = torch.zeros(bsz, self.data_dim, device=device)
         logvar_x = torch.zeros(bsz, self.data_dim, device=device)
         obs_count_t = torch.full(
-            (bsz,), float(self.data_dim), device=device,
+            (bsz,),
+            float(self.data_dim),
+            device=device,
         )
         return logp_t, mu_x, logvar_x, obs_count_t
 
 
-def _build_q_equals_prior_model(*, stage_selector: str,
-                                snapshot_anchor: bool = False,
-                                baseline_mode: str = "pinned"
-                                ) -> DDSSM_base:
+def _build_q_equals_prior_model(
+    *, stage_selector: str, snapshot_anchor: bool = False, baseline_mode: str = "pinned"
+) -> DDSSM_base:
     """Construct a DDSSM with q ≡ p ≡ N(0, I) for the chosen stage."""
     baseline = ZeroBaseline(latent_dim=D, j=J, hidden_dim=8, n_layers=1)
     _zero_sigma_head(baseline)
     transition = BaselineGaussianTransition(
-        baseline=baseline, latent_dim=D, j=J, emb_time_dim=EMB,
+        baseline=baseline,
+        latent_dim=D,
+        j=J,
+        emb_time_dim=EMB,
     )
     aux = AuxPosterior(latent_dim=D, j=J, hidden_dim=8, n_layers=1)
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed", init_value=1.0)
@@ -151,7 +165,8 @@ def _build_q_equals_prior_model(*, stage_selector: str,
     )
     # Override the latent-encoding path so q ≡ N(0, I) deterministically.
     model._encode_latents = types.MethodType(
-        _stub_encode_returns_standard_normal, model,
+        _stub_encode_returns_standard_normal,
+        model,
     )
     model.stage_selector = stage_selector
     model.S = S
@@ -179,7 +194,9 @@ def test_trans_kl_is_zero_when_q_equals_baseline_prior():
     model = _build_q_equals_prior_model(stage_selector="stage_1")
     batch = _zero_batch()
     components, _, _ = model(
-        batch["observed_data"], batch["observation_mask"], batch["timepoints"],
+        batch["observed_data"],
+        batch["observation_mask"],
+        batch["timepoints"],
         train=True,
     )
     assert components.trans_kl.item() == 0.0
@@ -196,7 +213,9 @@ def test_r_sigma_p_is_zero_when_log_sigma_p_squared_is_zero():
     model = _build_q_equals_prior_model(stage_selector="stage_1")
     batch = _zero_batch()
     components, _, _ = model(
-        batch["observed_data"], batch["observation_mask"], batch["timepoints"],
+        batch["observed_data"],
+        batch["observation_mask"],
+        batch["timepoints"],
         train=True,
     )
     assert components.r_sigma_p.item() == 0.0
@@ -218,7 +237,9 @@ def test_r_mu_p_is_zero_at_snapshot():
     )
     batch = _zero_batch()
     components, _, _ = model(
-        batch["observed_data"], batch["observation_mask"], batch["timepoints"],
+        batch["observed_data"],
+        batch["observation_mask"],
+        batch["timepoints"],
         train=True,
     )
     assert components.r_mu_p.item() == 0.0
@@ -250,12 +271,16 @@ def test_trans_kl_invariant_to_target_step_count():
         "timepoints": torch.arange(J + 5).expand(B, J + 5).clone().long(),
     }
     c_short, _, _ = model(
-        short["observed_data"], short["observation_mask"], short["timepoints"],
+        short["observed_data"],
+        short["observation_mask"],
+        short["timepoints"],
         train=True,
     )
     c_long, _, _ = model(
-        long_seq["observed_data"], long_seq["observation_mask"],
-        long_seq["timepoints"], train=True,
+        long_seq["observed_data"],
+        long_seq["observation_mask"],
+        long_seq["timepoints"],
+        train=True,
     )
     assert c_short.trans_kl.item() == 0.0
     assert c_long.trans_kl.item() == 0.0

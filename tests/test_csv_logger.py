@@ -15,7 +15,7 @@ from ddssm.training.loggers import CSVLogger
 
 
 def _read_rows(path: str) -> tuple[list[str], list[dict[str, str]]]:
-    with open(path, "r", newline="") as f:
+    with open(path, newline="") as f:
         reader = csv.DictReader(f)
         fieldnames = list(reader.fieldnames or [])
         rows = list(reader)

@@ -36,6 +36,8 @@ sweep_store = store(group="sweep", package="_global_")
 
 
 __all__ = [
-    "model_store", "data_store", "experiment_store",
+    "data_store",
+    "experiment_store",
+    "model_store",
     "sweep_store",
 ]

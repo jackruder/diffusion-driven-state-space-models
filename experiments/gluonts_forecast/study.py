@@ -8,19 +8,20 @@ per-dataset study (one worker per A100). Budgets/launch sizes are pilot-tunable.
 
 from __future__ import annotations
 
+from typing import Any
 import dataclasses
-from typing import Any, Mapping
+from collections.abc import Mapping
 
 from ddssm.launch import PointLaunch, ResourceSpec, register_study
 from experiments._make import experiment
 from ddssm.cluster.study import Axis, Study, StudyPoint
 from ddssm.experiment.stores import experiment_store
-from experiments.gluonts_forecast.model import GluonModel
 from experiments.gluonts_forecast.evals import GluonEval, ValElboObjective
+from experiments.gluonts_forecast.model import GluonModel
 from experiments.gluonts_forecast.hparams import (
     GluonStages,
-    GluonTraining,
     GluonHparams,
+    GluonTraining,
 )
 from experiments.gluonts_forecast.datasets import GLUONTS_DATASETS
 
@@ -34,7 +35,7 @@ def _build(coords: Mapping[str, Any]):
         hparams=dataclasses.replace(GluonHparams, batch_size=ds.batch_size),
         training=GluonTraining,
         stages=GluonStages(),
-        eval=GluonEval,            # dormant during the sweep (csv objective);
+        eval=GluonEval,  # dormant during the sweep (csv objective);
         objective=ValElboObjective,  # run via ddssm.evaluate on finalists.
     )
 
