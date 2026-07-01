@@ -652,6 +652,8 @@ def _make_edm_diffusion(
     num_steps: int,
     edm_s_churn: float = 0.0,
     edm_s_noise: float = 1.0,
+    edm_sigma_max_rel: float | None = None,
+    edm_sigma_min_rel: float | None = None,
 ) -> tuple[DiffusionTransition, SigmaDataBuffer]:
     """Build a ZeroBaseline EDM transition + a frozen σ_data² buffer.
 
@@ -674,6 +676,8 @@ def _make_edm_diffusion(
         sampler="edm",
         edm_s_churn=edm_s_churn,
         edm_s_noise=edm_s_noise,
+        edm_sigma_max_rel=edm_sigma_max_rel,
+        edm_sigma_min_rel=edm_sigma_min_rel,
     )
     transition.eval()
     buf = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed", init_value=sigma_d2)
@@ -748,6 +752,23 @@ def test_edm_sampler_churn_preserves_gaussian_marginal() -> None:
     flat = z.reshape(-1)
     assert abs(flat.mean().item()) < 0.08
     assert abs(flat.var().item() / sigma_d2 - 1.0) < 0.15
+
+
+@pytest.mark.parametrize("sigma_max_rel", [5.0, 10.0])
+def test_edm_sigma_max_rel_clamps_schedule(sigma_max_rel: float) -> None:
+    """Clamping σ_max to C·σ_data still produces N(0, σ_d²) with F_ψ≡0."""
+    torch.manual_seed(0)
+    n = 4000
+    sigma_d2 = 2.0
+    transition, buf = _make_edm_diffusion(
+        sigma_d2, num_steps=40, edm_sigma_max_rel=sigma_max_rel,
+    )
+    assert transition.edm_sigma_max_rel == sigma_max_rel
+    z = _edm_draw(transition, buf, n)
+    assert torch.isfinite(z).all()
+    flat = z.reshape(-1)
+    assert abs(flat.mean().item()) < 0.06 * math.sqrt(sigma_d2)
+    assert abs(flat.var().item() / sigma_d2 - 1.0) < 0.1
 
 
 class _MoGPreconditionedDenoiser(torch.nn.Module):

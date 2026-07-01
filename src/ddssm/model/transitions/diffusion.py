@@ -272,6 +272,8 @@ class DiffusionTransition(BaseTransition):
         edm_s_tmin: float = 0.0,
         edm_s_tmax: float = float("inf"),
         edm_rho: float = 7.0,
+        edm_sigma_max_rel: float | None = None,
+        edm_sigma_min_rel: float | None = None,
     ) -> None:
         super().__init__()
         if int(baseline.latent_dim) != int(latent_dim):
@@ -318,6 +320,12 @@ class DiffusionTransition(BaseTransition):
         self.edm_s_tmin = float(edm_s_tmin)
         self.edm_s_tmax = float(edm_s_tmax)
         self.edm_rho = float(edm_rho)
+        self.edm_sigma_max_rel = (
+            float(edm_sigma_max_rel) if edm_sigma_max_rel is not None else None
+        )
+        self.edm_sigma_min_rel = (
+            float(edm_sigma_min_rel) if edm_sigma_min_rel is not None else None
+        )
 
         if unet is None:
             unet = partial(
@@ -1356,6 +1364,10 @@ class DiffusionTransition(BaseTransition):
         sd = math.sqrt(sd2)
         sigma_max = float(self.sample_sigma_tilde[-1].item())
         sigma_min = float(self.sample_sigma_tilde[0].item())
+        if self.edm_sigma_max_rel is not None:
+            sigma_max = min(sigma_max, self.edm_sigma_max_rel * sd)
+        if self.edm_sigma_min_rel is not None:
+            sigma_min = max(sigma_min, self.edm_sigma_min_rel * sd)
         N = int(self.sample_num_steps)
         rho = float(self.edm_rho)
 
