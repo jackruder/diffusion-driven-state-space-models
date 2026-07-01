@@ -7,9 +7,9 @@ there.
 
 import os
 import math
-import pickle
 import shutil
 import signal
+import datetime
 from typing import TYPE_CHECKING, Any, final
 import logging
 import tempfile
@@ -36,6 +36,7 @@ from torch.profiler import (
 from torch.utils.data import DataLoader
 
 from ddssm.model.dssd import DDSSM_base
+from ddssm.training.checkpoint import NoUsableCheckpointError
 from ddssm.training.loggers import (
     CSVLogger,
     MetricSpec,
@@ -748,18 +749,20 @@ class DDSSMTrainer:
             )
 
     # Narrow set of exceptions that legitimately mean "no usable checkpoint
-    # on disk" — anything outside this set is a real bug that must surface
-    # loudly rather than silently restart from step 0 (ADR-0009 preempt
-    # path: a 6-hour stage-2 trial that hits a schema-incompatible ckpt
-    # would otherwise lose all progress without a trace).
+    # on disk" — anything outside this set (notably load_state_dict shape/
+    # key mismatches, which raise RuntimeError) is a schema bug that must
+    # surface loudly rather than silently restart from step 0 (ADR-0009
+    # preempt path: a 6-hour stage-2 trial that hits a schema-incompatible
+    # ckpt would otherwise lose all progress without a trace).
+    #
+    # File-read failures (corrupt zip, truncated pickle, OSError) are
+    # translated to NoUsableCheckpointError at the checkpoint boundary
+    # (see ``Checkpoint.load``), so RuntimeError here can only come from
+    # ``load_state_dict`` and is correctly excluded.
     _RESUME_NO_CKPT_EXCEPTIONS: tuple[type[BaseException], ...] = (
-        FileNotFoundError,  # missing file
-        IsADirectoryError,  # path points to a directory
-        EOFError,  # truncated pickle stream
-        pickle.UnpicklingError,  # malformed pickle
-        RuntimeError,  # torch.load corrupt-zip / state_dict shape drift
-        KeyError,  # payload missing expected keys
-        AttributeError,  # payload structure unexpected (e.g. not a dict)
+        FileNotFoundError,
+        IsADirectoryError,
+        NoUsableCheckpointError,
     )
 
     def _safe_resume(self, resume_from: str | None):
@@ -773,13 +776,29 @@ class DDSSMTrainer:
             # in a preempt-retry means hours of training are gone with no
             # trace in the run logs.
             self.global_step = 0
-            log.warning(
+            log.error(
                 "[resume] FALLBACK TO FRESH START — failed to load "
                 "checkpoint %r: %s: %s. global_step reset to 0.",
                 resume_from,
                 type(e).__name__,
                 e,
             )
+            # Persist a marker next to the checkpoint so post-hoc grep
+            # across sweep dirs can find silent restarts even if the log
+            # stream was lost.
+            try:
+                marker = os.path.join(
+                    os.path.dirname(resume_from) or ".",
+                    "_FRESH_START_FALLBACK.txt",
+                )
+                with open(marker, "a") as f:
+                    f.write(
+                        f"{datetime.datetime.now().isoformat()}\t"
+                        f"resume_from={resume_from}\t"
+                        f"{type(e).__name__}: {e}\n"
+                    )
+            except OSError:
+                pass
 
     def fit(
         self,

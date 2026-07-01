@@ -20,6 +20,7 @@ Two entry points for the two load modes:
 from __future__ import annotations
 
 import os
+import pickle
 from typing import Any
 import difflib
 import logging
@@ -29,6 +30,18 @@ from dataclasses import dataclass
 import torch
 
 log = logging.getLogger(__name__)
+
+
+class NoUsableCheckpointError(Exception):
+    """The checkpoint file on disk is unreadable (missing / truncated / corrupt).
+
+    Raised at the file-read boundary in :meth:`Checkpoint.load` so that
+    the trainer's resume path can distinguish "no ckpt to load" from
+    "ckpt loaded but load_state_dict rejected it". The former legitimately
+    means fall-back-to-fresh-start (preempt-retry semantics); the latter
+    is a schema-drift bug and must surface loudly.
+    """
+
 
 _FORMAT = "ddssm_ckpt_v2"
 # Older payloads we can still load (we only ever bumped here). On load, any
@@ -150,8 +163,20 @@ class Checkpoint:
         and v1 payloads (missing ``scaler_state`` / ``scheduler_state``, which
         default to ``None``); an unknown ``_format`` is loaded best-effort
         with a warning.
+
+        Read-time failures (missing file, truncated pickle, corrupt zip)
+        are translated into :class:`NoUsableCheckpointError` so callers can
+        distinguish them from post-read schema errors, which are bugs and
+        must propagate.
         """
-        payload = torch.load(path, map_location=device, weights_only=False)
+        try:
+            payload = torch.load(path, map_location=device, weights_only=False)
+        except (FileNotFoundError, IsADirectoryError):
+            raise
+        except (EOFError, pickle.UnpicklingError, RuntimeError, OSError) as e:
+            raise NoUsableCheckpointError(
+                f"failed to read checkpoint {path!r}: {type(e).__name__}: {e}"
+            ) from e
         if not isinstance(payload, dict) or "model_state" not in payload:
             # Legacy raw state_dict (pre-payload checkpoints).
             return cls(model_state=payload)
