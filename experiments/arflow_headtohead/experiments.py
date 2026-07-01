@@ -372,3 +372,45 @@ for _enc in (
     experiment_store(
         _phase2_cell(_enc, "nlblmv", j=10), name=f"h2h__{_enc}__nlblmv__j10"
     )
+
+# j-sweep: top 4 configs at j=6,4,2,1 (j=10 already registered above).
+for _j in (6, 4, 2, 1):
+    for _enc in (
+        "identity_csdilike_ais",
+        "identity_csdilike_ais_persist",
+        "identity_csdilike",
+        "identity_csdi",
+    ):
+        experiment_store(
+            _phase2_cell(_enc, "nlblmv", j=_j),
+            name=f"h2h__{_enc}__nlblmv__j{_j}",
+        )
+
+# Bumped capacity (704K): 96ch / 4 layers / 4 heads at j=4.
+experiment_store(
+    _phase2_cell("identity_csdilike_ais_big", "nlblmv", j=4),
+    name="h2h__identity_csdilike_ais_big__nlblmv__j4",
+)
+
+# 20K steps, LR=8e-4, bumped capacity.
+experiment_store(
+    experiment(
+        data=NonlinBimodalLiftMV,
+        model=_model("identity_csdilike_ais_big", 8, j=4),
+        hparams=dataclasses.replace(
+            GluonHparams, batch_size=32,
+            enc_lr=8e-4, dec_lr=8e-4, trans_lr=8e-4,
+        ),
+        training=GluonTraining,
+        stages=GluonStages(
+            run=["stage_2"], n_stage2=20000,
+            validate_every=100, log_every=50, checkpoint_every=4000,
+        ),
+        eval=Eval(
+            metrics=["crps_sum"], split="val", num_samples=100,
+            T_split=_T_SPLIT, output_filename="metrics.json",
+        ),
+        objective=Objective(metric="crps_sum", source="json"),
+    ),
+    name="h2h__identity_csdilike_ais_big_20k__nlblmv__j4",
+)
