@@ -54,11 +54,11 @@ def _build_trainer_stub(model):
             self.optimizer = None
 
         def _rebuild_optimizer(self, lrs):  # noqa: ANN001
+            # Mirrors production ``param_groups_for_adamw``: params are
+            # included regardless of ``requires_grad`` (AdamW skips
+            # grad-less params), so group membership is mask-independent.
             lr = float(getattr(lrs, "enc_lr", 1e-3))
-            self.optimizer = torch.optim.AdamW(
-                [p for p in self.model.parameters() if p.requires_grad],
-                lr=lr,
-            )
+            self.optimizer = torch.optim.AdamW(list(self.model.parameters()), lr=lr)
 
     return _Stub(model)
 
@@ -86,13 +86,16 @@ def test_pinned_baseline_params_frozen_after_handoff() -> None:
     )
     # Post-handoff: baseline frozen.
     assert all(not p.requires_grad for p in model.baseline.parameters())
-    # And the rebuilt optimizer doesn't carry baseline params.
+    # The rebuilt optimizer still carries the (frozen) baseline params —
+    # group membership is mask-independent so optimizer state stays
+    # load-compatible across stages; ``requires_grad=False`` alone is what
+    # keeps them untrained (AdamW skips params whose grad is None).
     optimizer_params = {
         id(p) for g in trainer.optimizer.param_groups for p in g["params"]
     }
     baseline_ids = {id(p) for p in model.baseline.parameters()}
-    assert baseline_ids.isdisjoint(optimizer_params), (
-        "frozen baseline params leaked into the rebuilt optimizer"
+    assert baseline_ids <= optimizer_params, (
+        "baseline params missing from the rebuilt optimizer"
     )
 
 

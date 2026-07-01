@@ -393,9 +393,12 @@ def build_loaders_for_expt(
         # Use all available hourly train windows
         train_ends = train_ends_all
     else:
-        # Keep old behavior: fixed-size sampled epoch
+        # Keep old behavior: fixed-size sampled epoch. Seed the bootstrap
+        # from the ambient (experiment-seeded) numpy RNG rather than a
+        # hard-coded 0 — the frozen seed made every run and every
+        # "seed replicate" train on the identical resampled epoch.
         n_train = int(num_train_batches_per_epoch * batch_size)
-        rng = np.random.default_rng(0)
+        rng = np.random.default_rng(np.random.randint(0, 2**32))
         train_ends = rng.choice(train_ends_all, size=n_train, replace=True).tolist()
 
     val_last_end = T_total - test_block

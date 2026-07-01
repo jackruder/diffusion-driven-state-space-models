@@ -264,6 +264,81 @@ def test_restore_raises_when_saved_scaler_state_but_live_scaler_disabled(tmp_pat
         trainer.restore_from_checkpoint(ckpt_path)
 
 
+def test_rng_state_roundtrip_through_restore(tmp_path):
+    """Restoring a checkpoint rewinds torch/numpy/python RNG to save time.
+
+    Regression guard: checkpoints carried no RNG state, so a preempt-resume
+    replayed a different noise/dropout/shuffle stream than the uninterrupted
+    run would have seen.
+    """
+    import sys
+    import random
+
+    import numpy as np
+
+    tests_dir = str(__import__("pathlib").Path(__file__).parent)
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    from test_trainer import make_small_model  # type: ignore
+
+    from ddssm.training.train import DDSSMTrainer
+
+    model = make_small_model()
+    trainer = DDSSMTrainer(
+        model=model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    torch.manual_seed(123)
+    np.random.seed(456)
+    random.seed(789)
+    ckpt_path = str(tmp_path / "ckpt.pth")
+    trainer.save_checkpoint(ckpt_path)
+
+    # The draws an uninterrupted run would make right after the save.
+    expected_torch = torch.rand(4)
+    expected_np = np.random.random(4)
+    expected_py = random.random()
+
+    # Scramble all three streams (simulates dying and restarting elsewhere).
+    torch.manual_seed(999)
+    np.random.seed(999)
+    random.seed(999)
+
+    trainer.restore_from_checkpoint(ckpt_path)
+    assert torch.equal(torch.rand(4), expected_torch)
+    assert np.array_equal(np.random.random(4), expected_np)
+    assert random.random() == expected_py
+
+
+def test_legacy_payload_without_rng_state_restores(tmp_path):
+    """A payload lacking ``rng_state`` (pre-RNG schema) restores cleanly."""
+    import sys
+
+    tests_dir = str(__import__("pathlib").Path(__file__).parent)
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    from test_trainer import make_small_model  # type: ignore
+
+    from ddssm.training.train import DDSSMTrainer
+
+    model = make_small_model()
+    trainer = DDSSMTrainer(
+        model=model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    ckpt_path = str(tmp_path / "ckpt.pth")
+    trainer.save_checkpoint(ckpt_path)
+    payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    payload.pop("rng_state", None)
+    torch.save(payload, ckpt_path)
+
+    trainer.restore_from_checkpoint(ckpt_path)  # must not raise
+
+
 def test_restore_raises_on_grad_accum_steps_mismatch(tmp_path):
     """A ckpt with a different grad_accum_steps than the live trainer must raise.
 

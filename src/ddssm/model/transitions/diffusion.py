@@ -614,7 +614,7 @@ class DiffusionTransition(BaseTransition):
             # Padding mask: all-zeros for t ≥ j+1 (no aux slots).
             padding_mask = torch.zeros(N, j + 1, device=device, dtype=dtype)
 
-            chunk_loss = self._esm_chunk_loss(
+            chunk_loss, mu_hat = self._esm_chunk_loss(
                 mu_t=mu_t_flat,
                 sigma2_t=sigma2_t_flat,
                 z_hist=z_hist_flat,
@@ -635,9 +635,8 @@ class DiffusionTransition(BaseTransition):
             else:
                 kl_sum = kl_sum + chunk_loss
 
-            # σ_data update at this chunk's timesteps.
-            mu_p_chunk = self.baseline.mean(z_hist_flat)  # (N, d)
-            mu_hat = mu_t_flat - mu_p_chunk
+            # σ_data update at this chunk's timesteps, reusing the centered
+            # mean already computed inside ``_esm_chunk_loss``.
             _update_sigma_data_blocked(
                 sigma_data=sigma_data,
                 mu_hat=mu_hat,
@@ -715,7 +714,7 @@ class DiffusionTransition(BaseTransition):
 
         ctx_step = self._init_step_time_ctx(step, time_embed, B, S, T)
 
-        chunk_loss = self._esm_chunk_loss(
+        chunk_loss, mu_hat = self._esm_chunk_loss(
             mu_t=mu_t_flat,
             sigma2_t=sigma2_t_flat,
             z_hist=z_hist,
@@ -724,7 +723,6 @@ class DiffusionTransition(BaseTransition):
             padding_mask=padding_mask,
         )
 
-        mu_hat = mu_t_flat - self.baseline.mean(z_hist)
         sigma_data.update(
             t_idx=torch.tensor([t_external], device=device),
             mu_hat_batch=mu_hat,
@@ -890,13 +888,14 @@ class DiffusionTransition(BaseTransition):
         padding_mask: torch.Tensor,  # (N, j+1)
         mc_override: dict[str, Any] | None = None,
         return_per_sample: bool = False,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Centered ESM regression: ``E_τ E_q[w · ‖F_ψ − F*‖²]``.
 
-        Returns the *summed-over-N* weighted squared error (caller
-        normalises), or the per-sample ``(N,)`` vector when
-        ``return_per_sample`` (used by the variance probe).  Centering:
-        ``μ̂ = μ_t − μ_p(z_hist)``; the sampler draws
+        Returns ``(loss, mu_hat_t)``: the *summed-over-N* weighted squared
+        error (caller normalises), or the per-sample ``(N,)`` vector when
+        ``return_per_sample`` (used by the variance probe) — plus the
+        centered mean ``μ̂ = μ_t − μ_p(z_hist)`` so callers can feed the
+        σ_data update without re-running the baseline.  The sampler draws
         ``ẑ_t^(τ) = μ̂ + √(σ_t² + σ̃²)·ε`` in centered coords.
         """
         N, d = mu_t.shape
@@ -1083,8 +1082,8 @@ class DiffusionTransition(BaseTransition):
 
         per_sample = total_sqerr / float(self.S_k)
         if return_per_sample:
-            return per_sample
-        return per_sample.sum()
+            return per_sample, mu_hat_t
+        return per_sample.sum(), mu_hat_t
 
     # ------------------------------------------------------------------
     # σ_data-aware EDM preconditioning.

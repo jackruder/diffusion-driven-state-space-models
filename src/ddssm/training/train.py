@@ -7,6 +7,7 @@ there.
 
 import os
 import math
+import random
 import shutil
 import signal
 import datetime
@@ -17,6 +18,7 @@ from contextlib import nullcontext, contextmanager
 from collections import deque
 from collections.abc import Callable
 
+import numpy as np
 import torch
 
 log = logging.getLogger(__name__)
@@ -464,6 +466,25 @@ class DDSSMTrainer:
         # true start (legacy payloads default to 0, matching the single-fit
         # convention where ``_stage_start_step`` is never set).
         self._stage_start_step = int(ckpt.stage_start_step)
+        if ckpt.rng_state is not None:
+            # Continue the producer's RNG streams (reparam / diffusion noise,
+            # loader shuffles) instead of replaying the fresh process's seed.
+            # ``map_location`` may have moved the state tensors; the setters
+            # require CPU uint8 tensors.
+            torch.set_rng_state(ckpt.rng_state["torch_cpu"].cpu())
+            cuda_states = ckpt.rng_state.get("torch_cuda") or []
+            if torch.cuda.is_available() and cuda_states:
+                if len(cuda_states) == torch.cuda.device_count():
+                    torch.cuda.set_rng_state_all([s.cpu() for s in cuda_states])
+                else:
+                    log.warning(
+                        "[resume] checkpoint carries %d CUDA RNG states but "
+                        "%d devices are visible; skipping CUDA RNG restore.",
+                        len(cuda_states),
+                        torch.cuda.device_count(),
+                    )
+            np.random.set_state(ckpt.rng_state["numpy"])
+            random.setstate(ckpt.rng_state["python"])
 
     def _build_default_loss(self):
         """Default loss for single-fit runs: full ELBO with no rate ramp.
@@ -1047,10 +1068,12 @@ class DDSSMTrainer:
             except Exception as e:
                 print(f"[interrupt] Failed to save emergency checkpoint: {e}")
             raise
-        finally:
-            if hasattr(self, "metrics"):
-                self.metrics.close()
 
+        # NOTE: ``self.metrics`` is deliberately NOT closed here. fit() runs
+        # once per stage under the orchestrator, and closing tore down the
+        # CSV/TB/W&B sinks after the FIRST stage (W&B even uploaded its
+        # final artifacts mid-run). The run owner — ``Experiment.train`` —
+        # closes the store once, after all stages.
         return int(self.global_step)
 
 

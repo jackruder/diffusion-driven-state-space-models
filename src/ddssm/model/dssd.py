@@ -354,24 +354,34 @@ class DDSSM_base(nn.Module):
             x_c = obs_flat[:, :, t0:t1].permute(0, 2, 1).reshape(N, D)
             m_c = mask_flat[:, :, t0:t1].permute(0, 2, 1).reshape(N, D)
             zh_c = windows[:, :, t0:t1, :].permute(0, 2, 1, 3).reshape(N, d, j)
+            # The decoder only ever gathers time / covariate tokens at
+            # indices [t-j+1, t] (clamped at 0), so slice the shared tables
+            # to the chunk's reachable range [ts, t1) and shift ``tidx``
+            # into slice coordinates instead of replicating the full-T
+            # tables per row (which materialised O(BS·T²·E)). Exactness:
+            # when ts > 0 every unclamped gather index is ≥ ts, and when
+            # the clamp can fire (t < j) ts == 0 — and the decoder's pad
+            # mask ``clamp(t+1, max=j)`` saturates at j for all t ≥ j-1,
+            # so the shift never changes it. Byte-identical output.
+            ts = max(0, t0 - (j - 1))
             tidx = (
                 torch
-                .arange(t0, t1, device=device, dtype=torch.long)
+                .arange(t0 - ts, t1 - ts, device=device, dtype=torch.long)
                 .view(1, cl)
                 .expand(BS, cl)
                 .reshape(N)
             )
             te_c = (
-                time_flat
+                time_flat[:, ts:t1]
                 .unsqueeze(1)
-                .expand(BS, cl, T, -1)
-                .reshape(N, T, time_flat.shape[-1])
+                .expand(BS, cl, t1 - ts, -1)
+                .reshape(N, t1 - ts, time_flat.shape[-1])
             )
             cov_c = (
-                cov_flat
+                cov_flat[:, :, ts:t1]
                 .unsqueeze(1)
                 .expand(BS, cl, -1, -1)
-                .reshape(N, cov_flat.shape[1], T)
+                .reshape(N, cov_flat.shape[1], t1 - ts)
                 if cov_flat is not None
                 else None
             )

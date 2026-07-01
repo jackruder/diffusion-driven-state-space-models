@@ -18,7 +18,9 @@ def param_groups_for_adamw(
 
     Norm layers, bias parameters, embeddings, and log-variance raw parameters
     are placed in a zero-weight-decay group; all other parameters receive the
-    full ``weight_decay``.
+    full ``weight_decay``. Frozen (``requires_grad=False``) parameters are
+    included too — AdamW leaves them untouched while their grads are None —
+    so group membership does not depend on the current stage trainable mask.
 
     Args:
         model: The ``DDSSM_base`` model.
@@ -69,9 +71,15 @@ def param_groups_for_adamw(
                     no_wd_ids.add(id(p))
 
         decay_params, nodecay_params = [], []
+        # Params are included regardless of ``requires_grad``: the per-stage
+        # trainable mask is applied AFTER optimizer (re)builds, so filtering
+        # here silently dropped modules that a stage was about to unfreeze
+        # (they would never train), and made optimizer state_dicts
+        # load-incompatible across stages on resume. AdamW skips params whose
+        # ``.grad`` is None — no update and no weight decay — so
+        # ``_set_trainable`` remains the single gradient-suppression
+        # mechanism and group membership stays stable across stage masks.
         for n, p in module.named_parameters(recurse=True):
-            if not p.requires_grad:
-                continue
             if id(p) in _claimed_ids:
                 continue
             _claimed_ids.add(id(p))

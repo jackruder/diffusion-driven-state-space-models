@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import os
 import pickle
+import random
 from typing import Any
 import difflib
 import logging
 import tempfile
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 
 log = logging.getLogger(__name__)
@@ -102,6 +104,13 @@ class Checkpoint:
     # stage's true start rather than the fresh process's zeroed counter.
     # Defaults to 0 for legacy payloads and single-fit checkpoints.
     stage_start_step: int = 0
+    # Global RNG streams (torch CPU / per-device CUDA, numpy, python) at
+    # save time, so a resume continues the same noise / shuffle streams
+    # instead of replaying the fresh process's seed. The dataloader's
+    # position within its epoch is NOT captured: on resume the epoch
+    # iterator restarts, reshuffled from the restored torch state.
+    # ``None`` for legacy payloads (restore skips it).
+    rng_state: dict | None = None
 
     @classmethod
     def from_trainer(
@@ -133,6 +142,16 @@ class Checkpoint:
             grad_accum_steps=int(trainer.grad_accum_steps),
             stage_prefix=stage_prefix,
             stage_start_step=int(getattr(trainer, "_stage_start_step", 0)),
+            rng_state={
+                "torch_cpu": torch.get_rng_state(),
+                "torch_cuda": (
+                    torch.cuda.get_rng_state_all()
+                    if torch.cuda.is_available()
+                    else []
+                ),
+                "numpy": np.random.get_state(),
+                "python": random.getstate(),
+            },
             # Only persist scaler state when scaling is actually live —
             # a disabled GradScaler carries no information worth resuming
             # and a non-None entry on disk is the contract guard's signal
@@ -157,6 +176,7 @@ class Checkpoint:
             "grad_accum_steps": self.grad_accum_steps,
             "stage_prefix": self.stage_prefix,
             "stage_start_step": self.stage_start_step,
+            "rng_state": self.rng_state,
             "scaler_state": self.scaler_state,
             "scheduler_state": self.scheduler_state,
         }
@@ -206,6 +226,7 @@ class Checkpoint:
             grad_accum_steps=int(payload.get("grad_accum_steps", 1)),
             stage_prefix=payload.get("stage_prefix"),
             stage_start_step=int(payload.get("stage_start_step", 0)),
+            rng_state=payload.get("rng_state"),
             # v1 payloads never wrote these — ``.get`` defaults to ``None``,
             # which the trainer's contract guard treats as "producer had no
             # scaler/scheduler".

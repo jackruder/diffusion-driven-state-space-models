@@ -315,6 +315,80 @@ def test_rebuild_optimizer_picks_up_baseline_params(tmp_path):
     )
 
 
+def test_rebuild_optimizer_keeps_frozen_params_in_groups(tmp_path):
+    """Params frozen at rebuild time still land in the optimizer groups.
+
+    Regression guard: ``param_groups_for_adamw`` used to filter on
+    ``requires_grad`` at build time, so a module frozen in stage N but
+    unfrozen in stage N+1 could be silently absent from the optimizer
+    (when the LRs-unchanged path skips the rebuild) and never train.
+    Group membership must be mask-independent; ``requires_grad`` alone
+    suppresses updates (AdamW skips grad-None params).
+    """
+    from ddssm.training.stages import StageLrsConf, StageTrainableConf
+
+    model = _make_model_with_baseline()
+    trainer = DDSSMTrainer(
+        model=model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    # Freeze the baseline BEFORE the rebuild — the old filter dropped it here.
+    trainer._set_trainable(StageTrainableConf(baseline=False))
+    trainer._rebuild_optimizer(StageLrsConf())
+
+    baseline_param_ids = {id(p) for p in model.baseline.parameters()}
+    grouped_param_ids = {
+        id(p) for group in trainer.optimizer.param_groups for p in group["params"]
+    }
+    assert baseline_param_ids <= grouped_param_ids, (
+        "params frozen at rebuild time were dropped from the optimizer groups"
+    )
+
+
+def test_fit_does_not_close_metric_loggers(small_model, tmp_path):
+    """``fit`` must leave the metric store open.
+
+    Regression guard: ``fit`` used to close ``self.metrics`` in a
+    ``finally``, tearing down CSV/TB/W&B after the FIRST stage of a
+    multi-stage run. The run owner (``Experiment.train``) closes loggers.
+    """
+
+    class _SentinelLogger:
+        def __init__(self):
+            self.closed = False
+
+        def on_step(self, split, step, row):
+            pass
+
+        def on_epoch(self, split, epoch, row):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    sentinel = _SentinelLogger()
+    trainer.metrics.loggers.append(sentinel)
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+    trainer.fit(
+        train_loader=loader,
+        val_loader=None,
+        total_steps=2,
+        validate_every=0,
+        log_every=1,
+        checkpoint_every=None,
+        amp=False,
+    )
+    assert not sentinel.closed, "fit() closed the metric loggers"
+
+
 def test_elbo_plateau_early_stop_triggers(small_model, tmp_path):
     """When the loss is flat, the early-stop spec terminates ``fit`` early."""
     from ddssm.training.stages import EarlyStopSpec
