@@ -64,6 +64,7 @@ from hydra.core.hydra_config import HydraConfig
 
 from ddssm.training.train import PreemptError
 from ddssm.experiment.registry import register_experiments
+from ddssm.experiment.experiment import _seed_everything
 
 register_experiments()
 
@@ -405,6 +406,13 @@ def main(cfg: DictConfig):
     except OSError as e:
         log.warning("Could not persist resolved_config.yaml: %s", e)
 
+    # Seed BEFORE instantiate: ``instantiate`` constructs every nn.Module —
+    # i.e. all weight init draws — so seeding only inside Experiment.train
+    # (which runs after) left model initialization on uncontrolled process
+    # entropy and made ``experiment.seed`` fictitious for replication.
+    # train() re-seeds afterwards, so the training stream stays anchored to
+    # the same seed as before.
+    _seed_everything(OmegaConf.select(cfg, "experiment.seed", default=None))
     experiment = instantiate(cfg.experiment)
     # ADR-0005: snapshot the resolved model YAML so the trainer can
     # persist it into checkpoints (and post-training stages can diff

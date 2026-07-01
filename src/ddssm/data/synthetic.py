@@ -97,7 +97,14 @@ class SyntheticDataset(Dataset):
         self.gt_latents: torch.Tensor | None = None
 
         self.N_total = 3 * N_per_split
-        all_data = self._generate_data(dataset_seed)
+        # Sandbox generation: draws are seeded with ``dataset_seed`` inside a
+        # forked RNG scope so the population is reproducible WITHOUT
+        # clobbering the ambient global torch RNG — that stream carries
+        # ``experiment.seed`` (weight init, reparam/diffusion noise, loader
+        # shuffling) and re-seeding it here made every "seed replicate"
+        # share an identical training stream.
+        with torch.random.fork_rng(devices=[]):
+            all_data = self._generate_data(dataset_seed)
 
         if split == "train":
             self.data = all_data[:N_per_split]
@@ -124,12 +131,13 @@ class SyntheticDataset(Dataset):
     def _generate_data(self, seed):
         """Generate the full ``(N_total, D, T)`` population for ``self.mode``.
 
-        Seeds torch and numpy with ``seed`` for reproducibility and, for
-        latent modes with ``expose_gt_latents`` set, records the clean
-        latent path in ``self._all_gt_latents``.
+        Seeds torch with ``seed`` for reproducibility — callers must wrap
+        this in ``torch.random.fork_rng`` (see ``__init__``) so the ambient
+        global RNG state is untouched. For latent modes with
+        ``expose_gt_latents`` set, records the clean latent path in
+        ``self._all_gt_latents``.
         """
         torch.manual_seed(seed)
-        np.random.seed(seed)
 
         data = torch.zeros(self.N_total, self.D, self.T)
 
@@ -536,13 +544,12 @@ def generate_lgssm_latents(N: int, T: int, D: int, seed: int = 42):
     z_t = 0.9 * z_{t-1} + 0.1 * eps_z
     x_t = z_t + 0.1 * eps_x
     """
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-
-    z = torch.zeros(N, D, T)
-    for t in range(1, T):
-        z[:, :, t] = 0.9 * z[:, :, t - 1] + 0.1 * torch.randn(N, D)
-    x = z + 0.1 * torch.randn(N, D, T)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(seed)
+        z = torch.zeros(N, D, T)
+        for t in range(1, T):
+            z[:, :, t] = 0.9 * z[:, :, t - 1] + 0.1 * torch.randn(N, D)
+        x = z + 0.1 * torch.randn(N, D, T)
     return z, x
 
 
