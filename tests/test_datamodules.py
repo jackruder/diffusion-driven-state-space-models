@@ -225,3 +225,55 @@ def test_synthetic_datamodule_bimodal_has_variance() -> None:
     assert std > 0.5, (
         f"bimodal std={std:.3f} suspiciously low — modes may have collapsed"
     )
+
+
+# ---------------------------------------------------------------------------
+# Eval window alignment (_make_window_ends)
+# ---------------------------------------------------------------------------
+
+
+def test_window_ends_anchor_backward_from_last_end() -> None:
+    """Eval window grids must end exactly at the region boundary.
+
+    With forward anchoring, (last_end - start_end) % step != 0 shifted every
+    eval window earlier, so val/test forecast targets could overlap the
+    training region.
+    """
+    from ddssm.data.dataload import _make_window_ends
+
+    # (last_end - start_end) % step = (100 - 24) % 10 = 6 → misaligned grid
+    ends = _make_window_ends(start_end=24, last_end=100, step=10, k_last=5)
+    assert ends[-1] == 100
+    assert ends == [60, 70, 80, 90, 100]
+    # Every end respects the valid range
+    assert all(24 <= e <= 100 for e in ends)
+
+
+def test_window_ends_step_one_unchanged() -> None:
+    """Train windows (step=1) enumerate every end; alignment is a no-op."""
+    from ddssm.data.dataload import _make_window_ends
+
+    ends = _make_window_ends(start_end=5, last_end=9, step=1)
+    assert ends == [5, 6, 7, 8, 9]
+
+
+def test_window_ends_aligned_grid_identical() -> None:
+    """When the span divides evenly by step the grid is the classic one."""
+    from ddssm.data.dataload import _make_window_ends
+
+    ends = _make_window_ends(start_end=20, last_end=80, step=20, k_last=None)
+    assert ends == [20, 40, 60, 80]
+
+
+def test_window_ends_empty_when_range_invalid() -> None:
+    from ddssm.data.dataload import _make_window_ends
+
+    assert _make_window_ends(start_end=50, last_end=40, step=5) == []
+
+
+def test_window_ends_k_last_shorter_than_grid() -> None:
+    """k_last larger than the grid returns everything available."""
+    from ddssm.data.dataload import _make_window_ends
+
+    ends = _make_window_ends(start_end=24, last_end=44, step=10, k_last=99)
+    assert ends == [24, 34, 44]

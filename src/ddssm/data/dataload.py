@@ -191,7 +191,13 @@ def _make_window_ends(
 ):
     if last_end < start_end:
         return []
-    ends = list(range(start_end, last_end + 1, step))
+    # Anchor the stride grid backward from ``last_end`` so the final window
+    # ends exactly at the region boundary. Anchoring forward from
+    # ``start_end`` left the grid short by ``(last_end - start_end) % step``,
+    # shifting every eval window earlier — far enough that val/test forecast
+    # targets could overlap the training region.
+    offset = (last_end - start_end) % step
+    ends = list(range(start_end + offset, last_end + 1, step))
     if k_last is not None:
         ends = ends[-k_last:]
     return ends
