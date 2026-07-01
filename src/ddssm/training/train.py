@@ -926,17 +926,26 @@ class DDSSMTrainer:
                             amp=amp,
                         )
 
+                        # Per-microstep guard: check before ``_backward_loss``
+                        # so a NaN/Inf micro-batch never poisons ``.grad`` via
+                        # backprop. Checking the summed accum_loss post-backward
+                        # would already be too late.
+                        loss_scalar = float(loss.detach())
+                        if self.abort_on_nonfinite_loss and not math.isfinite(
+                            loss_scalar
+                        ):
+                            raise FloatingPointError(
+                                f"Non-finite training loss ({loss_scalar}) at "
+                                f"step {step}; aborting "
+                                f"(abort_on_nonfinite_loss=True)."
+                            )
+
                         self._backward_loss(loss, scaler=scaler, amp=amp)
 
-                        accum_loss += float(loss.detach())
+                        accum_loss += loss_scalar
                         accum_metrics = self._accumulate_metrics(accum_metrics, metrics)
                         accum_weight += weight
 
-                    if self.abort_on_nonfinite_loss and not math.isfinite(accum_loss):
-                        raise FloatingPointError(
-                            f"Non-finite training loss ({accum_loss}) at step "
-                            f"{step}; aborting (abort_on_nonfinite_loss=True)."
-                        )
                     self._optimizer_step(scaler=scaler, amp=amp)
                     accum_metrics = self._finalize_accum_metrics(accum_metrics)
 
