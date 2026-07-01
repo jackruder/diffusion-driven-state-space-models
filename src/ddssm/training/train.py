@@ -367,7 +367,7 @@ class DDSSMTrainer:
 
         _save(self, path, stage_prefix=stage_prefix)
 
-    def restore_from_checkpoint(self, path: str, strict: bool = True) -> dict:
+    def restore_from_checkpoint(self, path: str, strict: bool = True) -> None:
         """Resume: load model weights + optimiser + EMA tracker + step.
 
         Loads *live* weights into the model (``load_ema=False``); the
@@ -447,8 +447,17 @@ class DDSSMTrainer:
             )
         if ckpt.scheduler_state is not None and live_scheduler is not None:
             live_scheduler.load_state_dict(ckpt.scheduler_state)
+        # grad_accum_steps contract guard — same logic as scaler/scheduler.
+        # Loss is divided by ``self.grad_accum_steps`` (see ``_backward_loss``
+        # and the accumulation loop), so silently changing it across resume
+        # rescales gradients mid-run — an invisible LR shift.
+        if ckpt.grad_accum_steps != self.grad_accum_steps:
+            raise RuntimeError(
+                f"Checkpoint has grad_accum_steps={ckpt.grad_accum_steps} but "
+                f"live trainer has grad_accum_steps={self.grad_accum_steps}; "
+                "refusing to rescale gradients silently mid-run."
+            )
         self.global_step = ckpt.global_step
-        return {"grad_accum_steps": ckpt.grad_accum_steps}
 
     def _build_default_loss(self):
         """Default loss for single-fit runs: full ELBO with no rate ramp.

@@ -209,9 +209,8 @@ class _OrchTrainer:
         self.calls.append(("fit", kw.get("checkpoint_prefix"), kw.get("resume_from")))
         self.fit_calls.append(dict(kw))
 
-    def restore_from_checkpoint(self, path: str, strict: bool = True) -> dict:
+    def restore_from_checkpoint(self, path: str, strict: bool = True) -> None:
         self.restore_calls.append(path)
-        return {"grad_accum_steps": 1}
 
 
 def _two_stage_config() -> StagesConf:

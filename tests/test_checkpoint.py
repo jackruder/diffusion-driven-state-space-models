@@ -262,3 +262,36 @@ def test_restore_raises_when_saved_scaler_state_but_live_scaler_disabled(tmp_pat
     assert not trainer.scaler.is_enabled(), "precondition: live scaler disabled"
     with pytest.raises(RuntimeError, match="GradScaler"):
         trainer.restore_from_checkpoint(ckpt_path)
+
+
+def test_restore_raises_on_grad_accum_steps_mismatch(tmp_path):
+    """A ckpt with a different grad_accum_steps than the live trainer must raise.
+
+    Loss is divided by ``self.grad_accum_steps`` in the backward path, so
+    silently rescaling it across resume shifts the effective LR mid-run.
+    Symmetric with the scaler/scheduler guards.
+    """
+    import sys
+
+    tests_dir = str(__import__("pathlib").Path(__file__).parent)
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    from test_trainer import make_small_model  # type: ignore
+
+    from ddssm.training.train import DDSSMTrainer
+
+    model = make_small_model()
+    trainer = DDSSMTrainer(
+        model=model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    ckpt_path = str(tmp_path / "ckpt.pth")
+    trainer.save_checkpoint(ckpt_path)
+    payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    payload["grad_accum_steps"] = trainer.grad_accum_steps + 1
+    torch.save(payload, ckpt_path)
+
+    with pytest.raises(RuntimeError, match="grad_accum_steps"):
+        trainer.restore_from_checkpoint(ckpt_path)
