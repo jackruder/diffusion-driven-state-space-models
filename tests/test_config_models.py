@@ -12,7 +12,7 @@ def test_hyperparams_defaults():
     hp = DDSSMHyperParamsConf()
     assert hp.S == 1
     assert hp.enc_lr == pytest.approx(5e-4)
-    assert hp.logvar_min == pytest.approx(-7.0)
+    assert hp.logvar_min == pytest.approx(-13.0)
 
 
 def test_hyperparams_override():

@@ -89,8 +89,8 @@ class GaussianDistHead(BaseDistHead):
         latent_dim: int,
         init_logvar: float = 0.0,
         var_min: float = 1e-6,
-        clamp_logvar_min: float = -9.0,
-        clamp_logvar_max: float = 6.0,
+        clamp_logvar_min: float = -13.0,
+        clamp_logvar_max: float = 13.0,
     ) -> None:
         super().__init__(in_features=in_features, latent_dim=latent_dim)
         self.gauss_head = GaussianHead(

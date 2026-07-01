@@ -114,8 +114,8 @@ def _make_hparams(lambda_sigma_p: float = 0.0) -> SimpleNamespace:
         enc_lr=1e-3,
         dec_lr=1e-3,
         trans_lr=1e-3,
-        logvar_min=-7.0,
-        logvar_max=7.0,
+        logvar_min=-13.0,
+        logvar_max=13.0,
     )
 
 

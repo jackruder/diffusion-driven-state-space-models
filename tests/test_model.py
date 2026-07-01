@@ -112,8 +112,8 @@ def make_hyperparams():
         enc_lr=1e-3,
         dec_lr=1e-3,
         trans_lr=1e-3,
-        logvar_min=-7.0,
-        logvar_max=7.0,
+        logvar_min=-13.0,
+        logvar_max=13.0,
     )
 
 

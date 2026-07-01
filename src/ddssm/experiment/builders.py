@@ -317,7 +317,7 @@ Encoder = builds(
     populate_full_signature=True,
     **_SHAPE_ENC,
     combiner=Combiner(aggregator=ContextAggregatorB(), fusion=ConcatLinearFusionB()),
-    dist_head=GaussianDistHeadB(clamp_logvar_min=-10.0),
+    dist_head=GaussianDistHeadB(),
     fut_summary=GRUFutSum(),
 )
 

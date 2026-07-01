@@ -109,8 +109,8 @@ class LogvarHead(nn.Module):
         out_features: int,
         init_logvar: float = 0.0,
         var_min: float = 1e-6,
-        clamp_logvar_min: float = -9.0,
-        clamp_logvar_max: float = 6.0,
+        clamp_logvar_min: float = -13.0,
+        clamp_logvar_max: float = 13.0,
     ) -> None:
         super().__init__()
         self.in_features = int(in_features)
@@ -153,8 +153,8 @@ class GaussianHead(nn.Module):
         out_features: int,
         init_logvar: float = 0.0,
         var_min: float = 1e-6,
-        clamp_logvar_min: float = -9.0,
-        clamp_logvar_max: float = 6.0,
+        clamp_logvar_min: float = -13.0,
+        clamp_logvar_max: float = 13.0,
     ) -> None:
         super().__init__()
         self.in_features = in_features

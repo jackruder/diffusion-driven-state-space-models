@@ -285,8 +285,6 @@ def build_gluonts_model(
             causal_layers=arflow_causal_layers,
             nheads=nheads,
             backbone="transformer",
-            clamp_logvar_min=-7.0,
-            clamp_logvar_max=7.0,
             init_logvar_bias=arflow_init_logvar_bias,
             stochastic_state=arflow_stochastic_state,
             forward_message=arflow_forward_message,

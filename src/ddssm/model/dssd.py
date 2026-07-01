@@ -127,8 +127,8 @@ class DDSSM_base(nn.Module):
         num_classes_per_static: list[int] | None = None,
         use_observation_mask: bool = True,
         mask_emb_dim: int = 8,
-        logvar_min: float = -7.0,
-        logvar_max: float = 7.0,
+        logvar_min: float = -13.0,
+        logvar_max: float = 13.0,
         S: int = 1,
         # --- VHP-via-diffusion + baseline-centering path (the only init path) ---
         aux_posterior: AuxPosterior | None = None,
@@ -1083,8 +1083,8 @@ def _default_hyperparams():
         enc_lr=5e-4,
         dec_lr=5e-4,
         trans_lr=5e-4,
-        logvar_min=-7.0,
-        logvar_max=7.0,
+        logvar_min=-13.0,
+        logvar_max=13.0,
     )
 
 
@@ -1109,5 +1109,5 @@ class DDSSMHyperParamsConf:
     dec_lr: float = 5e-4
     trans_lr: float = 5e-4
 
-    logvar_min: float = -7.0
-    logvar_max: float = 7.0
+    logvar_min: float = -13.0
+    logvar_max: float = 13.0

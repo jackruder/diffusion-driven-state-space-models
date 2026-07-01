@@ -152,7 +152,7 @@ class GaussianEncoder(BaseEncoder):
                 fusion=partial(ConcatLinearFusion),
             )
         if dist_head is None:
-            dist_head = partial(GaussianDistHead, clamp_logvar_min=-10.0)
+            dist_head = partial(GaussianDistHead)
         if fut_summary is None:
             fut_summary = partial(GRUFutureSummary, summary_dim=64, num_layers=2)
 
@@ -611,8 +611,8 @@ class ARFlowEncoder(BaseEncoder):
         causal_layers: int = 2,
         nheads: int = 8,
         backbone: Literal["conv", "transformer"] = "transformer",
-        clamp_logvar_min: float = -7.0,
-        clamp_logvar_max: float = 7.0,
+        clamp_logvar_min: float = -13.0,
+        clamp_logvar_max: float = 13.0,
         init_logvar_bias: float = 0.0,
         stochastic_state: bool = True,
         forward_message: Literal["none", "fwd_data", "fwd_summary"] = "none",

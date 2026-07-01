@@ -345,8 +345,7 @@ class GaussianDecoder(BaseDecoder):
             covariates=covariates,
             static_embed=static_embed,
         )  # (B, D)
-        # TODO expose via config
-        logvar_x = logvar_x.clamp(-20.0, 20.0)
+        logvar_x = logvar_x.clamp(-13.0, 13.0)
 
         if observation_mask_t is None:
             m_t = torch.ones_like(x_t, device=device)
