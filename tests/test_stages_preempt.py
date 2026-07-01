@@ -193,6 +193,7 @@ class _OrchTrainer:
     def __init__(self) -> None:
         self.model = SimpleNamespace(stage_selector="stage_0")
         self.global_step: int = 0
+        self._stage_start_step: int = 0
         self.device = torch.device("cpu")
         self.calls: list[tuple] = []
         # Captures: ``fit`` kwargs, ``restore`` calls.
@@ -207,10 +208,21 @@ class _OrchTrainer:
 
     def fit(self, **kw) -> None:
         self.calls.append(("fit", kw.get("checkpoint_prefix"), kw.get("resume_from")))
+        # Snapshot the counters the orchestrator computed for this stage so
+        # tests can assert the budget math (kw alone doesn't carry them).
+        kw["_stage_start_step_at_fit"] = int(self._stage_start_step)
         self.fit_calls.append(dict(kw))
 
     def restore_from_checkpoint(self, path: str, strict: bool = True) -> None:
+        # Mimic the real trainer: restore the step counters from the payload.
         self.restore_calls.append(path)
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        self.global_step = int(payload.get("global_step", 0))
+        self._stage_start_step = int(payload.get("stage_start_step", 0))
+
+    def _safe_resume(self, resume_from: str | None) -> None:
+        if resume_from is not None:
+            self.restore_from_checkpoint(resume_from)
 
 
 def _two_stage_config() -> StagesConf:
@@ -236,9 +248,17 @@ def _two_stage_config() -> StagesConf:
 
 
 def _write_stage_ckpt(
-    tmp_path, *, stage_prefix: str | None, global_step: int = 50
+    tmp_path,
+    *,
+    stage_prefix: str | None,
+    global_step: int = 50,
+    stage_start_step: int | None = None,
 ) -> str:
-    """Write a minimal ckpt payload with the given stage_prefix and return its path."""
+    """Write a minimal ckpt payload with the given stage_prefix and return its path.
+
+    ``stage_start_step=None`` omits the field, exercising the legacy-payload
+    path (checkpoints written before the field existed).
+    """
     payload: dict[str, Any] = {
         "_format": "ddssm_ckpt_v1",
         "model_config_yaml": None,
@@ -251,6 +271,8 @@ def _write_stage_ckpt(
     }
     if stage_prefix is not None:
         payload["stage_prefix"] = stage_prefix
+    if stage_start_step is not None:
+        payload["stage_start_step"] = int(stage_start_step)
     path = tmp_path / f"ckpt_{stage_prefix or 'legacy'}_latest.pth"
     torch.save(payload, str(path))
     return str(path)
@@ -283,7 +305,9 @@ def test_orchestrator_resumes_into_stage_2_skips_stage_1_and_handoff(
     tmp_path,
 ) -> None:
     """Resuming a stage_2 ckpt: skip stage_1, skip handoff, restore before stage_2 fit."""
-    ckpt_path = _write_stage_ckpt(tmp_path, stage_prefix="stage_2")
+    ckpt_path = _write_stage_ckpt(
+        tmp_path, stage_prefix="stage_2", global_step=50, stage_start_step=40
+    )
     trainer = _OrchTrainer()
     cfg = _two_stage_config()
     orch = StageOrchestrator(trainer, cfg)
@@ -297,12 +321,57 @@ def test_orchestrator_resumes_into_stage_2_skips_stage_1_and_handoff(
     fits = [c for c in trainer.calls if c[0] == "fit"]
     assert len(fits) == 1
     assert fits[0][1] == "stage_2"
-    # The trainer's restore happened (orchestrator passed resume_from into fit).
-    # We trust the orchestrator to pass resume_from to fit, which then triggers
-    # the trainer's own restore via _safe_resume.
-    assert fits[0][2] == ckpt_path
+    # The orchestrator restored the ckpt itself (before computing the stage
+    # budget) and passed resume_from=None into fit — fit must not re-load.
+    assert trainer.restore_calls == [ckpt_path]
+    assert fits[0][2] is None
     # No fit for stage_1.
     assert not any(c[1] == "stage_1" for c in fits)
+
+
+def test_orchestrator_resume_budget_uses_restored_counters(tmp_path) -> None:
+    """Regression: the stage budget / λ origin must be computed AFTER restore.
+
+    A stage_2 ckpt at global_step=50 with stage_start_step=40 and
+    stage_2.steps=20 must yield fit(total_steps=60) — i.e. 10 remaining
+    steps — with the λ origin at 40. The old order (budget before restore)
+    computed total_steps = 0 + 20 = 20 < 50 and trained zero steps.
+    """
+    ckpt_path = _write_stage_ckpt(
+        tmp_path, stage_prefix="stage_2", global_step=50, stage_start_step=40
+    )
+    trainer = _OrchTrainer()
+    orch = StageOrchestrator(trainer, _two_stage_config())
+
+    with patch("ddssm.training.stages.perform_centering_handoff"):
+        orch.run(train_loader=object(), amp=False, resume_from=ckpt_path)
+
+    (fit_kw,) = trainer.fit_calls
+    assert fit_kw["total_steps"] == 60  # stage_start (40) + stage_2.steps (20)
+    assert fit_kw["_stage_start_step_at_fit"] == 40  # λ-ramp origin
+    assert trainer.global_step == 50
+
+
+def test_orchestrator_resume_legacy_ckpt_without_stage_start_step(tmp_path) -> None:
+    """Legacy stage_2 ckpt (no stage_start_step): fall back to 'stage starts here'.
+
+    stage_start_step defaults to 0, but a stage after the first cannot have
+    started at step 0 — the orchestrator treats the restored global_step as
+    the stage start, training the full stage budget from there instead of
+    zero steps.
+    """
+    ckpt_path = _write_stage_ckpt(
+        tmp_path, stage_prefix="stage_2", global_step=50, stage_start_step=None
+    )
+    trainer = _OrchTrainer()
+    orch = StageOrchestrator(trainer, _two_stage_config())
+
+    with patch("ddssm.training.stages.perform_centering_handoff"):
+        orch.run(train_loader=object(), amp=False, resume_from=ckpt_path)
+
+    (fit_kw,) = trainer.fit_calls
+    assert fit_kw["_stage_start_step_at_fit"] == 50
+    assert fit_kw["total_steps"] == 70  # 50 + stage_2.steps (20)
 
 
 def test_orchestrator_resumes_into_stage_1_still_runs_stage_2_normally(
@@ -318,9 +387,11 @@ def test_orchestrator_resumes_into_stage_1_still_runs_stage_2_normally(
         orch.run(train_loader=object(), amp=False, resume_from=ckpt_path)
 
     fits = [c for c in trainer.calls if c[0] == "fit"]
-    # Stage_1's fit received resume_from; stage_2's fit did not.
+    # The orchestrator restored the ckpt before stage_1's fit; neither fit
+    # receives resume_from (the orchestrator owns the restore now).
     assert len(fits) == 2
-    assert fits[0][1] == "stage_1" and fits[0][2] == ckpt_path
+    assert trainer.restore_calls == [ckpt_path]
+    assert fits[0][1] == "stage_1" and fits[0][2] is None
     assert fits[1][1] == "stage_2" and fits[1][2] is None
     # Handoff fires after stage_1 (before stage_2): the resumed stage_1 ckpt
     # pre-dates the handoff, so re-running stage_1 fires it exactly once.
@@ -350,7 +421,9 @@ def test_orchestrator_resume_with_no_stage_prefix_starts_stage_1(tmp_path) -> No
 
     fits = [c for c in trainer.calls if c[0] == "fit"]
     assert len(fits) == 2
-    # Stage_1 receives resume_from (back-compat for hand-rolled resumes).
-    assert fits[0][1] == "stage_1" and fits[0][2] == ckpt_path
+    # The legacy ckpt is restored before stage_1's fit (back-compat for
+    # hand-rolled resumes); fit itself no longer receives resume_from.
+    assert trainer.restore_calls == [ckpt_path]
+    assert fits[0][1] == "stage_1" and fits[0][2] is None
     assert fits[1][1] == "stage_2" and fits[1][2] is None
     assert mock_handoff.call_count == 1

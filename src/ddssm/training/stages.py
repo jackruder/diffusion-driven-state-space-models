@@ -265,8 +265,14 @@ class StageOrchestrator:
 
         A ``resume_from`` ckpt without a ``stage_prefix`` field (legacy,
         hand-rolled single-stage resumes) is treated as "resume into the
-        first stage" — its fit receives ``resume_from`` and the rest of the
-        run proceeds normally.
+        first stage" and the rest of the run proceeds normally.
+
+        The resumed stage's checkpoint is restored by the orchestrator
+        itself (via ``trainer._safe_resume``) *before* the stage budget and
+        λ-ramp origin are computed, and ``fit`` is then called with
+        ``resume_from=None`` — budgets must see the restored
+        ``global_step`` / ``_stage_start_step``, not the fresh process's
+        zeroed counters.
         """
         stages = self.stages
         if stages is None:
@@ -276,9 +282,10 @@ class StageOrchestrator:
 
         # Iterate from the resume point onwards (or from the start when
         # resume_from is None). ``is_resumed_stage`` is True only for the
-        # first iteration of the resumed run; it threads ``resume_from`` into
-        # the trainer's fit (the post-loop handoff needs no resume suppression,
-        # since a stage's ckpts always pre-date its own handoff).
+        # first iteration of the resumed run; that stage restores the ckpt
+        # before its budget is computed (the post-loop handoff needs no
+        # resume suppression, since a stage's ckpts always pre-date its own
+        # handoff).
         start_idx = (
             ordered.index(resume_stage_key) if resume_stage_key is not None else 0
         )
@@ -334,9 +341,43 @@ class StageOrchestrator:
                 default_end=default_end,
             )
             self.trainer._stage_lambda_fn = stage_rate_lambda
+            # Stage-start / budget bookkeeping. On the resumed stage the
+            # checkpoint is restored HERE — before the budget and λ-ramp
+            # origin are computed — because both must be derived from the
+            # restored counters. (Restoring inside ``fit`` after the budget
+            # was fixed made a preempt-retry into stage ≥ 2 compute
+            # ``target = 0 + stage.steps`` while the restored global_step
+            # could already exceed it: the stage trained zero or too few
+            # steps, with the λ ramp restarted from the wrong origin.)
+            # ``restore_from_checkpoint`` brings back ``_stage_start_step``
+            # together with ``global_step``; on the unreadable-ckpt fallback
+            # ``_safe_resume`` resets global_step to 0 and the pre-set below
+            # (still 0 in a fresh retry process) stays — fresh-start
+            # semantics.
             self.trainer._stage_start_step = int(
                 getattr(self.trainer, "global_step", 0)
             )
+            stage_resume = resume_from if is_resumed_stage else None
+            if stage_resume is not None:
+                self.trainer._safe_resume(stage_resume)
+                stage_resume = None  # restored here; fit must not re-load
+                if (
+                    start_idx > 0
+                    and int(self.trainer._stage_start_step) == 0
+                    and int(self.trainer.global_step) > 0
+                ):
+                    # Legacy ckpt predating ``stage_start_step``: a stage
+                    # after the first cannot have started at global step 0.
+                    # Treat the restored step as the stage start — training
+                    # the full stage budget from here overtrains slightly but
+                    # beats the alternative (target < global_step → zero
+                    # steps trained).
+                    log.warning(
+                        "[resume] checkpoint carries no stage_start_step; "
+                        "treating restored global_step=%d as the stage start.",
+                        int(self.trainer.global_step),
+                    )
+                    self.trainer._stage_start_step = int(self.trainer.global_step)
             # Install the active loss object for this stage. If the
             # preset declared `stage.loss`, use it. Otherwise build a
             # default `FullELBO` from the stage's `lambda_ramp` with no
@@ -375,9 +416,11 @@ class StageOrchestrator:
 
             # 5. Run the stage's training loop.  ``trainer.fit``'s
             # ``total_steps`` is the *cumulative* max step, not per-stage,
-            # so we add the global step counter to the stage's budget.
-            target = int(self.trainer.global_step) + int(stage.steps)
-            stage_resume = resume_from if is_resumed_stage else None
+            # so we add the stage's start step to its budget. On a fresh
+            # stage ``_stage_start_step == global_step``; on a resumed stage
+            # it was restored from the checkpoint, so ``target`` counts the
+            # already-trained steps and fit runs exactly the remainder.
+            target = int(self.trainer._stage_start_step) + int(stage.steps)
             self.trainer.fit(
                 train_loader=train_loader,
                 val_loader=val_loader,

@@ -95,6 +95,13 @@ class Checkpoint:
     # refuse to silently drop it on the live side.
     scaler_state: dict | None = None
     scheduler_state: dict | None = None
+    # ADR-0009 companion to ``stage_prefix``: the trainer's
+    # ``_stage_start_step`` (the global step at which the producing stage
+    # began). Restored together with ``global_step`` so a preempt-retry can
+    # compute the resumed stage's remaining budget and λ-ramp origin from the
+    # stage's true start rather than the fresh process's zeroed counter.
+    # Defaults to 0 for legacy payloads and single-fit checkpoints.
+    stage_start_step: int = 0
 
     @classmethod
     def from_trainer(
@@ -125,6 +132,7 @@ class Checkpoint:
             global_step=int(trainer.global_step),
             grad_accum_steps=int(trainer.grad_accum_steps),
             stage_prefix=stage_prefix,
+            stage_start_step=int(getattr(trainer, "_stage_start_step", 0)),
             # Only persist scaler state when scaling is actually live —
             # a disabled GradScaler carries no information worth resuming
             # and a non-None entry on disk is the contract guard's signal
@@ -148,6 +156,7 @@ class Checkpoint:
             "global_step": self.global_step,
             "grad_accum_steps": self.grad_accum_steps,
             "stage_prefix": self.stage_prefix,
+            "stage_start_step": self.stage_start_step,
             "scaler_state": self.scaler_state,
             "scheduler_state": self.scheduler_state,
         }
@@ -196,6 +205,7 @@ class Checkpoint:
             global_step=int(payload.get("global_step", 0)),
             grad_accum_steps=int(payload.get("grad_accum_steps", 1)),
             stage_prefix=payload.get("stage_prefix"),
+            stage_start_step=int(payload.get("stage_start_step", 0)),
             # v1 payloads never wrote these — ``.get`` defaults to ``None``,
             # which the trainer's contract guard treats as "producer had no
             # scaler/scheduler".

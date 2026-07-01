@@ -459,6 +459,11 @@ class DDSSMTrainer:
                 "refusing to rescale gradients silently mid-run."
             )
         self.global_step = ckpt.global_step
+        # Restore the producing stage's start step alongside global_step so
+        # the orchestrator's budget / λ-ramp origin math sees the stage's
+        # true start (legacy payloads default to 0, matching the single-fit
+        # convention where ``_stage_start_step`` is never set).
+        self._stage_start_step = int(ckpt.stage_start_step)
 
     def _build_default_loss(self):
         """Default loss for single-fit runs: full ELBO with no rate ramp.
