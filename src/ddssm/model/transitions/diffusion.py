@@ -537,13 +537,19 @@ class DiffusionTransition(BaseTransition):
     ) -> dict[str, torch.Tensor]:
         """Centered ESM/EDM loss over ``t = j+1 … T``.
 
-        Returns ``{"kl": ...}``.  ``R_μp`` is added at the
-        :class:`DDSSM_base.forward` level via the free function — diffusion
-        is a pure loss-computer per the plan's ownership decisions.
+        Returns ``{"kl": ..., "kl_phith": ..., "kl_psi": ...}``.  ``"kl"``
+        is the IS-weighted ELBO-side loss (unchanged single-loss value);
+        ``"kl_phith"`` is the same tensor (alias) and ``"kl_psi"`` is the
+        unit-weighted score-net-side loss (same ``/(B·S)`` denominator,
+        NOT detached — it shares the score-net forward graph).  ``R_μp``
+        is added at the :class:`DDSSM_base.forward` level via the free
+        function — diffusion is a pure loss-computer per the plan's
+        ownership decisions.
 
         With ``return_per_sample`` (the variance-probe path) also returns
         ``L_p`` (the unnormalised summed ESM loss) and ``L_p_per_sample``
-        (the per-sequence-sample loss, summed over target timesteps). The
+        (the per-sequence-sample loss, summed over target timesteps) —
+        both wrapping the phith side — plus ``kl_psi_per_sample``. The
         default per-timestep chunking gives ``N = B·S`` rows per chunk, so
         the per-sample vectors align across timesteps and sum elementwise.
         """
@@ -566,13 +572,22 @@ class DiffusionTransition(BaseTransition):
         device = zs.device
         dtype = zs.dtype
         kl_sum = torch.zeros((), device=device, dtype=dtype)
+        kl_sum_psi = torch.zeros((), device=device, dtype=dtype)
         per_sample_acc: torch.Tensor | None = None
+        per_sample_psi_acc: torch.Tensor | None = None
         n_target_steps = max(0, T - j)
         if n_target_steps == 0:
             if return_per_sample:
                 zeros = torch.zeros(B * S, device=device, dtype=dtype)
-                return {"kl": kl_sum, "L_p": kl_sum, "L_p_per_sample": zeros}
-            return {"kl": kl_sum}
+                return {
+                    "kl": kl_sum,
+                    "kl_phith": kl_sum,
+                    "kl_psi": kl_sum_psi,
+                    "L_p": kl_sum,
+                    "L_p_per_sample": zeros,
+                    "kl_psi_per_sample": torch.zeros_like(zeros),
+                }
+            return {"kl": kl_sum, "kl_phith": kl_sum, "kl_psi": kl_sum_psi}
 
         mus = enc_stats["mus"]
         logvars = enc_stats["logvars"]
@@ -614,7 +629,7 @@ class DiffusionTransition(BaseTransition):
             # Padding mask: all-zeros for t ≥ j+1 (no aux slots).
             padding_mask = torch.zeros(N, j + 1, device=device, dtype=dtype)
 
-            chunk_loss, mu_hat = self._esm_chunk_loss(
+            chunk_loss, chunk_loss_psi, mu_hat = self._esm_chunk_loss(
                 mu_t=mu_t_flat,
                 sigma2_t=sigma2_t_flat,
                 z_hist=z_hist_flat,
@@ -631,9 +646,16 @@ class DiffusionTransition(BaseTransition):
                     if per_sample_acc is None
                     else per_sample_acc + chunk_loss
                 )
+                per_sample_psi_acc = (
+                    chunk_loss_psi
+                    if per_sample_psi_acc is None
+                    else per_sample_psi_acc + chunk_loss_psi
+                )
                 kl_sum = kl_sum + chunk_loss.sum()
+                kl_sum_psi = kl_sum_psi + chunk_loss_psi.sum()
             else:
                 kl_sum = kl_sum + chunk_loss
+                kl_sum_psi = kl_sum_psi + chunk_loss_psi
 
             # σ_data update at this chunk's timesteps, reusing the centered
             # mean already computed inside ``_esm_chunk_loss``.
@@ -654,13 +676,17 @@ class DiffusionTransition(BaseTransition):
         # biasing the ELBO toward reconstruction across the centering handoff.
         denom = float(B * S)
         kl = kl_sum / denom
+        kl_psi = kl_sum_psi / denom  # same /(B·S) denominator on both sides
         if return_per_sample:
             return {
                 "kl": kl,
-                "L_p": kl_sum,  # unnormalised summed ESM loss
+                "kl_phith": kl,
+                "kl_psi": kl_psi,
+                "L_p": kl_sum,  # unnormalised summed ESM loss (phith side)
                 "L_p_per_sample": per_sample_acc,
+                "kl_psi_per_sample": per_sample_psi_acc,
             }
-        return {"kl": kl}
+        return {"kl": kl, "kl_phith": kl, "kl_psi": kl_psi}
 
     # ------------------------------------------------------------------
     # transition_kl_init  (t = 1 … j)
@@ -687,11 +713,14 @@ class DiffusionTransition(BaseTransition):
         B: int,
         S: int,
         T: int,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Centered ESM/EDM surrogate for one init step (summed over B·S).
 
-        The padding-mask channel flags the ``j - step`` aux slots. Also
-        updates ``sigma_data`` at this init ``t``.
+        Returns the ``(phith, psi)`` pair from :meth:`_esm_chunk_loss`:
+        the IS-weighted ELBO-side loss and the unit-weighted score-net-side
+        loss (graph-connected, not detached).  The padding-mask channel
+        flags the ``j - step`` aux slots. Also updates ``sigma_data`` at
+        this init ``t``.
         """
         del z_t  # the base walk owns the history shift
         BS = B * S
@@ -714,7 +743,7 @@ class DiffusionTransition(BaseTransition):
 
         ctx_step = self._init_step_time_ctx(step, time_embed, B, S, T)
 
-        chunk_loss, mu_hat = self._esm_chunk_loss(
+        chunk_loss, chunk_loss_psi, mu_hat = self._esm_chunk_loss(
             mu_t=mu_t_flat,
             sigma2_t=sigma2_t_flat,
             z_hist=z_hist,
@@ -728,7 +757,7 @@ class DiffusionTransition(BaseTransition):
             mu_hat_batch=mu_hat,
             sigma_t2_batch=sigma2_t_flat,
         )
-        return chunk_loss
+        return chunk_loss, chunk_loss_psi
 
     # ------------------------------------------------------------------
     # VHP initial-state log-density (model-v2.org § Exact likelihood, Layer 4).
@@ -888,15 +917,26 @@ class DiffusionTransition(BaseTransition):
         padding_mask: torch.Tensor,  # (N, j+1)
         mc_override: dict[str, Any] | None = None,
         return_per_sample: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Centered ESM regression: ``E_τ E_q[w · ‖F_ψ − F*‖²]``.
 
-        Returns ``(loss, mu_hat_t)``: the *summed-over-N* weighted squared
-        error (caller normalises), or the per-sample ``(N,)`` vector when
-        ``return_per_sample`` (used by the variance probe) — plus the
-        centered mean ``μ̂ = μ_t − μ_p(z_hist)`` so callers can feed the
-        σ_data update without re-running the baseline.  The sampler draws
-        ``ẑ_t^(τ) = μ̂ + √(σ_t² + σ̃²)·ε`` in centered coords.
+        Returns ``(loss_phith, loss_psi, mu_hat_t)``.  Both losses share
+        one score-net forward and fork at the unweighted squared error:
+
+        * ``loss_phith`` — the IS-weighted (``w̃/p_k``) squared error,
+          *summed over N* (caller normalises), or the per-sample ``(N,)``
+          vector when ``return_per_sample`` (used by the variance probe).
+          Bit-identical to the pre-split single loss.
+        * ``loss_psi`` — the same squared error *unit-weighted* (no
+          ``w̃/p_k``), with the identical reduction and ``S_k``
+          normalisation.  NOT detached: it descends from the same
+          ``F_pred`` graph so a selective backward can route it to the
+          score net ψ.
+
+        ``mu_hat_t`` is the centered mean ``μ̂ = μ_t − μ_p(z_hist)`` so
+        callers can feed the σ_data update without re-running the
+        baseline.  The sampler draws ``ẑ_t^(τ) = μ̂ + √(σ_t² + σ̃²)·ε``
+        in centered coords.
         """
         N, d = mu_t.shape
         device = mu_t.device
@@ -934,7 +974,8 @@ class DiffusionTransition(BaseTransition):
 
         # ---- chunk over S_k ----
         k_chunk = max(1, min(int(self.schedule.k_chunk), int(self.S_k)))
-        total_sqerr = torch.zeros(N, device=device, dtype=dtype)
+        total_sqerr_phith = torch.zeros(N, device=device, dtype=dtype)
+        total_sqerr_psi = torch.zeros(N, device=device, dtype=dtype)
 
         override_k_idx = None
         override_eps = None
@@ -1091,13 +1132,21 @@ class DiffusionTransition(BaseTransition):
             F_pred = F_pred.squeeze(-1)
             F_tgt_flat = F_target.permute(0, 2, 1).reshape(N * kc, d)
 
-            sqerr = (F_pred - F_tgt_flat).pow(2).sum(dim=1) * weights
-            total_sqerr = total_sqerr + sqerr.view(N, kc).sum(dim=1)
+            # Fork at the unweighted squared error: phith gets the IS
+            # weights (arithmetic order identical to the pre-split code),
+            # psi gets the same sqerr unit-weighted.  Both share F_pred.
+            sqerr = (F_pred - F_tgt_flat).pow(2).sum(dim=1)
+            total_sqerr_phith = total_sqerr_phith + (sqerr * weights).view(
+                N, kc
+            ).sum(dim=1)
+            total_sqerr_psi = total_sqerr_psi + sqerr.view(N, kc).sum(dim=1)
 
-        per_sample = total_sqerr / float(self.S_k)
+        # S_k normalisation applied symmetrically to both accumulators.
+        per_sample_phith = total_sqerr_phith / float(self.S_k)
+        per_sample_psi = total_sqerr_psi / float(self.S_k)
         if return_per_sample:
-            return per_sample, mu_hat_t
-        return per_sample.sum(), mu_hat_t
+            return per_sample_phith, per_sample_psi, mu_hat_t
+        return per_sample_phith.sum(), per_sample_psi.sum(), mu_hat_t
 
     # ------------------------------------------------------------------
     # σ_data-aware EDM preconditioning.

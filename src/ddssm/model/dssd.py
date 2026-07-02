@@ -847,8 +847,12 @@ class DDSSM_base(nn.Module):
 
         components = LossComponents(
             recon=L_rec,
-            init_kl=L_init,
-            trans_kl=L_trans,
+            init_kl_phith=L_init,
+            # ψ-side placeholders (zeros): replaced with real score-net
+            # scalars when the split-loss forward wiring (plan M5) lands.
+            init_kl_psi=torch.zeros_like(L_init),
+            trans_kl_phith=L_trans,
+            trans_kl_psi=torch.zeros_like(L_trans),
             r_sigma_p=r_sigma_p_raw,
             r_mu_p=r_mu_p_raw,
         )

@@ -272,16 +272,23 @@ class BaseTransition(nn.Module):
         time_embed: torch.Tensor,  # (B, T, E_t)
         sigma_data: "SigmaDataBuffer | None" = None,
         covariates: torch.Tensor | None = None,
+        return_psi: bool = False,
     ) -> dict[str, torch.Tensor]:
         """Hierarchical VHP init term over ``t = 1 … j`` (shared walk).
 
         Samples the auxiliary previous states ``z_aux ~ q_Φ(·|z_{1:j})``,
         walks ``t = 1 … j`` with the mixed ``z_aux → real`` history, and
-        accumulates the per-step score via the polymorphic
-        :meth:`_score_init_step` hook. Returns the **complete** init
-        decomposition ``{loss, entropy, vhp, kl_aux, loss_init}``; the
-        entropy policy (:meth:`_init_entropy_term`) and any σ_data update
-        (inside :meth:`_score_init_step`) are owned by the subclass, so
+        accumulates both sides of the per-step ``(phith, psi)`` score via
+        the polymorphic :meth:`_score_init_step` hook. Returns the
+        **complete** init decomposition
+        ``{loss, entropy, vhp, kl_aux, loss_init}`` where
+        ``loss = entropy + loss_init + kl_aux`` wraps the phith side
+        (unchanged composition); with ``return_psi`` the dict additionally
+        carries ``"loss_psi"`` — the ψ-side (unit-weighted) init loss with
+        the same ``/(B·S)`` normalisation, graph-connected (not detached)
+        for the split backward. The entropy policy
+        (:meth:`_init_entropy_term`) and any σ_data update (inside
+        :meth:`_score_init_step`) are owned by the subclass, so
         :class:`DDSSM_base` never gates on transition type.
         """
         del covariates  # init does not condition on covariates
@@ -304,9 +311,10 @@ class BaseTransition(nn.Module):
         z_hist = z_aux.unsqueeze(1).expand(B, S, d, j).reshape(BS, d, j).clone()
 
         total = torch.zeros((), device=device, dtype=dtype)
+        total_psi = torch.zeros((), device=device, dtype=dtype)
         for step in range(j):
             z_t = zs[:, :, :, step].reshape(BS, d)
-            total = total + self._score_init_step(
+            step_phith, step_psi = self._score_init_step(
                 step=step,
                 z_t=z_t,
                 z_hist=z_hist,
@@ -317,6 +325,8 @@ class BaseTransition(nn.Module):
                 S=S,
                 T=T,
             )
+            total = total + step_phith
+            total_psi = total_psi + step_psi
             # Shift history: drop oldest, append the real z_t.
             if j > 1:
                 z_hist = torch.cat([z_hist[:, :, 1:], z_t.unsqueeze(-1)], dim=-1)
@@ -324,16 +334,20 @@ class BaseTransition(nn.Module):
                 z_hist = z_t.unsqueeze(-1)
 
         loss_init = total / float(BS)
+        loss_init_psi = total_psi / float(BS)
         kl_aux = aux_posterior.kl_against_standard_normal(aux_mu, aux_logvar)
         entropy = self._init_entropy_term(enc_stats)
         vhp = loss_init + kl_aux
-        return {
+        out = {
             "loss": entropy + vhp,
             "entropy": entropy,
             "vhp": vhp,
             "kl_aux": kl_aux,
             "loss_init": loss_init,
         }
+        if return_psi:
+            out["loss_psi"] = loss_init_psi
+        return out
 
     def _score_init_step(
         self,
@@ -347,10 +361,13 @@ class BaseTransition(nn.Module):
         B: int,
         S: int,
         T: int,
-    ) -> torch.Tensor:
-        """Per-step init score, **summed over B·S**. Override per transition.
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Per-step init score ``(phith, psi)``, each **summed over B·S**.
 
-        Implementations also own any σ_data update at this step.
+        Override per transition. ``phith`` is the ELBO-side loss; ``psi``
+        is the score-net-side (unit-weighted) loss — transitions without a
+        score net return ``loss.new_zeros(())`` for it. Implementations
+        also own any σ_data update at this step.
         """
         raise NotImplementedError
 
@@ -716,18 +733,20 @@ class GaussianTransition(BaseTransition):
         B: int,
         S: int,
         T: int,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Closed-form ``-log p_ψ(z_t | z_hist)`` for one init step (summed B·S).
 
         Scores the encoder sample ``z_t`` under the Gaussian prior
         ``p_ψ(·|z_hist)`` (same head as the ``t>j`` term). No σ_data — the
         plain Gaussian transition does not use EDM preconditioning; the
-        base ``_init_entropy_term`` default adds ``-H(q_φ)``.
+        base ``_init_entropy_term`` default adds ``-H(q_φ)``. No score net
+        either, so the ψ side of the ``(phith, psi)`` pair is zero.
         """
         del sigma_data  # plain Gaussian transition does not track σ_data
         ctx_step = self._init_step_time_ctx(step, time_embed, B, S, T)
         log_p = self.log_prob(z_t, z_hist, ctx=ctx_step)  # (BS,)
-        return (-log_p).sum()
+        loss = (-log_p).sum()
+        return loss, loss.new_zeros(())
 
     def transition_kl(
         self,

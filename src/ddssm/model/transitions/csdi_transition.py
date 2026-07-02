@@ -193,12 +193,17 @@ class CSDITransition(BaseTransition):
         time_embed: torch.Tensor | None = None,
         sigma_data: Any = None,
         covariates: torch.Tensor | None = None,
+        return_psi: bool = False,
     ) -> dict[str, torch.Tensor]:
         # CSDI models only the conditional p(z_t | z_{t-j:t-1}); the j-step init
-        # marginal is supplied from data at forecast time. Contribute nothing.
+        # marginal is supplied from data at forecast time. Contribute nothing
+        # (on the ψ side either — the init term is identically zero).
         del enc_stats, aux_posterior, time_embed, sigma_data, covariates
         z = zs.new_zeros(())
-        return {"loss": z, "entropy": z, "vhp": z, "kl_aux": z, "loss_init": z}
+        out = {"loss": z, "entropy": z, "vhp": z, "kl_aux": z, "loss_init": z}
+        if return_psi:
+            out["loss_psi"] = z
+        return out
 
     # --- forecast rollout -------------------------------------------------
     @torch.no_grad()

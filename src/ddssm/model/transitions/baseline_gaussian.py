@@ -253,7 +253,7 @@ class BaselineGaussianTransition(BaseTransition):
         B: int,
         S: int,
         T: int,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Closed-form cross-entropy ``-log p_ψ(z_t | z_hist)`` (summed over B·S).
 
         Per § State-conditional prior variance the σ_p head is shared with
@@ -261,6 +261,7 @@ class BaselineGaussianTransition(BaseTransition):
         at this init ``t`` (1-based) from the centered encoder moments. The
         shared :meth:`BaseTransition._init_entropy_term` default adds
         ``-H(q_φ)`` so the assembled init term is the full stage-1 loss.
+        No score net, so the ψ side of the ``(phith, psi)`` pair is zero.
         """
         del time_embed  # baseline does not condition on time
         BS = B * S
@@ -278,7 +279,8 @@ class BaselineGaussianTransition(BaseTransition):
                 sigma_t2_batch=q_logvar.exp(),
             )
 
-        return (-log_p).sum()
+        loss = (-log_p).sum()
+        return loss, loss.new_zeros(())
 
 
 # ---------------------------------------------------------------------------
