@@ -45,11 +45,12 @@ class NoUsableCheckpointError(Exception):
     """
 
 
-_FORMAT = "ddssm_ckpt_v2"
+_FORMAT = "ddssm_ckpt_v3"
 # Older payloads we can still load (we only ever bumped here). On load, any
-# v1 fields the v2 schema added (``scaler_state``, ``scheduler_state``)
-# default to ``None``.
-_SUPPORTED_FORMATS = {"ddssm_ckpt_v1", "ddssm_ckpt_v2"}
+# fields a newer schema added (v2: ``scaler_state``, ``scheduler_state``;
+# v3: ``optimizer_state_psi``, ``scheduler_state_psi``, ``split_loss``,
+# ``grad_skip_count``) default to ``None`` / ``False`` / ``0``.
+_SUPPORTED_FORMATS = {"ddssm_ckpt_v1", "ddssm_ckpt_v2", "ddssm_ckpt_v3"}
 
 
 def _atomic_save(obj: Any, path: str) -> None:
@@ -111,6 +112,18 @@ class Checkpoint:
     # iterator restarts, reshuffled from the restored torch state.
     # ``None`` for legacy payloads (restore skips it).
     rng_state: dict | None = None
+    # v3 additions (split-loss mode, M7). ``optimizer_state_psi`` /
+    # ``scheduler_state_psi`` carry the ψ-side optimizer / scheduler
+    # ``state_dict()`` when the producer ran the two-optimizer split
+    # topology; ``split_loss`` records whether the producing trainer was
+    # in split mode (topology, not loss flag, is the source of truth).
+    # ``grad_skip_count`` is the cumulative non-finite-gradient skip
+    # counter so skip accounting survives preempt-resume. Legacy v1/v2
+    # payloads lack all four keys and default them on load.
+    optimizer_state_psi: dict | None = None
+    scheduler_state_psi: dict | None = None
+    split_loss: bool = False
+    grad_skip_count: int = 0
 
     @classmethod
     def from_trainer(
@@ -128,6 +141,11 @@ class Checkpoint:
         ema = getattr(trainer, "ema", None)
         scaler = getattr(trainer, "scaler", None)
         scheduler = getattr(trainer, "scheduler", None)
+        # v3 split-mode capture. Topology (``_optimizers``) is the source
+        # of truth for ``split_loss`` — it works even when the trainer's
+        # ``_active_loss`` was never installed (e.g. save before fit()).
+        opt_psi = getattr(trainer, "opt_psi", None)
+        schedulers = getattr(trainer, "_schedulers", [])
         return cls(
             model_state=trainer.model.state_dict(),
             model_config_yaml=getattr(trainer, "_model_config_yaml", None),
@@ -162,6 +180,12 @@ class Checkpoint:
                 else None
             ),
             scheduler_state=(scheduler.state_dict() if scheduler is not None else None),
+            optimizer_state_psi=(opt_psi.state_dict() if opt_psi is not None else None),
+            scheduler_state_psi=(
+                schedulers[1].state_dict() if len(schedulers) > 1 else None
+            ),
+            split_loss=len(getattr(trainer, "_optimizers", [])) > 1,
+            grad_skip_count=int(getattr(trainer, "grad_skip_count", 0)),
         )
 
     def to_payload(self) -> dict:
@@ -179,6 +203,10 @@ class Checkpoint:
             "rng_state": self.rng_state,
             "scaler_state": self.scaler_state,
             "scheduler_state": self.scheduler_state,
+            "optimizer_state_psi": self.optimizer_state_psi,
+            "scheduler_state_psi": self.scheduler_state_psi,
+            "split_loss": self.split_loss,
+            "grad_skip_count": self.grad_skip_count,
         }
 
     def save(self, path: str) -> None:
@@ -232,6 +260,12 @@ class Checkpoint:
             # scaler/scheduler".
             scaler_state=payload.get("scaler_state"),
             scheduler_state=payload.get("scheduler_state"),
+            # v1/v2 payloads never wrote the v3 split-mode fields — default
+            # to "producer was single-mode, no skips".
+            optimizer_state_psi=payload.get("optimizer_state_psi"),
+            scheduler_state_psi=payload.get("scheduler_state_psi"),
+            split_loss=bool(payload.get("split_loss", False)),
+            grad_skip_count=int(payload.get("grad_skip_count", 0)),
         )
 
 

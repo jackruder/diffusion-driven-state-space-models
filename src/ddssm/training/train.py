@@ -542,6 +542,39 @@ class DDSSMTrainer:
             strict=strict,
             load_ema=False,
         )
+        # Split-mode contract guard — FIRST, before any optimizer-state
+        # handling. Live mode is the installed topology when present; when
+        # restore runs before fit() has installed it (no ``_optimizers``
+        # rebuild yet), the active loss's ``use_split_loss`` flag decides.
+        # A split-produced ckpt into a single-loss trainer (or vice versa)
+        # would silently drop / fabricate ψ optimizer state, so hard-error.
+        live_split = len(self._optimizers) > 1
+        loss_split = isinstance(self._active_loss, FullELBO) and getattr(
+            self._active_loss, "use_split_loss", False
+        )
+        live_mode = live_split or loss_split
+        if ckpt.split_loss != live_mode:
+            raise ValueError(
+                f"Checkpoint was produced in "
+                f"{'split' if ckpt.split_loss else 'single'}-loss mode but the "
+                f"live trainer is in {'split' if live_mode else 'single'}-loss "
+                "mode; refusing to mix optimizer topologies across resume."
+            )
+        # Split-mode restore may run before fit() installs the two-optimizer
+        # topology (e.g. a direct restore_from_checkpoint call); install it
+        # now so the ψ optimizer state has a live target.
+        if live_mode and not live_split:
+            self._install_split_topology()
+        # A v3 split payload must carry both optimizer states or neither —
+        # exactly one present means a corrupt / hand-mangled payload.
+        if live_mode and (ckpt.optimizer_state is None) != (
+            ckpt.optimizer_state_psi is None
+        ):
+            raise RuntimeError(
+                "Split-mode checkpoint carries exactly one of optimizer_state "
+                "/ optimizer_state_psi; a split-mode resume requires both (or "
+                "neither) — the payload is corrupt."
+            )
         if ckpt.optimizer_state is not None and self.optimizer is not None:
             self.optimizer.load_state_dict(ckpt.optimizer_state)
         else:
@@ -549,6 +582,8 @@ class DDSSMTrainer:
                 "[restore] Warning: optimizer state not found in checkpoint "
                 "or optimizer is None."
             )
+        if ckpt.optimizer_state_psi is not None and self.opt_psi is not None:
+            self.opt_psi.load_state_dict(ckpt.optimizer_state_psi)
         if hasattr(self, "ema"):
             if ckpt.ema_state is not None:
                 self.ema.shadow = ckpt.ema_state
@@ -600,6 +635,22 @@ class DDSSMTrainer:
             )
         if ckpt.scheduler_state is not None and live_scheduler is not None:
             live_scheduler.load_state_dict(ckpt.scheduler_state)
+        # ψ-side LR-scheduler contract guard — mirrors the φθ guard above.
+        live_scheduler_psi = self._schedulers[1] if len(self._schedulers) > 1 else None
+        if ckpt.scheduler_state_psi is not None and live_scheduler_psi is None:
+            raise RuntimeError(
+                "Checkpoint carries ψ-side LR scheduler state but the live "
+                "trainer has no second (ψ) scheduler; refusing to drop state "
+                "silently."
+            )
+        if ckpt.scheduler_state_psi is None and live_scheduler_psi is not None:
+            raise RuntimeError(
+                "Live trainer has a ψ-side LR scheduler but the checkpoint "
+                "carries no ψ scheduler state; refusing to restart the ψ "
+                "schedule from step 0 mid-run."
+            )
+        if ckpt.scheduler_state_psi is not None and live_scheduler_psi is not None:
+            live_scheduler_psi.load_state_dict(ckpt.scheduler_state_psi)
         # grad_accum_steps contract guard — same logic as scaler/scheduler.
         # Loss is divided by ``self.grad_accum_steps`` (see ``_backward_loss``
         # and the accumulation loop), so silently changing it across resume
@@ -611,6 +662,10 @@ class DDSSMTrainer:
                 "refusing to rescale gradients silently mid-run."
             )
         self.global_step = ckpt.global_step
+        # Always set from the payload (legacy v1/v2 default 0) — skip
+        # accounting must reflect the producer's run, not whatever the
+        # fresh process accumulated before restore.
+        self.grad_skip_count = int(getattr(ckpt, "grad_skip_count", 0))
         # Restore the producing stage's start step alongside global_step so
         # the orchestrator's budget / λ-ramp origin math sees the stage's
         # true start (legacy payloads default to 0, matching the single-fit
