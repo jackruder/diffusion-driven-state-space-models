@@ -463,7 +463,10 @@ class DDSSM_base(nn.Module):
         transition owns the per-step scoring, the encoder-entropy policy
         (``-H`` for closed-form, ``0`` for the ESM-cancelling diffusion
         path), and any σ_data update — the model does not gate on
-        transition type. Returns ``{loss, entropy, vhp, kl_aux, loss_init}``.
+        transition type. Returns ``{loss, entropy, vhp, kl_aux, loss_init,
+        loss_psi}`` — ``return_psi=True`` is requested so the ψ-side
+        (unit-weighted score-net) init loss is available for the split
+        objective; transitions without a score net return zero for it.
         """
         del logq_paths  # the VHP path scores encoder moments, not sampled log-q
         return self._active_transition().transition_kl_init(
@@ -473,6 +476,7 @@ class DDSSM_base(nn.Module):
             time_embed=time_embed,
             sigma_data=self.sigma_data,
             covariates=covariates,
+            return_psi=True,
         )
 
     def _active_transition(self) -> nn.Module:
@@ -752,6 +756,11 @@ class DDSSM_base(nn.Module):
         )
 
         L_init = init_terms["loss"]
+        # ψ-side (unit-weighted score-net) init loss. Requested via
+        # ``return_psi=True`` in ``_init_kl_loss``; transitions without a
+        # score net return an exact zero. Kept graph-connected (no detach)
+        # for the split backward.
+        L_init_psi = init_terms.get("loss_psi", torch.zeros_like(L_init))
         L_vhp = init_terms.get("vhp", torch.tensor(0.0, device=observed_data.device))
         L_ent_init = init_terms.get(
             "entropy", torch.tensor(0.0, device=observed_data.device)
@@ -765,6 +774,12 @@ class DDSSM_base(nn.Module):
             covariates=covariates,
         )
         L_trans = trans_terms["kl"]
+        # ψ-side (unit-weighted score-net) transition loss. Diffusion
+        # transitions always return ``kl_psi``; non-diffusion transitions
+        # (Gaussian / BaselineGaussian / CSDI) return only ``"kl"`` (+
+        # diagnostics), so the zeros fallback is exact for them. Kept
+        # graph-connected (no detach) for the split backward.
+        L_trans_psi = trans_terms.get("kl_psi", torch.zeros_like(L_trans))
         trans_subterms = {k: v for k, v in trans_terms.items() if k != "kl"}
 
         # Model-v2 centering regularizers (free functions in
@@ -826,6 +841,8 @@ class DDSSM_base(nn.Module):
                 metrics["loss/rate/init/kl_aux"] = init_terms["kl_aux"].detach()
             if "loss_init" in init_terms:
                 metrics["loss/rate/init/loss_init"] = init_terms["loss_init"].detach()
+            if "loss_psi" in init_terms:
+                metrics["loss/rate/init/loss_psi"] = init_terms["loss_psi"].detach()
         # Surface per-t σ_data²[t] buffer values whenever a buffer exists.
         # These feed the post-hoc ``sigma_data_drift`` metric's trajectory
         # plot (init-experiment.org § Headline metrics, metric 6); logged once
@@ -848,11 +865,9 @@ class DDSSM_base(nn.Module):
         components = LossComponents(
             recon=L_rec,
             init_kl_phith=L_init,
-            # ψ-side placeholders (zeros): replaced with real score-net
-            # scalars when the split-loss forward wiring (plan M5) lands.
-            init_kl_psi=torch.zeros_like(L_init),
+            init_kl_psi=L_init_psi,
             trans_kl_phith=L_trans,
-            trans_kl_psi=torch.zeros_like(L_trans),
+            trans_kl_psi=L_trans_psi,
             r_sigma_p=r_sigma_p_raw,
             r_mu_p=r_mu_p_raw,
         )
@@ -1096,7 +1111,7 @@ def _default_hyperparams():
         batch_size=16,
         grad_accum_steps=4,
         t_chunk=16,
-        clip_grad_norm=None,
+        psi_betas=None,
         enc_lr=5e-4,
         dec_lr=5e-4,
         trans_lr=5e-4,
@@ -1120,7 +1135,10 @@ class DDSSMHyperParamsConf:
     batch_size: int = 16
     grad_accum_steps: int = 4
     t_chunk: int = 16
-    clip_grad_norm: float | None = None
+    # Optional Adam betas for the score-net (ψ) param groups in single-loss
+    # mode (list, not tuple, for OmegaConf; the trainer converts at use).
+    # ``None`` (default) keeps today's optimizer topology exactly.
+    psi_betas: list[float] | None = None
 
     enc_lr: float = 5e-4
     dec_lr: float = 5e-4

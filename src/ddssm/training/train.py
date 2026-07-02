@@ -10,9 +10,9 @@ import math
 import random
 import shutil
 import signal
-import datetime
 from typing import TYPE_CHECKING, Any, final
 import logging
+import datetime
 import tempfile
 from contextlib import nullcontext, contextmanager
 from collections import deque
@@ -20,6 +20,8 @@ from collections.abc import Callable
 
 import numpy as np
 import torch
+
+from ddssm.model.losses import FullELBO, SplitLoss
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +40,6 @@ from torch.profiler import (
 from torch.utils.data import DataLoader
 
 from ddssm.model.dssd import DDSSM_base
-from ddssm.training.checkpoint import NoUsableCheckpointError
 from ddssm.training.loggers import (
     CSVLogger,
     MetricSpec,
@@ -47,8 +48,12 @@ from ddssm.training.loggers import (
     ConsoleLogger,
     TensorBoardLogger,
 )
+from ddssm.training.checkpoint import NoUsableCheckpointError
 from ddssm.training.train_utils import (
+    param_groups_psi,
+    param_groups_phith,
     param_groups_for_adamw,
+    split_params_phith_psi,
 )
 
 
@@ -205,12 +210,28 @@ class DDSSMTrainer:
                     dec_lr=self.hparams.dec_lr,
                     trans_lr=self.hparams.trans_lr,
                     weight_decay=self.hparams.weight_decay,
+                    psi_betas=self._hparams_psi_betas(),
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,
             )
+        # Optimizer topology: single-mode is ``[self.optimizer]``;
+        # ``_install_split_topology`` (split-loss mode) replaces this with
+        # ``[opt_phith, opt_psi]`` and keeps ``self.optimizer`` aliased to
+        # the φθ side. Every step/zero_grad/unscale site loops this list.
+        self._optimizers: list[optim.Optimizer] = [self.optimizer]
+        self.opt_psi: optim.Optimizer | None = None
+        # Cached (φθ, ψ) parameter lists for the split backward; populated
+        # by ``_install_split_topology``.
+        self._phith_params: list[torch.nn.Parameter] | None = None
+        self._psi_params: list[torch.nn.Parameter] | None = None
 
         self.scheduler = None
+        # Scheduler topology mirror of ``_optimizers``: populated by
+        # ``_install_scheduler`` (one entry per optimizer). When empty but
+        # ``self.scheduler`` was assigned directly (legacy call sites),
+        # ``_optimizer_step`` falls back to stepping ``self.scheduler``.
+        self._schedulers: list = []
         # Hoisted out of fit() so save_checkpoint can persist its state via
         # ``Checkpoint.from_trainer``. bf16 autocast doesn't need scaling, so
         # the default scaler stays disabled and ``scaler.state_dict()`` is
@@ -220,7 +241,13 @@ class DDSSMTrainer:
         self.weight_decay = self.hparams.weight_decay
 
         self.grad_accum_steps = self.hparams.grad_accum_steps
-        self.clip_grad_norm = self.hparams.clip_grad_norm
+        # Grad-skip bookkeeping (replaces the removed grad-norm clipping):
+        # non-finite whole-model grad norms discard the macro-batch instead
+        # of poisoning Adam state / EMA shadows. ``grad_skip_count`` is
+        # cumulative and persisted via checkpoints; ``_last_grad_norm`` is
+        # the most recent whole-model norm (NaN on a skipped step).
+        self.grad_skip_count: int = 0
+        self._last_grad_norm: float | None = None
 
         self.ema_decay = self.hparams.ema_decay
         # EMA on the denoiser (used at sampling time)
@@ -333,24 +360,147 @@ class DDSSMTrainer:
         baseline_flag = getattr(t, "baseline", True)
         maybe_flag(getattr(self.model, "baseline", None), baseline_flag)
 
+    def _hparams_psi_betas(self) -> tuple[float, float] | None:
+        """Single-mode ψ betas from hparams, as a tuple (or ``None``).
+
+        ``getattr`` guard: hparams objects predating the ``psi_betas``
+        field must keep working unchanged.
+        """
+        pb = getattr(self.hparams, "psi_betas", None)
+        return tuple(pb) if pb else None
+
+    def _build_split_optimizers(
+        self,
+        enc_lr: float,
+        dec_lr: float,
+        trans_lr: float,
+        baseline_lr: float | None = None,
+    ) -> None:
+        """(Re)build the two-optimizer (φθ, ψ) topology and its aliases.
+
+        The ψ side (score net: ``transition.diffmodel`` +
+        ``transition.embed_layer``) gets betas ``(0.9, 0.99)`` — faster
+        second-moment adaptation for the score-matching objective — while
+        the φθ side keeps the default ``(0.9, 0.999)``.
+
+        Raises:
+            ValueError: If the model has no ψ parameters (split-loss mode
+                requires a diffusion transition).
+        """
+        psi_groups = param_groups_psi(
+            self.model,
+            trans_lr=trans_lr,
+            weight_decay=self.weight_decay,
+        )
+        if not psi_groups:
+            raise ValueError(
+                "split-loss mode requires a diffusion transition: the model "
+                "has no ψ parameters (transition.diffmodel / "
+                "transition.embed_layer), so param_groups_psi is empty."
+            )
+        opt_phith = torch.optim.AdamW(
+            param_groups_phith(
+                self.model,
+                enc_lr=enc_lr,
+                dec_lr=dec_lr,
+                trans_lr=trans_lr,
+                weight_decay=self.weight_decay,
+                baseline_lr=baseline_lr,
+            ),
+            betas=(0.9, 0.999),
+            eps=1e-8,
+        )
+        opt_psi = torch.optim.AdamW(psi_groups, betas=(0.9, 0.99), eps=1e-8)
+        self._optimizers = [opt_phith, opt_psi]
+        # ``self.optimizer`` stays the φθ alias so existing single-optimizer
+        # call sites (checkpointing, external LR pokes) keep a target.
+        self.optimizer = opt_phith
+        self.opt_psi = opt_psi
+
+    def _install_split_topology(self) -> None:
+        """Switch the trainer to the split-loss two-optimizer topology.
+
+        Builds ``opt_phith`` / ``opt_psi`` from the trainer hparams' LRs
+        (mirroring the default single-optimizer build) and caches the
+        (φθ, ψ) parameter lists used by the split backward. Calling it
+        again simply rebuilds (fresh Adam state).
+        """
+        # The split backward runs two passes over a shared graph (the φθ
+        # pass uses retain_graph=True). AOTAutograd's donated-buffer
+        # optimization — active inside torch.compile'd regions, which
+        # ``maybe_compile`` enables by default — hard-errors on
+        # retain_graph=True, so it must be off for split-loss runs.
+        try:
+            import torch._functorch.config as _functorch_config
+
+            _functorch_config.donated_buffer = False
+        except (ImportError, AttributeError):  # pragma: no cover
+            pass
+        self._build_split_optimizers(
+            enc_lr=self.hparams.enc_lr,
+            dec_lr=self.hparams.dec_lr,
+            trans_lr=self.hparams.trans_lr,
+            baseline_lr=getattr(self.hparams, "baseline_lr", None),
+        )
+        self._phith_params, self._psi_params = split_params_phith_psi(self.model)
+
+    def _install_scheduler(self, sched: torch.optim.lr_scheduler.LambdaLR) -> None:
+        """Install the LR scheduler(s) for the current optimizer topology.
+
+        Single mode: ``self.scheduler = sched`` and ``_schedulers = [sched]``
+        (today's behavior). Split mode: additionally builds a ψ-side
+        ``LambdaLR`` on ``opt_psi`` reusing the φθ scheduler's shape (the
+        same ``lr_lambda`` callable — identical warmup/total/floor), so
+        both sides decay together; ``_optimizer_step`` steps the list.
+
+        Args:
+            sched: A ``LambdaLR`` (e.g. from ``make_warmup_cosine``)
+                attached to ``self._optimizers[0]``.
+        """
+        self.scheduler = sched
+        if len(self._optimizers) < 2:
+            self._schedulers = [sched]
+            return
+        opt_psi = self._optimizers[1]
+        sched_psi = torch.optim.lr_scheduler.LambdaLR(
+            opt_psi,
+            lr_lambda=[sched.lr_lambdas[0]] * len(opt_psi.param_groups),
+        )
+        self._schedulers = [sched, sched_psi]
+
     def _rebuild_optimizer(
         self,
         lrs,
     ):
-        """Rebuild the AdamW optimizer with per-component stage learning rates.
+        """Rebuild the optimizer(s) with per-component stage learning rates.
+
+        Split-aware: under the two-optimizer topology both sides are
+        rebuilt with their structural betas; otherwise the single AdamW is
+        rebuilt as before (threading the optional single-mode per-group
+        ψ betas from hparams).
 
         Args:
             lrs: A ``StageLrs``-like object with ``enc_lr`` / ``dec_lr`` /
                 ``trans_lr`` learning rates.
         """
+        if len(self._optimizers) == 2:
+            self._build_split_optimizers(
+                enc_lr=lrs.enc_lr,
+                dec_lr=lrs.dec_lr,
+                trans_lr=lrs.trans_lr,
+                baseline_lr=getattr(lrs, "baseline_lr", None),
+            )
+            return
         groups = param_groups_for_adamw(
             self.model,
             enc_lr=lrs.enc_lr,
             dec_lr=lrs.dec_lr,
             trans_lr=lrs.trans_lr,
             weight_decay=self.weight_decay,
+            psi_betas=self._hparams_psi_betas(),
         )
         self.optimizer = torch.optim.AdamW(groups, betas=(0.9, 0.999), eps=1e-8)
+        self._optimizers = [self.optimizer]
 
     # ------------------------
     # Serialization / Checkpoint  (schema owned by ddssm.training.checkpoint)
@@ -554,8 +704,27 @@ class DDSSMTrainer:
 
         return loss, metrics, observed.size(0)
 
-    def _backward_loss(self, loss: torch.Tensor, scaler, amp: bool):
-        if amp:
+    def _backward_loss(self, loss: "torch.Tensor | SplitLoss", scaler, amp: bool):
+        if isinstance(loss, SplitLoss):
+            # Split backward: route each side's gradients only into its own
+            # parameter set. The φθ pass must retain the graph — both sides
+            # share the encoder subgraph, and the ψ pass walks it second.
+            if self._phith_params is None or self._psi_params is None:
+                raise RuntimeError(
+                    "SplitLoss backward requires the split topology; call "
+                    "_install_split_topology() first (fit() does this when "
+                    "the active loss has use_split_loss=True)."
+                )
+            lp = loss.phith / self.grad_accum_steps
+            lq = loss.psi / self.grad_accum_steps
+            (scaler.scale(lp) if amp else lp).backward(
+                inputs=self._phith_params, retain_graph=True
+            )
+            # ψ side can be a graph-free zero (e.g. every ψ term degenerate
+            # for the batch) — nothing to backprop then.
+            if lq.requires_grad:
+                (scaler.scale(lq) if amp else lq).backward(inputs=self._psi_params)
+        elif amp:
             scaler.scale(loss / self.grad_accum_steps).backward()
         else:
             (loss / self.grad_accum_steps).backward()
@@ -567,24 +736,64 @@ class DDSSMTrainer:
             accum_metrics[k] = accum_metrics[k] + v.detach()
         return accum_metrics
 
-    def _optimizer_step(self, scaler, amp: bool):
-        # Optional global grad-norm clip (``hparams.clip_grad_norm``).
-        # Follows the AMP unscale→clip→step order; ``scaler`` is disabled
-        # in this trainer so ``unscale_`` is a no-op but keeps the order
-        # correct if scaling is ever re-enabled.
-        if self.clip_grad_norm is not None:
-            if amp:
-                scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), float(self.clip_grad_norm)
-            )
+    def _optimizer_step(self, scaler, amp: bool) -> bool:
+        """Step optimizer(s)/scheduler(s)/EMA, skipping on non-finite grads.
+
+        Returns:
+            ``True`` if the step was taken, ``False`` if it was skipped
+            because the whole-model gradient norm was non-finite (the
+            macro-batch is discarded: grads zeroed, no optimizer /
+            scheduler / EMA update, ``grad_skip_count`` incremented).
+        """
+        # AMP: unscale before inspecting grads (unscale→inspect→step order;
+        # the scaler is disabled for bf16 so this is a no-op today, but the
+        # order stays correct if fp16 scaling is ever enabled).
         if amp:
-            scaler.step(self.optimizer)
+            for opt in self._optimizers:
+                scaler.unscale_(opt)
+
+        # Norm computation only — max_norm=inf never rescales. One norm
+        # over the whole model in both single and split modes.
+        norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), float("inf"))
+
+        if not torch.isfinite(norm):
+            # Discard the macro-batch: a NaN step would poison Adam state
+            # and EMA shadows alike.
+            for opt in self._optimizers:
+                opt.zero_grad(set_to_none=True)
+            self.grad_skip_count += 1
+            self._last_grad_norm = float("nan")
+            log.warning(
+                "[grad-skip] non-finite grad norm %s at step %d "
+                "(total skips: %d)",
+                float(norm),
+                self.global_step + 1,
+                self.grad_skip_count,
+            )
+            if amp:
+                # GradScaler contract: after unscale_(), update() must still
+                # run once per iteration even when scaler.step() is skipped,
+                # so per-optimizer bookkeeping resets for the next step.
+                # (No-op while the scaler is disabled, as under bf16.)
+                scaler.update()
+            return False
+
+        self._last_grad_norm = float(norm)
+        if amp:
+            for opt in self._optimizers:
+                scaler.step(opt)
             scaler.update()
         else:
-            self.optimizer.step()
+            for opt in self._optimizers:
+                opt.step()
 
-        if self.scheduler is not None:
+        if self._schedulers:
+            for sched in self._schedulers:
+                sched.step()
+        elif self.scheduler is not None:
+            # Back-compat: a scheduler assigned directly to
+            # ``trainer.scheduler`` without going through
+            # ``_install_scheduler`` still steps.
             self.scheduler.step()
 
         if hasattr(self, "ema") and self.ema is not None and any(
@@ -595,6 +804,7 @@ class DDSSMTrainer:
             # warm-started EMA lag over the length of the frozen stage.
             with torch.no_grad():
                 self.ema.update()
+        return True
 
     def _finalize_accum_metrics(self, accum_metrics):
         if accum_metrics is None:
@@ -642,6 +852,16 @@ class DDSSMTrainer:
         )
         log_values["stage/step_within"] = torch.tensor(
             float(self.global_step - self._stage_start_step), device=device
+        )
+        # Grad-skip diagnostics: the whole-model grad norm of the last
+        # optimizer step (NaN on a skipped step) and the cumulative skip
+        # count. Both fit the existing ``optim/*`` MetricSpec.
+        if self._last_grad_norm is not None:
+            log_values["optim/grad_norm"] = torch.tensor(
+                self._last_grad_norm, device=device
+            )
+        log_values["optim/grad_skips"] = torch.tensor(
+            float(self.grad_skip_count), device=device
         )
         self.metrics.update(split="train", values=log_values, weight=accum_weight)
         if log_every and (step % log_every == 0):
@@ -695,7 +915,11 @@ class DDSSMTrainer:
                 vlog = dict(vmetrics)
                 if "loss/total" in vlog:
                     vlog["loss/total_unweighted"] = vlog["loss/total"]
-                vlog["loss/total"] = vloss
+                # Under split-loss mode the loss object returns a SplitLoss
+                # pair; log its scalar total (φθ + ψ).
+                vlog["loss/total"] = (
+                    vloss.total if isinstance(vloss, SplitLoss) else vloss
+                )
                 self.metrics.update("val", values=vlog, weight=vwin.size(0))
 
     def _maybe_run_validation(
@@ -889,6 +1113,18 @@ class DDSSMTrainer:
         if self._active_loss is None:
             self._active_loss = self._build_default_loss()
 
+        # Split-loss topology decision happens here (not __init__): the
+        # orchestrator installs the per-stage loss after construction.
+        # fit() is re-entered per stage — the ``len`` guard preserves the
+        # existing two-optimizer topology (and its Adam moments) instead
+        # of rebuilding it every stage.
+        if (
+            isinstance(self._active_loss, FullELBO)
+            and getattr(self._active_loss, "use_split_loss", False)
+            and len(self._optimizers) < 2
+        ):
+            self._install_split_topology()
+
         # Rolling window for the ELBO-plateau early-stop check.
         es_active = bool(early_stop and early_stop.enabled)
         loss_window: deque[float] = (
@@ -944,7 +1180,8 @@ class DDSSMTrainer:
             with profiler_cm as prof:
                 for step in range(start_step + 1, total_steps + 1):
                     self.model.train()
-                    self.optimizer.zero_grad(set_to_none=True)
+                    for opt in self._optimizers:
+                        opt.zero_grad(set_to_none=True)
 
                     accum_loss_t: torch.Tensor | None = None
                     accum_metrics = None
@@ -964,6 +1201,11 @@ class DDSSMTrainer:
                         )
 
                         loss_detached = loss.detach()
+                        if isinstance(loss_detached, SplitLoss):
+                            # Normalize to a scalar tensor (φθ + ψ) so the
+                            # microstep accumulation below stays plain tensor
+                            # arithmetic; single-mode passes through untouched.
+                            loss_detached = loss_detached.total
                         # Per-microstep guard: check before ``_backward_loss``
                         # so a NaN/Inf micro-batch never poisons ``.grad`` via
                         # backprop. Checking the summed accum_loss post-backward
