@@ -24,8 +24,10 @@ def test_full_elbo_assembles_recon_plus_lambda_rate_plus_anchors() -> None:
     """
     components = LossComponents(
         recon=torch.tensor(1.0),
-        init_kl=torch.tensor(2.0),
-        trans_kl=torch.tensor(3.0),
+        init_kl_phith=torch.tensor(2.0),
+        init_kl_psi=torch.zeros(()),
+        trans_kl_phith=torch.tensor(3.0),
+        trans_kl_psi=torch.zeros(()),
         r_sigma_p=torch.tensor(4.0),
         r_mu_p=torch.tensor(5.0),
     )
@@ -48,8 +50,10 @@ def test_full_elbo_keeps_anchors_live_at_lambda_zero() -> None:
     """
     components = LossComponents(
         recon=torch.tensor(1.0),
-        init_kl=torch.tensor(2.0),
-        trans_kl=torch.tensor(3.0),
+        init_kl_phith=torch.tensor(2.0),
+        init_kl_psi=torch.zeros(()),
+        trans_kl_phith=torch.tensor(3.0),
+        trans_kl_psi=torch.zeros(()),
         r_sigma_p=torch.tensor(7.0),
         r_mu_p=torch.tensor(0.0),
     )
@@ -67,8 +71,10 @@ def test_full_elbo_keeps_anchors_live_at_lambda_zero() -> None:
     # Same for μ_p anchor with r_sigma_p zero.
     components_mu = LossComponents(
         recon=torch.tensor(1.0),
-        init_kl=torch.tensor(2.0),
-        trans_kl=torch.tensor(3.0),
+        init_kl_phith=torch.tensor(2.0),
+        init_kl_psi=torch.zeros(()),
+        trans_kl_phith=torch.tensor(3.0),
+        trans_kl_psi=torch.zeros(()),
         r_sigma_p=torch.tensor(0.0),
         r_mu_p=torch.tensor(11.0),
     )
@@ -174,8 +180,10 @@ def test_loss_selection_actually_selects() -> None:
 
     components = LossComponents(
         recon=torch.tensor(1.0),
-        init_kl=torch.tensor(2.0),
-        trans_kl=torch.tensor(3.0),
+        init_kl_phith=torch.tensor(2.0),
+        init_kl_psi=torch.zeros(()),
+        trans_kl_phith=torch.tensor(3.0),
+        trans_kl_psi=torch.zeros(()),
         r_sigma_p=torch.tensor(0.0),
         r_mu_p=torch.tensor(0.0),
     )

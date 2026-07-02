@@ -119,7 +119,6 @@ def _make_hparams() -> SimpleNamespace:
         batch_size=2,
         grad_accum_steps=1,
         t_chunk=4,
-        clip_grad_norm=None,
         enc_lr=1e-3,
         dec_lr=1e-3,
         trans_lr=1e-3,

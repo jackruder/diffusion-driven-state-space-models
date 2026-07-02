@@ -107,8 +107,10 @@ def test_step_within_stage_resets_at_boundary() -> None:
     stage_2_loss = trainer.installs[1][1]
     components = LossComponents(
         recon=torch.tensor(0.0),
-        init_kl=torch.tensor(1.0),
-        trans_kl=torch.tensor(0.0),
+        init_kl_phith=torch.tensor(1.0),
+        init_kl_psi=torch.zeros(()),
+        trans_kl_phith=torch.tensor(0.0),
+        trans_kl_psi=torch.zeros(()),
         r_sigma_p=torch.tensor(0.0),
         r_mu_p=torch.tensor(0.0),
     )
