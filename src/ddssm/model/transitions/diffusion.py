@@ -1136,9 +1136,9 @@ class DiffusionTransition(BaseTransition):
             # weights (arithmetic order identical to the pre-split code),
             # psi gets the same sqerr unit-weighted.  Both share F_pred.
             sqerr = (F_pred - F_tgt_flat).pow(2).sum(dim=1)
-            total_sqerr_phith = total_sqerr_phith + (sqerr * weights).view(
-                N, kc
-            ).sum(dim=1)
+            total_sqerr_phith = total_sqerr_phith + (sqerr * weights).view(N, kc).sum(
+                dim=1
+            )
             total_sqerr_psi = total_sqerr_psi + sqerr.view(N, kc).sum(dim=1)
 
         # S_k normalisation applied symmetrically to both accumulators.
