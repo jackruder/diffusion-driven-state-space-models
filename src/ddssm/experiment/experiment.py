@@ -224,14 +224,21 @@ class ObjectiveSpec:
                         v = float(raw)
                     except (TypeError, ValueError):
                         continue
-                    if math.isfinite(v):
-                        values.append(v)
+                    values.append(v)
         except OSError:
             return float("inf")
         if not values:
             return float("inf")
         tail_n = max(1, int(len(values) * float(self.tail_frac)))
-        return float(sum(values[-tail_n:]) / tail_n)
+        tail = values[-tail_n:]
+        # Non-finite rows count as divergence rather than being dropped:
+        # scoring a trial whose tail went NaN/Inf on its earlier (better)
+        # finite rows would let the sweeper rank diverged configs above
+        # stable ones. Route through the configured penalty, same as any
+        # other unavailable value.
+        if not all(math.isfinite(v) for v in tail):
+            return self._apply_penalty(csv_path)
+        return float(sum(tail) / tail_n)
 
     def _read_json(self, run_dir: str) -> float:
         if not run_dir:

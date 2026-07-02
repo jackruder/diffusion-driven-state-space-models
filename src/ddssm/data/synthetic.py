@@ -493,10 +493,13 @@ class SyntheticDataset(Dataset):
                 z[:, 0, t] = xn.clamp(-2.0, 2.0)
                 z[:, 1, t] = yn.clamp(-1.0, 1.0)
 
-            # Standardise each dim so the lift + unit-variance prior are sane.
-            z = (z - z.mean(dim=(0, 2), keepdim=True)) / (
-                z.std(dim=(0, 2), keepdim=True) + 1e-6
-            )
+            # Standardise each dim using train-split stats only (indices
+            # [:N_per_split]) so val/test normalisation does not leak
+            # information from those splits.
+            z_train = z[: self.N_per_split]
+            z_mean = z_train.mean(dim=(0, 2), keepdim=True)
+            z_std = z_train.std(dim=(0, 2), keepdim=True) + 1e-6
+            z = (z - z_mean) / z_std
 
             # tanh-MLP lift sampled once from a fixed seed.
             g_lift = torch.Generator().manual_seed(HENON_A_SEED)

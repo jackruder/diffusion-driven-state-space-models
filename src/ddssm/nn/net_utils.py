@@ -137,7 +137,22 @@ def Conv1d_with_init(in_channels, out_channels, kernel_size):
 def _precompute_rope_freqs(
     head_dim: int, max_len: int, theta: float = 10000.0
 ) -> torch.Tensor:
-    """Precompute RoPE complex exponentials for up to ``max_len`` positions."""
+    """Precompute RoPE complex exponentials for up to ``max_len`` positions.
+
+    Args:
+        head_dim: Per-head dimension; must be even.
+        max_len: Maximum sequence length supported at inference time.
+        theta: RoPE base frequency.
+
+    Raises:
+        ValueError: If ``head_dim`` is odd.
+    """
+    if head_dim % 2 != 0:
+        raise ValueError(
+            f"head_dim={head_dim} must be even for RoPE (got an odd value). "
+            "Ensure d_model is divisible by nheads and that "
+            "head_dim = d_model // nheads is even."
+        )
     freqs = 1.0 / (
         theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim)
     )
@@ -152,8 +167,17 @@ def _apply_rope(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
     Args:
         x: ``(B, T, nheads, head_dim)`` query or key tensor.
         freqs_cis: ``(max_len, head_dim // 2)`` complex rotation factors.
+
+    Raises:
+        ValueError: If the sequence length ``T`` exceeds ``max_len``.
     """
     B, T, H, D = x.shape
+    max_len = freqs_cis.shape[0]
+    if T > max_len:
+        raise ValueError(
+            f"Sequence length T={T} exceeds RoPE max_len={max_len}. "
+            "Increase max_len when constructing TransformerEncoder (rope=True)."
+        )
     xf = x.float().reshape(B, T, H, D // 2, 2).contiguous()
     x_c = torch.view_as_complex(xf)
     fc = freqs_cis[:T].unsqueeze(0).unsqueeze(2)

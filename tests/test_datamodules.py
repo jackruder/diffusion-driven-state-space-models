@@ -277,3 +277,115 @@ def test_window_ends_k_last_shorter_than_grid() -> None:
 
     ends = _make_window_ends(start_end=24, last_end=44, step=10, k_last=99)
     assert ends == [24, 34, 44]
+
+
+# ---------------------------------------------------------------------------
+# henon-lift standardization: train-only stats
+# ---------------------------------------------------------------------------
+
+
+def test_henon_lift_standardization_uses_train_stats() -> None:
+    """Val/test normalisation must use train-split stats, not the full population.
+
+    After the fix the normalisation stats are anchored to ``z[:N_per_split]``
+    (the train rows).  By definition that makes the train-slice gt_latents
+    have mean ≈ 0 and std ≈ 1.  The val-split gt_latents come from different
+    Henon trajectories so they will NOT be self-normalised — they carry a
+    nonzero mean (shifted by the train-anchored stats).  This confirms that
+    the train-slice stats govern ALL splits, not a per-split normalisation.
+
+    The key regression check: if full-population stats were used, the
+    train-slice gt_latents would NOT have mean exactly 0 (because the
+    full-population mean is pulled away from the train-slice mean).
+    """
+    import torch
+    from ddssm.data.synthetic import SyntheticDataset, HENON_OBS_D
+
+    N = 64
+    T = 40
+    seed = 42
+
+    with torch.random.fork_rng(devices=[]):
+        ds_train = SyntheticDataset(
+            "henon-lift", split="train", N_per_split=N, T=T, D=HENON_OBS_D,
+            dataset_seed=seed, expose_gt_latents=True,
+        )
+    with torch.random.fork_rng(devices=[]):
+        ds_val = SyntheticDataset(
+            "henon-lift", split="val", N_per_split=N, T=T, D=HENON_OBS_D,
+            dataset_seed=seed, expose_gt_latents=True,
+        )
+
+    assert ds_train.gt_latents is not None and ds_val.gt_latents is not None
+
+    # Train-slice normalisation invariant: mean ≈ 0, std ≈ 1.
+    z_tr = ds_train.gt_latents  # (N, latent_d, T)
+    tr_mean = z_tr.mean(dim=(0, 2))
+    tr_std = z_tr.std(dim=(0, 2))
+    assert (tr_mean.abs() < 0.1).all(), (
+        f"Train gt_latents mean={tr_mean.tolist()} not near 0; "
+        "standardization may be using full-population stats."
+    )
+    assert ((tr_std - 1.0).abs() < 0.15).all(), (
+        f"Train gt_latents std={tr_std.tolist()} not near 1; "
+        "standardization may be using full-population stats."
+    )
+
+    # Val-slice: different trajectories anchored to the SAME train stats,
+    # so the val mean is NOT zero (the train-slice anchor shifts it).
+    z_val = ds_val.gt_latents  # (N, latent_d, T)
+    val_mean = z_val.mean(dim=(0, 2))
+    # At least one latent dim should have a non-trivial mean offset.
+    assert val_mean.abs().max().item() > 0.01, (
+        "Val gt_latents appear unit-normalised, suggesting per-split "
+        "normalisation rather than train-slice-anchored stats."
+    )
+
+
+def test_henon_lift_gt_latents_train_slice_is_unit_normalised() -> None:
+    """After the fix, the train-slice of the gt latent z must be unit-normalised.
+
+    The standardisation uses ``z[:N_per_split]`` stats (mean / std computed over
+    train sequences only).  By definition, after subtracting the train-slice mean
+    and dividing by its std, the train slice of z has mean ≈ 0 and std ≈ 1 per
+    dim.  If the full-population stats were used instead, the train-slice of the
+    normalised z would NOT have mean ≈ 0 because the full-population mean shifts
+    away from the train-slice mean.
+
+    ``expose_gt_latents=True`` surfaces the post-normalised latent z so we can
+    inspect it directly (the normalisation happens before the tanh-MLP lift).
+    """
+    import torch
+    from ddssm.data.synthetic import SyntheticDataset, HENON_OBS_D
+
+    N = 64
+    T = 30
+    seed = 55
+
+    with torch.random.fork_rng(devices=[]):
+        ds = SyntheticDataset(
+            "henon-lift",
+            split="train",
+            N_per_split=N,
+            T=T,
+            D=HENON_OBS_D,
+            dataset_seed=seed,
+            expose_gt_latents=True,
+        )
+
+    assert ds.gt_latents is not None, "expose_gt_latents must populate gt_latents"
+    z_train = ds.gt_latents  # shape (N, latent_d, T)
+
+    # Mean and std of the train slice per latent dim (averaged over N and T).
+    train_mean = z_train.mean(dim=(0, 2))  # (latent_d,)
+    train_std = z_train.std(dim=(0, 2))    # (latent_d,)
+
+    # After train-slice normalisation: mean should be close to 0, std close to 1.
+    assert (train_mean.abs() < 0.1).all(), (
+        f"Train-slice gt_latents mean={train_mean.tolist()} is not near 0 — "
+        "standardization is likely using full-population stats."
+    )
+    assert ((train_std - 1.0).abs() < 0.1).all(), (
+        f"Train-slice gt_latents std={train_std.tolist()} is not near 1 — "
+        "standardization is likely using full-population stats."
+    )

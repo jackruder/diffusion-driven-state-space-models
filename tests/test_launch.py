@@ -1250,3 +1250,116 @@ def test_renderers_emit_strict_bash_pipefail(renderer: str) -> None:
         )
     assert "set -euo pipefail" in script
     assert "set -uo pipefail\n" not in script
+
+
+# --- run_local degradation warnings -----------------------------------------
+
+
+def _make_sweep_study(strategy: str = "optuna_single_node") -> _Study:
+    """One-point study whose launch returns the given single-worker sweep strategy."""
+    point = _StudyPoint(
+        name="mock_sweep_point",
+        config=SimpleNamespace(),
+        tags={"dataset": "1d", "cell": "mock"},
+        coords={},
+    )
+    return _Study(
+        name="mock_sweep_study",
+        points=(point,),
+        launch=lambda p: PointLaunch(
+            strategy=strategy,
+            sweep="init_ablation_moo",
+            n_trials=5,
+        ),
+    )
+
+
+def test_run_local_single_node_sweep_warns_degraded(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """``optuna_single_node`` on --local silently drops the sweep; the fix must warn."""
+    study = _make_sweep_study("optuna_single_node")
+    orch = StudyOrchestrator(
+        study,
+        study_prefix="t",
+        storage_dir=str(tmp_path / "o"),
+        sweeps_root=str(tmp_path / "s"),
+    )
+
+    class _FakeRun:
+        returncode = 0
+
+    monkeypatch.setattr(
+        "ddssm.launch.subprocess.run", lambda *a, **kw: _FakeRun()
+    )
+
+    rc = orch.run_local(study.points, out_dir=str(tmp_path / "out"))
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "mock_sweep_point" in err
+    assert "optuna_single_node" in err
+    assert "sweep" in err.lower()
+
+
+def test_run_local_single_node_sweep_summary_lists_degraded_point(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """End-of-run summary must list every degraded point by name."""
+    study = _make_sweep_study("optuna_single_node")
+    orch = StudyOrchestrator(
+        study,
+        study_prefix="t",
+        storage_dir=str(tmp_path / "o"),
+        sweeps_root=str(tmp_path / "s"),
+    )
+
+    class _FakeRun:
+        returncode = 0
+
+    monkeypatch.setattr(
+        "ddssm.launch.subprocess.run", lambda *a, **kw: _FakeRun()
+    )
+
+    orch.run_local(study.points, out_dir=str(tmp_path / "out"))
+    err = capsys.readouterr().err
+    # The summary header must be present.
+    assert "degraded mode" in err
+    # The specific point must appear in the summary.
+    assert "mock_sweep_point" in err
+
+
+def test_run_local_single_job_strategy_no_degradation_warning(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """``single_job`` is the canonical no-sweep strategy; no degradation warning."""
+    point = _StudyPoint(
+        name="mock_single_job_point",
+        config=SimpleNamespace(),
+        tags={},
+        coords={},
+    )
+    study = _Study(
+        name="mock_single_job_study",
+        points=(point,),
+        launch=lambda p: PointLaunch(strategy="single_job"),
+    )
+    orch = StudyOrchestrator(
+        study,
+        study_prefix="t",
+        storage_dir=str(tmp_path / "o"),
+        sweeps_root=str(tmp_path / "s"),
+    )
+
+    class _FakeRun:
+        returncode = 0
+
+    monkeypatch.setattr(
+        "ddssm.launch.subprocess.run", lambda *a, **kw: _FakeRun()
+    )
+
+    rc = orch.run_local(study.points, out_dir=str(tmp_path / "out"))
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING" not in err
+    assert "degraded" not in err

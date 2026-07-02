@@ -735,6 +735,7 @@ class StudyOrchestrator:
         (e.g. ``optuna_multi_node``) raise immediately.
         """
         failures: list[tuple[str, int]] = []
+        degraded: list[tuple[str, str, str]] = []  # (point_name, strategy, reason)
         for seed in seeds:
             ctx = LaunchContext(
                 self.study_prefix,
@@ -757,6 +758,22 @@ class StudyOrchestrator:
                 base_name = _job_name(point, ctx)
 
                 if n_w == 1:
+                    # When the declared strategy is not ``single_job``, its sweep
+                    # overrides (--multirun, +sweep=, hydra.sweeper.*) are NOT
+                    # included in the single-subprocess path below — the point runs
+                    # as a plain training job instead of the intended Optuna sweep.
+                    # Warn loudly so this degradation is visible.
+                    if pl.strategy != "single_job":
+                        reason = (
+                            f"strategy {pl.strategy!r} produces n_workers=1 on "
+                            f"--local; sweep overrides (--multirun, +sweep={pl.sweep!r}) "
+                            f"are dropped and the point runs as a plain single-trial job"
+                        )
+                        print(
+                            f"WARNING [run_local] degraded point {base_name!r}: {reason}",
+                            file=sys.stderr,
+                        )
+                        degraded.append((base_name, pl.strategy, reason))
                     run_dir = os.path.join(out_dir, f"{self.study_prefix}_{base_name}")
                     os.makedirs(run_dir, exist_ok=True)
                     cmd = [
@@ -830,6 +847,14 @@ class StudyOrchestrator:
                         rc = proc.wait()
                         if rc != 0:
                             failures.append((job, rc))
+        if degraded:
+            print(
+                f"\nWARNING [run_local] {len(degraded)} point(s) ran in degraded mode "
+                f"(sweep overrides dropped; plain single-trial job substituted):",
+                file=sys.stderr,
+            )
+            for pt_name, strat, _reason in degraded:
+                print(f"  - {pt_name!r} (strategy={strat!r})", file=sys.stderr)
         if failures:
             for job, rc in failures:
                 print(f"  FAIL {job} (rc={rc})", file=sys.stderr)

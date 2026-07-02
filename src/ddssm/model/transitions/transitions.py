@@ -213,7 +213,7 @@ class BaseTransition(nn.Module):
         if total_steps <= 0:
             return torch.zeros(B, device=device)
 
-        total_nll = torch.zeros(B, device=device)
+        total_log_p = torch.zeros(B, device=device)
 
         for (
             B_,
@@ -237,10 +237,10 @@ class BaseTransition(nn.Module):
             log_p = log_p_flat.view(B_, S_, current_chunk_len)
 
             # Sum over time in chunk, Mean over S
-            chunk_nll = log_p.sum(dim=2).mean(dim=1)
-            total_nll += chunk_nll
+            chunk_log_p = log_p.sum(dim=2).mean(dim=1)
+            total_log_p += chunk_log_p
 
-        return total_nll
+        return total_log_p
 
     def transition_kl(
         self,
@@ -418,6 +418,30 @@ class BaseTransition(nn.Module):
         """
         raise NotImplementedError
 
+    def _ensure_seq(self, z: torch.Tensor) -> torch.Tensor:
+        """Ensure z has shape (B, d, j).
+
+        Accepts:
+          - (B, d) for j==1
+          - (B, d, j)
+          - (B, j, d)
+        """
+        if z.dim() == 2:
+            B, d = z.shape
+            assert self.j == 1, "z with no history dimension requires j==1"
+            assert d == self.latent_dim
+            return z.unsqueeze(-1)  # (B, d, 1)
+        if z.dim() == 3:
+            B, a, b = z.shape
+            # try to infer if shape is (B,d,j) or (B,j,d)
+            if a == self.latent_dim and b == self.j:
+                return z  # (B,d,j)
+            if a == self.j and b == self.latent_dim:
+                return z.permute(0, 2, 1)  # (B,d,j)
+        raise ValueError(
+            f"z_hist must be (B,d) or (B,d,j) or (B,j,d); got {tuple(z.shape)}"
+        )
+
     def sample_latent_trajectory(
         self,
         z_hist: torch.Tensor,
@@ -571,32 +595,6 @@ class GaussianTransition(BaseTransition):
         self.gaussian_head = gaussian_head(
             in_features=int(head_in_dim),
             out_features=self.latent_dim,
-        )
-
-    # --------- helpers ----------
-
-    def _ensure_seq(self, z: torch.Tensor) -> torch.Tensor:
-        """Ensure z has shape (B, d, j).
-
-        Accepts:
-          - (B, d) for j==1
-          - (B, d, j)
-          - (B, j, d)
-        """
-        if z.dim() == 2:
-            B, d = z.shape
-            assert self.j == 1, "z with no history dimension requires j==1"
-            assert d == self.latent_dim
-            return z.unsqueeze(-1)  # (B, d, 1)
-        if z.dim() == 3:
-            B, a, b = z.shape
-            # try to infer if shape is (B,d,j) or (B,j,d)
-            if a == self.latent_dim and b == self.j:
-                return z  # (B,d,j)
-            if a == self.j and b == self.latent_dim:
-                return z.permute(0, 2, 1)  # (B,d,j)
-        raise ValueError(
-            f"z_hist must be (B,d) or (B,d,j) or (B,j,d); got {tuple(z.shape)}"
         )
 
     def prior_params(

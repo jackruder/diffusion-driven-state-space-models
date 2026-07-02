@@ -234,6 +234,119 @@ def test_vhp_stage1_r_sigma_p_active_with_lambda() -> None:
     assert metrics["loss/rate/trans/r_sigma_p"] != 0.0
 
 
+# ---------------------------------------------------------------------------
+# forecast uses the stage-aware active transition (item 1 fix regression)
+# ---------------------------------------------------------------------------
+
+
+def _make_two_transition_model() -> tuple[DDSSM_base, BaselineGaussianTransition, BaselineGaussianTransition]:
+    """Build a model with distinct stage-1 and stage-2 transitions."""
+    enc = _make_encoder()
+    dec = _make_decoder()
+    baseline1 = _make_gaussian_baseline()
+    baseline2 = _make_gaussian_baseline()
+    aux = AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
+    sigma_data = SigmaDataBuffer(T_max=20, tracking_mode="fixed")
+    stage1_trans = BaselineGaussianTransition(
+        baseline=baseline1,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
+    )
+    stage2_trans = BaselineGaussianTransition(
+        baseline=baseline2,
+        latent_dim=LATENT_DIM,
+        j=J,
+        emb_time_dim=EMB_TIME,
+    )
+    model = DDSSM_base(
+        encoder=enc,
+        decoder=dec,
+        transition=stage2_trans,
+        j=J,
+        data_dim=DATA_DIM,
+        latent_dim=LATENT_DIM,
+        emb_time_dim=EMB_TIME,
+        aux_posterior=aux,
+        baseline=baseline1,
+        sigma_data=sigma_data,
+        stage1_transition=stage1_trans,
+    )
+    return model, stage1_trans, stage2_trans
+
+
+def test_forecast_uses_stage1_transition_when_stage_selector_is_stage_1() -> None:
+    """forecast must draw from stage1_transition when stage_selector='stage_1'."""
+    model, stage1_trans, stage2_trans = _make_two_transition_model()
+    model.stage_selector = "stage_1"
+
+    stage1_called = []
+    stage2_called = []
+
+    _orig_s1 = stage1_trans.sample
+    _orig_s2 = stage2_trans.sample
+
+    def _stub_s1(z_hist, S=1, ctx=None):
+        stage1_called.append(True)
+        return _orig_s1(z_hist, S=S, ctx=ctx)
+
+    def _stub_s2(z_hist, S=1, ctx=None):
+        stage2_called.append(True)
+        return _orig_s2(z_hist, S=S, ctx=ctx)
+
+    stage1_trans.sample = _stub_s1  # type: ignore[method-assign]
+    stage2_trans.sample = _stub_s2  # type: ignore[method-assign]
+
+    B, H, L2 = 2, 6, 3
+    with torch.no_grad():
+        model.forecast(
+            x_hist=torch.randn(B, DATA_DIM, H),
+            x_mask=torch.ones(B, DATA_DIM, H),
+            past_time=torch.arange(H, dtype=torch.float32).unsqueeze(0).expand(B, -1).contiguous(),
+            future_time=torch.arange(H, H + L2, dtype=torch.float32).unsqueeze(0).expand(B, -1).contiguous(),
+            num_samples=1,
+        )
+
+    assert len(stage1_called) > 0, "stage1_transition.sample was never called"
+    assert len(stage2_called) == 0, "stage2 (self.transition) must not be called in stage_1"
+
+
+def test_forecast_uses_stage2_transition_when_stage_selector_is_stage_2() -> None:
+    """forecast must draw from self.transition (stage-2 slot) when stage_selector='stage_2'."""
+    model, stage1_trans, stage2_trans = _make_two_transition_model()
+    model.stage_selector = "stage_2"
+
+    stage1_called = []
+    stage2_called = []
+
+    _orig_s1 = stage1_trans.sample
+    _orig_s2 = stage2_trans.sample
+
+    def _stub_s1(z_hist, S=1, ctx=None):
+        stage1_called.append(True)
+        return _orig_s1(z_hist, S=S, ctx=ctx)
+
+    def _stub_s2(z_hist, S=1, ctx=None):
+        stage2_called.append(True)
+        return _orig_s2(z_hist, S=S, ctx=ctx)
+
+    stage1_trans.sample = _stub_s1  # type: ignore[method-assign]
+    stage2_trans.sample = _stub_s2  # type: ignore[method-assign]
+
+    B, H, L2 = 2, 6, 3
+    with torch.no_grad():
+        model.forecast(
+            x_hist=torch.randn(B, DATA_DIM, H),
+            x_mask=torch.ones(B, DATA_DIM, H),
+            past_time=torch.arange(H, dtype=torch.float32).unsqueeze(0).expand(B, -1).contiguous(),
+            future_time=torch.arange(H, H + L2, dtype=torch.float32).unsqueeze(0).expand(B, -1).contiguous(),
+            num_samples=1,
+        )
+
+    assert len(stage2_called) > 0, "stage2 transition (self.transition) was never called"
+    assert len(stage1_called) == 0, "stage1_transition must not be called in stage_2"
+
+
 def test_vhp_stage1_sigma_data_buffer_accumulates() -> None:
     """The σ_data buffer accumulates values during stage 1."""
     model = _make_vhp_model()

@@ -22,7 +22,12 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ddssm.eval.eval_metrics import mae_metrics, rmse_metrics, crps_sum_metrics
+from ddssm.eval.eval_metrics import (
+    crps_sum_components,
+    crps_sum_metrics,
+    mae_metrics,
+    rmse_metrics,
+)
 
 
 @dataclass
@@ -71,9 +76,12 @@ def register_metric(name: str) -> Callable[[MetricFn], MetricFn]:
 
 
 def _iter_forecast_batches(ctx: EvalContext):
-    """Yield ``(pred_samples, pred_mean, y_future)`` per batch.
+    """Yield ``(pred_samples, pred_mean, y_future, y_mask)`` per batch.
 
     Splits each batch at ``ctx.T_split`` (required for these metrics).
+    ``y_mask`` is the future slice of the observation mask (1 = observed);
+    consumers must reduce over observed entries only, else missing/imputed
+    targets are scored as if real.
     """
     if ctx.model is None or ctx.loader is None or ctx.T_split is None:
         raise ValueError(
@@ -108,6 +116,7 @@ def _iter_forecast_batches(ctx: EvalContext):
             past_time = batch["timepoints"][:, :L1]
             future_time = batch["timepoints"][:, L1:]
             y_future = batch["observed_data"][..., L1:]
+            y_mask = batch["observation_mask"][..., L1:]
 
             covariates = batch.get("covariates")
             past_cov = covariates[..., :L1] if covariates is not None else None
@@ -129,7 +138,7 @@ def _iter_forecast_batches(ctx: EvalContext):
                 pred_samples = pred_samples * std_d.unsqueeze(1) + mean_d.unsqueeze(1)
                 pred_mean = pred_mean * std_d + mean_d
                 y_future = y_future * std_d + mean_d
-            yield pred_samples, pred_mean, y_future
+            yield pred_samples, pred_mean, y_future, y_mask
 
 
 @register_metric("energy_score")
@@ -139,9 +148,16 @@ def eval_energy_score(ctx: EvalContext) -> dict[str, Any]:
     ES(F, y) = E[||X - y||] - 0.5 * E[||X - X'||]
     where X, X' are i.i.d. forecast samples and expectation is taken over S draws.
     (D, L2) dimensions are collapsed into a single vector before computing norms.
+
+    Missing target entries are zeroed in both the samples and the target
+    (projection onto the observed coordinates), so they contribute to
+    neither norm — the score is the energy score of the observed marginal.
     """
     scores = []
-    for pred_samples, _, y_future in _iter_forecast_batches(ctx):
+    for pred_samples, _, y_future, y_mask in _iter_forecast_batches(ctx):
+        m = y_mask.to(pred_samples.dtype)
+        pred_samples = pred_samples * m.unsqueeze(1)
+        y_future = y_future * m
         B, S, D, L2 = pred_samples.shape
         s_flat = pred_samples.reshape(B, S, -1)  # (B, S, D*L2)
         y_flat = y_future.reshape(B, -1).unsqueeze(1)  # (B, 1, D*L2)
@@ -163,52 +179,113 @@ def eval_energy_score(ctx: EvalContext) -> dict[str, Any]:
     return {"energy_score": float(np.mean(scores))}
 
 
+def _masked_weighted_reduce(
+    g_acc: list[float],
+    t_acc: list[np.ndarray],
+    w_g: list[float],
+    w_t: list[np.ndarray],
+    *,
+    square: bool = False,
+) -> tuple[float, list[float]] | None:
+    """Pool per-batch (global, per_t) values weighted by observed counts.
+
+    Plain ``np.mean`` over batches would weight a nearly-all-missing batch
+    the same as a fully-observed one; weighting by mask counts recovers the
+    exact pooled mean over observed entries. ``square=True`` pools on the
+    squared scale (for RMSE, where sqrt is nonlinear).
+    """
+    total_w = float(np.sum(w_g))
+    if total_w <= 0:
+        return None
+    g_arr = np.asarray(g_acc, dtype=np.float64)
+    t_arr = np.stack(t_acc, axis=0).astype(np.float64)
+    w_t_arr = np.stack(w_t, axis=0).astype(np.float64)
+    if square:
+        g_arr = g_arr**2
+        t_arr = t_arr**2
+    g = float(np.average(g_arr, weights=np.asarray(w_g, dtype=np.float64)))
+    per_t = (t_arr * w_t_arr).sum(axis=0) / np.maximum(w_t_arr.sum(axis=0), 1.0)
+    if square:
+        g = math.sqrt(g)
+        per_t = np.sqrt(per_t)
+    return g, per_t.tolist()
+
+
 @register_metric("mae")
 def eval_mae(ctx: EvalContext) -> dict[str, Any]:
-    """Mean absolute error of the forecast mean against the true future."""
-    g_acc, t_acc = [], []
-    for _, pred_mean, y_future in _iter_forecast_batches(ctx):
-        g, t = mae_metrics(pred_mean, y_future)
+    """Mean absolute error of the forecast mean against the true future.
+
+    Reduced over observed target entries only (per the observation mask).
+    """
+    g_acc, t_acc, w_g, w_t = [], [], [], []
+    for _, pred_mean, y_future, y_mask in _iter_forecast_batches(ctx):
+        g, t = mae_metrics(pred_mean, y_future, mask=y_mask)
         g_acc.append(float(g.item()))
         t_acc.append(t.detach().cpu().numpy())
-    if not g_acc:
+        w_g.append(float(y_mask.sum().item()))
+        w_t.append(y_mask.sum(dim=(0, 1)).detach().cpu().numpy())
+    reduced = _masked_weighted_reduce(g_acc, t_acc, w_g, w_t) if g_acc else None
+    if reduced is None:
         return {"mae": float("nan"), "mae_per_t": []}
-    return {
-        "mae": float(np.mean(g_acc)),
-        "mae_per_t": np.mean(np.stack(t_acc, axis=0), axis=0).tolist(),
-    }
+    return {"mae": reduced[0], "mae_per_t": reduced[1]}
 
 
 @register_metric("rmse")
 def eval_rmse(ctx: EvalContext) -> dict[str, Any]:
-    """Root mean squared error of the forecast mean against the true future."""
-    g_acc, t_acc = [], []
-    for _, pred_mean, y_future in _iter_forecast_batches(ctx):
-        g, t = rmse_metrics(pred_mean, y_future)
+    """Root mean squared error of the forecast mean against the true future.
+
+    Reduced over observed target entries only (per the observation mask).
+    """
+    g_acc, t_acc, w_g, w_t = [], [], [], []
+    for _, pred_mean, y_future, y_mask in _iter_forecast_batches(ctx):
+        g, t = rmse_metrics(pred_mean, y_future, mask=y_mask)
         g_acc.append(float(g.item()))
         t_acc.append(t.detach().cpu().numpy())
-    if not g_acc:
+        w_g.append(float(y_mask.sum().item()))
+        w_t.append(y_mask.sum(dim=(0, 1)).detach().cpu().numpy())
+    reduced = (
+        _masked_weighted_reduce(g_acc, t_acc, w_g, w_t, square=True)
+        if g_acc
+        else None
+    )
+    if reduced is None:
         return {"rmse": float("nan"), "rmse_per_t": []}
-    return {
-        "rmse": float(np.mean(g_acc)),
-        "rmse_per_t": np.mean(np.stack(t_acc, axis=0), axis=0).tolist(),
-    }
+    return {"rmse": reduced[0], "rmse_per_t": reduced[1]}
 
 
 @register_metric("crps_sum")
 def eval_crps_sum(ctx: EvalContext) -> dict[str, Any]:
-    """Sum-aggregated CRPS over forecast samples (channel-summed)."""
-    g_acc, t_acc = [], []
-    for pred_samples, _, y_future in _iter_forecast_batches(ctx):
-        g, t = crps_sum_metrics(pred_samples, y_future)
-        g_acc.append(float(g.item()))
-        t_acc.append(t.detach().cpu().numpy())
-    if not g_acc:
+    """Sum-aggregated CRPS over forecast samples (channel-summed).
+
+    Missing target entries are zeroed in both target and samples before the
+    channel sum (CSDI ``eval_points`` convention).
+
+    The global ND is the **ratio-of-means**: the total pinball numerator
+    accumulated across all batches and timesteps divided by the total ND
+    denominator ``Σ_{b,t} |Σ_d y_{b,d,t}|``.  Numerator and denominator are
+    accumulated separately across batches and divided once, which avoids the
+    mean-of-ratios bias that would overweight low-magnitude windows.
+
+    ``crps_sum_per_t`` is each timestep's pinball sum (across all batch
+    elements) divided by the same global denominator, so
+    ``sum(crps_sum_per_t) == crps_sum``.
+    """
+    num_acc: list[np.ndarray] = []  # (B, L2) per batch
+    denom_acc: list[float] = []  # scalar per batch (sum of (B, 1))
+    for pred_samples, _, y_future, y_mask in _iter_forecast_batches(ctx):
+        num, denom = crps_sum_components(pred_samples, y_future, mask=y_mask)
+        num_acc.append(num.detach().cpu().numpy())  # (B, L2)
+        denom_acc.append(float(denom.sum().item()))
+    if not num_acc:
         return {"crps_sum": float("nan"), "crps_sum_per_t": []}
-    return {
-        "crps_sum": float(np.mean(g_acc)),
-        "crps_sum_per_t": np.mean(np.stack(t_acc, axis=0), axis=0).tolist(),
-    }
+    # Ratio-of-means: pool numerator and denominator separately.
+    total_denom = max(float(np.sum(denom_acc)), 1e-8)
+    # Stack over batches → (N_batches*B, L2); sum across all elements, then
+    # divide once by the global denominator.
+    num_all = np.concatenate(num_acc, axis=0)  # (total_B, L2)
+    per_t = (num_all.sum(axis=0) / total_denom).tolist()
+    global_nd = float(num_all.sum() / total_denom)
+    return {"crps_sum": global_nd, "crps_sum_per_t": per_t}
 
 
 # ---------------------------------------------------------------------------
@@ -1316,17 +1393,24 @@ def eval_crps_sum_latent(
     otherwise.  Per ``init-experiment.org`` § Headline metrics,
     metric 4 ("CRPS-sum across forecast horizons, in both latent
     and observation spaces").
+
+    The global ND uses the **ratio-of-means** convention: pinball
+    numerator and ND denominator are accumulated separately across
+    batches and divided once at the end (matching ``eval_crps_sum``
+    and the GluonTS / CSDI published convention).  ``crps_sum_latent_per_t``
+    is each timestep's numerator (summed over all batch elements) divided by
+    the global denominator, so ``sum(crps_sum_latent_per_t) == crps_sum_latent_mean``.
     """
     if ctx.model is None or ctx.loader is None or ctx.T_split is None:
         return {"crps_sum_latent_available": False}
-    from ddssm.eval.eval_metrics import crps_sum_latent_metrics
+    from ddssm.eval.eval_metrics import _crps_sum_pinball
 
     model = ctx.model
     device = ctx.device
     transform = ctx.batch_transform
     L1 = int(ctx.T_split)
-    means: list[float] = []
-    per_t_accum: list[torch.Tensor] = []
+    num_acc: list[np.ndarray] = []  # (B, L2) per batch
+    denom_acc: list[float] = []  # scalar per batch
     n_batches = 0
 
     from ddssm.nn.net_utils import time_embedding
@@ -1408,20 +1492,23 @@ def eval_crps_sum_latent(
 
             # Ground-truth latents over the same future range.
             z_gt = gt_latent[..., L1:T]  # (B, d, L2)
-            crps_mean, crps_per_t = crps_sum_latent_metrics(
-                z_samples=future_zs,
-                z_gt=z_gt,
-            )
-            means.append(float(crps_mean.item()))
-            per_t_accum.append(crps_per_t.cpu())
+            z_sum = future_zs.sum(dim=2)  # (B, S, L2)
+            y_sum = z_gt.sum(dim=1)  # (B, L2)
+            num, denom = _crps_sum_pinball(z_sum, y_sum)
+            num_acc.append(num.detach().cpu().numpy())
+            denom_acc.append(float(denom.sum().item()))
             n_batches += 1
 
     if n_batches == 0:
         return {"crps_sum_latent_available": False}
-    per_t = torch.stack(per_t_accum, dim=0).mean(dim=0).tolist()
+    # Ratio-of-means: divide total pinball numerator by total denominator.
+    total_denom = max(float(np.sum(denom_acc)), 1e-8)
+    num_all = np.concatenate(num_acc, axis=0)  # (total_B, L2)
+    global_nd = float(num_all.sum() / total_denom)
+    per_t = (num_all.sum(axis=0) / total_denom).tolist()
     return {
         "crps_sum_latent_available": True,
-        "crps_sum_latent_mean": float(np.mean(means)),
+        "crps_sum_latent_mean": global_nd,
         "crps_sum_latent_per_t": per_t,
     }
 

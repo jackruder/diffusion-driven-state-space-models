@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from abc import ABC, abstractmethod
 import csv
 import math
@@ -195,14 +196,26 @@ class CSVLogger(Logger):
         # (split, idx_name) from the old header when present.
         leading = old_header[:2] if len(old_header) >= 2 else ["split", self._IDX_COL]
         expanded_header = leading + list(self._known_keys)
-        with open(self.path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(expanded_header)
-            # Old rows already match leading + previously-known keys; pad
-            # with empty strings for each newly-added key.
-            pad = [""] * len(new_keys)
-            for row in old_rows:
-                writer.writerow(row + pad)
+        # Write to a sibling temp file then atomically replace the target so
+        # a crash mid-rewrite never corrupts the existing metrics.csv.
+        dirpath = os.path.dirname(self.path) or "."
+        fd, tmppath = tempfile.mkstemp(prefix="_csv_rewrite_", dir=dirpath)
+        try:
+            with os.fdopen(fd, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(expanded_header)
+                # Old rows already match leading + previously-known keys; pad
+                # with empty strings for each newly-added key.
+                pad = [""] * len(new_keys)
+                for row in old_rows:
+                    writer.writerow(row + pad)
+            os.replace(tmppath, self.path)
+        except Exception:
+            try:
+                os.remove(tmppath)
+            except OSError:
+                pass
+            raise
 
     def _write(self, split: str, idx_name: str, idx: int, row: dict[str, float]):
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)

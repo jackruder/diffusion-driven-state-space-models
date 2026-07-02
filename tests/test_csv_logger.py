@@ -1,4 +1,4 @@
-"""Regression tests for :class:`ddssm.loggers.CSVLogger` schema-drift handling.
+"""Regression tests for :class:`ddssm.training.loggers.CSVLogger` schema-drift handling.
 
 The model emits metric keys conditionally (stage-1 vs stage-2, train vs val,
 λ-warmup vs steady-state). A naive append-with-fixed-header writer misaligns
@@ -10,6 +10,8 @@ silently read the wrong column. These tests pin the superset-header behaviour.
 from __future__ import annotations
 
 import csv
+import os
+import unittest.mock as mock
 
 from ddssm.training.loggers import CSVLogger
 
@@ -154,3 +156,45 @@ def test_no_rewrite_when_no_new_keys(tmp_path):
     for i, step in enumerate(range(1, 6)):
         assert rows[i]["A"] == str(float(step))
         assert rows[i]["B"] == str(float(step) * 2)
+
+
+def test_header_rewrite_is_atomic(tmp_path):
+    """A crash mid-rewrite must not corrupt the existing metrics.csv.
+
+    Regression guard: the old rewrite opened the file for write directly, so
+    any exception between open() and close() left a truncated or partial file.
+    The fix writes to a sibling temp file then calls ``os.replace``, which is
+    atomic on POSIX.
+    """
+    path = str(tmp_path / "metrics.csv")
+    logger = CSVLogger(path)
+    # Write an initial row so the file exists with content.
+    logger.on_step("train", 1, {"A": 1.0, "B": 2.0})
+    original_contents = open(path).read()
+
+    # Patch os.replace to raise *after* the temp file is written, simulating a
+    # crash at the swap step.  The original file must survive intact.
+    real_replace = os.replace
+    replace_called: list[tuple[str, str]] = []
+
+    def _failing_replace(src, dst):
+        replace_called.append((src, dst))
+        raise OSError("simulated disk-full during os.replace")
+
+    with mock.patch("ddssm.training.loggers.os.replace", side_effect=_failing_replace):
+        try:
+            # Trigger header rewrite by introducing a new key.
+            logger.on_step("train", 2, {"A": 10.0, "C": 30.0})
+        except OSError:
+            pass  # expected from the patched os.replace
+
+    assert replace_called, "os.replace was not called — rewrite path not exercised"
+    # The original file must be intact (not truncated/overwritten).
+    assert open(path).read() == original_contents, (
+        "metrics.csv was corrupted by a failed mid-rewrite"
+    )
+    # Verify the temp file was cleaned up on failure.
+    src_tmp = replace_called[0][0]
+    assert not os.path.exists(src_tmp), (
+        f"temp rewrite file {src_tmp!r} was not cleaned up after failure"
+    )

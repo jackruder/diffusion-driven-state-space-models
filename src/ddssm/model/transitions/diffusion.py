@@ -938,16 +938,30 @@ class DiffusionTransition(BaseTransition):
 
         override_k_idx = None
         override_eps = None
+        override_p_k = None
         if mc_override is not None:
             override_k_idx = mc_override.get("k_idx")
             override_eps = mc_override.get("eps")
+            override_p_k = mc_override.get("p_k")
 
         # Build per-row p_k once per chunk-loss call. Static modes
         # (uniform / lsgm_is) get a no-copy expand view of self.p_k; the
         # two adaptive modes recompute from the live σ_d² (and per-sample
         # stats for ``adaptive_is_full``) per row. Reweighting at the
         # ``weights = wtilde / p_k`` step below does a row-aware gather.
-        if self.k_sampling_mode == "adaptive_is":
+        if override_p_k is not None:
+            # The IS correction must divide by the density the caller's
+            # ``k_idx`` was actually drawn from (or, for forced-k sweeps,
+            # the mode's sampling density). Recomputing the live adaptive
+            # density here would mismatch the caller's proposal and bias
+            # the estimator by q(k)/p(k) per row.
+            override_p_k = override_p_k.to(device=device, dtype=torch.float32)
+            p_k_per_row = (
+                override_p_k
+                if override_p_k.dim() == 2
+                else override_p_k.unsqueeze(0).expand(N, -1)
+            )  # (N, K)
+        elif self.k_sampling_mode == "adaptive_is":
             p_k_per_row = _adaptive_is_density_meandom(
                 self.sigma_tilde,
                 sigma_d2_per_row,

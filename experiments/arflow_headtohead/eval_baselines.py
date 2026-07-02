@@ -39,7 +39,7 @@ from hydra_zen import instantiate
 
 from ddssm.experiment.registry import register_experiments
 from ddssm.training.checkpoint import load_into_model
-from ddssm.eval.eval_metrics import mae_metrics, rmse_metrics, crps_sum_metrics
+from ddssm.eval.eval_metrics import crps_sum_components, mae_metrics, rmse_metrics
 
 
 def gauss_sum_nll(pred_samples: torch.Tensor, y_future: torch.Tensor) -> torch.Tensor:
@@ -129,8 +129,19 @@ def main() -> None:
     print(f"T={T}  L1(history)={L1}  L2(horizon)={L2}  S={S}  device={device}\n")
 
     forecasters = ["model", "locf", "marg"]
-    acc = {f: {"crps": [], "energy": [], "nll": [], "mae": [], "rmse": []}
-           for f in forecasters}
+    # crps uses ratio-of-means: accumulate (num, denom) separately per
+    # forecaster; all other metrics are plain per-batch means.
+    acc = {
+        f: {
+            "crps_num": [],  # list of np.ndarray (B, L2)
+            "crps_denom": [],  # list of float (sum of (B,1) per batch)
+            "energy": [],
+            "nll": [],
+            "mae": [],
+            "rmse": [],
+        }
+        for f in forecasters
+    }
 
     with torch.no_grad():
         for bi, batch in enumerate(loader):
@@ -163,7 +174,10 @@ def main() -> None:
                     ps, pm = out["pred_samples"], out["pred_mean"]
                 else:
                     ps, pm = _baseline_samples(x_hist, L2, S, f)
-                acc[f]["crps"].append(float(crps_sum_metrics(ps, y_fut)[0]))
+                # Ratio-of-means CRPS-sum: accumulate num/denom separately.
+                crps_num, crps_denom = crps_sum_components(ps, y_fut)
+                acc[f]["crps_num"].append(crps_num.detach().cpu().numpy())
+                acc[f]["crps_denom"].append(float(crps_denom.sum().item()))
                 acc[f]["energy"].append(float(energy_score(ps, y_fut).mean()))
                 acc[f]["nll"].append(float(gauss_sum_nll(ps, y_fut).mean()))
                 acc[f]["mae"].append(float(mae_metrics(pm, y_fut)[0]))
@@ -174,8 +188,13 @@ def main() -> None:
     print("\n" + hdr)
     print("-" * len(hdr))
     for f in forecasters:
-        m = {k: float(np.mean(v)) for k, v in acc[f].items()}
-        print(f"{f:>12} {m['crps']:>10.4f} {m['energy']:>10.4f} "
+        # Ratio-of-means CRPS-sum: divide total numerator by total denominator.
+        total_denom = max(float(np.sum(acc[f]["crps_denom"])), 1e-8)
+        num_all = np.concatenate(acc[f]["crps_num"], axis=0)
+        crps_nd = float(num_all.sum() / total_denom)
+        m = {k: float(np.mean(v)) for k, v in acc[f].items()
+             if k not in ("crps_num", "crps_denom")}
+        print(f"{f:>12} {crps_nd:>10.4f} {m['energy']:>10.4f} "
               f"{m['nll']:>10.4f} {m['mae']:>10.4f} {m['rmse']:>10.4f}")
     print("\n(lower is better for every column; CRPS_sum is ND-normalized)")
 

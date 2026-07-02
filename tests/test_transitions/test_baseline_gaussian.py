@@ -336,3 +336,34 @@ def test_sample_latent_trajectory_shape_and_finite(
 
     assert traj.shape == (B, S, D, steps)
     assert torch.isfinite(traj).all()
+
+
+# ---------------------------------------------------------------------------
+# seq_log_prob — return value is a log-probability, not an NLL
+# (regression guard for the total_nll -> total_log_p rename, item 2)
+# ---------------------------------------------------------------------------
+
+
+def test_seq_log_prob_sign_is_log_prob_not_nll() -> None:
+    """``seq_log_prob`` accumulates log p (positive for tight Gaussians).
+
+    The variable was previously named ``total_nll`` despite storing a
+    *sum of log-probabilities*, not a negated one.  This test pins the
+    sign convention: under a well-fitted prior with small variance, the
+    log-probability returned should be negative-to-zero (Gaussian log-pdf
+    is negative), but crucially the function returns the un-negated value
+    — the caller in ``transition_kl`` negates it via ``L_p = -seq_log_prob``.
+    """
+    j = 1
+    baseline = ZeroBaseline(latent_dim=D, j=j)
+    transition = _make_transition(baseline, j=j)
+    # Encoder samples sitting exactly at the prior mean (zero), so log p is
+    # maximal for this prior.  seq_log_prob should be finite and negative
+    # (log-pdf of a Gaussian is ≤ 0 for unit-variance priors at σ_p ≡ 1).
+    zs = torch.zeros(B, S, D, T)
+    time_embed = torch.zeros(B, T, EMB_TIME)
+    val = transition.seq_log_prob(zs, time_embed)
+    assert val.shape == (B,)
+    assert torch.isfinite(val).all()
+    # A Gaussian with σ² = 1 has log p(0) = -d/2 · log(2π) < 0 per step.
+    assert (val < 0.0).all(), "seq_log_prob must return log-prob (≤ 0 for N(0,I))"

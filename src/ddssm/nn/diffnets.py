@@ -69,10 +69,10 @@ class SmallTimeConv(nn.Module):
 class SmallTimeConvStack(nn.Module):
     """Two stacked :class:`SmallTimeConv` blocks with dilation 1 then 2."""
 
-    def __init__(self, channels: int, causal: bool = False):
+    def __init__(self, channels: int, k: int = 3, causal: bool = False):
         super().__init__()
-        self.m1 = SmallTimeConv(channels, k=3, dilation=1, causal=causal)
-        self.m2 = SmallTimeConv(channels, k=3, dilation=2, causal=causal)
+        self.m1 = SmallTimeConv(channels, k=k, dilation=1, causal=causal)
+        self.m2 = SmallTimeConv(channels, k=k, dilation=2, causal=causal)
 
     def forward(self, y: torch.Tensor) -> torch.Tensor:
         return self.m2(self.m1(y))
@@ -125,7 +125,7 @@ class ConvTimeLayer(TimeLayer):
 
     def __init__(self, channels: int, kernel_size: int = 3, causal: bool = False):
         super().__init__()
-        self.layer = SmallTimeConvStack(channels, causal=causal)
+        self.layer = SmallTimeConvStack(channels, k=kernel_size, causal=causal)
 
     def forward(
         self, x_flat: torch.Tensor, base_shape: tuple[int, int, int, int]
@@ -290,7 +290,7 @@ class ConvFeatureLayer(FeatureLayer):
 
     def __init__(self, channels: int, kernel_size: int = 3):
         super().__init__()
-        self.layer = SmallTimeConvStack(channels)
+        self.layer = SmallTimeConvStack(channels, k=kernel_size)
 
     def forward(
         self, x_flat: torch.Tensor, base_shape: tuple[int, int, int, int]
@@ -343,6 +343,7 @@ def build_time_layer(
 def build_feature_layer(
     feature_type: str,
     channels: int,
+    kernel_size: int = 3,
     nheads: int = 8,
     n_layers: int = 1,
     dropout: float = 0.1,
@@ -353,7 +354,7 @@ def build_feature_layer(
             channels, nheads=nheads, layers=n_layers, dropout=dropout
         )
     if feature_type == "conv":
-        return ConvFeatureLayer(channels)
+        return ConvFeatureLayer(channels, kernel_size=kernel_size)
     if feature_type == "identity":
         return IdentityLayer()
     raise ValueError(

@@ -177,6 +177,14 @@ def run_probe(
         for mode in modes
     }
 
+    # The cell loops below mutate mode state on the (single, shared)
+    # ``model.transition``; snapshot it so the probe can restore the
+    # training-time configuration afterwards instead of leaking whichever
+    # cell happened to run last.
+    _orig_p_k = model.transition.p_k
+    _orig_mode = model.transition.k_sampling_mode
+    _orig_sched_mode = model.transition.schedule.k_sampling_mode
+
     loader = experiment.data.loader(spec.split)
     if loader is None:
         raise ValueError("Variance probe requires a non-empty loader.")
@@ -266,6 +274,11 @@ def run_probe(
                         mc_override={
                             "eps": shared_eps,
                             "k_idx": shared_k_idx[cell.k_sampling_mode],
+                            # The density k_idx was drawn from. Without it the
+                            # loss recomputes the live adaptive density for the
+                            # IS correction, mismatching this proposal and
+                            # biasing the estimator by q(k)/p(k) per row.
+                            "p_k": p_k_by_mode[cell.k_sampling_mode],
                             "objective": cell.objective,
                         },
                         return_per_sample=True,
@@ -318,6 +331,13 @@ def run_probe(
                     forced_eps = torch.randn(bs, d, sk, device=device)
                     for cell in spec.cells:
                         trans = transitions[cell.k_sampling_mode]
+                        # ``transitions`` maps every mode to the SAME shared
+                        # module, so the mode state must be re-set per cell —
+                        # otherwise this loop runs every cell under whichever
+                        # configuration the replica loop set last.
+                        trans.p_k = p_k_by_mode[cell.k_sampling_mode]
+                        trans.k_sampling_mode = cell.k_sampling_mode
+                        trans.schedule.k_sampling_mode = cell.k_sampling_mode
                         trans.zero_grad(set_to_none=True)
                         out = trans.transition_kl(
                             **probe_batch.as_kwargs(),
@@ -325,6 +345,12 @@ def run_probe(
                             mc_override={
                                 "eps": forced_eps,
                                 "k_idx": forced_idx,
+                                # k is forced, not sampled — but the per-τ curve
+                                # should show each mode's per-draw contribution
+                                # w(k)/p_mode(k), so weight against the mode's
+                                # sampling density (the same one the replica
+                                # branch draws from), not the live adaptive one.
+                                "p_k": p_k_by_mode[cell.k_sampling_mode],
                                 "objective": cell.objective,
                             },
                             return_per_sample=True,
@@ -352,6 +378,11 @@ def run_probe(
                             "L_p_scalar": l_p_mean,
                             "grad_norm": g_norm,
                         })
+
+    # Restore the training-time mode configuration mutated by the cell loops.
+    model.transition.p_k = _orig_p_k
+    model.transition.k_sampling_mode = _orig_mode
+    model.transition.schedule.k_sampling_mode = _orig_sched_mode
 
     log.info(
         "Probe loop done in %.1fs — %d rows across %d cells",

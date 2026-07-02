@@ -28,6 +28,56 @@ def _make_experiment(name: str):
     return instantiate(cfg.experiment)
 
 
+def test_force_per_k_sets_mode_per_cell_and_restores(monkeypatch) -> None:
+    """Every forced-k call runs under its own cell's mode; state is restored.
+
+    ``run_probe`` keys all modes to the SAME shared ``model.transition``.
+    Pre-fix, the forced-k sweep never re-set the mode attributes per cell,
+    so every cell ran under whichever configuration the replica loop set
+    last — and the mutated mode leaked past ``run_probe`` entirely.
+    """
+    from ddssm.variance.probe import run_probe
+    from ddssm.model.transitions.diffusion import DiffusionTransition
+
+    expt = _make_experiment("init_smoke_simple")
+    # Shrink the forced-k sweep: the loop bound reads ``num_steps`` off the
+    # transition, while the schedule buffers stay full-size (forced indices
+    # 0..1 remain valid rows), so this only trims test cost.
+    expt.model.transition.num_steps = 2
+
+    orig_mode = expt.model.transition.k_sampling_mode
+    orig_sched_mode = expt.model.transition.schedule.k_sampling_mode
+    orig_p_k = expt.model.transition.p_k
+
+    modes_at_call: list[str] = []
+    orig_kl = DiffusionTransition.transition_kl
+
+    def spy(self, *args, **kwargs):
+        modes_at_call.append(self.k_sampling_mode)
+        return orig_kl(self, *args, **kwargs)
+
+    monkeypatch.setattr(DiffusionTransition, "transition_kl", spy)
+
+    spec = ProbeSpec(
+        cells=[ProbeCell("esm", "uniform"), ProbeCell("esm", "lsgm_is")],
+        R=1,
+        n_batches=1,
+        seeds=[0],
+        force_per_k=True,
+        plots=[],
+    )
+    run_probe(expt, spec, device=torch.device("cpu"), checkpoint_path=None)
+
+    # Call layout: R × n_cells replica calls, then num_steps × n_cells forced.
+    assert len(modes_at_call) == 2 + 2 * 2
+    assert modes_at_call[2:] == ["uniform", "lsgm_is", "uniform", "lsgm_is"]
+
+    # The training-time configuration must be restored on the shared module.
+    assert expt.model.transition.k_sampling_mode == orig_mode
+    assert expt.model.transition.schedule.k_sampling_mode == orig_sched_mode
+    assert expt.model.transition.p_k is orig_p_k
+
+
 def test_variance_runner_smoke(tmp_path: Path) -> None:
     """The probe runner drives a diffusion model end-to-end and writes its artefacts."""
     expt = _make_experiment("init_smoke_simple")

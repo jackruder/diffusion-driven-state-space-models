@@ -61,6 +61,61 @@ def test_csv_source_filters_by_split(tmp_path: Path) -> None:
     assert train.read(str(csv_path)) == pytest.approx(1.5)
 
 
+def test_csv_nonfinite_tail_applies_penalty(tmp_path: Path) -> None:
+    """A trial whose tail diverged to NaN scores as a miss, not on its
+    earlier (better) finite rows."""
+    csv_path = tmp_path / "metrics.csv"
+    rows = [
+        {"step": str(i), "split": "train", "loss/total": str(float(i))}
+        for i in range(1, 9)
+    ]
+    rows += [
+        {"step": "9", "split": "train", "loss/total": "nan"},
+        {"step": "10", "split": "train", "loss/total": "inf"},
+    ]
+    _write_csv(csv_path, rows)
+    spec = ObjectiveSpec(metric="loss/total", split="train", tail_frac=0.2)
+    assert math.isinf(spec.read(str(csv_path)))
+
+
+def test_csv_nonfinite_outside_tail_does_not_penalize(tmp_path: Path) -> None:
+    """A recovered mid-run NaN spike outside the tail window is harmless."""
+    csv_path = tmp_path / "metrics.csv"
+    rows = [
+        {
+            "step": str(i),
+            "split": "train",
+            "loss/total": "nan" if i == 3 else str(float(i)),
+        }
+        for i in range(1, 11)
+    ]
+    _write_csv(csv_path, rows)
+    spec = ObjectiveSpec(metric="loss/total", split="train", tail_frac=0.2)
+    # tail_n=2 → rows 9.0 and 10.0, both finite.
+    assert spec.read(str(csv_path)) == pytest.approx(9.5)
+
+
+def test_csv_nonfinite_tail_routes_through_configured_penalty(
+    tmp_path: Path,
+) -> None:
+    """Divergence uses the spec's penalty, not a bare +inf sentinel."""
+    csv_path = tmp_path / "metrics.csv"
+    rows = [
+        {"step": str(i), "split": "train", "loss/total": str(float(i))}
+        for i in range(1, 10)
+    ]
+    rows.append({"step": "10", "split": "train", "loss/total": "nan"})
+    _write_csv(csv_path, rows)
+    spec = ObjectiveSpec(
+        metric="loss/total",
+        split="train",
+        tail_frac=0.2,
+        penalty="csv_tail_step",
+    )
+    # csv_tail_step penalty ⇒ the trial costs its full step budget.
+    assert spec.read(str(csv_path)) == pytest.approx(10.0)
+
+
 def test_csv_source_returns_inf_on_missing_file(tmp_path: Path) -> None:
     """No CSV ⇒ ``+inf`` so the trial fails cleanly."""
     spec = ObjectiveSpec(metric="loss/total")

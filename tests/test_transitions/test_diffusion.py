@@ -932,6 +932,61 @@ def _adaptive_is_meandom_pk(transition, sigma_d2: float) -> torch.Tensor:
     return pk.squeeze(0)
 
 
+def test_esm_override_p_k_controls_is_correction() -> None:
+    """``mc_override["p_k"]`` is the density used for the IS reweighting.
+
+    Regression: the variance probe draws its shared ``k_idx`` from a
+    global proposal, but the adaptive modes recomputed the *live* per-row
+    density for the ``wtilde / p_k`` correction — biasing probed losses
+    and gradients by q(k)/p(k) per row. With the fix, the caller-supplied
+    proposal is what divides the weight.
+    """
+    from ddssm.model.transitions.diffusion import _adaptive_is_density_meandom
+
+    torch.manual_seed(0)
+    transition = _make_diffusion(
+        ZeroBaseline(latent_dim=D, j=J), schedule=_adaptive_is_schedule()
+    )
+    transition.eval()
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+
+    K = int(transition.sigma_tilde.numel())
+    N = B * S
+    k_idx = torch.randint(0, K, (N, 1))
+    eps = torch.randn(N, D, 1)
+
+    # The buffer inits at σ_d² = 1.0 and no_grad forwards don't mutate it,
+    # so this is exactly the density the loss recomputes per row.
+    live_pk = _adaptive_is_density_meandom(
+        transition.sigma_tilde,
+        torch.tensor([1.0]),
+        floor=transition.gfloor,
+    ).squeeze(0)
+    uniform_pk = torch.full((K,), 1.0 / K)
+
+    def _loss(p_k: torch.Tensor | None) -> float:
+        override = {"k_idx": k_idx, "eps": eps}
+        if p_k is not None:
+            override["p_k"] = p_k
+        with torch.no_grad():
+            out = transition.transition_kl(
+                enc_stats=enc_stats,
+                zs=zs,
+                logq_paths=logq_paths,
+                time_embed=time_embed,
+                sigma_data=sigma_data,
+                mc_override=override,
+            )
+        return float(out["kl"])
+
+    # Supplying the same density the loss would recompute is a no-op…
+    assert _loss(live_pk) == pytest.approx(_loss(None), rel=1e-5)
+    # …while supplying the actual (different) proposal changes the
+    # correction — the pre-fix path silently ignored it.
+    assert _loss(uniform_pk) != pytest.approx(_loss(live_pk), rel=1e-3)
+
+
 def test_adaptive_is_p_k_sums_to_one() -> None:
     """Mean-dom adaptive-IS density at σ_d=1 is a valid PMF."""
     transition = _make_diffusion(

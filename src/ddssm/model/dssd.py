@@ -1028,9 +1028,12 @@ class DDSSM_base(nn.Module):
                     0, 2, 1
                 )  # to (BS, 1, V)
 
-            # Sample z_t
+            # Sample z_t using the stage-aware active transition so that
+            # stage-1 checkpoints roll out under the correct prior.
             # transition.sample returns (BS, 1, d) because we pass S=1 (we already flattened S)
-            z_t = self.transition.sample(z_hist_flat, S=1, ctx=ctx)  # (BS, 1, d)
+            z_t = self._active_transition().sample(
+                z_hist_flat, S=1, ctx=ctx
+            )  # (BS, 1, d)
             z_t = z_t.squeeze(1)  # (BS, d)
 
             # Decode: x_t ~ p(x_t | z_{t-j+1:t})

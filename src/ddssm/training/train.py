@@ -652,6 +652,7 @@ class DDSSMTrainer:
         val_loader: DataLoader,
         batch_transform: Callable[[dict, torch.device], dict] | None,
         device: torch.device,
+        amp: bool = False,
     ):
         self.model.eval()
         # Validate on the EMA model — the same transition weights the
@@ -661,7 +662,10 @@ class DDSSMTrainer:
         ema_ctx = (
             self.ema.swap() if getattr(self, "ema", None) is not None else nullcontext()
         )
-        with torch.no_grad(), ema_ctx:
+        # Mirror the training autocast so val and train losses are computed
+        # in the same dtype — numerically comparable and faster under bf16.
+        amp_ctx = torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=amp)
+        with torch.no_grad(), ema_ctx, amp_ctx:
             for vbatch in val_loader:
                 vbatch = self._prepare_batch(vbatch, device, batch_transform)
 
@@ -701,6 +705,7 @@ class DDSSMTrainer:
         validate_every: int,
         batch_transform: Callable[[dict, torch.device], dict] | None,
         device: torch.device,
+        amp: bool = False,
     ):
         if val_loader is None or not validate_every or (step % validate_every != 0):
             return
@@ -708,6 +713,7 @@ class DDSSMTrainer:
             val_loader=val_loader,
             batch_transform=batch_transform,
             device=device,
+            amp=amp,
         )
         self.metrics.epoch_end("val", self.global_step)
 
@@ -895,6 +901,11 @@ class DDSSMTrainer:
             if isinstance(lg, ConsoleLogger):
                 lg.every_steps = log_every
 
+        # Reset train meters so stage-N values don't leak into stage-(N+1)
+        # logged means. Val resets per epoch_end; train has no equivalent
+        # flush-and-reset cycle, so we do it explicitly at fit() entry.
+        self.metrics._split("train").reset()
+
         # see if we should resume
         self._safe_resume(resume_from)
 
@@ -935,7 +946,7 @@ class DDSSMTrainer:
                     self.model.train()
                     self.optimizer.zero_grad(set_to_none=True)
 
-                    accum_loss = 0.0
+                    accum_loss_t: torch.Tensor | None = None
                     accum_metrics = None
                     accum_weight = 0
 
@@ -952,27 +963,37 @@ class DDSSMTrainer:
                             amp=amp,
                         )
 
+                        loss_detached = loss.detach()
                         # Per-microstep guard: check before ``_backward_loss``
                         # so a NaN/Inf micro-batch never poisons ``.grad`` via
                         # backprop. Checking the summed accum_loss post-backward
-                        # would already be too late.
-                        loss_scalar = float(loss.detach())
-                        if self.abort_on_nonfinite_loss and not math.isfinite(
-                            loss_scalar
-                        ):
-                            raise FloatingPointError(
-                                f"Non-finite training loss ({loss_scalar}) at "
-                                f"step {step}; aborting "
-                                f"(abort_on_nonfinite_loss=True)."
-                            )
+                        # would already be too late. The host-side read forces
+                        # a device sync per microstep, so it only runs when the
+                        # guard is enabled; otherwise the loss accumulates
+                        # on-device and syncs once per optimizer step.
+                        if self.abort_on_nonfinite_loss:
+                            loss_scalar = float(loss_detached)
+                            if not math.isfinite(loss_scalar):
+                                raise FloatingPointError(
+                                    f"Non-finite training loss ({loss_scalar}) "
+                                    f"at step {step}; aborting "
+                                    f"(abort_on_nonfinite_loss=True)."
+                                )
 
                         self._backward_loss(loss, scaler=scaler, amp=amp)
 
-                        accum_loss += loss_scalar
+                        accum_loss_t = (
+                            loss_detached
+                            if accum_loss_t is None
+                            else accum_loss_t + loss_detached
+                        )
                         accum_metrics = self._accumulate_metrics(accum_metrics, metrics)
                         accum_weight += weight
 
                     self._optimizer_step(scaler=scaler, amp=amp)
+                    # Single host sync per optimizer step, queued after the
+                    # optimizer kernels so it doesn't stall them.
+                    accum_loss = float(accum_loss_t)
                     accum_metrics = self._finalize_accum_metrics(accum_metrics)
 
                     self._log_train_step(
@@ -1013,6 +1034,7 @@ class DDSSMTrainer:
                         validate_every=validate_every,
                         batch_transform=batch_transform,
                         device=device,
+                        amp=amp,
                     )
 
                     self._maybe_save_checkpoint(

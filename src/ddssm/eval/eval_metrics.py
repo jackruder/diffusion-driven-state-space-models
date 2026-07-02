@@ -103,28 +103,122 @@ def check_recon_divergence(
 
 
 def mae_metrics(
-    pred_mean: torch.Tensor, y_future: torch.Tensor
+    pred_mean: torch.Tensor,
+    y_future: torch.Tensor,
+    mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Mean absolute error, globally and per future timestep."""
+    """Mean absolute error, globally and per future timestep.
+
+    ``mask`` (``(B, D, L2)``, 1 = observed) restricts both reductions to
+    observed target entries; missing/imputed entries would otherwise be
+    scored as if real. Timesteps with no observed entries report 0.
+    """
     abs_err = (pred_mean - y_future).abs()
-    return abs_err.mean(), abs_err.mean(dim=(0, 1))
+    if mask is None:
+        return abs_err.mean(), abs_err.mean(dim=(0, 1))
+    m = mask.to(abs_err.dtype)
+    abs_err = abs_err * m
+    global_mae = abs_err.sum() / m.sum().clamp_min(1.0)
+    per_t = abs_err.sum(dim=(0, 1)) / m.sum(dim=(0, 1)).clamp_min(1.0)
+    return global_mae, per_t
 
 
 def rmse_metrics(
-    pred_mean: torch.Tensor, y_future: torch.Tensor
+    pred_mean: torch.Tensor,
+    y_future: torch.Tensor,
+    mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Root mean squared error, globally and per future timestep.
 
     The global value is the true RMSE (sqrt of the overall MSE); the per-t
     vector is the sqrt of each timestep's MSE (so it does NOT linearly average
     back to the global value — sqrt is nonlinear).
+
+    ``mask`` (``(B, D, L2)``, 1 = observed) restricts both reductions to
+    observed target entries. Timesteps with no observed entries report 0.
     """
     sq_err = (pred_mean - y_future) ** 2  # (B, D, L2)
-    return sq_err.mean().sqrt(), sq_err.mean(dim=(0, 1)).sqrt()
+    if mask is None:
+        return sq_err.mean().sqrt(), sq_err.mean(dim=(0, 1)).sqrt()
+    m = mask.to(sq_err.dtype)
+    sq_err = sq_err * m
+    global_rmse = (sq_err.sum() / m.sum().clamp_min(1.0)).sqrt()
+    per_t = (sq_err.sum(dim=(0, 1)) / m.sum(dim=(0, 1)).clamp_min(1.0)).sqrt()
+    return global_rmse, per_t
+
+
+def _crps_sum_pinball(
+    pred_sum: torch.Tensor,
+    y_sum: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute per-batch-element pinball numerator and ND denominator.
+
+    Args:
+        pred_sum: Channel-summed forecast samples, shape ``(B, S, L2)``.
+        y_sum: Channel-summed targets, shape ``(B, L2)``.
+
+    Returns:
+        A pair ``(ql_sum, denom)`` where:
+
+        * ``ql_sum`` — pinball numerator, shape ``(B, L2)``.  Each entry is
+          ``Σ_τ 2·QL(τ)`` averaged over the 19 quantile levels, summed across
+          time within each batch element when the caller wants cross-batch
+          pooling, or kept per-``(B, L2)`` for ``per_t`` reporting.
+        * ``denom`` — ND denominator, shape ``(B, 1)``:
+          ``Σ_t |Σ_d y_{b,d,t}|`` per batch element, clamped away from zero.
+    """
+    levels = torch.arange(0.05, 1.0, 0.05, device=pred_sum.device)
+    qs = torch.quantile(pred_sum, levels, dim=1).permute(1, 2, 0)  # (B, L2, Q)
+    indicator = (y_sum.unsqueeze(-1) < qs).float()
+    # Mean over the 19 levels of 2·QL(τ) (CSDI calc_quantile_CRPS), per (B, L2).
+    ql = 2 * ((levels - indicator) * (y_sum.unsqueeze(-1) - qs)).sum(dim=-1)
+    ql = ql / levels.numel()  # (B, L2)
+    denom = y_sum.abs().sum(dim=1, keepdim=True).clamp_min(1e-8)  # (B, 1)
+    return ql, denom
+
+
+def crps_sum_components(
+    pred_samples: torch.Tensor,
+    y_future: torch.Tensor,
+    mask: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return the raw numerator and denominator for ratio-of-means ND.
+
+    This is the building block for cross-batch pooling in
+    :func:`crps_sum_metrics` and :mod:`ddssm.eval.metrics`.  Callers that
+    span multiple batches should **accumulate** the two tensors separately
+    across batches and compute ``num.sum() / denom.sum()`` once at the end,
+    which yields the true ratio-of-means ND.
+
+    Args:
+        pred_samples: ``(B, S, D, L2)`` forecast sample tensor.
+        y_future: ``(B, D, L2)`` target tensor.
+        mask: Optional ``(B, D, L2)`` observation mask (1 = observed).
+            Masked entries are zeroed in both target and samples before the
+            channel sum, so they contribute neither to the pinball numerator
+            nor to the ND denominator (CSDI ``eval_points`` convention).
+
+    Returns:
+        ``(num, denom)`` where
+
+        * ``num`` has shape ``(B, L2)``: the per-``(batch, time)`` pinball
+          loss averaged over the 19 quantile levels.
+        * ``denom`` has shape ``(B, 1)``: ``Σ_t |Σ_d y_{b,d,t}|`` per batch
+          element, clamped to ``≥ 1e-8``.
+    """
+    if mask is not None:
+        m = mask.to(y_future.dtype)
+        pred_samples = pred_samples * m.unsqueeze(1)
+        y_future = y_future * m
+    pred_sum = pred_samples.sum(dim=2)  # (B, S, L2)
+    y_sum = y_future.sum(dim=1)  # (B, L2)
+    return _crps_sum_pinball(pred_sum, y_sum)
 
 
 def crps_sum_metrics(
-    pred_samples: torch.Tensor, y_future: torch.Tensor
+    pred_samples: torch.Tensor,
+    y_future: torch.Tensor,
+    mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """ND-normalized CRPS-sum at 19 quantile levels (0.05..0.95).
 
@@ -133,27 +227,37 @@ def crps_sum_metrics(
     computed before quantilisation, matching the standard probabilistic
     forecasting convention.
 
+    ``mask`` (``(B, D, L2)``, 1 = observed) zeroes missing entries in both
+    the target and the forecast samples before the channel sum (the CSDI
+    ``eval_points`` convention), so unobserved entries contribute neither
+    to the pinball loss nor to the ND denominator.
+
     Per batch element the pinball loss is **averaged over the 19 quantile
     levels** (``Σ_τ 2·QL(τ) / 19``), matching CSDI's ``calc_quantile_CRPS`` /
     the published CRPS-sum convention — this is what every baseline table
     reports. (A Δτ=0.05 Riemann sum, which only spans [0.05,0.95], reads ≈5%
-    lower and is NOT comparable to published numbers.) The per-level loss is
-    then normalized by ``Σ_t |Σ_d y|`` — the GluonTS ND convention, making the
-    metric dimensionless. The global value is the mean over the batch of the
-    time-summed normalized loss; the per-timestep vector is the batch mean and
-    sums to the global value.
+    lower and is NOT comparable to published numbers.)
+
+    The global ND is the **ratio-of-means**: total pinball numerator across
+    all batch elements and timesteps divided by the total ND denominator
+    ``Σ_{b,t} |Σ_d y_{b,d,t}|``.  This matches the GluonTS / CSDI published
+    convention and avoids overweighting low-magnitude windows.  The
+    ``per_t`` vector is the per-timestep pinball sum (across the batch)
+    divided by the **global** denominator, so ``per_t.sum() == global``.
+
+    For cross-batch pooling (accumulating over a data loader) use
+    :func:`crps_sum_components` to obtain ``(num, denom)`` per batch, then
+    compute ``num_all.sum() / denom_all.sum()`` at the end — **do not**
+    average per-batch globals, which would reintroduce mean-of-ratios bias.
     """
-    levels = torch.arange(0.05, 1.0, 0.05, device=pred_samples.device)
-    pred_sum = pred_samples.sum(dim=2)  # (B, S, L2)
-    y_sum = y_future.sum(dim=1)  # (B, L2)
-    qs = torch.quantile(pred_sum, levels, dim=1).permute(1, 2, 0)  # (B, L2, Q)
-    indicator = (y_sum.unsqueeze(-1) < qs).float()
-    # Mean over the 19 levels of 2·QL(τ) (CSDI calc_quantile_CRPS), per (B, L2).
-    ql = 2 * ((levels - indicator) * (y_sum.unsqueeze(-1) - qs)).sum(dim=-1)
-    ql = ql / levels.numel()
-    denom = y_sum.abs().sum(dim=1, keepdim=True).clamp_min(1e-8)  # (B, 1)
-    nd = ql / denom  # (B, L2)
-    return nd.sum(dim=1).mean(), nd.mean(dim=0)
+    num, denom = crps_sum_components(pred_samples, y_future, mask=mask)
+    # num: (B, L2), denom: (B, 1) — ratio-of-means: pool across B and t.
+    total_denom = denom.sum().clamp_min(1e-8)
+    global_nd = num.sum() / total_denom
+    # per_t: pinball sum across B divided by the global denominator so
+    # per_t.sum() == global_nd.
+    per_t = num.sum(dim=0) / total_denom
+    return global_nd, per_t
 
 
 def crps_sum_latent_metrics(
@@ -166,18 +270,19 @@ def crps_sum_latent_metrics(
     tensors of shapes ``(B, S, d, L2)`` and ``(B, d, L2)``, summed
     across the latent dimension ``d``.
 
-    Used by ``ddssm.eval.metrics.crps_sum_latent`` for the model-v2
-    init-experiment headline metric on the latent path. See
-    :func:`crps_sum_metrics` for the integral / ND-normalization details.
+    The global ND uses the ratio-of-means convention (see
+    :func:`crps_sum_metrics`): total pinball numerator divided by total
+    ND denominator across all batch elements and timesteps.  The ``per_t``
+    vector is each timestep's numerator (summed over B) divided by the
+    global denominator, so ``per_t.sum() == global``.
+
+    Used by ``ddssm.eval.metrics.eval_crps_sum_latent`` for the model-v2
+    init-experiment headline metric on the latent path.
     """
-    levels = torch.arange(0.05, 1.0, 0.05, device=z_samples.device)
     z_sum = z_samples.sum(dim=2)  # (B, S, L2)
     y_sum = z_gt.sum(dim=1)  # (B, L2)
-    qs = torch.quantile(z_sum, levels, dim=1).permute(1, 2, 0)  # (B, L2, Q)
-    indicator = (y_sum.unsqueeze(-1) < qs).float()
-    # Mean over the 19 levels of 2·QL(τ) (CSDI calc_quantile_CRPS), per (B, L2).
-    ql = 2 * ((levels - indicator) * (y_sum.unsqueeze(-1) - qs)).sum(dim=-1)
-    ql = ql / levels.numel()
-    denom = y_sum.abs().sum(dim=1, keepdim=True).clamp_min(1e-8)  # (B, 1)
-    nd = ql / denom  # (B, L2)
-    return nd.sum(dim=1).mean(), nd.mean(dim=0)
+    num, denom = _crps_sum_pinball(z_sum, y_sum)
+    total_denom = denom.sum().clamp_min(1e-8)
+    global_nd = num.sum() / total_denom
+    per_t = num.sum(dim=0) / total_denom
+    return global_nd, per_t

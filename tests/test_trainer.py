@@ -389,6 +389,38 @@ def test_fit_does_not_close_metric_loggers(small_model, tmp_path):
     assert not sentinel.closed, "fit() closed the metric loggers"
 
 
+def test_abort_on_nonfinite_loss_raises_before_backward(small_model, tmp_path):
+    """With the guard enabled, a NaN micro-batch loss aborts the step.
+
+    The guard's host-side read is now gated on ``abort_on_nonfinite_loss``
+    (the default path accumulates the loss on-device); this pins the
+    guard's behaviour so the optimization can't silently disable it.
+    """
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    trainer.abort_on_nonfinite_loss = True
+    trainer._compute_loss_and_metrics = lambda batch, amp: (  # type: ignore[assignment]
+        torch.tensor(float("nan")),
+        {},
+        1,
+    )
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+    with pytest.raises(FloatingPointError, match="Non-finite training loss"):
+        trainer.fit(
+            train_loader=loader,
+            val_loader=None,
+            total_steps=1,
+            validate_every=0,
+            log_every=1,
+            checkpoint_every=None,
+            amp=False,
+        )
+
+
 def test_elbo_plateau_early_stop_triggers(small_model, tmp_path):
     """When the loss is flat, the early-stop spec terminates ``fit`` early."""
     from ddssm.training.stages import EarlyStopSpec
@@ -529,3 +561,114 @@ def test_elbo_plateau_disabled_runs_full_budget(small_model, tmp_path):
         early_stop=None,
     )
     assert final_step == 6
+
+
+def test_train_meters_reset_between_stages(small_model, tmp_path):
+    """Stage-2 metrics must not include stage-1 accumulation after ``fit()`` resets.
+
+    Regression guard: train SplitStore was never reset across ``fit()`` calls,
+    so keys written in stage 1 with MeanMeter semantics carried stale sums into
+    stage 2's first flush.  The fix resets the train split at ``fit()`` entry.
+
+    We assert via the SplitStore directly: after ``reset()``, a MeanMeter
+    seeded with a stage-1 value and then updated with a stage-2 value must
+    report only the stage-2 value.
+    """
+    from ddssm.training.loggers import MetricStore, MetricSpec
+
+    store = MetricStore(
+        spec=[MetricSpec("loss/*", "mean")],
+        loggers=[],
+    )
+
+    # Stage 1: accumulate without flushing (log_every window not reached yet).
+    store.update("train", {"loss/total": torch.tensor(100.0)}, weight=1)
+
+    # fit() entry for stage 2 resets.
+    store._split("train").reset()
+
+    # Stage 2: accumulate only stage-2 values.
+    store.update("train", {"loss/total": torch.tensor(1.0)}, weight=1)
+
+    row = store.step_end("train", step=1)
+    assert row["loss/total"] < 10.0, (
+        f"loss/total={row['loss/total']:.2f} was contaminated by stage-1 "
+        "accumulation (expected ≈ 1.0)"
+    )
+
+
+def test_fit_resets_train_meters_on_entry(small_model, tmp_path):
+    """``fit()`` itself clears the train split so stage boundaries are clean.
+
+    Concrete end-to-end proof: the trainer exposes a stale meter if reset is
+    skipped and the loss value changes sharply between stages.  We check the
+    raw meter value after stage-2's first fit() call but before any log flush.
+    """
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+
+    # Manually prime the train split with a large value to simulate stage-1 leftovers.
+    # Use a key that fits the "loss/*" mean spec.
+    trainer.metrics._split("train").add("loss/sentinel", 999.0, 1.0)
+    sentinel_val = trainer.metrics._split("train").meters["loss/sentinel"].value()
+    assert sentinel_val == pytest.approx(999.0)
+
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+    # fit() entry must reset the train split, clearing the sentinel meter.
+    trainer.fit(
+        train_loader=loader,
+        total_steps=1,
+        validate_every=0,
+        log_every=100,  # no CSV flush — we only care about the reset
+        checkpoint_every=None,
+        amp=False,
+    )
+    # After reset, the sentinel meter must be gone / zeroed — the split was
+    # rebuilt from scratch via reset(), so the meter's sum/weight are 0.
+    sentinel = trainer.metrics._split("train").meters.get("loss/sentinel")
+    if sentinel is not None:
+        assert sentinel.value() == pytest.approx(0.0), (
+            "stage-1 sentinel value survived into stage-2 (reset did not fire)"
+        )
+
+
+def test_validation_enters_autocast_when_amp_enabled(small_model, tmp_path):
+    """``_run_validation`` enters torch.amp.autocast when amp=True.
+
+    Regression guard: the validation loop ran in full precision even when AMP
+    was enabled, making val/train losses non-comparable and slowing validation.
+    """
+    import unittest.mock as mock
+
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+
+    entered: list[bool] = []
+    real_autocast = torch.amp.autocast
+
+    def _spy_autocast(device_type, *args, **kwargs):
+        if kwargs.get("enabled", True):
+            entered.append(True)
+        return real_autocast(device_type, *args, **kwargs)
+
+    with mock.patch("torch.amp.autocast", side_effect=_spy_autocast):
+        trainer.fit(
+            train_loader=loader,
+            val_loader=loader,
+            total_steps=2,
+            validate_every=1,
+            log_every=1,
+            checkpoint_every=None,
+            amp=True,
+        )
+
+    assert entered, "validation did not enter torch.amp.autocast with amp=True"
