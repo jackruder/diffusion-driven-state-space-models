@@ -17,12 +17,21 @@ reads it directly.
 | `grad_accum_steps` | 4 | optimizer step every N micro-batches (effective batch = `batch_size × grad_accum_steps`). |
 | `ema_decay` | 0.999 | EMA of the transition weights (used at val/sampling). |
 | `weight_decay` | 1e-2 | AdamW decay; **not** applied to norms/biases/embeddings/decoder logvar (selective grouping in `param_groups_for_adamw`). |
-| `clip_grad_norm` | None | global grad-norm clip (None = off). |
+| `psi_betas` | None | single-mode Adam betas for the score-net (ψ) param groups only (e.g. `[0.9, 0.99]`; None = default betas everywhere) — see split-loss training below. |
 | `logvar_min` / `logvar_max` | -7 / 7 | clamp on encoder/decoder log-variances. |
 
 Per-submodule LRs are realized by
 {py:func}`ddssm.training.train_utils.param_groups_for_adamw`, which also splits
 each group into decay / no-decay sub-groups.
+
+```{note}
+**No grad clipping — skip instead.** The old `clip_grad_norm` knob was
+removed. The trainer always computes the whole-model gradient norm at every
+optimizer step (logged as `optim/grad_norm`) and **skips** the step when that
+norm is non-finite: the macro-batch is discarded (grads zeroed; optimizer,
+scheduler, and EMA untouched). Skips are counted in `optim/grad_skips`
+(cumulative, persisted in checkpoints as `grad_skip_count`).
+```
 
 ## Run scalars — `Training(...)`
 
@@ -78,6 +87,57 @@ mechanism for stage-aware freezing (e.g. pinning the baseline in stage 2).
 The orchestrator iterates `run`, sets `model.stage_selector`, applies the
 handoff (unless resumed), sets the trainable mask, installs the loss/λ schedule,
 and calls `fit()`. Resuming from a stage-N checkpoint skips earlier stages.
+
+## Split-loss training — `FullELBO(use_split_loss=True)`
+
+Setting `use_split_loss=True` on a stage's `FullELBO` splits the objective in
+two: one forward pass, two selective backward passes over the shared graph.
+
+- **φθ side** (encoder / decoder / baseline): `recon + λ(step)·KL + anchors`
+  — the same composition as single mode, over the `*_phith` KL fields.
+- **ψ side** (score net = `transition.diffmodel` + `transition.embed_layer`):
+  the **unit-weighted** KL (`trans_kl_psi + init_kl_psi`), deliberately NOT
+  gated by `rate_lambda` — the score net trains at full strength through
+  recon-only warmup (score matching is invariant to positive rescaling; the
+  λ ramp's job is protecting φθ from KL through an imperfect ψ).
+
+At `fit()` entry the trainer auto-builds the two-optimizer topology: two
+AdamWs, φθ with betas `(0.9, 0.999)` and ψ with betas `(0.9, 0.99)` (faster
+second-moment adaptation for the score-matching objective), both `eps=1e-8`,
+per-component LRs preserved. The LR scheduler shape is mirrored onto the ψ
+optimizer so both sides decay together.
+
+**Single-mode alternative.** `hyperparams.psi_betas=[0.9, 0.99]` (default
+`null` = unchanged) keeps the one-optimizer topology but tags only the
+score-net param groups with the faster β₂.
+
+**`p_k_clip`** (`DiffusionScheduleConfig`, default `1e-3`) — a
+post-normalization floor on the adaptive IS probabilities, bounding the IS
+weight `w̃/p`. Applies to `adaptive_is` / `adaptive_is_full` k-sampling only.
+`0.0` disables it and is bit-identical to the old (unclipped) density — note
+`null` is NOT valid, the field is float-typed.
+
+### Migration caveats
+
+```{warning}
+1. The `p_k_clip=1e-3` default changes the loss numerics **and** the RNG
+   draws of every adaptive-IS run relative to pre-change code. Set
+   `p_k_clip: 0.0` to reproduce old results exactly.
+2. Checkpoints now write format v3. Old code reads them with a warning,
+   silently dropping the split/skip fields — and a split-mode v3 checkpoint
+   does NOT load into old code's optimizer.
+3. In split mode the logged `loss/total` — and hence Optuna objectives and
+   the ELBO-plateau early stop — is the combined φθ+ψ scalar. Don't resume
+   or compare an Optuna study across a `use_split_loss` flip; start a new
+   `study_name`.
+4. DDP is NOT split-ready: `SigmaDataBuffer` does no cross-rank sync (must
+   be fixed before any multi-rank run), and the double selective backward
+   requires `find_unused_parameters=True` when wrapping.
+5. With `grad_checkpoint=True` the score-net recompute redraws dropout masks
+   (`preserve_rng_state=False`), so checkpointed backwards are not
+   bit-consistent — a known pre-existing issue that split mode inherits on
+   the ψ side.
+```
 
 ## In the worked example
 
