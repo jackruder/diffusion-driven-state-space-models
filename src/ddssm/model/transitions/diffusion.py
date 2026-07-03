@@ -121,6 +121,7 @@ def _adaptive_is_density_meandom(
     sigma_tilde: torch.Tensor,  # (K,)
     sigma_d2: torch.Tensor,  # (n_t,)
     floor: float = 1e-12,
+    p_k_clip: float = 0.0,
 ) -> torch.Tensor:
     """Mean-dominated adaptive IS density per (importance-sampling.org § Mean-
     dominated regime, line 342)::
@@ -132,11 +133,19 @@ def _adaptive_is_density_meandom(
     ``σ_d² = 1``. Sample-independent under the regularised regime where the
     encoder posterior variance stays near σ_d² across samples — the (σ²−σ_d²)²
     term in the full formula vanishes and the (σ²+s²) factor cancels.
+
+    ``p_k_clip > 0`` floors the *normalized* probabilities at ``p_k_clip``
+    and renormalizes, bounding the IS weight ``w̃/p``; ``0`` (default)
+    returns the unclipped density unchanged.
     """
     s = sigma_tilde.to(torch.float32)  # (K,)
     sd2 = sigma_d2.to(torch.float32).clamp_min(floor).unsqueeze(-1)  # (n_t, 1)
     raw = (s / (sd2 + s * s).pow(2)).clamp_min(floor)  # (n_t, K)
-    return raw / raw.sum(dim=-1, keepdim=True)
+    p = raw / raw.sum(dim=-1, keepdim=True)
+    if p_k_clip > 0.0:
+        p = p.clamp_min(p_k_clip)
+        p = p / p.sum(dim=-1, keepdim=True)
+    return p
 
 
 def _adaptive_is_density_full(
@@ -145,6 +154,7 @@ def _adaptive_is_density_full(
     sigma2: torch.Tensor,  # (N,)
     mu_hat2: torch.Tensor,  # (N,)
     floor: float = 1e-12,
+    p_k_clip: float = 0.0,
 ) -> torch.Tensor:
     """Full per-sample adaptive IS density (importance-sampling.org line 319,
     the boxed equation)::
@@ -157,6 +167,10 @@ def _adaptive_is_density_full(
     ``σ²=σ_d²`` the second numerator term vanishes and the ``(σ²+s²)``
     factor cancels, collapsing to the mean-dom form modulo a per-row
     scalar (which is absorbed by the normalisation).
+
+    ``p_k_clip > 0`` floors the *normalized* probabilities at ``p_k_clip``
+    and renormalizes, bounding the IS weight ``w̃/p``; ``0`` (default)
+    returns the unclipped density unchanged.
     """
     s = sigma_tilde.to(torch.float32)  # (K,)
     s2 = s * s  # (K,)
@@ -166,7 +180,11 @@ def _adaptive_is_density_full(
     num = s * (mh2 * (sg2 + s2) + (sg2 - sd2).pow(2))  # (N, K)
     den = (sd2 + s2).pow(2) * (sg2 + s2)  # (N, K)
     raw = (num / den.clamp_min(floor)).clamp_min(floor)
-    return raw / raw.sum(dim=-1, keepdim=True)
+    p = raw / raw.sum(dim=-1, keepdim=True)
+    if p_k_clip > 0.0:
+        p = p.clamp_min(p_k_clip)
+        p = p / p.sum(dim=-1, keepdim=True)
+    return p
 
 
 @dataclass
@@ -213,6 +231,12 @@ class DiffusionScheduleConfig:
     # larger chunks = fewer/faster calls; tune to the memory budget. ``None`` ⇒ 1
     # (per-timestep: minimal memory, slowest).
     time_chunk_size: int | None = None
+    # Post-normalization floor on the adaptive IS probabilities — bounds the
+    # IS weight ``w̃/p`` by max ≈ w̃_max·(1+K·c)/c. ``0.0`` disables (bit-
+    # identical to the unclipped density). Distinct from ``pk_floor``, the
+    # pre-normalization raw-density zero guard (which does NOT bound the
+    # post-normalization probability, hence not the weight).
+    p_k_clip: float = 1e-3
 
 
 @dataclass
@@ -418,6 +442,7 @@ class DiffusionTransition(BaseTransition):
         ismode = schedule.k_sampling_mode
         self.gamma = float(schedule.pk_gamma)
         self.gfloor = float(schedule.pk_floor)
+        self.p_k_clip = float(schedule.p_k_clip)
         if ismode == "lsgm_is":
             beta_t = self.beta.to(torch.float32)
             om_a2 = self.one_minus_alpha2.to(torch.float32)
@@ -1007,6 +1032,7 @@ class DiffusionTransition(BaseTransition):
                 self.sigma_tilde,
                 sigma_d2_per_row,
                 floor=self.gfloor,
+                p_k_clip=self.p_k_clip,
             )  # (N, K)
         elif self.k_sampling_mode == "adaptive_is_full":
             # Per-coordinate means so these match σ_d²'s per-coordinate scale
@@ -1021,6 +1047,7 @@ class DiffusionTransition(BaseTransition):
                 sigma2=sigma2_row,
                 mu_hat2=mu_hat2_row,
                 floor=self.gfloor,
+                p_k_clip=self.p_k_clip,
             )  # (N, K)
         else:
             # Static mode: broadcast view (zero-copy).

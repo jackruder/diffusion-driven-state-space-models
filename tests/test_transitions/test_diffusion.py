@@ -957,11 +957,13 @@ def test_esm_override_p_k_controls_is_correction() -> None:
     eps = torch.randn(N, D, 1)
 
     # The buffer inits at σ_d² = 1.0 and no_grad forwards don't mutate it,
-    # so this is exactly the density the loss recomputes per row.
+    # so this is exactly the density the loss recomputes per row (including
+    # the post-normalization p_k clip the loss now applies by default).
     live_pk = _adaptive_is_density_meandom(
         transition.sigma_tilde,
         torch.tensor([1.0]),
         floor=transition.gfloor,
+        p_k_clip=transition.p_k_clip,
     ).squeeze(0)
     uniform_pk = torch.full((K,), 1.0 / K)
 
@@ -1140,7 +1142,9 @@ def test_adaptive_is_full_call_site_reduces_per_coordinate(monkeypatch) -> None:
     captured: dict[str, torch.Tensor] = {}
     real_full = diff_mod._adaptive_is_density_full
 
-    def spy(sigma_tilde, *, sigma_d2, sigma2, mu_hat2, floor=1e-12):
+    def spy(
+        sigma_tilde, *, sigma_d2, sigma2, mu_hat2, floor=1e-12, p_k_clip: float = 0.0
+    ):
         captured["sigma2"] = sigma2.detach().clone()
         captured["mu_hat2"] = mu_hat2.detach().clone()
         return real_full(
@@ -1149,6 +1153,7 @@ def test_adaptive_is_full_call_site_reduces_per_coordinate(monkeypatch) -> None:
             sigma2=sigma2,
             mu_hat2=mu_hat2,
             floor=floor,
+            p_k_clip=p_k_clip,
         )
 
     monkeypatch.setattr(diff_mod, "_adaptive_is_density_full", spy)
@@ -1375,6 +1380,181 @@ def test_probe_p_k_for_mode_adaptive_is_matches_formula() -> None:
     reconstructed = _p_k_for_mode(transition, "adaptive_is", sigma_d2=1.0)
     expected = _adaptive_is_meandom_pk(transition, sigma_d2=1.0)
     assert torch.allclose(reconstructed, expected, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# adaptive_is — Group E: p_k clip (post-normalization IS-probability floor)
+# ---------------------------------------------------------------------------
+
+PK_CLIP = 1e-3
+
+
+def _pk_clip_inputs() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """A spread of density inputs for the p_k-clip tests.
+
+    Includes extreme σ_d²/σ²/μ̂² combinations that push the unclipped
+    post-normalization probabilities arbitrarily low.
+    """
+    s = torch.logspace(-3, 3, 40)  # (K,)
+    sd2 = torch.tensor([1e-8, 1e-2, 1.0, 1e4, 1e6])
+    sg2 = torch.tensor([1e-8, 1.0, 1e4, 1e-6, 1e2])
+    mh2 = torch.tensor([0.0, 1.0, 1e6, 1e-9, 1e3])
+    return s, sd2, sg2, mh2
+
+
+def _pk_densities(p_k_clip: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """Both adaptive densities over the ``_pk_clip_inputs`` spread."""
+    from ddssm.model.transitions.diffusion import (
+        _adaptive_is_density_full,
+        _adaptive_is_density_meandom,
+    )
+
+    s, sd2, sg2, mh2 = _pk_clip_inputs()
+    pk_meandom = _adaptive_is_density_meandom(s, sd2, p_k_clip=p_k_clip)
+    pk_full = _adaptive_is_density_full(s, sd2, sg2, mh2, p_k_clip=p_k_clip)
+    return pk_meandom, pk_full
+
+
+def test_pk_clip_bounds_probability() -> None:
+    """With clip c, every prob ≥ c/(1+K·c) and each row still sums to 1."""
+    c = PK_CLIP
+    s, *_ = _pk_clip_inputs()
+    K = int(s.numel())
+    bound = c / (1.0 + K * c)
+    # Sanity: the spread genuinely produces sub-c probs without the clip.
+    for pk_unclipped in _pk_densities(0.0):
+        assert float(pk_unclipped.min()) < c
+    for pk in _pk_densities(c):
+        assert (pk >= bound * (1.0 - 1e-5)).all(), float(pk.min())
+        assert torch.allclose(pk.sum(dim=-1), torch.ones(pk.shape[0]), atol=1e-6)
+
+
+def test_pk_clip_zero_recovers_prior_behavior() -> None:
+    """``p_k_clip=0.0`` (and the omitted default) is bit-identical.
+
+    Reference: the pre-clip formula ``raw / raw.sum(-1, keepdim=True)``
+    computed inline, for both densities.
+    """
+    from ddssm.model.transitions.diffusion import (
+        _adaptive_is_density_full,
+        _adaptive_is_density_meandom,
+    )
+
+    floor = 1e-12
+    s, sd2, sg2, mh2 = _pk_clip_inputs()
+
+    # Mean-dom: the pre-change computation, inline.
+    s32 = s.to(torch.float32)
+    sd2c = sd2.to(torch.float32).clamp_min(floor).unsqueeze(-1)
+    raw_m = (s32 / (sd2c + s32 * s32).pow(2)).clamp_min(floor)
+    expected_m = raw_m / raw_m.sum(dim=-1, keepdim=True)
+    assert torch.equal(
+        _adaptive_is_density_meandom(s, sd2, floor=floor, p_k_clip=0.0),
+        expected_m,
+    )
+    assert torch.equal(
+        _adaptive_is_density_meandom(s, sd2, floor=floor),
+        expected_m,
+    )
+
+    # Full: the pre-change computation, inline.
+    s2 = s32 * s32
+    sg2c = sg2.to(torch.float32).clamp_min(floor).unsqueeze(-1)
+    mh2c = mh2.to(torch.float32).unsqueeze(-1)
+    num = s32 * (mh2c * (sg2c + s2) + (sg2c - sd2c).pow(2))
+    den = (sd2c + s2).pow(2) * (sg2c + s2)
+    raw_f = (num / den.clamp_min(floor)).clamp_min(floor)
+    expected_f = raw_f / raw_f.sum(dim=-1, keepdim=True)
+    assert torch.equal(
+        _adaptive_is_density_full(s, sd2, sg2, mh2, floor=floor, p_k_clip=0.0),
+        expected_f,
+    )
+    assert torch.equal(
+        _adaptive_is_density_full(s, sd2, sg2, mh2, floor=floor),
+        expected_f,
+    )
+
+
+def test_pk_clip_bounds_is_weight() -> None:
+    """The weight-bounding property (with w̃≡1): max 1/p ≤ (1+K·c)/c."""
+    c = PK_CLIP
+    s, *_ = _pk_clip_inputs()
+    K = int(s.numel())
+    cap = (1.0 + K * c) / c
+    for pk in _pk_densities(c):
+        assert float((1.0 / pk).max()) <= cap * (1.0 + 1e-5)
+
+
+def _pk_clip_transition_kl(transition: DiffusionTransition) -> float:
+    """Fixed-seed transition_kl on the shared batch (fresh σ_data buffer)."""
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+    torch.manual_seed(7)
+    with torch.no_grad():
+        out = transition.transition_kl(
+            enc_stats=enc_stats,
+            zs=zs,
+            logq_paths=logq_paths,
+            time_embed=time_embed,
+            sigma_data=sigma_data,
+        )
+    return float(out["kl"])
+
+
+def test_pk_clip_threaded_through_transition_kl() -> None:
+    """``schedule.p_k_clip`` reaches the adaptive density inside the loss.
+
+    The default (1e-3, active) changes the kl vs an explicit 0.0, while
+    0.0 itself is bit-reproducible across reseeded runs.
+    """
+
+    def _build(**kw: float) -> DiffusionTransition:
+        torch.manual_seed(3)
+        return _make_diffusion(
+            ZeroBaseline(latent_dim=D, j=J),
+            schedule=_adaptive_is_schedule(**kw),
+        )
+
+    t_default = _build()
+    t_off = _build(p_k_clip=0.0)
+    assert t_default.p_k_clip == pytest.approx(PK_CLIP)  # dataclass default
+    assert t_off.p_k_clip == pytest.approx(0.0)
+
+    kl_off_1 = _pk_clip_transition_kl(t_off)
+    kl_off_2 = _pk_clip_transition_kl(t_off)
+    assert kl_off_1 == kl_off_2, "p_k_clip=0.0 is not reseed-reproducible"
+    assert _pk_clip_transition_kl(t_default) != kl_off_1, (
+        "default p_k_clip=1e-3 did not reach the adaptive density"
+    )
+
+
+@pytest.mark.parametrize("mode", ["uniform", "lsgm_is"])
+def test_pk_clip_has_no_effect_on_static_modes(mode: str) -> None:
+    """The clip is specific to the adaptive densities.
+
+    The uniform and lsgm_is losses are bit-identical with p_k_clip
+    1e-3 vs 0.0.
+    """
+
+    def _build(p_k_clip: float) -> DiffusionTransition:
+        torch.manual_seed(3)
+        return _make_diffusion(
+            ZeroBaseline(latent_dim=D, j=J),
+            schedule=DiffusionScheduleConfig(
+                S_k=1,
+                k_chunk=1,
+                num_steps=20,
+                beta_min=0.1,
+                beta_max=20.0,
+                tau_min=1e-3,
+                k_sampling_mode=mode,
+                p_k_clip=p_k_clip,
+            ),
+        )
+
+    kl_on = _pk_clip_transition_kl(_build(PK_CLIP))
+    kl_off = _pk_clip_transition_kl(_build(0.0))
+    assert kl_on == kl_off
 
 
 # ---------------------------------------------------------------------------
