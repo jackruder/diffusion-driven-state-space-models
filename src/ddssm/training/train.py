@@ -222,9 +222,18 @@ class DDSSMTrainer:
         self._optimizers: list[optim.Optimizer] = [self.optimizer]
         self.opt_psi: optim.Optimizer | None = None
         # Cached (φθ, ψ) parameter lists for the split backward; populated
-        # by ``_install_split_topology``.
+        # by ``_install_split_topology`` with ``include_frozen=True`` (the
+        # full per-side partition). ``_backward_loss`` re-filters them by
+        # the live ``requires_grad`` at every call, so per-stage
+        # freeze/unfreeze after install is honored.
         self._phith_params: list[torch.nn.Parameter] | None = None
         self._psi_params: list[torch.nn.Parameter] | None = None
+        # One-time warning latches for the silent scheduler traps:
+        # (a) legacy ``self.scheduler`` fallback stepping only the φθ side
+        # under the split topology; (b) rebuilding optimizers while
+        # installed schedulers still point at the old optimizer objects.
+        self._warned_split_legacy_scheduler: bool = False
+        self._warned_stale_schedulers: bool = False
 
         self.scheduler = None
         # Scheduler topology mirror of ``_optimizers``: populated by
@@ -442,7 +451,13 @@ class DDSSMTrainer:
             trans_lr=self.hparams.trans_lr,
             baseline_lr=getattr(self.hparams, "baseline_lr", None),
         )
-        self._phith_params, self._psi_params = split_params_phith_psi(self.model)
+        # Cache the UNFILTERED per-side partition (frozen params included):
+        # per-stage trainable masks flip ``requires_grad`` after install
+        # (e.g. the centering handoff freezing the baseline), so the
+        # backward filters by the live flag instead of a stale snapshot.
+        self._phith_params, self._psi_params = split_params_phith_psi(
+            self.model, include_frozen=True
+        )
 
     def _install_scheduler(self, sched: torch.optim.lr_scheduler.LambdaLR) -> None:
         """Install the LR scheduler(s) for the current optimizer topology.
@@ -483,12 +498,27 @@ class DDSSMTrainer:
             lrs: A ``StageLrs``-like object with ``enc_lr`` / ``dec_lr`` /
                 ``trans_lr`` learning rates.
         """
+        if self._schedulers and not self._warned_stale_schedulers:
+            self._warned_stale_schedulers = True
+            log.warning(
+                "[rebuild] optimizer(s) rebuilt while %d LR scheduler(s) are "
+                "installed; they still point at the OLD optimizer objects and "
+                "will no longer scale the live LRs. Reinstall via "
+                "_install_scheduler after rebuilding.",
+                len(self._schedulers),
+            )
         if len(self._optimizers) == 2:
             self._build_split_optimizers(
                 enc_lr=lrs.enc_lr,
                 dec_lr=lrs.dec_lr,
                 trans_lr=lrs.trans_lr,
                 baseline_lr=getattr(lrs, "baseline_lr", None),
+            )
+            # Defensive refresh of the split param caches (cheap): the
+            # partition is structural, but a rebuild is the natural point
+            # to re-derive it should the module set ever change.
+            self._phith_params, self._psi_params = split_params_phith_psi(
+                self.model, include_frozen=True
             )
             return
         groups = param_groups_for_adamw(
@@ -543,26 +573,37 @@ class DDSSMTrainer:
             load_ema=False,
         )
         # Split-mode contract guard — FIRST, before any optimizer-state
-        # handling. Live mode is the installed topology when present; when
-        # restore runs before fit() has installed it (no ``_optimizers``
-        # rebuild yet), the active loss's ``use_split_loss`` flag decides.
-        # A split-produced ckpt into a single-loss trainer (or vice versa)
-        # would silently drop / fabricate ψ optimizer state, so hard-error.
+        # handling. The live trainer's intent is DECLARED when either the
+        # split topology is already installed or an active loss object has
+        # been set (its ``use_split_loss`` flag decides). A declared mode
+        # that contradicts the checkpoint would silently drop / fabricate
+        # ψ optimizer state, so hard-error. When NEITHER is present —
+        # e.g. the orchestrator's preempt-resume restores BEFORE any stage
+        # loss is installed — the trainer has expressed no intent yet, so
+        # adopt the checkpoint's mode silently (fit() reconciles topology
+        # with the stage loss afterwards).
         live_split = len(self._optimizers) > 1
-        loss_split = isinstance(self._active_loss, FullELBO) and getattr(
-            self._active_loss, "use_split_loss", False
-        )
-        live_mode = live_split or loss_split
-        if ckpt.split_loss != live_mode:
+        if live_split:
+            declared_split: bool | None = True
+        elif self._active_loss is not None:
+            declared_split = isinstance(self._active_loss, FullELBO) and getattr(
+                self._active_loss, "use_split_loss", False
+            )
+        else:
+            declared_split = None  # undeclared: adopt the checkpoint's mode
+        if declared_split is not None and ckpt.split_loss != declared_split:
             raise ValueError(
                 f"Checkpoint was produced in "
                 f"{'split' if ckpt.split_loss else 'single'}-loss mode but the "
-                f"live trainer is in {'split' if live_mode else 'single'}-loss "
+                f"live trainer is in "
+                f"{'split' if declared_split else 'single'}-loss "
                 "mode; refusing to mix optimizer topologies across resume."
             )
+        live_mode = ckpt.split_loss if declared_split is None else declared_split
         # Split-mode restore may run before fit() installs the two-optimizer
-        # topology (e.g. a direct restore_from_checkpoint call); install it
-        # now so the ψ optimizer state has a live target.
+        # topology (e.g. a direct restore_from_checkpoint call, or the
+        # undeclared adopt-the-checkpoint path above); install it now so
+        # the ψ optimizer state has a live target.
         if live_mode and not live_split:
             self._install_split_topology()
         # A v3 split payload must carry both optimizer states or neither —
@@ -770,15 +811,28 @@ class DDSSMTrainer:
                     "_install_split_topology() first (fit() does this when "
                     "the active loss has use_split_loss=True)."
                 )
+            # The caches hold the FULL per-side partition (frozen params
+            # included); filter by the live requires_grad here so per-stage
+            # freeze/unfreeze after install is honored — backward(inputs=...)
+            # rejects requires_grad=False tensors, and a stale trainable
+            # list would silently starve a later-unfrozen module.
+            phith_live = [p for p in self._phith_params if p.requires_grad]
+            psi_live = [p for p in self._psi_params if p.requires_grad]
             lp = loss.phith / self.grad_accum_steps
             lq = loss.psi / self.grad_accum_steps
-            (scaler.scale(lp) if amp else lp).backward(
-                inputs=self._phith_params, retain_graph=True
-            )
             # ψ side can be a graph-free zero (e.g. every ψ term degenerate
-            # for the batch) — nothing to backprop then.
-            if lq.requires_grad:
-                (scaler.scale(lq) if amp else lq).backward(inputs=self._psi_params)
+            # for the batch) — nothing to backprop then. A fully-frozen
+            # side is likewise skipped.
+            run_psi = bool(psi_live) and lq.requires_grad
+            if phith_live:
+                # Retain the shared graph only when the ψ pass will walk
+                # it second; when φθ is skipped the graph is still fresh
+                # for ψ, so no retain is needed on either path.
+                (scaler.scale(lp) if amp else lp).backward(
+                    inputs=phith_live, retain_graph=run_psi
+                )
+            if run_psi:
+                (scaler.scale(lq) if amp else lq).backward(inputs=psi_live)
         elif amp:
             scaler.scale(loss / self.grad_accum_steps).backward()
         else:
@@ -819,8 +873,7 @@ class DDSSMTrainer:
             self.grad_skip_count += 1
             self._last_grad_norm = float("nan")
             log.warning(
-                "[grad-skip] non-finite grad norm %s at step %d "
-                "(total skips: %d)",
+                "[grad-skip] non-finite grad norm %s at step %d (total skips: %d)",
                 float(norm),
                 self.global_step + 1,
                 self.grad_skip_count,
@@ -849,6 +902,14 @@ class DDSSMTrainer:
             # Back-compat: a scheduler assigned directly to
             # ``trainer.scheduler`` without going through
             # ``_install_scheduler`` still steps.
+            if len(self._optimizers) > 1 and not self._warned_split_legacy_scheduler:
+                self._warned_split_legacy_scheduler = True
+                log.warning(
+                    "[split] trainer.scheduler was assigned directly while the "
+                    "two-optimizer split topology is active: only the phi-theta "
+                    "optimizer is scheduled and opt_psi runs UNSCHEDULED. Use "
+                    "_install_scheduler(sched) to schedule both sides."
+                )
             self.scheduler.step()
 
         if hasattr(self, "ema") and self.ema is not None and any(
@@ -1170,15 +1231,44 @@ class DDSSMTrainer:
 
         # Split-loss topology decision happens here (not __init__): the
         # orchestrator installs the per-stage loss after construction.
-        # fit() is re-entered per stage — the ``len`` guard preserves the
-        # existing two-optimizer topology (and its Adam moments) instead
-        # of rebuilding it every stage.
-        if (
-            isinstance(self._active_loss, FullELBO)
-            and getattr(self._active_loss, "use_split_loss", False)
-            and len(self._optimizers) < 2
-        ):
+        # fit() is re-entered per stage, and the topology must MATCH the
+        # active loss both ways. Split direction: the ``len`` guard
+        # preserves an existing two-optimizer topology (and its Adam
+        # moments) instead of rebuilding it every stage. Single direction:
+        # a split topology left over from an earlier stage is downgraded —
+        # otherwise a single-loss stage would keep two optimizers (ψ with
+        # split betas) and its checkpoints would record split_loss=True.
+        loss_wants_split = isinstance(self._active_loss, FullELBO) and getattr(
+            self._active_loss, "use_split_loss", False
+        )
+        if loss_wants_split and len(self._optimizers) < 2:
             self._install_split_topology()
+        elif not loss_wants_split and len(self._optimizers) > 1:
+            log.warning(
+                "[split] active loss is single-mode but the split "
+                "two-optimizer topology is installed; downgrading to the "
+                "single AdamW (psi Adam state is discarded)."
+            )
+            self.optimizer = torch.optim.AdamW(
+                param_groups_for_adamw(
+                    self.model,
+                    enc_lr=self.hparams.enc_lr,
+                    dec_lr=self.hparams.dec_lr,
+                    trans_lr=self.hparams.trans_lr,
+                    weight_decay=self.hparams.weight_decay,
+                    psi_betas=self._hparams_psi_betas(),
+                ),
+                betas=(0.9, 0.999),
+                eps=1e-8,
+            )
+            self._optimizers = [self.optimizer]
+            self.opt_psi = None
+            self._phith_params = None
+            self._psi_params = None
+            # Reconcile the scheduler topology mirror: keep the φθ
+            # scheduler when one is installed (it may need reinstalling —
+            # _rebuild_optimizer warns on that), drop the ψ-side one.
+            self._schedulers = [self.scheduler] if self.scheduler is not None else []
 
         # Rolling window for the ELBO-plateau early-stop check.
         es_active = bool(early_stop and early_stop.enabled)

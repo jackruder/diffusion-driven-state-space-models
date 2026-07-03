@@ -67,6 +67,9 @@ def _p_k_for_mode(
             transition.sigma_tilde,
             sd2,
             floor=transition.gfloor,
+            # Match training: the loss clips the normalized density at
+            # p_k_clip; the probe must measure the same estimator.
+            p_k_clip=getattr(transition, "p_k_clip", 0.0),
         ).squeeze(0)
     elif mode == "adaptive_is_full":
         from ddssm.model.transitions.diffusion import _adaptive_is_density_full
@@ -84,6 +87,8 @@ def _p_k_for_mode(
             sg2,
             mh2,
             floor=transition.gfloor,
+            # Match training: same p_k_clip as the loss-time density.
+            p_k_clip=getattr(transition, "p_k_clip", 0.0),
         ).squeeze(0)
     else:
         raise ValueError(f"Unsupported k_sampling_mode {mode!r}.")

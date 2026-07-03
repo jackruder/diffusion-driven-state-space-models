@@ -94,6 +94,7 @@ def _iter_psi_modules(model: nn.Module) -> Iterator[nn.Module]:
 
 def split_params_phith_psi(
     model: nn.Module,
+    include_frozen: bool = False,
 ) -> tuple[list[nn.Parameter], list[nn.Parameter]]:
     """Partition trainable parameters into the (φθ, ψ) split-loss sides.
 
@@ -111,10 +112,18 @@ def split_params_phith_psi(
 
     Args:
         model: The ``DDSSM_base`` model.
+        include_frozen: When ``True``, partition EVERY parameter onto its
+            side regardless of ``requires_grad`` (the exhaustive/disjoint
+            fence then runs over all params too). This is what the
+            trainer caches at split-topology install so per-stage
+            freeze/unfreeze after install can be re-filtered live at each
+            backward. Default ``False`` keeps the historical
+            requires-grad-only behavior.
 
     Returns:
         Tuple ``(phith_params, psi_params)`` of parameter lists covering
-        every ``requires_grad=True`` parameter exactly once.
+        every ``requires_grad=True`` parameter exactly once (every
+        parameter when ``include_frozen=True``).
 
     Raises:
         ValueError: If a transition top-level submodule has no explicit
@@ -129,7 +138,7 @@ def split_params_phith_psi(
             if id(p) in psi_ids:
                 continue
             psi_ids.add(id(p))
-            if p.requires_grad:
+            if include_frozen or p.requires_grad:
                 psi_params.append(p)
 
     phith_params: list[torch.nn.Parameter] = []
@@ -138,7 +147,7 @@ def split_params_phith_psi(
         if id(p) in seen:
             continue
         seen.add(id(p))
-        if p.requires_grad:
+        if include_frozen or p.requires_grad:
             phith_params.append(p)
 
     # Exhaustive-and-disjoint fence over model.parameters().
@@ -149,11 +158,9 @@ def split_params_phith_psi(
     missing = [
         n
         for n, p in model.named_parameters()
-        if p.requires_grad and id(p) not in split_ids
+        if (include_frozen or p.requires_grad) and id(p) not in split_ids
     ]
-    assert not missing, (
-        f"requires_grad params not covered by the phith/psi split: {missing}"
-    )
+    assert not missing, f"params not covered by the phith/psi split: {missing}"
 
     return phith_params, psi_params
 
