@@ -225,6 +225,25 @@ def test_transition_kl_init_shape_and_finite(j: int) -> None:
     assert torch.allclose(out["vhp"], out["loss_init"] + out["kl_aux"])
 
 
+def test_transition_kl_init_return_psi_is_zero_for_baseline() -> None:
+    """Non-diffusion transitions have no ψ side; opt-in ``loss_psi`` is zero."""
+    j = 1
+    baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=8, n_layers=2)
+    transition = _make_transition(baseline, j=j)
+    aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=8, n_layers=2)
+    zs, enc_stats, time_embed, _ = _make_enc_stats(j)
+    out = transition.transition_kl_init(
+        enc_stats=enc_stats,
+        zs=zs,
+        aux_posterior=aux,
+        time_embed=time_embed,
+        return_psi=True,
+    )
+    assert "loss_psi" in out
+    assert out["loss_psi"].shape == ()
+    assert float(out["loss_psi"]) == 0.0
+
+
 def test_transition_kl_init_walks_mixed_history() -> None:
     """At j=2 the history transitions all-aux → 1-aux + 1-real."""
     j = 2
