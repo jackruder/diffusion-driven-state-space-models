@@ -41,6 +41,14 @@ from collections.abc import Iterable
 import torch
 import torch.nn as nn
 
+try:
+    import torch.distributed as dist
+
+    _dist_available = True
+except ImportError:
+    dist = None  # type: ignore[assignment]
+    _dist_available = False
+
 _TRACKING_MODES = ("fixed", "global_ema", "per_t")
 
 
@@ -184,7 +192,40 @@ class SigmaDataBuffer(nn.Module):
         idx = _coerce_t_idx(t_idx).to(self.sigma_data2.device)
         self._check_in_range(idx)
 
-        bar = self._estimator_per_t(idx, mu_hat_batch, sigma_t2_batch)
+        suff = self._suff_stats_per_t(idx, mu_hat_batch, sigma_t2_batch)
+
+        # DDP all-reduce: accumulate sufficient statistics across ranks before
+        # estimating.  This is a preventive fix — single-rank runs are a no-op
+        # because neither branch is entered.  Under multi-rank DDP, each rank
+        # computes its partial suff stats; the all-reduce SUM yields the global
+        # suff stats, and the pure estimator then produces an unbiased estimate
+        # over the full global batch (Bessel correction uses the combined count).
+        if _dist_available and dist.is_initialized():
+            # Pack all four suff-stat tensors into a single flat 1-D vector so
+            # we incur only one all-reduce call per update.  Layout:
+            #   [ sum_mu.flatten()  |  sum_mu2_total  |  sum_s2_total  |  count ]
+            # n and d are known from idx and mu_hat_batch so unpacking is exact.
+            n, d = suff["sum_mu"].shape
+            payload = torch.cat(
+                [
+                    suff["sum_mu"].reshape(-1),        # n*d
+                    suff["sum_mu2_total"],              # n
+                    suff["sum_s2_total"],               # n
+                    suff["count"].to(suff["sum_mu"].dtype),  # n (cast for cat)
+                ]
+            )
+            dist.all_reduce(payload, op=dist.ReduceOp.SUM)
+            # Unpack
+            offset = 0
+            suff = {
+                "sum_mu": payload[offset : offset + n * d].reshape(n, d),
+                "sum_mu2_total": payload[offset + n * d : offset + n * d + n],
+                "sum_s2_total": payload[offset + n * d + n : offset + n * d + 2 * n],
+                "count": payload[offset + n * d + 2 * n : offset + n * d + 3 * n].long(),
+            }
+
+        bar = self._estimator_from_suff_stats(suff, mu_hat_batch.shape[1])
+
         # EMA warmup: blend at the running-mean rate ``1/(n+1)`` until it falls
         # to the steady-state rate ``1 - γ``, where ``n`` is the slot's lifetime
         # update count. The first real update (n=0 → α=1) fully replaces the
@@ -214,17 +255,15 @@ class SigmaDataBuffer(nn.Module):
         self.n_updates[ext] += 1
 
     @staticmethod
-    def _estimator_per_t(
+    def _suff_stats_per_t(
         idx: torch.Tensor,
         mu_hat_batch: torch.Tensor,
         sigma_t2_batch: torch.Tensor,
-    ) -> torch.Tensor:
-        """``bar_σ_data²(t) = (1/D) (E[‖σ_t‖²] + tr Var[μ̂_t])`` per t.
+    ) -> dict[str, torch.Tensor]:
+        """Compute per-t sufficient statistics for the σ_data² estimator.
 
-        Per ``model-v2.org`` § Data-variance tracking, the per-batch
-        estimator decomposes into average posterior variance plus the
-        spread of residual means.  We compute it per t when
-        ``mu_hat_batch`` / ``sigma_t2_batch`` are pre-grouped by t.
+        Returns additive (linear) statistics that can be summed across DDP
+        ranks before passing to :meth:`_estimator_from_suff_stats`.
 
         Args:
             idx: ``(n,)`` 1-based t indices.
@@ -233,7 +272,11 @@ class SigmaDataBuffer(nn.Module):
             sigma_t2_batch: ``(N, d)`` per-sample posterior variances.
 
         Returns:
-            ``(n,)`` per-t estimator values.
+            Dict with:
+            - ``sum_mu``: ``(n, d)`` — sum of per-sample means over K samples.
+            - ``sum_mu2_total``: ``(n,)`` — sum of (μ²) over K and d.
+            - ``sum_s2_total``: ``(n,)`` — sum of σ² over K and d.
+            - ``count``: ``(n,)`` — number of samples K per t.
         """
         if mu_hat_batch.shape != sigma_t2_batch.shape:
             raise ValueError(
@@ -248,25 +291,77 @@ class SigmaDataBuffer(nn.Module):
             )
         per_t = N // n
 
-        mu_blocks = mu_hat_batch.view(n, per_t, d)
-        s2_blocks = sigma_t2_batch.view(n, per_t, d)
+        mu_blocks = mu_hat_batch.view(n, per_t, d)   # (n, K, d)
+        s2_blocks = sigma_t2_batch.view(n, per_t, d)  # (n, K, d)
 
-        avg_post_var = s2_blocks.mean(dim=1).sum(
-            dim=1
-        )  # (n,) = E[‖σ_t‖²] = E[Σ_d σ²_d]
-        # tr Var[μ̂_t] = sum_d Var_b[μ̂_{t,b,d}]. Use Bessel-corrected
-        # (``unbiased=True``) so the EMA's steady-state target is the true
-        # marginal variance regardless of ``per_t``. The biased (1/per_t)
-        # estimator shifts the target by a factor ``(per_t − 1)/per_t``
-        # (~6% at per_t=16), making σ_data² depend on batch size. Fall
-        # back to zero when ``per_t == 1`` — a single sample carries no
-        # cross-sample dispersion information.
-        if per_t > 1:
-            mu_var = mu_blocks.var(dim=1, unbiased=True).sum(dim=1)  # (n,)
-        else:
-            mu_var = torch.zeros(n, device=mu_blocks.device, dtype=mu_blocks.dtype)
+        sum_mu = mu_blocks.sum(dim=1)                        # (n, d)
+        sum_mu2_total = mu_blocks.pow(2).sum(dim=1).sum(dim=1)  # (n,)
+        sum_s2_total = s2_blocks.sum(dim=1).sum(dim=1)       # (n,)
+        count = torch.full(
+            (n,), per_t, dtype=torch.long, device=mu_hat_batch.device
+        )
+
+        return {
+            "sum_mu": sum_mu,
+            "sum_mu2_total": sum_mu2_total,
+            "sum_s2_total": sum_s2_total,
+            "count": count,
+        }
+
+    @staticmethod
+    def _estimator_from_suff_stats(
+        suff_stats: dict[str, torch.Tensor],
+        d: int,
+    ) -> torch.Tensor:
+        """Compute the per-t σ_data² estimator from sufficient statistics.
+
+        ``bar_σ_data²(t) = (1/D) (avg_post_var + tr Var[μ̂_t])``
+
+        The Bessel-corrected variance uses the *combined* count (sum over
+        ranks after all-reduce), so two ranks with 1 sample each yield
+        count=2 and real cross-rank dispersion — unlike the single-rank
+        per_t==1 fallback which correctly zeros mu_var (no dispersion).
+
+        Args:
+            suff_stats: Dict from :meth:`_suff_stats_per_t` (possibly
+                all-reduced across DDP ranks).
+            d: Feature dimension.
+
+        Returns:
+            ``(n,)`` per-t estimator values.
+        """
+        sum_mu = suff_stats["sum_mu"]             # (n, d)
+        sum_mu2_total = suff_stats["sum_mu2_total"]  # (n,)
+        sum_s2_total = suff_stats["sum_s2_total"]    # (n,)
+        count = suff_stats["count"].to(sum_mu.dtype)  # (n,) float for division
+
+        avg_post_var = sum_s2_total / count  # (n,) mean σ² over K and d
+        # Bessel-corrected variance of μ̂ across K samples, summed over d:
+        #   Var[μ̂] = (Σ_k μ̂_k² − (Σ_k μ̂_k)²/K) / (K − 1)
+        # The fallback (count == 1) zeros mu_var: a single sample carries no
+        # dispersion information.  After DDP all-reduce, count reflects the
+        # combined global sample count, so two ranks × 1 sample = count 2
+        # and mu_var is computed from the real cross-rank dispersion.
+        mu_var_numer = sum_mu2_total - sum_mu.pow(2).sum(dim=1) / count  # (n,)
+        mu_var = mu_var_numer / (count - 1)
+        mu_var = torch.where(count > 1, mu_var, torch.zeros_like(mu_var))
 
         return (avg_post_var + mu_var) / float(d)
+
+    @staticmethod
+    def _estimator_per_t(
+        idx: torch.Tensor,
+        mu_hat_batch: torch.Tensor,
+        sigma_t2_batch: torch.Tensor,
+    ) -> torch.Tensor:
+        """Thin wrapper: compute suff stats then the pure estimator.
+
+        Preserved for any external callers that reference this method directly.
+        Internal code now routes through :meth:`_suff_stats_per_t` +
+        :meth:`_estimator_from_suff_stats` to support DDP all-reduce.
+        """
+        suff = SigmaDataBuffer._suff_stats_per_t(idx, mu_hat_batch, sigma_t2_batch)
+        return SigmaDataBuffer._estimator_from_suff_stats(suff, mu_hat_batch.shape[1])
 
     # ------------------------------------------------------------------
     # Schedule
