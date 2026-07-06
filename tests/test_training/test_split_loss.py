@@ -14,9 +14,11 @@ Gaussian transitions.
 from __future__ import annotations
 
 import os
+import csv as _csv
 import copy
 import math
 import logging
+from unittest.mock import patch
 
 import torch
 import pytest
@@ -624,3 +626,279 @@ def test_score_init_step_zero_psi_for_nondiffusion():
         assert psi.shape == ()
         assert psi.item() == 0.0
         assert not psi.requires_grad, "psi zero must carry no graph"
+
+
+# ---------------------------------------------------------------------------
+# Ports from the parallel local split-loss implementation (test_local_ prefix).
+# ---------------------------------------------------------------------------
+
+
+def test_local_loss_components_alias_still_works():
+    """``components.trans_kl`` is ``components.trans_kl_phith`` (identity)."""
+    comps = _components(init_kl_phith=torch.tensor(2.5), trans_kl_phith=torch.tensor(3.5))
+    assert comps.trans_kl is comps.trans_kl_phith
+    assert comps.init_kl is comps.init_kl_phith
+
+
+def test_local_full_elbo_single_mode_numerical_parity():
+    """``use_split_loss=False`` output is ``recon + λ·phith_KL + regs`` bit-for-bit.
+
+    Nonzero ``*_psi`` fields prove single-mode reads only the ``*_phith`` fields.
+    """
+    recon, init_phith, init_psi = 1.0, 2.0, 99.0
+    trans_phith, trans_psi = 3.0, 88.0
+    r_sigma_p, r_mu_p = 4.0, 5.0
+    lam, lambda_sigma_p, lambda_mu_p = 0.5, 0.1, 0.01
+    comps = LossComponents(
+        recon=torch.tensor(recon),
+        init_kl_phith=torch.tensor(init_phith),
+        init_kl_psi=torch.tensor(init_psi),
+        trans_kl_phith=torch.tensor(trans_phith),
+        trans_kl_psi=torch.tensor(trans_psi),
+        r_sigma_p=torch.tensor(r_sigma_p),
+        r_mu_p=torch.tensor(r_mu_p),
+    )
+    got = FullELBO(
+        rate_lambda=lambda _s: lam,
+        lambda_sigma_p=lambda_sigma_p,
+        lambda_mu_p=lambda_mu_p,
+        use_split_loss=False,
+    )(comps, 0)
+    expected = recon + lam * (init_phith + trans_phith) + lambda_sigma_p * r_sigma_p + lambda_mu_p * r_mu_p
+    assert isinstance(got, torch.Tensor)
+    assert got.item() == pytest.approx(expected)
+
+
+def test_local_no_clip_grad_norm_attribute_or_branch(vhp_model, tmp_path):
+    """Trainer has no legacy ``clip_grad_norm`` attribute after M5."""
+    trainer = _make_trainer(copy.deepcopy(vhp_model), tmp_path)
+    assert not hasattr(trainer, "clip_grad_norm")
+
+
+def test_local_zero_grad_covers_both_optimizers(vhp_model, tmp_path):
+    """Under split, iterating ``_optimizers`` and calling ``zero_grad`` clears
+    both φθ and ψ side gradients."""
+    trainer = _make_trainer(copy.deepcopy(vhp_model), tmp_path)
+    trainer._install_split_topology()
+    assert len(trainer._optimizers) == 2
+    for p in trainer.model.parameters():
+        if p.requires_grad:
+            p.grad = torch.ones_like(p)
+    for opt in trainer._optimizers:
+        opt.zero_grad(set_to_none=True)
+    for p in _live(trainer._phith_params) + _live(trainer._psi_params):
+        assert p.grad is None
+
+
+def test_local_split_loss_second_backward_requires_retain_graph(vhp_model, tmp_path):
+    """Without ``retain_graph=True``, the ψ-side backward must fail with a
+    freed-graph error."""
+    trainer = _make_trainer(copy.deepcopy(vhp_model), tmp_path)
+    trainer._install_split_topology()
+    loss = _forward_split(trainer, seed=2)
+    assert isinstance(loss, SplitLoss)
+    # First backward WITHOUT retain_graph — the shared subgraph is freed.
+    loss.phith.backward(inputs=_live(trainer._phith_params))
+    with pytest.raises(RuntimeError, match="backward|graph|freed"):
+        loss.psi.backward(inputs=_live(trainer._psi_params))
+
+
+def test_local_split_loss_amp_scales_both_backwards(vhp_model, tmp_path):
+    """Under AMP, ``scaler.scale`` is invoked on both the φθ and ψ scalars."""
+    trainer = _make_trainer(copy.deepcopy(vhp_model), tmp_path)
+    trainer._install_split_topology()
+    loss = _forward_split(trainer, seed=3)
+    assert isinstance(loss, SplitLoss)
+    scale_calls = []
+    orig_scale = trainer.scaler.scale
+
+    def spy_scale(t):
+        scale_calls.append(t)
+        return orig_scale(t)
+
+    trainer.scaler.scale = spy_scale
+    trainer._backward_loss(loss, scaler=trainer.scaler, amp=True)
+    assert len(scale_calls) == 2, f"expected 2 scale() calls; got {len(scale_calls)}"
+
+
+def test_local_split_loss_grad_accum_correct_scaling(vhp_model, tmp_path):
+    """``grad_accum_steps=4`` divides both φθ and ψ scalars before backward."""
+    model = copy.deepcopy(vhp_model)
+    trainer = DDSSMTrainer(
+        model=model,
+        device=torch.device("cpu"),
+        hparams=DDSSMHyperParamsConf(grad_accum_steps=4),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    trainer._active_loss = FullELBO(rate_lambda=lambda _s: 1.0, use_split_loss=True)
+    trainer._install_split_topology()
+    loss = _forward_split(trainer, seed=5)
+    assert isinstance(loss, SplitLoss)
+    expected_phith = loss.phith.item() / 4
+    expected_psi = loss.psi.item() / 4
+    calls: list[float] = []
+    orig_backward = torch.Tensor.backward
+
+    def spy_backward(self, *args, **kwargs):
+        calls.append(float(self.detach()))
+        return orig_backward(self, *args, **kwargs)
+
+    with patch.object(torch.Tensor, "backward", spy_backward):
+        trainer._backward_loss(loss, scaler=trainer.scaler, amp=False)
+    assert len(calls) == 2, f"expected 2 backward calls; got {calls}"
+    got_phith, got_psi = calls
+    assert got_phith == pytest.approx(expected_phith, rel=1e-5)
+    assert got_psi == pytest.approx(expected_psi, rel=1e-5)
+
+
+def test_local_finite_grad_steps_normally_and_never_rescales(vhp_model, tmp_path):
+    """A large finite gradient triggers a step (no skip); the norm computation
+    uses ``max_norm=inf`` so grads are never rescaled."""
+    model = copy.deepcopy(vhp_model)
+    trainer = _make_trainer(model, tmp_path, split=False)
+    _fit_one_step(trainer)
+    target = next(p for p in model.parameters() if p.requires_grad)
+    for p in model.parameters():
+        if p.requires_grad:
+            p.grad = torch.zeros_like(p)
+    target.grad = torch.full_like(target, 1e6)
+    param_pre = target.detach().clone()
+    trainer._optimizer_step(scaler=trainer.scaler, amp=False)
+    assert not torch.equal(target.detach(), param_pre), "large finite grad should step"
+    # Second pass: monkeypatch clip_grad_norm_ to prove it's only called with inf.
+    calls: list[float] = []
+    import torch.nn.utils as _tnu
+    orig_clip = _tnu.clip_grad_norm_
+
+    def spy_clip(params, max_norm, *args, **kwargs):
+        calls.append(float(max_norm))
+        return orig_clip(params, max_norm, *args, **kwargs)
+
+    for p in model.parameters():
+        if p.requires_grad:
+            p.grad = torch.full_like(p, 1.0)
+    with patch.object(_tnu, "clip_grad_norm_", spy_clip):
+        trainer._optimizer_step(scaler=trainer.scaler, amp=False)
+    assert calls, "clip_grad_norm_ was never called"
+    assert all(math.isinf(c) for c in calls), (
+        f"clip_grad_norm_ called with finite max_norm (would rescale!): {calls}"
+    )
+
+
+def test_local_validation_logs_scalar_total_under_split(vhp_model, tmp_path):
+    """Under split mode, val rows must log ``loss/total`` as a parseable scalar
+    (not a SplitLoss repr)."""
+    model = copy.deepcopy(vhp_model)
+    csv_path = tmp_path / "metrics.csv"
+    trainer = DDSSMTrainer(
+        model=model,
+        device=torch.device("cpu"),
+        hparams=DDSSMHyperParamsConf(grad_accum_steps=1),
+        csv_log_path=str(csv_path),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    trainer._active_loss = FullELBO(rate_lambda=lambda _s: 1.0, use_split_loss=True)
+    loader = DataLoader(_DS(), batch_size=2)
+    trainer.fit(
+        train_loader=loader,
+        val_loader=loader,
+        total_steps=1,
+        validate_every=1,
+        log_every=1,
+        checkpoint_every=None,
+        amp=False,
+    )
+    with open(csv_path) as f:
+        rows = list(_csv.DictReader(f))
+    val_rows = [r for r in rows if r.get("split") == "val"]
+    assert val_rows, f"no val rows in metrics.csv; rows: {rows}"
+    tv = val_rows[-1].get("loss/total", "")
+    assert tv and "SplitLoss" not in tv, f"loss/total should be scalar, got {tv!r}"
+    float(tv)
+
+
+def test_local_grad_norm_and_skips_logged(tmp_path):
+    """``optim/grad_norm`` and ``optim/grad_skips`` land as CSV columns."""
+    from tests.test_trainer import _SyntheticBatchDataset
+
+    model = make_small_model()
+    csv_path = tmp_path / "metrics.csv"
+    trainer = DDSSMTrainer(
+        model=model,
+        device=torch.device("cpu"),
+        hparams=DDSSMHyperParamsConf(grad_accum_steps=1),
+        csv_log_path=str(csv_path),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+    trainer.fit(
+        train_loader=loader,
+        val_loader=None,
+        total_steps=2,
+        validate_every=0,
+        log_every=1,
+        checkpoint_every=None,
+        amp=False,
+    )
+    with open(csv_path) as f:
+        rows = list(_csv.DictReader(f))
+    assert rows, "empty metrics.csv"
+    cols = set(rows[0].keys())
+    assert "optim/grad_norm" in cols, f"optim/grad_norm not in columns: {cols}"
+    assert "optim/grad_skips" in cols, f"optim/grad_skips not in columns: {cols}"
+
+
+def test_local_single_mode_psi_betas_threaded(vhp_model, tmp_path):
+    """``hparams.psi_betas`` tags ψ-only groups inside the single-mode optimizer."""
+    from ddssm.training.stages import StageLrsConf
+
+    model = copy.deepcopy(vhp_model)
+    trainer = DDSSMTrainer(
+        model=model,
+        device=torch.device("cpu"),
+        hparams=DDSSMHyperParamsConf(grad_accum_steps=1, psi_betas=[0.9, 0.99]),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    trainer._active_loss = FullELBO(rate_lambda=lambda _s: 1.0, use_split_loss=False)
+    _fit_one_step(trainer)
+    _, real_psi = split_params_phith_psi(model)
+    psi_ids = {id(p) for p in real_psi}
+
+    def _has_psi_group_with_betas(opt):
+        for g in opt.param_groups:
+            g_ids = {id(p) for p in g["params"]}
+            if g_ids and g_ids <= psi_ids and g.get("betas") == (0.9, 0.99):
+                return True
+        return False
+
+    assert _has_psi_group_with_betas(trainer.optimizer), (
+        "no ψ-only group with betas=(0.9, 0.99) in single-mode optimizer"
+    )
+    trainer._rebuild_optimizer(StageLrsConf(enc_lr=1e-4, dec_lr=2e-4, trans_lr=3e-4))
+    assert _has_psi_group_with_betas(trainer.optimizer), (
+        "ψ-only group with custom betas lost after _rebuild_optimizer"
+    )
+
+
+def test_local_psi_betas_none_is_default_topology(vhp_model, tmp_path):
+    """With ``psi_betas=None`` (default), every group carries the AdamW default betas."""
+    model = copy.deepcopy(vhp_model)
+    hparams = DDSSMHyperParamsConf(grad_accum_steps=1)
+    assert hparams.psi_betas is None
+    trainer = DDSSMTrainer(
+        model=model,
+        device=torch.device("cpu"),
+        hparams=hparams,
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    trainer._active_loss = FullELBO(rate_lambda=lambda _s: 1.0, use_split_loss=False)
+    _fit_one_step(trainer)
+    for g in trainer.optimizer.param_groups:
+        assert g["betas"] == (0.9, 0.999), (
+            f"group carries non-default betas under psi_betas=None: {g['betas']}"
+        )

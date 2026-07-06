@@ -206,3 +206,52 @@ def test_psi_betas_none_leaves_groups_untouched(vhp_model):
         assert a.keys() == b.keys()
         assert [id(p) for p in a["params"]] == [id(p) for p in b["params"]]
         assert a["lr"] == b["lr"] and a["weight_decay"] == b["weight_decay"]
+
+
+# ---------------------------------------------------------------------------
+# Ported from the parallel local implementation (see git stash@{0}).
+# ---------------------------------------------------------------------------
+
+
+def _has_decay_and_nodecay(groups: list[dict], expected_wd: float) -> bool:
+    """True iff ``groups`` has ≥1 decay (wd == expected_wd) and ≥1 no-decay (wd == 0)."""
+    has_decay = any(g["weight_decay"] == expected_wd for g in groups)
+    has_nodecay = any(g["weight_decay"] == 0.0 for g in groups)
+    return has_decay and has_nodecay
+
+
+def test_local_param_groups_decay_split_preserved_per_side(vhp_model):
+    """Both φθ and ψ builders emit a decay AND a no-decay group.
+
+    Also pins the embed_layer nn.Embedding to the ψ no-decay bucket — a
+    cross-check on the AdamW decay policy that ``test_embed_layer_in_zero_
+    weight_decay_psi_group`` above only asserts for the ψ side.
+    """
+    WD = 0.05
+
+    phith_groups = param_groups_phith(
+        vhp_model,
+        enc_lr=1e-3,
+        dec_lr=1e-4,
+        trans_lr=5e-4,
+        weight_decay=WD,
+    )
+    psi_groups = param_groups_psi(vhp_model, trans_lr=5e-4, weight_decay=WD)
+
+    assert phith_groups, "param_groups_phith returned empty list"
+    assert psi_groups, "param_groups_psi returned empty list"
+
+    assert _has_decay_and_nodecay(phith_groups, WD), (
+        "φθ groups missing decay or no-decay bucket"
+    )
+    assert _has_decay_and_nodecay(psi_groups, WD), (
+        "ψ groups missing decay or no-decay bucket"
+    )
+
+    embed_ids = _ids(vhp_model.transition.embed_layer.parameters())
+    no_decay_psi_ids = {
+        id(p) for g in psi_groups if g["weight_decay"] == 0.0 for p in g["params"]
+    }
+    assert embed_ids <= no_decay_psi_ids, (
+        "embed_layer params should be in ψ's no-decay group (it's nn.Embedding)"
+    )

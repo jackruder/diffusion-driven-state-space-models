@@ -1616,3 +1616,367 @@ def test_sampling_schedule_defaults_to_training_when_none() -> None:
     assert int(transition.sample_num_steps) == int(transition.num_steps)
     assert torch.equal(transition.sample_sigma_tilde, transition.sigma_tilde)
     assert torch.equal(transition.sample_tau, transition.tau)
+
+
+# ---------------------------------------------------------------------------
+# Ported from the parallel local implementation (see git stash@{0}).
+# ---------------------------------------------------------------------------
+
+
+def test_local_esm_chunk_loss_returns_phith_and_psi() -> None:
+    """Under non-unit weights, the ELBO-weighted (phith) and unit-weight (psi)
+    accumulators must differ; both are returned from ``_esm_chunk_loss``.
+    """
+    from tests.fixtures.golden_values import make_m1_transition, make_m1_inputs
+
+    transition = make_m1_transition()
+    inputs = make_m1_inputs()
+
+    torch.manual_seed(42 + 2)
+    with torch.no_grad():
+        out = transition._esm_chunk_loss(
+            **inputs,
+            return_per_sample=False,
+        )
+    # Contract: 3-tuple (sum_phith, sum_psi, mu_hat_t)
+    assert len(out) == 3
+    sum_phith, sum_psi, mu_hat_t = out
+    assert sum_phith.dim() == 0
+    assert sum_psi.dim() == 0
+    assert torch.isfinite(sum_phith) and torch.isfinite(sum_psi)
+    # Under S_k=2 with sigma_d²=1 and uniform p_k, the IS weight per draw is
+    # wtilde_full/p_k — NOT unit — so phith != psi.
+    assert not torch.allclose(sum_phith, sum_psi, atol=1e-6), (
+        f"phith and psi must differ under non-unit weights: "
+        f"{sum_phith=} {sum_psi=}"
+    )
+
+
+def test_local_esm_chunk_loss_phith_reproduces_prior_single_loss() -> None:
+    """Bit-level: ``sum_phith`` matches the pre-refactor single-accumulator scalar.
+
+    The pre-refactor ``_esm_chunk_loss`` computed a single ELBO-weighted loss;
+    the phith side must reproduce that value exactly.
+    """
+    from tests.fixtures.golden_values import (
+        make_m1_transition,
+        make_m1_inputs,
+        M1_ESM_CHUNK_LOSS_SCALAR,
+        M1_ESM_CHUNK_LOSS_PER_SAMPLE,
+    )
+
+    transition = make_m1_transition()
+    inputs = make_m1_inputs()
+
+    torch.manual_seed(42 + 2)
+    with torch.no_grad():
+        sum_phith, _sum_psi, _mu_hat = transition._esm_chunk_loss(
+            **inputs, return_per_sample=False
+        )
+    assert float(sum_phith) == pytest.approx(M1_ESM_CHUNK_LOSS_SCALAR, rel=0.0, abs=0.0), (
+        f"phith scalar drifted from pre-refactor golden: "
+        f"got {float(sum_phith)!r}, want {M1_ESM_CHUNK_LOSS_SCALAR!r}"
+    )
+
+    # Also check the per-sample phith reproducer.
+    torch.manual_seed(42 + 2)
+    with torch.no_grad():
+        per_sample_phith, _per_sample_psi, _mu_hat = transition._esm_chunk_loss(
+            **inputs, return_per_sample=True
+        )
+    for i, ref in enumerate(M1_ESM_CHUNK_LOSS_PER_SAMPLE):
+        assert float(per_sample_phith[i]) == pytest.approx(ref, rel=0.0, abs=0.0), (
+            f"per_sample_phith[{i}] drifted from golden: "
+            f"got {float(per_sample_phith[i])!r}, want {ref!r}"
+        )
+
+
+def test_local_esm_chunk_loss_ratio_matches_weight_at_forced_k() -> None:
+    """With all draws forced onto a single k and uniform p_k, the phith/psi
+    ratio equals the per-k IS weight ``wtilde_full / p_k``.
+
+    Evidence that the ``/ float(self.S_k)`` normalisation is applied
+    symmetrically on both accumulators (renamed from the local
+    ``test_esm_chunk_loss_sk_division_applied_to_both``).
+    """
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    schedule = DiffusionScheduleConfig(
+        S_k=2, k_chunk=2, num_steps=20,
+        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        k_sampling_mode="uniform",
+    )
+    transition = _make_diffusion(baseline, schedule=schedule)
+    transition.eval()
+
+    torch.manual_seed(0)
+    N = 4
+    d = D
+    mu_t = torch.randn(N, d)
+    sigma2_t = torch.full((N, d), 1.0)
+    z_hist = torch.zeros(N, d, J)
+    sigma_d2_per_row = torch.ones(N)
+    padding_mask = torch.zeros(N, J + 1)
+    time_win = torch.randn(N, J + 1, EMB_TIME)
+    ctx = {
+        "hist_time_emb": time_win[:, :J, :],
+        "target_time_emb": time_win[:, J:, :],
+    }
+
+    K = transition.num_steps
+    k_idx = torch.zeros(N, 2, dtype=torch.long)  # both draws at k=0
+    eps = torch.randn(N, d, 2)
+    p_k_override = torch.full((K,), 1.0 / K)
+
+    torch.manual_seed(1)
+    with torch.no_grad():
+        sum_phith, sum_psi, _ = transition._esm_chunk_loss(
+            mu_t=mu_t, sigma2_t=sigma2_t, z_hist=z_hist, ctx=ctx,
+            sigma_d2_per_row=sigma_d2_per_row, padding_mask=padding_mask,
+            mc_override={"k_idx": k_idx, "eps": eps, "p_k": p_k_override},
+        )
+
+    sd2 = 1.0
+    k = 0
+    wtilde_base = float(transition.wtilde_base[k])
+    st2 = float(transition.sigma_tilde[k].pow(2))
+    wtilde_full = wtilde_base * sd2 / (st2 + sd2)
+    w_expected = wtilde_full / (1.0 / K)
+
+    assert torch.isfinite(sum_phith) and torch.isfinite(sum_psi)
+    assert sum_psi > 0
+    ratio = float(sum_phith / sum_psi)
+    assert ratio == pytest.approx(w_expected, rel=1e-5), (
+        f"phith/psi ratio {ratio} should equal weight {w_expected} — "
+        f"evidence S_k normalization is symmetric"
+    )
+
+
+def test_local_transition_kl_returns_kl_phith_kl_psi_and_alias() -> None:
+    """``transition_kl`` returns both KL sides plus a ``kl`` alias to phith."""
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    schedule = DiffusionScheduleConfig(
+        S_k=2, k_chunk=2, num_steps=20,
+        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        k_sampling_mode="uniform",
+    )
+    transition = _make_diffusion(baseline, schedule=schedule)
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+
+    out = transition.transition_kl(
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
+    )
+    assert "kl" in out
+    assert "kl_phith" in out
+    assert "kl_psi" in out
+    assert torch.isfinite(out["kl"])
+    assert torch.isfinite(out["kl_phith"])
+    assert torch.isfinite(out["kl_psi"])
+    # Alias contract: kl == kl_phith (existing consumers read `kl`).
+    assert torch.equal(out["kl"], out["kl_phith"])
+    # Under non-unit weights they must differ.
+    assert not torch.allclose(out["kl_phith"], out["kl_psi"], atol=1e-6)
+
+
+def test_local_transition_kl_returns_kl_psi_per_sample() -> None:
+    """Under ``return_per_sample`` the dict also carries ``kl_psi_per_sample``."""
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    schedule = DiffusionScheduleConfig(
+        S_k=2, k_chunk=2, num_steps=20,
+        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        k_sampling_mode="uniform",
+    )
+    transition = _make_diffusion(baseline, schedule=schedule)
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+
+    out = transition.transition_kl(
+        enc_stats=enc_stats,
+        zs=zs,
+        logq_paths=logq_paths,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
+        return_per_sample=True,
+    )
+    assert "kl_psi_per_sample" in out
+    assert out["kl_psi_per_sample"].shape == (B * S,)
+    assert torch.isfinite(out["kl_psi_per_sample"]).all()
+
+
+def test_local_transition_kl_init_returns_loss_psi_with_return_psi() -> None:
+    """``transition_kl_init(return_psi=True)`` includes ``loss_psi`` in the dict.
+
+    Adapted from local: claude branch requires ``return_psi=True`` opt-in
+    (local always emits ``loss_psi``). Confirms the phith composition is
+    unchanged (loss = entropy + loss_init + kl_aux, with the diffusion
+    ``_init_entropy_term`` cancelling to zero).
+    """
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    transition = _make_diffusion(baseline)
+    aux = AuxPosterior(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    zs, enc_stats, time_embed, _ = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+    out = transition.transition_kl_init(
+        enc_stats=enc_stats,
+        zs=zs,
+        aux_posterior=aux,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
+        return_psi=True,
+    )
+    assert "loss_psi" in out
+    assert torch.isfinite(out["loss_psi"])
+    # The main "loss" composition on the phith side is unchanged: entropy +
+    # loss_init + kl_aux (with diffusion cancelling the encoder entropy → 0).
+    assert torch.allclose(out["loss"], out["loss_init"] + out["kl_aux"])
+    # And without return_psi, loss_psi must be absent (opt-in contract).
+    out_default = transition.transition_kl_init(
+        enc_stats=enc_stats,
+        zs=zs,
+        aux_posterior=aux,
+        time_embed=time_embed,
+        sigma_data=SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t"),
+    )
+    assert "loss_psi" not in out_default
+
+
+@pytest.mark.parametrize(
+    "transition_kind",
+    ["gaussian", "baseline_gaussian"],
+)
+def test_local_score_init_step_nondiffusion_returns_zero_psi(transition_kind: str) -> None:
+    """Non-diffusion transitions return a zero ψ tensor from ``_score_init_step``.
+
+    The hook contract is a 2-tuple ``(phith, psi)``. Gaussian and
+    BaselineGaussian have no ψ score-net side so they return
+    ``loss.new_zeros(())``.
+    """
+    from ddssm.model.transitions.transitions import GaussianTransition
+    from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
+
+    j = 1
+    if transition_kind == "gaussian":
+        transition = GaussianTransition(
+            latent_dim=D, j=j, emb_time_dim=EMB_TIME, hidden_dim=8
+        )
+    else:
+        baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+        transition = BaselineGaussianTransition(
+            baseline=baseline, latent_dim=D, j=j, emb_time_dim=EMB_TIME
+        )
+
+    torch.manual_seed(0)
+    BS = B * S
+    z_t = torch.randn(BS, D)
+    z_hist = torch.randn(BS, D, j)
+    mus = 0.3 * torch.randn(B, S, D, T)
+    logvars = -1.0 + 0.2 * torch.randn(B, S, D, T)
+    enc_stats = {"mus": mus, "logvars": logvars}
+    time_embed = torch.randn(B, T, EMB_TIME)
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+
+    out = transition._score_init_step(
+        step=0,
+        z_t=z_t,
+        z_hist=z_hist,
+        enc_stats=enc_stats,
+        time_embed=time_embed,
+        sigma_data=sigma_data,
+        B=B,
+        S=S,
+        T=T,
+    )
+    assert isinstance(out, tuple) and len(out) == 2
+    phith, psi = out
+    assert psi.shape == ()  # ``loss.new_zeros(())``
+    assert float(psi) == 0.0
+    # And phith must be a scalar too.
+    assert phith.dim() == 0
+
+
+def test_local_pk_clip_bounds_max_weight() -> None:
+    """The IS weight max is bounded by ``w_ll_max · (1 + K·c) / c``.
+
+    A complementary framing to :func:`test_pk_clip_bounds_is_weight`
+    (which asserts ``max(1/p) ≤ (1+K·c)/c``): given an arbitrary
+    non-negative per-k weight ``w_ll``, the ratio ``w_ll / p_k`` is
+    bounded by ``max(w_ll) · (1+K·c)/c``.
+    """
+    from ddssm.model.transitions.diffusion import _adaptive_is_density_meandom
+
+    torch.manual_seed(0)
+    K = 20
+    sigma_tilde = torch.linspace(1e-3, 5.0, K)
+    sigma_d2 = torch.tensor([0.25])
+    p_k_clip = 1e-3
+
+    pk = _adaptive_is_density_meandom(
+        sigma_tilde, sigma_d2, floor=1e-12, p_k_clip=p_k_clip
+    ).squeeze(0)
+    w_ll = torch.rand(K)  # random non-negative weight
+    ratio = w_ll / pk
+    w_ll_max = float(w_ll.max())
+    bound = w_ll_max * (1.0 + K * p_k_clip) / p_k_clip
+    assert float(ratio.max()) <= bound + 1e-4
+
+
+def test_local_pk_clip_threaded_through_transition_kl_via_spy() -> None:
+    """``schedule.p_k_clip`` reaches the adaptive density inside ``transition_kl``.
+
+    Complementary to :func:`test_pk_clip_threaded_through_transition_kl`
+    (which compares kl values); this one spies on the density function
+    and asserts the clip value flows through.
+    """
+    import ddssm.model.transitions.diffusion as diff_mod
+
+    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    schedule_clip = DiffusionScheduleConfig(
+        S_k=1, k_chunk=1, num_steps=20,
+        beta_min=0.1, beta_max=20.0, tau_min=1e-3,
+        k_sampling_mode="adaptive_is",
+        p_k_clip=1e-2,  # aggressive floor so we can detect it
+    )
+    transition = _make_diffusion(baseline, schedule=schedule_clip)
+    zs, enc_stats, time_embed, logq_paths = _make_batch()
+    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
+
+    captured: dict[str, torch.Tensor] = {}
+    real_meandom = diff_mod._adaptive_is_density_meandom
+
+    def spy(sigma_tilde, sigma_d2, floor=1e-12, p_k_clip=0.0):
+        captured["p_k_clip"] = p_k_clip
+        pk = real_meandom(sigma_tilde, sigma_d2, floor=floor, p_k_clip=p_k_clip)
+        captured["pk"] = pk.detach().clone()
+        return pk
+
+    import unittest.mock
+    with unittest.mock.patch.object(
+        diff_mod, "_adaptive_is_density_meandom", side_effect=spy
+    ):
+        with torch.no_grad():
+            transition.transition_kl(
+                enc_stats=enc_stats,
+                zs=zs,
+                logq_paths=logq_paths,
+                time_embed=time_embed,
+                sigma_data=sigma_data,
+            )
+    assert "p_k_clip" in captured
+    assert captured["p_k_clip"] == 1e-2, (
+        f"schedule.p_k_clip=1e-2 not threaded through: {captured['p_k_clip']=}"
+    )
+    # And the clipped density respects the floor.
+    K = int(transition.sigma_tilde.numel())
+    floor_expected = 1e-2 / (1.0 + K * 1e-2)
+    assert float(captured["pk"].min()) >= floor_expected - 1e-8
+
+
+def test_local_diffusion_schedule_config_has_p_k_clip_default() -> None:
+    """``DiffusionScheduleConfig.p_k_clip`` defaults to 1e-3."""
+    config = DiffusionScheduleConfig()
+    assert hasattr(config, "p_k_clip"), "DiffusionScheduleConfig missing p_k_clip"
+    assert config.p_k_clip == 1e-3
