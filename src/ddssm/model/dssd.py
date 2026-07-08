@@ -165,9 +165,11 @@ class DDSSM_base(nn.Module):
 
         if self.static_embed_dim > 0 and self.num_classes_per_static:
             for num_classes in self.num_classes_per_static:
-                self.static_embeddings.append(
-                    nn.Embedding(num_classes, self.static_embed_dim)
-                )
+                emb = nn.Embedding(num_classes, self.static_embed_dim)
+                # Same scale as the transition's feature embedding (1/√2),
+                # replacing the default std-1 normal.
+                nn.init.normal_(emb.weight, std=0.5**0.5)
+                self.static_embeddings.append(emb)
             self.total_static_dim = (
                 len(self.num_classes_per_static) * self.static_embed_dim
             )

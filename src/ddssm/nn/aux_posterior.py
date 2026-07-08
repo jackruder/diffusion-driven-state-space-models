@@ -73,6 +73,10 @@ class AuxPosterior(nn.Module):
         self.body = nn.Sequential(*layers)
 
         self.mu_head = nn.Linear(self.hidden_dim, out_dim)
+        # Small-init like every other μ-head (see GaussianHead): q_Φ starts
+        # near N(0, exp(init_logvar)·I), so the init-state KL starts near 0.
+        nn.init.xavier_uniform_(self.mu_head.weight, gain=0.5)
+        nn.init.zeros_(self.mu_head.bias)
         self.logvar_head = LogvarHead(
             in_features=self.hidden_dim,
             out_features=out_dim,

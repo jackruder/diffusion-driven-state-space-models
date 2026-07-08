@@ -395,6 +395,9 @@ class DiffusionTransition(BaseTransition):
         self.embed_layer = nn.Embedding(
             num_embeddings=self.latent_dim, embedding_dim=self.emb_feature_dim
         )
+        # Match the per-element RMS of the sinusoidal time channels (1/√2) so
+        # all side-info channels enter cond_projection at the same scale.
+        nn.init.normal_(self.embed_layer.weight, std=0.5**0.5)
 
         # ---------- VP-SDE precompute (σ_data-independent quantities) ----------
         # Training schedule: every loss-side buffer (alpha, beta, …) plus

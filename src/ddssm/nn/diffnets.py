@@ -717,7 +717,7 @@ class MLPCSDIUnet(nn.Module):
         embedding_dim: int = 128,
         projection_dim: int | None = None,
         residual_block: DiffResidualBlockConfig | None = None,
-        zero_init_output: bool = False,
+        zero_init_output: bool = True,
         cond_mask_channel: int | None = None,
     ) -> None:
         super().__init__()
@@ -918,6 +918,11 @@ class ContextProducer(nn.Module):
             groups=self.channels * self.combined_dim,
             bias=True,
         )
+        # No nonlinearity follows (the output is the context vector), so linear
+        # gain rather than the relu gain used by input_projection.
+        nn.init.kaiming_normal_(self.context_conv.weight, nonlinearity="linear")
+        if self.context_conv.bias is not None:
+            nn.init.zeros_(self.context_conv.bias)
 
     # ---- main calls ----
     def forward(
