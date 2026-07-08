@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DDSSM = Diffusion-Driven State Space Models — a PyTorch framework for probabilistic time-series forecasting. It jointly trains a variational encoder/decoder over latent states and a transition prior (Gaussian or CSDI-style diffusion) under an ELBO objective. See `README.md` for the high-level overview and full preset table.
 
-Python 3.13, PyTorch ≥ 2.9. Dependencies are managed with `uv` (see `uv.lock`).
+Python 3.13, PyTorch ≥ 2.12. Dependencies are managed with `uv` (see `uv.lock`).
 
 ## Commands
 
