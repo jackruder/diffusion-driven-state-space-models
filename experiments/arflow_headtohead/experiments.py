@@ -44,7 +44,7 @@ import dataclasses
 from experiments._make import experiment
 from ddssm.data.presets import LGSSM, NonlinBimodalLiftMV
 from ddssm.experiment.stores import experiment_store
-from ddssm.experiment.builders import Eval, Objective
+from ddssm.experiment.builders import Eval, Objective, Probe
 from experiments.gluonts_forecast.model import GluonModel
 from experiments.gluonts_forecast.hparams import (
     GluonHparams,
@@ -167,6 +167,28 @@ _ENCODERS = {
         channels=96,
         diffusion_layers=4,
         nheads=4,
+    ),
+    # Same transition recipe as identity_csdilike_ais_big, but swaps the frozen
+    # identity encoder (σ_t pinned to e^{-3.5} ≈ 0.03) for a learned gaussian
+    # encoder — puts σ_t into the O(1) regime early in training, which is
+    # where the LSGM Rao-Blackwellization gap between ESM and DSM actually
+    # blows up at low σ̃. Positive control for the variance probe.
+    #
+    # nheads=2 here (not 4 like the identity variant) because the gaussian
+    # encoder's fut_summary transformer uses summary_dim = 2*latent_dim = 16,
+    # and nheads=4 would give head_dim=4 which SDPA rejects (needs ≥ 8).
+    "gaussian_csdilike_ais_big": dict(
+        encoder_type="gaussian",
+        baseline_type="zero",
+        emb_feature_dim=16,
+        time_mixer="transformer",
+        diffusion_sampler="edm",
+        edm_s_churn=16.0,
+        edm_s_noise=1.0,
+        k_sampling_mode="adaptive_is",
+        channels=96,
+        diffusion_layers=4,
+        nheads=2,
     ),
     # adaptive_is + persistence baseline
     "identity_csdilike_ais_persist": dict(
@@ -408,6 +430,33 @@ experiment_store(
             T_split=_T_SPLIT, output_filename="metrics.json",
         ),
         objective=Objective(metric="crps_sum", source="json"),
+        # ESM vs DSM score-net gradient/loss variance, at both k-sampling modes
+        # this cell actually trains under (uniform reference + its own
+        # adaptive_is). Defaults: R=128 replicas x 3 seeds x 4 cells, plus the
+        # force_per_k sweep over all 64 diffusion steps for the per-tau curves.
+        variance=Probe(),
     ),
     name="h2h__identity_csdilike_ais_big_20k__nlblmv__j4",
+)
+
+# Positive-control sibling: identical to h2h__identity_csdilike_ais_big_20k but
+# with a learned gaussian encoder (σ_t ~ O(1) early → the LSGM ESM/DSM
+# blowup regime the variance probe wants to see).
+experiment_store(
+    experiment(
+        data=NonlinBimodalLiftMV,
+        model=_model("gaussian_csdilike_ais_big", 8, j=4),
+        hparams=dataclasses.replace(
+            GluonHparams, batch_size=32,
+            enc_lr=8e-4, dec_lr=8e-4, trans_lr=8e-4,
+        ),
+        training=_training(steps=20000, checkpoint_every=4000),
+        eval=Eval(
+            metrics=["crps_sum"], split="val", num_samples=100,
+            T_split=_T_SPLIT, output_filename="metrics.json",
+        ),
+        objective=Objective(metric="crps_sum", source="json"),
+        variance=Probe(),
+    ),
+    name="h2h__gaussian_csdilike_ais_big_20k__nlblmv__j4",
 )
