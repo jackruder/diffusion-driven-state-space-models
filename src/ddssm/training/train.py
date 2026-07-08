@@ -211,6 +211,7 @@ class DDSSMTrainer:
                     trans_lr=self.hparams.trans_lr,
                     weight_decay=self.hparams.weight_decay,
                     psi_betas=self._hparams_psi_betas(),
+                    weight_decay_psi=getattr(self.hparams, "weight_decay_psi", None),
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,
@@ -248,6 +249,12 @@ class DDSSMTrainer:
         # externally if you wire in fp16 AMP.
         self.scaler = torch.amp.GradScaler("cuda", enabled=False)
         self.weight_decay = self.hparams.weight_decay
+        # ψ-side (score net) override; ``None`` falls back to
+        # ``weight_decay``. getattr guard: hparams objects predating the
+        # field must keep working unchanged.
+        self.weight_decay_psi: float | None = getattr(
+            self.hparams, "weight_decay_psi", None
+        )
 
         self.grad_accum_steps = self.hparams.grad_accum_steps
         self.clip_grad_norm = self.hparams.clip_grad_norm
@@ -383,6 +390,12 @@ class DDSSMTrainer:
         pb = getattr(self.hparams, "psi_betas", None)
         return tuple(pb) if pb else None
 
+    def _psi_weight_decay(self) -> float:
+        """Resolved ψ-optimizer weight decay (override or φθ fallback)."""
+        if self.weight_decay_psi is None:
+            return self.weight_decay
+        return self.weight_decay_psi
+
     def _build_split_optimizers(
         self,
         enc_lr: float,
@@ -395,7 +408,10 @@ class DDSSMTrainer:
         The ψ side (score net: ``transition.diffmodel`` +
         ``transition.embed_layer``) gets betas ``(0.9, 0.99)`` — faster
         second-moment adaptation for the score-matching objective — while
-        the φθ side keeps the default ``(0.9, 0.999)``.
+        the φθ side keeps the default ``(0.9, 0.999)``. Weight decay is
+        per-optimizer: φθ uses ``hparams.weight_decay``, ψ uses
+        ``hparams.weight_decay_psi`` when set (falling back to
+        ``weight_decay``).
 
         Raises:
             ValueError: If the model has no ψ parameters (split-loss mode
@@ -404,7 +420,7 @@ class DDSSMTrainer:
         psi_groups = param_groups_psi(
             self.model,
             trans_lr=trans_lr,
-            weight_decay=self.weight_decay,
+            weight_decay=self._psi_weight_decay(),
         )
         if not psi_groups:
             raise ValueError(
@@ -533,6 +549,7 @@ class DDSSMTrainer:
             trans_lr=lrs.trans_lr,
             weight_decay=self.weight_decay,
             psi_betas=self._hparams_psi_betas(),
+            weight_decay_psi=self.weight_decay_psi,
         )
         self.optimizer = torch.optim.AdamW(groups, betas=(0.9, 0.999), eps=1e-8)
         self._optimizers = [self.optimizer]
@@ -1308,6 +1325,7 @@ class DDSSMTrainer:
                     trans_lr=self.hparams.trans_lr,
                     weight_decay=self.hparams.weight_decay,
                     psi_betas=self._hparams_psi_betas(),
+                    weight_decay_psi=self.weight_decay_psi,
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,

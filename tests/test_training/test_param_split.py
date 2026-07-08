@@ -194,6 +194,51 @@ def test_psi_betas_tags_exactly_score_net_groups(vhp_model):
     assert all("betas" not in g for g in gaussian_groups)
 
 
+def test_weight_decay_psi_overrides_exactly_score_net_groups(vhp_model):
+    """``weight_decay_psi`` retargets precisely the score-net decay groups."""
+    model = vhp_model
+    groups = param_groups_for_adamw(
+        model,
+        enc_lr=1e-3,
+        dec_lr=1e-4,
+        trans_lr=5e-4,
+        weight_decay=1e-4,
+        weight_decay_psi=0.0,
+    )
+    score_ids = _ids(model.transition.diffmodel.parameters()) | _ids(
+        model.transition.embed_layer.parameters()
+    )
+    assert _group_ids(groups) == {id(p) for p in model.parameters()}
+    for g in groups:
+        gids = {id(p) for p in g["params"]}
+        if gids & score_ids:
+            assert gids <= score_ids, "ψ groups must not mix in φθ params"
+            assert g["weight_decay"] == 0.0
+        else:
+            assert g["weight_decay"] in (1e-4, 0.0)
+    # Without psi_betas, the override alone must not tag betas.
+    assert all("betas" not in g for g in groups)
+    # φθ decay groups keep the base weight decay.
+    phith_decay = [
+        g
+        for g in groups
+        if not ({id(p) for p in g["params"]} & score_ids) and g["weight_decay"] > 0.0
+    ]
+    assert phith_decay, "φθ side must retain a nonzero-decay group"
+
+
+def test_weight_decay_psi_none_leaves_groups_untouched(vhp_model):
+    """``weight_decay_psi=None`` reproduces the plain group structure."""
+    kwargs = dict(enc_lr=1e-3, dec_lr=1e-4, trans_lr=5e-4, weight_decay=1e-4)
+    plain = param_groups_for_adamw(vhp_model, **kwargs)
+    none_case = param_groups_for_adamw(vhp_model, weight_decay_psi=None, **kwargs)
+    assert len(plain) == len(none_case)
+    for a, b in zip(plain, none_case):
+        assert a.keys() == b.keys()
+        assert [id(p) for p in a["params"]] == [id(p) for p in b["params"]]
+        assert a["lr"] == b["lr"] and a["weight_decay"] == b["weight_decay"]
+
+
 def test_psi_betas_none_leaves_groups_untouched(vhp_model):
     """``psi_betas=None`` emits no ``betas`` key and the same group structure."""
     model = vhp_model

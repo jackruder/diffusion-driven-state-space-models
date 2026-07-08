@@ -260,9 +260,10 @@ def param_groups_for_adamw(
     enc_lr: float,
     dec_lr: float,
     trans_lr: float,
-    weight_decay: float = 0.01,
+    weight_decay: float = 1e-4,
     baseline_lr: float | None = None,
     psi_betas: tuple[float, float] | None = None,
+    weight_decay_psi: float | None = None,
 ):
     """Build per-component AdamW parameter groups with selective weight decay.
 
@@ -289,6 +290,9 @@ def param_groups_for_adamw(
             key and inherit the optimizer's constructor default. When
             ``None`` (default) the output is identical to the
             pre-``psi_betas`` behavior: no group carries a ``betas`` key.
+        weight_decay_psi: Optional weight decay for the score-net family's
+            decay groups (same ψ assignment as ``psi_betas``). ``None``
+            (default) applies ``weight_decay`` uniformly.
 
     Returns:
         List of parameter-group dicts ready to pass to ``torch.optim.AdamW``.
@@ -305,24 +309,35 @@ def param_groups_for_adamw(
     # deterministic via the call order below).
     _claimed_ids: set[int] = set()
 
-    def add_module(module, lr: float, betas: tuple[float, float] | None = None):
+    def add_module(
+        module,
+        lr: float,
+        betas: tuple[float, float] | None = None,
+        wd: float | None = None,
+    ):
         _append_module_param_groups(
-            groups, _claimed_ids, module, lr, weight_decay, betas=betas
+            groups,
+            _claimed_ids,
+            module,
+            lr,
+            weight_decay if wd is None else wd,
+            betas=betas,
         )
 
     add_module(getattr(model, "encoder", None), enc_lr)
     add_module(getattr(model, "decoder", None), dec_lr)
 
     transition = getattr(model, "transition", None)
-    if psi_betas is not None:
+    if psi_betas is not None or weight_decay_psi is not None:
         # Claim the score-net family first so exactly its groups carry
-        # the per-group betas; the remaining transition params follow in
-        # untagged groups.
+        # the per-group betas / ψ weight decay; the remaining transition
+        # params follow in untagged groups.
         for name in _PSI_TRANSITION_SUBMODULES:
             add_module(
                 getattr(transition, name, None) if transition is not None else None,
                 trans_lr,
-                betas=tuple(psi_betas),
+                betas=tuple(psi_betas) if psi_betas is not None else None,
+                wd=weight_decay_psi,
             )
     add_module(transition, trans_lr)
 
@@ -344,7 +359,7 @@ def param_groups_phith(
     enc_lr: float,
     dec_lr: float,
     trans_lr: float,
-    weight_decay: float = 0.01,
+    weight_decay: float = 1e-4,
     baseline_lr: float | None = None,
 ) -> list[dict]:
     """Build the φθ-side AdamW parameter groups for split-loss training.
@@ -397,7 +412,7 @@ def param_groups_phith(
 def param_groups_psi(
     model: nn.Module,
     trans_lr: float,
-    weight_decay: float = 0.01,
+    weight_decay: float = 1e-4,
 ) -> list[dict]:
     """Build the ψ-side AdamW parameter groups for split-loss training.
 

@@ -1109,7 +1109,8 @@ def _default_hyperparams():
     return SimpleNamespace(
         S=1,
         ema_decay=0.999,
-        weight_decay=1e-2,
+        weight_decay=1e-4,
+        weight_decay_psi=None,
         batch_size=16,
         grad_accum_steps=4,
         t_chunk=16,
@@ -1134,7 +1135,11 @@ class DDSSMHyperParamsConf:
 
     S: int = 1
     ema_decay: float = 0.999
-    weight_decay: float = 1e-2
+    # AdamW weight decay for the single optimizer / φθ side. The ψ side
+    # (score net) can be overridden independently via ``weight_decay_psi``;
+    # ``None`` falls back to ``weight_decay``.
+    weight_decay: float = 1e-4
+    weight_decay_psi: float | None = None
     batch_size: int = 16
     grad_accum_steps: int = 4
     t_chunk: int = 16
