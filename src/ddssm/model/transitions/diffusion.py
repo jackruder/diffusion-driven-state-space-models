@@ -233,10 +233,12 @@ class DiffusionScheduleConfig:
     time_chunk_size: int | None = None
     # Post-normalization floor on the adaptive IS probabilities — bounds the
     # IS weight ``w̃/p`` by max ≈ w̃_max·(1+K·c)/c. ``0.0`` disables (bit-
-    # identical to the unclipped density). Distinct from ``pk_floor``, the
-    # pre-normalization raw-density zero guard (which does NOT bound the
-    # post-normalization probability, hence not the weight).
-    p_k_clip: float = 1e-3
+    # identical to the unclipped density); ``None`` is accepted as an alias
+    # for ``0.0`` (so ``p_k_clip=null`` works from Hydra overrides). Distinct
+    # from ``pk_floor``, the pre-normalization raw-density zero guard (which
+    # does NOT bound the post-normalization probability, hence not the
+    # weight).
+    p_k_clip: float | None = 1e-3
 
 
 @dataclass
@@ -442,7 +444,11 @@ class DiffusionTransition(BaseTransition):
         ismode = schedule.k_sampling_mode
         self.gamma = float(schedule.pk_gamma)
         self.gfloor = float(schedule.pk_floor)
-        self.p_k_clip = float(schedule.p_k_clip)
+        # ``None`` is an alias for 0.0 (clip disabled) — the Hydra ``null``
+        # convention; the density functions themselves take a float.
+        self.p_k_clip = (
+            float(schedule.p_k_clip) if schedule.p_k_clip is not None else 0.0
+        )
         if ismode == "lsgm_is":
             beta_t = self.beta.to(torch.float32)
             om_a2 = self.one_minus_alpha2.to(torch.float32)

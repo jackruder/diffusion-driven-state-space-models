@@ -917,19 +917,23 @@ def _adaptive_is_schedule(num_steps: int = 20, **kw) -> DiffusionScheduleConfig:
     )
 
 
-def _adaptive_is_meandom_pk(transition, sigma_d2: float) -> torch.Tensor:
+def _adaptive_is_meandom_pk(
+    transition, sigma_d2: float, p_k_clip: float = 0.0
+) -> torch.Tensor:
     """Compute the mean-dominated adaptive-IS density at a given σ_d² from
     the transition's σ̃ buffer. Mirrors the helper the diffusion module
     will expose; used to assert distribution properties without relying
     on a static ``transition.p_k`` buffer (which is None under
     ``adaptive_is`` since p_k is recomputed per-row from live σ_d²).
+    ``p_k_clip=0.0`` (default) gives the raw analytic density; pass
+    ``transition.p_k_clip`` to mirror the clipped training/probe density.
     """
     from ddssm.model.transitions.diffusion import _adaptive_is_density_meandom
 
     s = transition.sigma_tilde
     sd2 = torch.tensor([sigma_d2], dtype=s.dtype)
-    pk = _adaptive_is_density_meandom(s, sd2, floor=1e-12)  # (1, K)
-    return pk.squeeze(0)
+    pk = _adaptive_is_density_meandom(s, sd2, floor=1e-12, p_k_clip=p_k_clip)
+    return pk.squeeze(0)  # (K,) from (1, K)
 
 
 def test_esm_override_p_k_controls_is_correction() -> None:
@@ -1371,15 +1375,26 @@ def test_constructor_rejects_legacy_esm_is_string() -> None:
 
 
 def test_probe_p_k_for_mode_adaptive_is_matches_formula() -> None:
-    """``_p_k_for_mode("adaptive_is", sigma_d2=1.0)`` returns the mean-dom density."""
+    """``_p_k_for_mode("adaptive_is", sigma_d2=1.0)`` returns the mean-dom density.
+
+    The probe threads the transition's ``p_k_clip`` so its diagnostic
+    density matches the estimator training actually uses — the expected
+    formula must mirror the clip.
+    """
     from ddssm.variance.probe import _p_k_for_mode
 
     transition = _make_diffusion(
         ZeroBaseline(latent_dim=D, j=J), schedule=_adaptive_is_schedule()
     )
     reconstructed = _p_k_for_mode(transition, "adaptive_is", sigma_d2=1.0)
-    expected = _adaptive_is_meandom_pk(transition, sigma_d2=1.0)
+    expected = _adaptive_is_meandom_pk(
+        transition, sigma_d2=1.0, p_k_clip=transition.p_k_clip
+    )
     assert torch.allclose(reconstructed, expected, atol=1e-6)
+    # And it must NOT be the unclipped density when the default clip binds.
+    unclipped = _adaptive_is_meandom_pk(transition, sigma_d2=1.0)
+    assert transition.p_k_clip > 0.0
+    assert not torch.allclose(reconstructed, unclipped, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -1473,6 +1488,20 @@ def test_pk_clip_zero_recovers_prior_behavior() -> None:
         _adaptive_is_density_full(s, sd2, sg2, mh2, floor=floor),
         expected_f,
     )
+
+
+def test_pk_clip_none_is_alias_for_zero() -> None:
+    """``p_k_clip=None`` on the schedule is accepted and means clip-off.
+
+    The plan (and Hydra ``null`` overrides) use ``None`` to disable the
+    clip; the transition coerces it to ``0.0`` at construction so the
+    float-typed density path is untouched.
+    """
+    schedule = DiffusionScheduleConfig(
+        S_k=1, k_chunk=1, num_steps=10, p_k_clip=None
+    )
+    transition = _make_diffusion(ZeroBaseline(latent_dim=D, j=J), schedule=schedule)
+    assert transition.p_k_clip == pytest.approx(0.0)
 
 
 def test_pk_clip_bounds_is_weight() -> None:

@@ -37,7 +37,6 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from ddssm.model.losses import FullELBO, SplitLoss
-from ddssm.model.transitions.diffusion import DiffusionScheduleConfig
 from ddssm.training.train import DDSSMTrainer
 
 # Reuse the fixture helpers already vetted by the other integration tests.
@@ -82,26 +81,6 @@ class _RandomWalkDataset(Dataset):
             "observation_mask": self._mask[idx],
             "timepoints": self._tp[idx],
         }
-
-
-def _uniform_weight_schedule() -> DiffusionScheduleConfig:
-    """Schedule tuned so `w_ll/p` collapses toward a per-t constant.
-
-    We drop the plan's ``p_k_clip=1e-3`` (which caps the extreme
-    high-weight tail) by setting ``p_k_clip=None`` and enable uniform
-    ``k`` sampling. Combined with ``sigma_data_init=1.0`` the phith and
-    psi accumulators agree on *shape*, though ``w_ll`` still depends on
-    the diffusion schedule constants (``wtilde_base * σ_d² / (σ̃²+σ_d²)``)
-    so exact equality between the two optimizers is not expected — see
-    test docstring for tolerance justification.
-    """
-    return DiffusionScheduleConfig(
-        S_k=1,
-        k_chunk=1,
-        num_steps=20,
-        k_sampling_mode="uniform",
-        p_k_clip=None,
-    )
 
 
 def _build_trainer(
@@ -160,10 +139,17 @@ def test_single_vs_split_agree_at_unit_weight_end_to_end(tmp_path):
     """Parameter deltas after 5 steps match between single-loss and split-loss
     modes under a schedule tuned so ``w_ll/p`` is approximately constant.
 
+    ``make_vhp_model``'s schedule is already ``k_sampling_mode="uniform"``
+    (asserted below), under which the adaptive-IS ``p_k_clip`` never
+    engages — so ``w_ll/p`` collapses toward a per-t constant without any
+    schedule override. (A post-construction ``transition.schedule`` swap
+    would NOT work: the transition caches ``k_sampling_mode``/``p_k_clip``
+    and the σ̃ buffers at ``__init__``.)
+
     Tolerance rationale
     -------------------
-    Even with ``k_sampling_mode='uniform'``, ``p_k_clip=None`` and
-    ``sigma_data_init=1.0``, the two paths are not bit-identical:
+    Even with uniform ``k`` sampling and ``sigma_data_init=1.0``, the two
+    paths are not bit-identical:
 
     * split-mode drives φθ with ``loss_phith = recon + λ·(init_kl_phith +
       trans_kl_phith)`` and ψ with the *unit-weighted* ``trans_kl_psi``;
@@ -190,8 +176,9 @@ def test_single_vs_split_agree_at_unit_weight_end_to_end(tmp_path):
             sigma_data_init=1.0,
             snapshot_anchor=False,
         )
-        # Override the transition schedule for unit-weight semantics.
-        model.transition.schedule = _uniform_weight_schedule()
+        # Unit-weight semantics need uniform k-sampling; the fixture's
+        # schedule already provides it (cached at transition __init__).
+        assert model.transition.k_sampling_mode == "uniform"
         model.stage_selector = "stage_2"
         return model
 

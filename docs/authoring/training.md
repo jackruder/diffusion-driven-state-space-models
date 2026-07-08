@@ -18,6 +18,7 @@ reads it directly.
 | `ema_decay` | 0.999 | EMA of the transition weights (used at val/sampling). |
 | `weight_decay` | 1e-2 | AdamW decay; **not** applied to norms/biases/embeddings/decoder logvar (selective grouping in `param_groups_for_adamw`). |
 | `psi_betas` | None | single-mode Adam betas for the score-net (ψ) param groups only (e.g. `[0.9, 0.99]`; None = default betas everywhere) — see split-loss training below. |
+| `clip_grad_norm` | 1.0 | per-optimizer grad-norm clip (`null` = off). Under the split topology each optimizer's own grads are clipped independently, so a spike on one side never rescales the other. |
 | `logvar_min` / `logvar_max` | -7 / 7 | clamp on encoder/decoder log-variances. |
 
 Per-submodule LRs are realized by
@@ -25,12 +26,15 @@ Per-submodule LRs are realized by
 each group into decay / no-decay sub-groups.
 
 ```{note}
-**No grad clipping — skip instead.** The old `clip_grad_norm` knob was
-removed. The trainer always computes the whole-model gradient norm at every
-optimizer step (logged as `optim/grad_norm`) and **skips** the step when that
-norm is non-finite: the macro-batch is discarded (grads zeroed; optimizer,
-scheduler, and EMA untouched). Skips are counted in `optim/grad_skips`
-(cumulative, persisted in checkpoints as `grad_skip_count`).
+**Clipping + non-finite skip.** At every optimizer step the trainer clips
+each optimizer's own gradients to `clip_grad_norm` (default 1.0; `null`
+disables — `clip_grad_norm_` still reports the pre-clip norm, logged as
+`optim/grad_norm`, the L2 over the per-optimizer norms under the split
+topology). If any side's pre-clip norm is non-finite the step is **skipped**
+atomically: the macro-batch is discarded on both sides (grads zeroed;
+optimizer, scheduler, and EMA untouched). Skips are counted in
+`optim/grad_skips` (cumulative, persisted in checkpoints as
+`grad_skip_count`).
 ```
 
 ## Run scalars — `Training(...)`
@@ -114,15 +118,17 @@ score-net param groups with the faster β₂.
 **`p_k_clip`** (`DiffusionScheduleConfig`, default `1e-3`) — a
 post-normalization floor on the adaptive IS probabilities, bounding the IS
 weight `w̃/p`. Applies to `adaptive_is` / `adaptive_is_full` k-sampling only.
-`0.0` disables it and is bit-identical to the old (unclipped) density — note
-`null` is NOT valid, the field is float-typed.
+`0.0` disables it and is bit-identical to the old (unclipped) density;
+`null` is accepted as an alias for `0.0`.
 
 ### Migration caveats
 
 ```{warning}
 1. The `p_k_clip=1e-3` default changes the loss numerics **and** the RNG
    draws of every adaptive-IS run relative to pre-change code. Set
-   `p_k_clip: 0.0` to reproduce old results exactly.
+   `p_k_clip: 0.0` to reproduce old results exactly. Likewise
+   `clip_grad_norm` now defaults to `1.0` where the old default was `None`
+   (off) — every run's numerics change unless you set it to `null`.
 2. Checkpoints now write format v3. Old code reads them with a warning,
    silently dropping the split/skip fields — and a split-mode v3 checkpoint
    does NOT load into old code's optimizer.
