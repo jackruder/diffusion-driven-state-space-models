@@ -4,6 +4,7 @@ q_ϕ(z_{1:T} | x_{1:T}, u_{1:T}).
 """
 
 import abc
+import math
 from typing import Literal
 from functools import partial
 from collections.abc import Callable
@@ -27,8 +28,9 @@ from ddssm.nn.gaussians import (
     GaussianStats,
     gaussian_entropy,
     gaussian_log_prob,
+    logvar_from_raw,
 )
-from ddssm.nn.net_utils import TransformerEncoder, hist_abs_time_tokens
+from ddssm.nn.net_utils import TransformerEncoder, hist_abs_time_tokens, softplus_inv
 from ddssm.nn.dist_heads import BaseDistHead, GaussianDistHead
 from ddssm.nn.aggregators import ContextProducerAggregator
 from ddssm.nn.torch_compile import maybe_compile, maybe_compile_fn
@@ -511,6 +513,7 @@ class CausalNoiseNet(nn.Module):
         backbone: str = "transformer",
         init_logvar_bias: float = 0.0,
         stochastic_state: bool = True,
+        var_min: float = 1e-6,
     ) -> None:
         super().__init__()
         self.latent_dim = latent_dim
@@ -518,6 +521,7 @@ class CausalNoiseNet(nn.Module):
         self.channels = channels
         self.nheads = nheads
         self.backbone = backbone
+        self.var_min = float(var_min)
         # stochastic_state=True: the IAF conditioner sees [n_{<t}, h] so μ,σ depend on the
         # noise history (q is an autoregressive flow conditioned on the realized path).
         # False: the deterministic causal encoder, μ,σ = f(h) only (z_hist amortized).
@@ -525,6 +529,7 @@ class CausalNoiseNet(nn.Module):
 
         # Input: [n_{<t} (1, if stochastic), h_t (summary_dim)] per (d,t) → C channels.
         self.input_projection = nn.Linear(int(stochastic_state) + summary_dim, channels)
+        self.input_ln = nn.LayerNorm(channels)
 
         def _make_time_layer() -> nn.Module:
             if backbone == "conv":
@@ -549,12 +554,23 @@ class CausalNoiseNet(nn.Module):
             for _ in range(causal_layers)
         )
 
-        # Head: C → 2 (μ, logσ²). Small-init weight so μ is data-responsive yet small at
-        # init (q ≈ N(0, σ²), KL≈0 handoff); the data-at-input path trains μ immediately.
-        self.head = nn.Conv1d(channels, 2, kernel_size=1)
-        nn.init.xavier_uniform_(self.head.weight, gain=0.5)
-        nn.init.zeros_(self.head.bias)
-        self.head.bias.data[1] = init_logvar_bias
+        # Head: C → (μ, logσ²) via softplus reparameterisation (mirrors LogvarHead).
+        # μ head: small-init so mean is data-responsive yet small at init.
+        self.mu_head = nn.Conv1d(channels, 1, kernel_size=1)
+        nn.init.xavier_uniform_(self.mu_head.weight, gain=0.5)
+        nn.init.zeros_(self.mu_head.bias)
+        # logvar head: zero-init weight+bias; var_bias_raw encodes init_logvar_bias exactly.
+        # Never emit raw log-variance from a Kaiming-init Conv — KL can NaN before a clamp
+        # catches it.  See LogvarHead docstring (gaussians.py) for the full rationale.
+        self.raw_logvar_head = nn.Conv1d(channels, 1, kernel_size=1)
+        nn.init.zeros_(self.raw_logvar_head.weight)
+        nn.init.zeros_(self.raw_logvar_head.bias)
+        init_var = math.exp(float(init_logvar_bias))
+        v_soft = max(init_var - self.var_min, 1e-6)
+        raw0 = float(softplus_inv(torch.tensor(v_soft)).item())
+        self.var_bias_raw = nn.Parameter(
+            torch.full((1, 1, 1), raw0, dtype=torch.float32)
+        )
 
     def forward(self, n, h):
         """``n`` ``(BS, d, T)`` base noise; ``h`` ``(BS, T, summary_dim)`` → ``(μ, logσ²)`` ``(BS, d, T)``."""
@@ -567,7 +583,7 @@ class CausalNoiseNet(nn.Module):
             inp = torch.cat([n_shifted, h_grid], dim=-1)  # (BS, d, T, 1+M)
         else:
             inp = h_grid  # (BS, d, T, M) — deterministic causal encoder
-        x0 = self.input_projection(inp).permute(0, 3, 1, 2)  # (BS, C, d, T)
+        x0 = self.input_ln(self.input_projection(inp)).permute(0, 3, 1, 2)  # (BS, C, d, T)
 
         # h_t as additive in-block side-info (extra data conditioning), broadcast over d.
         side_info = h.permute(0, 2, 1).unsqueeze(2).expand(-1, -1, d, -1)
@@ -580,8 +596,11 @@ class CausalNoiseNet(nn.Module):
         x = torch.stack(skips, dim=0).sum(0) / (len(self.blocks) ** 0.5)
         x = x + x0  # skip: direct access to the (projected) input
 
-        out = self.head(x.reshape(BS, self.channels, d * T)).reshape(BS, 2, d, T)
-        return out[:, 0], out[:, 1]  # μ, logσ²
+        x_flat = x.reshape(BS, self.channels, d * T)
+        mu = self.mu_head(x_flat).reshape(BS, d, T)
+        raw_lv = self.raw_logvar_head(x_flat) + self.var_bias_raw  # (BS,1,d*T) + (1,1,1)
+        logvar = logvar_from_raw(raw_lv, self.var_min).reshape(BS, d, T)
+        return mu, logvar
 
 
 class ARFlowEncoder(BaseEncoder):
@@ -627,6 +646,7 @@ class ARFlowEncoder(BaseEncoder):
         clamp_logvar_max: float = 13.0,
         init_logvar_bias: float = 0.0,
         stochastic_state: bool = True,
+        var_min: float = 1e-6,
         forward_message: Literal["none", "fwd_data", "fwd_summary"] = "none",
         fwd_summary: Callable[..., FutureSummary] | None = None,
         fwd_layers: int = 2,
@@ -646,6 +666,7 @@ class ARFlowEncoder(BaseEncoder):
         self.hidden_dim = hidden_dim
         self.clamp_logvar_min = clamp_logvar_min
         self.clamp_logvar_max = clamp_logvar_max
+        self.var_min = float(var_min)
         self.total_static_dim = static_covariate_dim
         # ARFlow assumes the persistence/identity baseline (μ_p = z_{t-1}); flag it so the
         # composition root (DDSSM_base) can reject a mismatched baseline.
@@ -713,6 +734,7 @@ class ARFlowEncoder(BaseEncoder):
             backbone=backbone,
             init_logvar_bias=init_logvar_bias,
             stochastic_state=stochastic_state,
+            var_min=var_min,
         )
 
         self.fut_sum_module = maybe_compile(self.fut_sum_module, dynamic=True)

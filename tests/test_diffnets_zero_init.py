@@ -57,8 +57,8 @@ def test_csdi_unet_zero_init_false_keeps_kaiming() -> None:
 
 
 def test_mlp_unet_zero_init_default_false() -> None:
-    """MLPCSDIUnet default keeps standard PyTorch init."""
-    net = MLPCSDIUnet(**COMMON_KW, channels=16, n_layers=2)
+    """MLPCSDIUnet with zero_init_output=False keeps standard PyTorch init."""
+    net = MLPCSDIUnet(**COMMON_KW, channels=16, n_layers=2, zero_init_output=False)
     final_layer = net.mlp[-1]
     assert bool(final_layer.weight.detach().any())
 

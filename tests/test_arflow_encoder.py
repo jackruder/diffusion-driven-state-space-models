@@ -163,8 +163,11 @@ def _live_encoder(backbone: str, d: int = 4, T: int = 6) -> ARFlowEncoder:
     )
     # Randomize the zero-init head so g/σ actually depend on η — zero-init would make
     # ∂μ/∂η structurally zero and mask an anti-causal wiring (Agent-4's blind spot).
-    nn.init.normal_(enc.causal_net.head.weight, std=0.5)
-    nn.init.normal_(enc.causal_net.head.bias, std=0.5)
+    nn.init.normal_(enc.causal_net.mu_head.weight, std=0.5)
+    nn.init.normal_(enc.causal_net.mu_head.bias, std=0.5)
+    nn.init.normal_(enc.causal_net.raw_logvar_head.weight, std=0.5)
+    nn.init.normal_(enc.causal_net.raw_logvar_head.bias, std=0.5)
+    enc.causal_net.var_bias_raw.data.normal_(std=0.5)
     enc.eval()
     return enc
 
@@ -241,8 +244,11 @@ def test_covariates_reach_summary() -> None:
     # they must reach the future-summary (else h silently drops them).
     B, D, T, V, d = 2, 12, 5, 3, 4
     enc = make_encoder(data_dim=D, latent_dim=d, hidden_dim=16, covariate_dim=V)
-    nn.init.normal_(enc.causal_net.head.weight, std=0.5)
-    nn.init.normal_(enc.causal_net.head.bias, std=0.5)
+    nn.init.normal_(enc.causal_net.mu_head.weight, std=0.5)
+    nn.init.normal_(enc.causal_net.mu_head.bias, std=0.5)
+    nn.init.normal_(enc.causal_net.raw_logvar_head.weight, std=0.5)
+    nn.init.normal_(enc.causal_net.raw_logvar_head.bias, std=0.5)
+    enc.causal_net.var_bias_raw.data.normal_(std=0.5)
     enc.eval()
     obs, te = torch.randn(B, D, T), torch.zeros(B, T, 0)
     cov0, cov1 = torch.zeros(B, V, T), torch.randn(B, V, T)
@@ -291,8 +297,11 @@ def test_entropy_closed_form_matches_mc() -> None:
     d, T, j = 4, 5, 1
     enc = make_encoder(latent_dim=d, hidden_dim=16, channels=16, nheads=2)
     # small random head so logvar varies (zero-init would make this trivially constant)
-    nn.init.normal_(enc.causal_net.head.weight, std=0.2)
-    nn.init.normal_(enc.causal_net.head.bias, std=0.2)
+    nn.init.normal_(enc.causal_net.mu_head.weight, std=0.2)
+    nn.init.normal_(enc.causal_net.mu_head.bias, std=0.2)
+    nn.init.normal_(enc.causal_net.raw_logvar_head.weight, std=0.2)
+    nn.init.normal_(enc.causal_net.raw_logvar_head.bias, std=0.2)
+    enc.causal_net.var_bias_raw.data.normal_(std=0.2)
     enc.eval()
     _, logqs, stats = enc.sample_paths(
         torch.randn(1, 12, T), torch.zeros(1, T, 0), S=6000
@@ -336,8 +345,9 @@ def test_end_to_end_arflow_elbo_and_sigma_data() -> None:
     assert torch.isfinite(loss), loss
     loss.backward()
     # Gradient reaches the encoder's IAF (μ, logσ²) head.
-    hgrad = model.encoder.causal_net.head.weight.grad
+    hgrad = model.encoder.causal_net.mu_head.weight.grad
     assert hgrad is not None and torch.isfinite(hgrad).all() and hgrad.abs().sum() > 0
+    assert model.encoder.causal_net.raw_logvar_head.weight.grad is not None
 
     # σ_data tracks the IAF residual Var[μ_t − z_{t-1}] + E[σ²]. Since z_t = μ_t + σ_t·η_t is
     # NOT accumulated (no cumsum), the residual stays BOUNDED and roughly flat in t — the
@@ -491,8 +501,11 @@ def test_fwd_flow_strict_noise_causality() -> None:
     # conditioner at the augmented context dim used by the fwd_data flow.
     d, T = 4, 6
     enc = make_fwd_encoder("fwd_data", True, latent_dim=d)
-    nn.init.normal_(enc.causal_net.head.weight, std=0.5)
-    nn.init.normal_(enc.causal_net.head.bias, std=0.5)
+    nn.init.normal_(enc.causal_net.mu_head.weight, std=0.5)
+    nn.init.normal_(enc.causal_net.mu_head.bias, std=0.5)
+    nn.init.normal_(enc.causal_net.raw_logvar_head.weight, std=0.5)
+    nn.init.normal_(enc.causal_net.raw_logvar_head.bias, std=0.5)
+    enc.causal_net.var_bias_raw.data.normal_(std=0.5)
     enc.eval()
     ctx_dim = enc.causal_net.summary_dim  # 2·hidden for fwd_data
     c = torch.randn(1, T, ctx_dim)

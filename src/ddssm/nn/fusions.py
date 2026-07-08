@@ -66,6 +66,8 @@ class ConcatLinearFusion(BaseEncoderFusion):
         )
         self.h_proj = nn.Linear(self.summary_dim, self.hidden_dim)
         self.z_proj = nn.Linear(self.hist_features, self.hidden_dim)
+        self.h_ln = nn.LayerNorm(self.hidden_dim)
+        self.z_ln = nn.LayerNorm(self.hidden_dim)
         self._out_features = 2 * self.hidden_dim
 
     @property
@@ -78,8 +80,8 @@ class ConcatLinearFusion(BaseEncoderFusion):
         h_fut: torch.Tensor,
         z_hist_feat: torch.Tensor,
     ) -> torch.Tensor:
-        h = self.h_proj(h_fut)
-        z = self.z_proj(z_hist_feat)
+        h = self.h_ln(self.h_proj(h_fut))
+        z = self.z_ln(self.z_proj(z_hist_feat))
         return torch.cat([h, z], dim=-1)
 
 
@@ -100,6 +102,8 @@ class DKSFusion(BaseEncoderFusion):
         )
         self.h_proj = nn.Linear(self.summary_dim, self.hidden_dim)
         self.z_proj = nn.Linear(self.hist_features, self.hidden_dim)
+        self.h_ln = nn.LayerNorm(self.hidden_dim)
+        self.z_ln = nn.LayerNorm(self.hidden_dim)
         self._out_features = self.hidden_dim
 
     @property
@@ -112,8 +116,8 @@ class DKSFusion(BaseEncoderFusion):
         h_fut: torch.Tensor,
         z_hist_feat: torch.Tensor,
     ) -> torch.Tensor:
-        h = self.h_proj(h_fut)
-        z = torch.tanh(self.z_proj(z_hist_feat))
+        h = self.h_ln(self.h_proj(h_fut))
+        z = torch.tanh(self.z_ln(self.z_proj(z_hist_feat)))
         return 0.5 * (h + z)
 
 
@@ -134,6 +138,8 @@ class GatedFusion(BaseEncoderFusion):
         )
         self.h_proj = nn.Linear(self.summary_dim, self.hidden_dim)
         self.z_proj = nn.Linear(self.hist_features, self.hidden_dim)
+        self.h_ln = nn.LayerNorm(self.hidden_dim)
+        self.z_ln = nn.LayerNorm(self.hidden_dim)
         self.gate = nn.Linear(2 * self.hidden_dim, self.hidden_dim)
         self._out_features = self.hidden_dim
 
@@ -147,7 +153,7 @@ class GatedFusion(BaseEncoderFusion):
         h_fut: torch.Tensor,
         z_hist_feat: torch.Tensor,
     ) -> torch.Tensor:
-        h = self.h_proj(h_fut)
-        z = self.z_proj(z_hist_feat)
+        h = self.h_ln(self.h_proj(h_fut))
+        z = self.z_ln(self.z_proj(z_hist_feat))
         g = torch.sigmoid(self.gate(torch.cat([h, z], dim=-1)))
         return g * z + (1.0 - g) * h

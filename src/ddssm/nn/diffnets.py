@@ -743,9 +743,9 @@ class MLPCSDIUnet(nn.Module):
         hidden = max(int(channels), 16)
         depth = max(int(n_layers), 1)
 
-        layers: list[nn.Module] = [nn.Linear(in_dim, hidden), nn.SiLU()]
+        layers: list[nn.Module] = [nn.Linear(in_dim, hidden), nn.SiLU(), nn.LayerNorm(hidden)]
         for _ in range(depth - 1):
-            layers.extend([nn.Linear(hidden, hidden), nn.SiLU()])
+            layers.extend([nn.Linear(hidden, hidden), nn.SiLU(), nn.LayerNorm(hidden)])
         final = nn.Linear(hidden, out_dim)
         if zero_init_output:
             nn.init.zeros_(final.weight)
@@ -1051,9 +1051,9 @@ class MLPContextProducer(nn.Module):
         hidden = max(out_dim, 16)
         depth = max(self.num_layers, 1)
 
-        layers: list[nn.Module] = [nn.Linear(in_dim, hidden), nn.SiLU()]
+        layers: list[nn.Module] = [nn.Linear(in_dim, hidden), nn.SiLU(), nn.LayerNorm(hidden)]
         for _ in range(depth - 1):
-            layers.extend([nn.Linear(hidden, hidden), nn.SiLU()])
+            layers.extend([nn.Linear(hidden, hidden), nn.SiLU(), nn.LayerNorm(hidden)])
         layers.append(nn.Linear(hidden, out_dim))
         self.mlp = nn.Sequential(*layers)
 

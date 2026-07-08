@@ -67,9 +67,9 @@ class AuxPosterior(nn.Module):
         in_dim = self.latent_dim * self.j
         out_dim = self.latent_dim * self.j
 
-        layers: list[nn.Module] = [nn.Linear(in_dim, self.hidden_dim), nn.SiLU()]
+        layers: list[nn.Module] = [nn.Linear(in_dim, self.hidden_dim), nn.SiLU(), nn.LayerNorm(self.hidden_dim)]
         for _ in range(max(0, self.n_layers - 1)):
-            layers.extend([nn.Linear(self.hidden_dim, self.hidden_dim), nn.SiLU()])
+            layers.extend([nn.Linear(self.hidden_dim, self.hidden_dim), nn.SiLU(), nn.LayerNorm(self.hidden_dim)])
         self.body = nn.Sequential(*layers)
 
         self.mu_head = nn.Linear(self.hidden_dim, out_dim)

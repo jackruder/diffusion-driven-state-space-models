@@ -66,3 +66,50 @@ def test_gaussian_dist_head_entropy():
     assert e_init.ndim == 0
     assert e_trans.ndim == 0
     assert torch.isfinite(e_init) and torch.isfinite(e_trans)
+
+
+def test_causal_noise_net_init_logvar() -> None:
+    """Fresh CausalNoiseNet should produce logvar ≈ init_logvar_bias at init.
+
+    With W=0 and b=0 on raw_logvar_head, only var_bias_raw contributes.
+    The softplus-inverse math in __init__ is set up so the initial logvar
+    equals init_logvar_bias exactly (up to float32 precision).
+    """
+    from ddssm.model.encoder import CausalNoiseNet
+
+    latent_dim = 4
+    summary_dim = 8
+    channels = 64
+    T = 5
+    BS = 2
+
+    for init_logvar_bias in (-3.0, 0.0, 2.0):
+        net = CausalNoiseNet(
+            latent_dim=latent_dim,
+            summary_dim=summary_dim,
+            channels=channels,
+            causal_layers=1,
+            nheads=4,
+            backbone="transformer",
+            init_logvar_bias=init_logvar_bias,
+        )
+        net.eval()
+        with torch.no_grad():
+            eta = torch.randn(BS, latent_dim, T)
+            h = torch.randn(BS, T, summary_dim)
+            mu, logvar = net(eta, h)
+
+        # With zero-init W and b on raw_logvar_head, logvar should equal init_logvar_bias
+        # uniformly (up to float32 precision).
+        expected = torch.tensor(init_logvar_bias)
+        assert torch.allclose(
+            logvar.mean(), expected, atol=1e-3
+        ), f"init_logvar_bias={init_logvar_bias}: got {logvar.mean().item():.6f}"
+
+        # Backward on a scalar dependent on both mu and logvar should populate grads.
+        net.zero_grad()
+        mu2, logvar2 = net(torch.randn(BS, latent_dim, T), torch.randn(BS, T, summary_dim))
+        (mu2 ** 2 + logvar2.exp()).sum().backward()
+        assert net.mu_head.weight.grad is not None, "mu_head.weight has no grad"
+        assert net.raw_logvar_head.weight.grad is not None, "raw_logvar_head.weight has no grad"
+        assert net.var_bias_raw.grad is not None, "var_bias_raw has no grad"

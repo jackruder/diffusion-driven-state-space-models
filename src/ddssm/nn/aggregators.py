@@ -106,6 +106,7 @@ class IdentityAggregator(BaseHistoryAggregator):
             nn.Linear(emb_time_dim, hidden_dim) if emb_time_dim > 0 else None
         )
         self.pad_mask_proj = nn.Linear(1, hidden_dim)
+        self.out_ln = nn.LayerNorm(hidden_dim)
         self._out_features = hidden_dim
 
     @property
@@ -127,7 +128,7 @@ class IdentityAggregator(BaseHistoryAggregator):
             t_emb = hist_time_emb.squeeze(1)  # (B, E_t)
             out = out + self.time_proj(t_emb)
         out = out + self.pad_mask_proj(pad_mask)  # (B, H)
-        return out
+        return self.out_ln(out)
 
 
 class _PerStepProj(nn.Module):
@@ -150,6 +151,7 @@ class _PerStepProj(nn.Module):
             nn.Linear(emb_time_dim, hidden_dim) if emb_time_dim > 0 else None
         )
         self.pad_mask_proj = nn.Linear(1, hidden_dim)
+        self.out_ln = nn.LayerNorm(hidden_dim)
 
     def forward(
         self,
@@ -163,7 +165,7 @@ class _PerStepProj(nn.Module):
         if self.time_proj is not None:
             out = out + self.time_proj(hist_time_emb)
         out = out + self.pad_mask_proj(pad_mask.unsqueeze(-1))
-        return out
+        return self.out_ln(out)
 
 
 class GRUAggregator(BaseHistoryAggregator):
@@ -264,9 +266,11 @@ class MLPAggregator(BaseHistoryAggregator):
         else:
             layers.append(nn.Linear(in_dim, hidden_dim))
             layers.append(nn.SiLU())
+            layers.append(nn.LayerNorm(hidden_dim))
             for _ in range(depth - 2):
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
                 layers.append(nn.SiLU())
+                layers.append(nn.LayerNorm(hidden_dim))
             layers.append(nn.Linear(hidden_dim, hidden_dim))
         self.mlp = nn.Sequential(*layers)
         self._out_features = hidden_dim
@@ -413,6 +417,7 @@ class ContextProducerAggregator(BaseHistoryAggregator):
             static_emb_dim=static_emb_dim,
         )
         self.z_proj = nn.Linear(latent_dim, hidden_dim)
+        self.z_ln = nn.LayerNorm(hidden_dim)
         self.pad_mask_embed = nn.Linear(1, pad_mask_emb_dim)
         self.context_producer = ContextProducer(
             channels=int(channels),
@@ -440,7 +445,7 @@ class ContextProducerAggregator(BaseHistoryAggregator):
     ) -> torch.Tensor:
         # z_hist: (B, d, j), hist_time_emb: (B, j, E_t), pad_mask: (B, j)
         z = z_hist.permute(0, 2, 1)  # (B, j, d)
-        z_proj = self.z_proj(z)  # (B, j, H)
+        z_proj = self.z_ln(self.z_proj(z))  # (B, j, H)
         combined = z_proj.permute(0, 2, 1)  # (B, H, j)
         hist_time_emb_t = hist_time_emb.permute(0, 2, 1)  # (B, E_t, j)
         pad_mask_emb = self.pad_mask_embed(pad_mask.unsqueeze(-1))  # (B, j, E_pad)

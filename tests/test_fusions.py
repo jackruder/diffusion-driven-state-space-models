@@ -42,12 +42,12 @@ def test_fusion_backprop(cls):
 
 
 def test_dks_fusion_average_property():
-    """DKSFusion outputs the average of two projections (modulo tanh on z)."""
+    """DKSFusion outputs the average of two LN'd projections (LN on z pre-tanh)."""
     fusion = DKSFusion(hist_features=HIST, summary_dim=SUMMARY, hidden_dim=H)
     h_fut = torch.randn(B, SUMMARY)
     z = torch.randn(B, HIST)
     out = fusion(h_fut=h_fut, z_hist_feat=z)
-    h_proj = fusion.h_proj(h_fut)
-    z_proj = torch.tanh(fusion.z_proj(z))
+    h_proj = fusion.h_ln(fusion.h_proj(h_fut))
+    z_proj = torch.tanh(fusion.z_ln(fusion.z_proj(z)))
     expected = 0.5 * (h_proj + z_proj)
     assert torch.allclose(out, expected)

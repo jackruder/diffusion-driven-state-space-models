@@ -115,9 +115,9 @@ class _StateConditionalSigmaHead(nn.Module):
     ) -> None:
         super().__init__()
         in_dim = latent_dim * j
-        body: list[nn.Module] = [nn.Linear(in_dim, hidden_dim), nn.SiLU()]
+        body: list[nn.Module] = [nn.Linear(in_dim, hidden_dim), nn.SiLU(), nn.LayerNorm(hidden_dim)]
         for _ in range(max(0, n_layers - 1)):
-            body.extend([nn.Linear(hidden_dim, hidden_dim), nn.SiLU()])
+            body.extend([nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.LayerNorm(hidden_dim)])
         self.body = nn.Sequential(*body)
         self.logvar_head = LogvarHead(
             in_features=hidden_dim,
@@ -279,9 +279,9 @@ class MLPBaseline(BaseBaseline):
         self.n_layers = int(n_layers)
 
         in_dim = self.latent_dim * self.j
-        body: list[nn.Module] = [nn.Linear(in_dim, self.hidden_dim), nn.SiLU()]
+        body: list[nn.Module] = [nn.Linear(in_dim, self.hidden_dim), nn.SiLU(), nn.LayerNorm(self.hidden_dim)]
         for _ in range(max(0, self.n_layers - 1)):
-            body.extend([nn.Linear(self.hidden_dim, self.hidden_dim), nn.SiLU()])
+            body.extend([nn.Linear(self.hidden_dim, self.hidden_dim), nn.SiLU(), nn.LayerNorm(self.hidden_dim)])
         self.backbone = nn.Sequential(*body)
 
         self.mu_head = nn.Linear(self.hidden_dim, self.latent_dim)
