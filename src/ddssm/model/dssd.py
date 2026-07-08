@@ -1111,6 +1111,7 @@ def _default_hyperparams():
         batch_size=16,
         grad_accum_steps=4,
         t_chunk=16,
+        clip_grad_norm=1.0,
         psi_betas=None,
         enc_lr=5e-4,
         dec_lr=5e-4,
@@ -1135,6 +1136,9 @@ class DDSSMHyperParamsConf:
     batch_size: int = 16
     grad_accum_steps: int = 4
     t_chunk: int = 16
+    # Global grad-norm clip, applied after the non-finite-grad skip check
+    # (see ``DDSSMTrainer._optimizer_step``). ``None`` disables clipping.
+    clip_grad_norm: float | None = 1.0
     # Optional Adam betas for the score-net (ψ) param groups in single-loss
     # mode (list, not tuple, for OmegaConf; the trainer converts at use).
     # ``None`` (default) keeps today's optimizer topology exactly.

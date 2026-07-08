@@ -669,10 +669,10 @@ def test_local_full_elbo_single_mode_numerical_parity():
     assert got.item() == pytest.approx(expected)
 
 
-def test_local_no_clip_grad_norm_attribute_or_branch(vhp_model, tmp_path):
-    """Trainer has no legacy ``clip_grad_norm`` attribute after M5."""
+def test_local_clip_grad_norm_attribute_defaults_to_one(vhp_model, tmp_path):
+    """Trainer has a ``clip_grad_norm`` attribute, defaulting to 1.0."""
     trainer = _make_trainer(copy.deepcopy(vhp_model), tmp_path)
-    assert not hasattr(trainer, "clip_grad_norm")
+    assert trainer.clip_grad_norm == 1.0
 
 
 def test_local_zero_grad_covers_both_optimizers(vhp_model, tmp_path):
@@ -752,9 +752,11 @@ def test_local_split_loss_grad_accum_correct_scaling(vhp_model, tmp_path):
     assert got_psi == pytest.approx(expected_psi, rel=1e-5)
 
 
-def test_local_finite_grad_steps_normally_and_never_rescales(vhp_model, tmp_path):
-    """A large finite gradient triggers a step (no skip); the norm computation
-    uses ``max_norm=inf`` so grads are never rescaled."""
+def test_local_finite_grad_steps_normally_and_rescales_to_clip_norm(
+    vhp_model, tmp_path
+):
+    """A large finite gradient triggers a step (no skip) and is rescaled down
+    to ``trainer.clip_grad_norm`` (default 1.0)."""
     model = copy.deepcopy(vhp_model)
     trainer = _make_trainer(model, tmp_path, split=False)
     _fit_one_step(trainer)
@@ -766,7 +768,8 @@ def test_local_finite_grad_steps_normally_and_never_rescales(vhp_model, tmp_path
     param_pre = target.detach().clone()
     trainer._optimizer_step(scaler=trainer.scaler, amp=False)
     assert not torch.equal(target.detach(), param_pre), "large finite grad should step"
-    # Second pass: monkeypatch clip_grad_norm_ to prove it's only called with inf.
+    # Second pass: monkeypatch clip_grad_norm_ to prove it's called with the
+    # configured clip value and actually rescales the grads.
     calls: list[float] = []
     import torch.nn.utils as _tnu
     orig_clip = _tnu.clip_grad_norm_
@@ -781,8 +784,15 @@ def test_local_finite_grad_steps_normally_and_never_rescales(vhp_model, tmp_path
     with patch.object(_tnu, "clip_grad_norm_", spy_clip):
         trainer._optimizer_step(scaler=trainer.scaler, amp=False)
     assert calls, "clip_grad_norm_ was never called"
-    assert all(math.isinf(c) for c in calls), (
-        f"clip_grad_norm_ called with finite max_norm (would rescale!): {calls}"
+    assert all(c == trainer.clip_grad_norm for c in calls), (
+        f"clip_grad_norm_ called with unexpected max_norm "
+        f"(expected {trainer.clip_grad_norm}): {calls}"
+    )
+    post_clip_norm = torch.nn.utils.clip_grad_norm_(
+        [p for p in model.parameters() if p.requires_grad], float("inf")
+    )
+    assert float(post_clip_norm) <= trainer.clip_grad_norm * 1.01, (
+        f"grads not rescaled to clip norm: {float(post_clip_norm)}"
     )
 
 

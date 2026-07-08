@@ -250,13 +250,18 @@ class DDSSMTrainer:
         self.weight_decay = self.hparams.weight_decay
 
         self.grad_accum_steps = self.hparams.grad_accum_steps
-        # Grad-skip bookkeeping (replaces the removed grad-norm clipping):
-        # non-finite whole-model grad norms discard the macro-batch instead
+        self.clip_grad_norm = self.hparams.clip_grad_norm
+        # Grad-skip bookkeeping (alongside per-optimizer grad-norm
+        # clipping): non-finite grad norms discard the macro-batch instead
         # of poisoning Adam state / EMA shadows. ``grad_skip_count`` is
         # cumulative and persisted via checkpoints; ``_last_grad_norm`` is
-        # the most recent whole-model norm (NaN on a skipped step).
+        # the combined (L2-over-per-optimizer) pre-clip norm of the most
+        # recent step (NaN on a skipped step); ``_last_grad_norms_by_opt``
+        # holds the individual per-optimizer norms when the split topology
+        # is active (``None`` in single-optimizer mode).
         self.grad_skip_count: int = 0
         self._last_grad_norm: float | None = None
+        self._last_grad_norms_by_opt: list[float] | None = None
 
         self.ema_decay = self.hparams.ema_decay
         # EMA on the denoiser (used at sampling time)
@@ -846,13 +851,14 @@ class DDSSMTrainer:
         return accum_metrics
 
     def _optimizer_step(self, scaler, amp: bool) -> bool:
-        """Step optimizer(s)/scheduler(s)/EMA, skipping on non-finite grads.
+        """Clip grads per-optimizer and step optimizer(s)/scheduler(s)/EMA,
+        skipping on non-finite grads.
 
         Returns:
             ``True`` if the step was taken, ``False`` if it was skipped
-            because the whole-model gradient norm was non-finite (the
-            macro-batch is discarded: grads zeroed, no optimizer /
-            scheduler / EMA update, ``grad_skip_count`` incremented).
+            because a gradient norm was non-finite (the macro-batch is
+            discarded: grads zeroed, no optimizer / scheduler / EMA update,
+            ``grad_skip_count`` incremented).
         """
         # AMP: unscale before inspecting grads (unscale→inspect→step order;
         # the scaler is disabled for bf16 so this is a no-op today, but the
@@ -861,20 +867,46 @@ class DDSSMTrainer:
             for opt in self._optimizers:
                 scaler.unscale_(opt)
 
-        # Norm computation only — max_norm=inf never rescales. One norm
-        # over the whole model in both single and split modes.
-        norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), float("inf"))
+        # Clip each optimizer's own parameters independently rather than one
+        # norm over the whole model. Under the split topology, opt_phith and
+        # opt_psi already run with independent LRs/betas because they
+        # optimize disjoint parameter sets against different loss scalars
+        # (ELBO recon/rate vs. denoising score-matching — see
+        # _backward_loss); a shared norm would let a spike on one side
+        # rescale the other side's well-behaved grads. In single-optimizer
+        # mode this is one clip over the whole model, same as before.
+        # ``clip_grad_norm_`` returns the pre-clip norm regardless of
+        # whether clipping was applied, so the non-finite check below still
+        # sees the true norm. ``max_norm=inf`` (clipping disabled) never
+        # rescales.
+        max_norm = (
+            float(self.clip_grad_norm)
+            if self.clip_grad_norm is not None
+            else float("inf")
+        )
+        norms = [
+            torch.nn.utils.clip_grad_norm_(
+                [p for group in opt.param_groups for p in group["params"]],
+                max_norm,
+            )
+            for opt in self._optimizers
+        ]
 
-        if not torch.isfinite(norm):
-            # Discard the macro-batch: a NaN step would poison Adam state
-            # and EMA shadows alike.
+        if not all(torch.isfinite(n) for n in norms):
+            # Discard the macro-batch on EITHER side going non-finite: both
+            # sides backward from the same forward pass on the same
+            # (possibly poisoned) batch, so a partial step would poison
+            # Adam state / EMA shadows on whichever side(s) look clean too.
             for opt in self._optimizers:
                 opt.zero_grad(set_to_none=True)
             self.grad_skip_count += 1
             self._last_grad_norm = float("nan")
+            self._last_grad_norms_by_opt = (
+                [float(n) for n in norms] if len(self._optimizers) > 1 else None
+            )
             log.warning(
-                "[grad-skip] non-finite grad norm %s at step %d (total skips: %d)",
-                float(norm),
+                "[grad-skip] non-finite grad norm(s) %s at step %d (total skips: %d)",
+                [float(n) for n in norms],
                 self.global_step + 1,
                 self.grad_skip_count,
             )
@@ -886,7 +918,16 @@ class DDSSMTrainer:
                 scaler.update()
             return False
 
-        self._last_grad_norm = float(norm)
+        # Aggregate as a single L2 norm over the per-optimizer norms for the
+        # ``optim/grad_norm`` metric (equals the one norm in single-optimizer
+        # mode); per-optimizer values are logged separately when split.
+        self._last_grad_norm = float(
+            torch.linalg.vector_norm(torch.stack(norms))
+        )
+        if len(self._optimizers) > 1:
+            self._last_grad_norms_by_opt = [float(n) for n in norms]
+        else:
+            self._last_grad_norms_by_opt = None
         if amp:
             for opt in self._optimizers:
                 scaler.step(opt)
@@ -969,12 +1010,22 @@ class DDSSMTrainer:
         log_values["stage/step_within"] = torch.tensor(
             float(self.global_step - self._stage_start_step), device=device
         )
-        # Grad-skip diagnostics: the whole-model grad norm of the last
+        # Grad-skip diagnostics: the combined grad norm of the last
         # optimizer step (NaN on a skipped step) and the cumulative skip
-        # count. Both fit the existing ``optim/*`` MetricSpec.
+        # count. Both fit the existing ``optim/*`` MetricSpec. Under the
+        # split topology, also surface each optimizer's own (independently
+        # clipped) norm so a spike on one side is visible without being
+        # averaged away by the combined figure.
         if self._last_grad_norm is not None:
             log_values["optim/grad_norm"] = torch.tensor(
                 self._last_grad_norm, device=device
+            )
+        if self._last_grad_norms_by_opt is not None:
+            log_values["optim/grad_norm_phith"] = torch.tensor(
+                self._last_grad_norms_by_opt[0], device=device
+            )
+            log_values["optim/grad_norm_psi"] = torch.tensor(
+                self._last_grad_norms_by_opt[1], device=device
             )
         log_values["optim/grad_skips"] = torch.tensor(
             float(self.grad_skip_count), device=device

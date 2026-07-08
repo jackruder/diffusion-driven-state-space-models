@@ -299,12 +299,13 @@ def test_metrics_include_loss_init_psi() -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_hyperparams_have_psi_betas_and_no_clip_grad_norm
+# test_hyperparams_have_psi_betas_and_clip_grad_norm
 # ---------------------------------------------------------------------------
 
 
-def test_hyperparams_have_psi_betas_and_no_clip_grad_norm() -> None:
-    """DDSSMHyperParamsConf has psi_betas (default None); clip_grad_norm is gone."""
+def test_hyperparams_have_psi_betas_and_clip_grad_norm() -> None:
+    """DDSSMHyperParamsConf has psi_betas (default None) and clip_grad_norm
+    (default 1.0 — restored alongside the non-finite-grad skip guard)."""
     conf = DDSSMHyperParamsConf()
 
     # psi_betas must exist with default None
@@ -315,7 +316,10 @@ def test_hyperparams_have_psi_betas_and_no_clip_grad_norm() -> None:
         f"psi_betas default must be None, got {conf.psi_betas!r}"
     )
 
-    # clip_grad_norm must be gone
-    assert not hasattr(conf, "clip_grad_norm"), (
-        "DDSSMHyperParamsConf must NOT have field 'clip_grad_norm' (M5 removes it)"
+    # clip_grad_norm must be present and default to 1.0
+    assert hasattr(conf, "clip_grad_norm"), (
+        "DDSSMHyperParamsConf must have field 'clip_grad_norm'"
+    )
+    assert conf.clip_grad_norm == 1.0, (
+        f"clip_grad_norm default must be 1.0, got {conf.clip_grad_norm!r}"
     )

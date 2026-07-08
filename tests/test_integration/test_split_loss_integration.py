@@ -10,14 +10,18 @@ End-to-end coverage of the split-loss code path landed by M1-M7:
   guard: training continues, params stay finite, and exactly one skip is
   counted.
 
-Two repo-level grep fences ride along here so a future refactor cannot
+A repo-level grep fence rides along here so a future refactor cannot
 silently break the split-backward contract:
 
-* ``clip_grad_norm`` is gone from ``src/`` — the always-on non-finite grad
-  skip replaces it.
 * ``use_reentrant=False`` remains on the ``torch.utils.checkpoint(...)`` call
   inside ``_esm_chunk_loss`` — without it the second selective backward
   silently corrupts.
+
+Grad-norm clipping (``hparams.clip_grad_norm``, default 1.0) and the
+always-on non-finite-grad skip guard are both active and compose: the whole-
+model norm is computed and clipped every step, and a step is additionally
+skipped outright (grads zeroed, no optimizer/scheduler/EMA update) when that
+pre-clip norm is non-finite.
 """
 
 from __future__ import annotations
@@ -409,7 +413,7 @@ def test_grad_skip_recovers_training(tmp_path):
     ``register_hook`` fires as soon as autograd routes a grad tensor
     through the parameter — we replace that tensor's first element with a
     NaN once, then detach.  The NaN lands in ``p.grad`` and the trainer's
-    ``clip_grad_norm_(..., inf)`` sees a non-finite global norm on the
+    ``clip_grad_norm_(...)`` sees a non-finite global norm on the
     next ``_optimizer_step``: it zeros all grads, bumps the skip counter,
     logs a warning, and returns without stepping the optimizer, scheduler,
     or EMA.  Subsequent steps run on clean grads.
@@ -483,31 +487,54 @@ def test_grad_skip_recovers_training(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 5. Repo-level grep fences.
+# 5. Grad-norm clipping.
 # ---------------------------------------------------------------------------
 
 
-def test_no_clip_grad_norm_in_src():
-    """``clip_grad_norm`` was removed everywhere in ``src/`` — clipping is
-    gone, replaced by the non-finite grad-skip guard.
+def test_default_clip_grad_norm_is_one():
+    """``hparams.clip_grad_norm`` defaults to ``1.0`` (not ``None``)."""
+    from ddssm.model.dssd import DDSSMHyperParamsConf, _default_hyperparams
 
-    Note: ``clip_grad_norm_`` (with trailing underscore) is still used
-    inside ``_optimizer_step`` as the *norm-computation-only* mechanism
-    (``max_norm=inf`` never rescales), so we grep the exact word boundary
-    ``\\bclip_grad_norm\\b`` — the ``_`` in ``clip_grad_norm_`` counts as
-    a word char and won't match.
+    assert DDSSMHyperParamsConf().clip_grad_norm == 1.0
+    assert _default_hyperparams().clip_grad_norm == 1.0
+
+
+def test_clip_grad_norm_bounds_gradient(tmp_path):
+    """A small ``clip_grad_norm`` actually rescales grads before the step.
+
+    Builds a trainer whose unclipped grad norm is (verified) larger than a
+    tiny clip threshold, fits one step, and checks the post-step ``.grad``
+    norm on the live parameters is bounded by that threshold while
+    ``_last_grad_norm`` (recorded pre-clip) exceeds it.
     """
-    src_dir = REPO_ROOT / "src"
-    assert src_dir.is_dir(), f"src/ not found at {src_dir}"
-    result = subprocess.run(
-        ["grep", "-rn", "-w", "clip_grad_norm", str(src_dir)],
-        capture_output=True,
-        text=True,
-        check=False,
+    torch.manual_seed(0)
+    np.random.seed(0)
+    model = make_vhp_model(
+        baseline_form="mlp",
+        baseline_mode="pinned",
+        tracking_mode="fixed",
+        lambda_sigma_p=0.0,
+        sigma_data_init=1.0,
+        snapshot_anchor=False,
     )
-    # grep returns 1 when no matches; anything else is a real hit.
-    assert result.returncode == 1, (
-        f"clip_grad_norm reappeared in src/:\n{result.stdout}"
+    model.stage_selector = "stage_2"
+    trainer = _build_trainer(model, tmp_path=tmp_path, use_split_loss=False)
+
+    clip_value = 1e-3
+    trainer.clip_grad_norm = clip_value
+    _fit_n_steps(trainer, n_steps=1, seed=0)
+
+    assert trainer._last_grad_norm is not None
+    assert trainer._last_grad_norm > clip_value, (
+        "test is a no-op unless the unclipped norm exceeds the clip value"
+    )
+
+    post_clip_norm = torch.nn.utils.clip_grad_norm_(
+        model.parameters(), float("inf")
+    )
+    assert float(post_clip_norm) <= clip_value * 1.01, (
+        f"post-step grad norm {float(post_clip_norm)} exceeds clip value "
+        f"{clip_value} — clipping was not applied"
     )
 
 
