@@ -1,6 +1,5 @@
 """Run a :class:`ddssm.cluster.study.Study` — per-point launch strategies + the orchestrator.
 
-Where ``StageOrchestrator`` (``stages.py``) runs the *stages of one experiment*,
 :class:`StudyOrchestrator` runs the *points of one study*. The launch **shape** is
 per-point — a function of the point via ``Study.launch(point) -> PointLaunch`` —
 so a 2-model compare emits single-GPU jobs while a ``j=1..16`` sweep can ask for
@@ -138,8 +137,7 @@ def _validate_preempt_compat(pl: PointLaunch, point: StudyPoint) -> None:
     """Raise ``ValueError`` if ``pl.preemptive=True`` is paired with an incompatible config.
 
     Only one rejection remains: ``strategy='single_job'`` has no trials concept,
-    so preempt+resume cannot work. Multi-stage experiments ARE supported now
-    that ``StageOrchestrator`` is stage-prefix-aware on resume (ADR-0009).
+    so preempt+resume cannot work.
     """
     if not pl.preemptive:
         return

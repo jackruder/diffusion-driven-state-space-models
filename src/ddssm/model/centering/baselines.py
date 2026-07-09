@@ -1,53 +1,43 @@
-"""Baseline μ_p(z_{t-1}) head with state-conditional σ_p sibling.
+"""Baseline μ_p(z_{t-1}) centering head.
 
 Per ``model-v2.org`` § Baseline-form variants, the centering function
-``μ_p(z_{t-1})`` admits four parametric families (Zero, Persistence,
-Linear, MLP).  ("Persistence" was previously called "Identity"; renamed
+``μ_p(z_{t-1})`` admits two parameter-free families: Zero and
+Persistence.  ("Persistence" was previously called "Identity"; renamed
 because at j>1 it's the persistence/last-value baseline, not the
 identity-on-the-window — see docs/adr/0010-persistence-baseline-rename.md.)
-Per § State-conditional prior variance, the stage-1
-Gaussian transition prior is
-``N(μ_p(z_{t-1}), diag(σ_p²(z_{t-1})))`` — so a sibling
-state-conditional ``σ_p`` head exists alongside ``μ_p`` and (for the
-parametric forms) shares the backbone.
+
+The prior variance is fixed at ``σ_p² = 1`` (``log σ_p² = 0``): the
+baselines carry **no parameters**.  ``mean_and_logvar`` returns a zero
+log-variance alongside the mean so the module stays a drop-in for the
+:class:`ddssm.nn.gaussians.GaussianHead` contract.
 
 The ``BaseBaseline`` interface exposes two access patterns:
 
-* ``mean(z_hist)`` — μ_p alone.  Used by the stage-2 diffusion transition
-  for the centering shift ``ẑ_t = z̃_t − μ_p(z_{t-1})``; σ_p plays
-  no role in stage 2.
-* ``mean_and_logvar(z_hist)`` — both heads.  Used by the stage-1
-  Gaussian transition for the closed-form KL and by the
-  log-variance regularizer ``R_σp``.
+* ``mean(z_hist)`` — μ_p alone.  Used by the diffusion transition for the
+  centering shift ``ẑ_t = z̃_t − μ_p(z_{t-1})``.
+* ``mean_and_logvar(z_hist)`` — μ_p plus the (identically-zero) log σ_p².
 
-The four concrete forms all support general j ≥ 1.  The doc writes
-the linear form as ``μ_p(z_{t-1}) = A z_{t-1} + b`` with ``A ∈
-R^{D×D}``; we generalise to ``A ∈ R^{D×(j·D)}`` (linear over the
-flattened history), reducing to the doc's expression at j = 1.
+Both concrete forms support general j ≥ 1.
 """
 
 from __future__ import annotations
 
 import abc
-import copy
 
 import torch
 import torch.nn as nn
 
-from ddssm.nn.gaussians import LogvarHead
-
 
 class BaseBaseline(nn.Module, metaclass=abc.ABCMeta):
-    """Abstract μ_p / σ_p head.
+    """Abstract μ_p head with fixed unit prior variance.
 
-    Subclasses must:
-      - implement :meth:`mean` returning ``(B, d)`` from ``(B, d, j)``.
-      - implement :meth:`mean_and_logvar` returning ``((B, d), (B, d))``.
+    Subclasses must implement :meth:`mean` returning ``(B, d)`` from
+    ``(B, d, j)``.  :meth:`mean_and_logvar` pairs that mean with a
+    zero log-variance (σ_p² = 1).
 
     The default :meth:`forward` delegates to :meth:`mean_and_logvar` so
-    the module is a drop-in replacement for the existing
-    :class:`ddssm.nn.gaussians.GaussianHead` contract used by the legacy
-    :class:`ddssm.model.transitions.transitions.GaussianTransition`.
+    the module is a drop-in replacement for the
+    :class:`ddssm.nn.gaussians.GaussianHead` contract.
     """
 
     latent_dim: int
@@ -57,28 +47,16 @@ class BaseBaseline(nn.Module, metaclass=abc.ABCMeta):
     def mean(self, z_hist: torch.Tensor) -> torch.Tensor:
         """Return μ_p(z_hist) with shape ``(B, d)``."""
 
-    @abc.abstractmethod
     def mean_and_logvar(
         self, z_hist: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return ``(μ_p, log σ_p²)``, each ``(B, d)``."""
+        """Return ``(μ_p, log σ_p²)`` with ``log σ_p² ≡ 0`` (σ_p² = 1)."""
+        mu = self.mean(z_hist)
+        return mu, torch.zeros_like(mu)
 
     def forward(self, z_hist: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Drop-in replacement for ``GaussianHead.forward``."""
         return self.mean_and_logvar(z_hist)
-
-    def snapshot(self) -> BaseBaseline:
-        """Return a deep-copied, frozen eval-mode copy.
-
-        Used as the anchor target μ_p^(0) for the Learnable
-        baseline-mode regularizer R_μp.  Mutating parameters of the
-        snapshot does not affect the live baseline (and vice versa).
-        """
-        clone = copy.deepcopy(self)
-        clone.eval()
-        for p in clone.parameters():
-            p.requires_grad_(False)
-        return clone
 
 
 # ---------------------------------------------------------------------------
@@ -96,79 +74,24 @@ def _validate_z_hist(z_hist: torch.Tensor, latent_dim: int, j: int) -> None:
         )
 
 
-class _StateConditionalSigmaHead(nn.Module):
-    """Small MLP body + :class:`LogvarHead` producing per-dim ``log σ_p²``.
-
-    Used by the parameter-free baseline forms (Zero, Persistence) so that
-    σ_p remains state-conditional per ``model-v2.org`` § State-conditional
-    prior variance.  Output starts at ``init_logvar`` (default 0 → σ_p² = I)
-    regardless of the input, matching ``GaussianHead``'s convention.
-    """
-
-    def __init__(
-        self,
-        latent_dim: int,
-        j: int,
-        hidden_dim: int,
-        n_layers: int,
-        init_logvar: float = 0.0,
-    ) -> None:
-        super().__init__()
-        in_dim = latent_dim * j
-        body: list[nn.Module] = [nn.Linear(in_dim, hidden_dim), nn.SiLU(), nn.LayerNorm(hidden_dim)]
-        for _ in range(max(0, n_layers - 1)):
-            body.extend([nn.Linear(hidden_dim, hidden_dim), nn.SiLU(), nn.LayerNorm(hidden_dim)])
-        self.body = nn.Sequential(*body)
-        self.logvar_head = LogvarHead(
-            in_features=hidden_dim,
-            out_features=latent_dim,
-            init_logvar=init_logvar,
-        )
-
-    def forward(self, z_hist: torch.Tensor) -> torch.Tensor:
-        B = z_hist.shape[0]
-        h = self.body(z_hist.reshape(B, -1))
-        return self.logvar_head(h)
-
-
 # ---------------------------------------------------------------------------
 # Concrete forms
 # ---------------------------------------------------------------------------
 
 
 class ZeroBaseline(BaseBaseline):
-    """``μ_p ≡ 0``; σ_p from a small state-conditional MLP head."""
+    """``μ_p ≡ 0`` with fixed unit prior variance. Parameter-free."""
 
-    def __init__(
-        self,
-        latent_dim: int,
-        j: int,
-        hidden_dim: int = 32,
-        n_layers: int = 2,
-        init_logvar: float = 0.0,
-    ) -> None:
+    def __init__(self, latent_dim: int, j: int) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.j = int(j)
-        self.sigma_head = _StateConditionalSigmaHead(
-            self.latent_dim, self.j, hidden_dim, n_layers, init_logvar=init_logvar
-        )
 
     def mean(self, z_hist: torch.Tensor) -> torch.Tensor:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         return torch.zeros(
             z_hist.shape[0], self.latent_dim, device=z_hist.device, dtype=z_hist.dtype
         )
-
-    def mean_and_logvar(
-        self, z_hist: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        _validate_z_hist(z_hist, self.latent_dim, self.j)
-        mu = torch.zeros(
-            z_hist.shape[0], self.latent_dim, device=z_hist.device, dtype=z_hist.dtype
-        )
-        logvar = self.sigma_head(z_hist)
-        return mu, logvar
 
 
 class PersistenceBaseline(BaseBaseline):
@@ -181,129 +104,14 @@ class PersistenceBaseline(BaseBaseline):
     *persistence* / no-change forecast. See
     docs/adr/0010-persistence-baseline-rename.md for the rename rationale.
 
-    σ_p comes from a small state-conditional MLP head.
+    Fixed unit prior variance. Parameter-free.
     """
 
-    def __init__(
-        self,
-        latent_dim: int,
-        j: int,
-        hidden_dim: int = 32,
-        n_layers: int = 2,
-        init_logvar: float = 0.0,
-    ) -> None:
+    def __init__(self, latent_dim: int, j: int) -> None:
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.j = int(j)
-        self.sigma_head = _StateConditionalSigmaHead(
-            self.latent_dim, self.j, hidden_dim, n_layers, init_logvar=init_logvar
-        )
 
     def mean(self, z_hist: torch.Tensor) -> torch.Tensor:
         _validate_z_hist(z_hist, self.latent_dim, self.j)
         return z_hist[..., -1]
-
-    def mean_and_logvar(
-        self, z_hist: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        _validate_z_hist(z_hist, self.latent_dim, self.j)
-        mu = z_hist[..., -1]
-        logvar = self.sigma_head(z_hist)
-        return mu, logvar
-
-
-class LinearBaseline(BaseBaseline):
-    """``μ_p(z_{t-1}) = A · vec(z_hist) + b``; σ_p from a sibling linear head.
-
-    At j = 1 reduces to the doc's ``A z_{t-1} + b`` with ``A ∈ R^{D×D}``.
-    μ_p and σ_p share the same flat input vector but use separate
-    linear projections (DKF "two-headed" convention).
-    """
-
-    def __init__(self, latent_dim: int, j: int, init_logvar: float = 0.0) -> None:
-        super().__init__()
-        self.latent_dim = int(latent_dim)
-        self.j = int(j)
-        in_dim = self.latent_dim * self.j
-        self.mu_head = nn.Linear(in_dim, self.latent_dim)
-        # Match GaussianHead.mu_head convention: xavier-uniform weight (small)
-        # + zero bias. At z_hist=0 ⇒ μ_p=0; under typical-scale z_hist μ_p is
-        # a small projection that the model can grow. Going further and
-        # zeroing the weight too lands the score-net likelihood in a config
-        # where dopri5 is pathologically slow on the integration tests.
-        nn.init.xavier_uniform_(self.mu_head.weight, gain=0.5)
-        nn.init.zeros_(self.mu_head.bias)
-        self.logvar_head = LogvarHead(
-            in_features=in_dim,
-            out_features=self.latent_dim,
-            init_logvar=init_logvar,
-        )
-
-    def _flatten(self, z_hist: torch.Tensor) -> torch.Tensor:
-        return z_hist.reshape(z_hist.shape[0], -1)
-
-    def mean(self, z_hist: torch.Tensor) -> torch.Tensor:
-        _validate_z_hist(z_hist, self.latent_dim, self.j)
-        return self.mu_head(self._flatten(z_hist))
-
-    def mean_and_logvar(
-        self, z_hist: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        _validate_z_hist(z_hist, self.latent_dim, self.j)
-        flat = self._flatten(z_hist)
-        return self.mu_head(flat), self.logvar_head(flat)
-
-
-class MLPBaseline(BaseBaseline):
-    """DKF-style nonlinear baseline: shared MLP backbone, two output heads.
-
-    Per ``model-v2.org`` § State-conditional prior variance, ``μ_p``
-    and ``log σ_p²`` are produced from a *shared* backbone with two
-    output linear heads (standard Gaussian-head convention).  This is
-    the variant the smoke test uses and the one the doc is written
-    around.
-    """
-
-    def __init__(
-        self,
-        latent_dim: int,
-        j: int,
-        hidden_dim: int = 64,
-        n_layers: int = 2,
-        init_logvar: float = 0.0,
-    ) -> None:
-        super().__init__()
-        self.latent_dim = int(latent_dim)
-        self.j = int(j)
-        self.hidden_dim = int(hidden_dim)
-        self.n_layers = int(n_layers)
-
-        in_dim = self.latent_dim * self.j
-        body: list[nn.Module] = [nn.Linear(in_dim, self.hidden_dim), nn.SiLU(), nn.LayerNorm(self.hidden_dim)]
-        for _ in range(max(0, self.n_layers - 1)):
-            body.extend([nn.Linear(self.hidden_dim, self.hidden_dim), nn.SiLU(), nn.LayerNorm(self.hidden_dim)])
-        self.backbone = nn.Sequential(*body)
-
-        self.mu_head = nn.Linear(self.hidden_dim, self.latent_dim)
-        # Same convention as GaussianHead.mu_head — see LinearBaseline above.
-        nn.init.xavier_uniform_(self.mu_head.weight, gain=0.5)
-        nn.init.zeros_(self.mu_head.bias)
-        self.logvar_head = LogvarHead(
-            in_features=self.hidden_dim,
-            out_features=self.latent_dim,
-            init_logvar=init_logvar,
-        )
-
-    def _hidden(self, z_hist: torch.Tensor) -> torch.Tensor:
-        return self.backbone(z_hist.reshape(z_hist.shape[0], -1))
-
-    def mean(self, z_hist: torch.Tensor) -> torch.Tensor:
-        _validate_z_hist(z_hist, self.latent_dim, self.j)
-        return self.mu_head(self._hidden(z_hist))
-
-    def mean_and_logvar(
-        self, z_hist: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        _validate_z_hist(z_hist, self.latent_dim, self.j)
-        h = self._hidden(z_hist)
-        return self.mu_head(h), self.logvar_head(h)

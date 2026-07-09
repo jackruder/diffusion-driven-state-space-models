@@ -32,10 +32,8 @@ from ddssm.variance.probe import _p_k_for_mode
 from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.training.checkpoint import Checkpoint
 from ddssm.training.train_utils import make_warmup_cosine, split_params_phith_psi
-from ddssm.model.centering.baselines import MLPBaseline
 from tests.test_integration.conftest import make_vhp_model
 from ddssm.model.transitions.diffusion import _adaptive_is_density_meandom
-from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -139,8 +137,6 @@ def _components(**overrides) -> LossComponents:
         init_kl_psi=torch.tensor(3.0),
         trans_kl_phith=torch.tensor(4.0),
         trans_kl_psi=torch.tensor(5.0),
-        r_sigma_p=torch.tensor(6.0),
-        r_mu_p=torch.tensor(7.0),
     )
     values.update(overrides)
     return LossComponents(**values)
@@ -154,18 +150,13 @@ def _components(**overrides) -> LossComponents:
 def test_full_elbo_split_returns_splitloss_single_returns_tensor():
     """Split mode returns a ``SplitLoss`` pair; single mode a plain tensor."""
     comps = _components()
-    single = FullELBO(rate_lambda=lambda _s: 0.5, lambda_sigma_p=2.0, lambda_mu_p=3.0)
+    single = FullELBO(rate_lambda=lambda _s: 0.5)
     out = single(comps, 1)
     assert isinstance(out, torch.Tensor)
-    expected_phith = 1.0 + 0.5 * (2.0 + 4.0) + 2.0 * 6.0 + 3.0 * 7.0
+    expected_phith = 1.0 + 0.5 * (2.0 + 4.0)
     assert out.item() == pytest.approx(expected_phith)
 
-    split = FullELBO(
-        rate_lambda=lambda _s: 0.5,
-        lambda_sigma_p=2.0,
-        lambda_mu_p=3.0,
-        use_split_loss=True,
-    )
+    split = FullELBO(rate_lambda=lambda _s: 0.5, use_split_loss=True)
     out_split = split(comps, 1)
     assert isinstance(out_split, SplitLoss)
     assert out_split.phith.item() == pytest.approx(expected_phith)
@@ -565,14 +556,8 @@ def _init_kl_inputs(transition, *, B=2, S=2, T=4, emb_time=8, seed=0):
 
 
 def test_transition_kl_init_returns_loss_psi():
-    """``return_psi=True`` adds a zero ``loss_psi`` on Gaussian transitions."""
-    baseline = MLPBaseline(latent_dim=2, j=1, hidden_dim=8, n_layers=1)
-    transitions = [
-        BaselineGaussianTransition(
-            baseline=baseline, latent_dim=2, j=1, emb_time_dim=8
-        ),
-        make_small_model().transition,  # plain GaussianTransition
-    ]
+    """``return_psi=True`` adds a zero ``loss_psi`` on the plain Gaussian transition."""
+    transitions = [make_small_model().transition]  # plain GaussianTransition
     for transition in transitions:
         aux = AuxPosterior(latent_dim=2, j=1, hidden_dim=8, n_layers=1)
         zs, enc_stats, time_embed = _init_kl_inputs(transition)
@@ -596,14 +581,8 @@ def test_transition_kl_init_returns_loss_psi():
 
 
 def test_score_init_step_zero_psi_for_nondiffusion():
-    """``_score_init_step`` returns a graph-free zero ψ on Gaussian transitions."""
-    baseline = MLPBaseline(latent_dim=2, j=1, hidden_dim=8, n_layers=1)
-    transitions = [
-        make_small_model().transition,  # plain GaussianTransition
-        BaselineGaussianTransition(
-            baseline=baseline, latent_dim=2, j=1, emb_time_dim=8
-        ),
-    ]
+    """``_score_init_step`` returns a graph-free zero ψ on the plain Gaussian transition."""
+    transitions = [make_small_model().transition]  # plain GaussianTransition
     B, S, T = 2, 2, 4
     for transition in transitions:
         torch.manual_seed(0)
@@ -641,30 +620,26 @@ def test_local_loss_components_alias_still_works():
 
 
 def test_local_full_elbo_single_mode_numerical_parity():
-    """``use_split_loss=False`` output is ``recon + λ·phith_KL + regs`` bit-for-bit.
+    """``use_split_loss=False`` output is ``recon + λ·phith_KL`` bit-for-bit.
 
     Nonzero ``*_psi`` fields prove single-mode reads only the ``*_phith`` fields.
+    (The r_sigma_p / r_mu_p regularizers were removed post-refactor.)
     """
     recon, init_phith, init_psi = 1.0, 2.0, 99.0
     trans_phith, trans_psi = 3.0, 88.0
-    r_sigma_p, r_mu_p = 4.0, 5.0
-    lam, lambda_sigma_p, lambda_mu_p = 0.5, 0.1, 0.01
+    lam = 0.5
     comps = LossComponents(
         recon=torch.tensor(recon),
         init_kl_phith=torch.tensor(init_phith),
         init_kl_psi=torch.tensor(init_psi),
         trans_kl_phith=torch.tensor(trans_phith),
         trans_kl_psi=torch.tensor(trans_psi),
-        r_sigma_p=torch.tensor(r_sigma_p),
-        r_mu_p=torch.tensor(r_mu_p),
     )
     got = FullELBO(
         rate_lambda=lambda _s: lam,
-        lambda_sigma_p=lambda_sigma_p,
-        lambda_mu_p=lambda_mu_p,
         use_split_loss=False,
     )(comps, 0)
-    expected = recon + lam * (init_phith + trans_phith) + lambda_sigma_p * r_sigma_p + lambda_mu_p * r_mu_p
+    expected = recon + lam * (init_phith + trans_phith)
     assert isinstance(got, torch.Tensor)
     assert got.item() == pytest.approx(expected)
 

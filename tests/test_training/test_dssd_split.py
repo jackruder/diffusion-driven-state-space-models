@@ -32,13 +32,12 @@ from ddssm.model.encoder import GaussianEncoder
 from ddssm.nn.dist_heads import GaussianDistHead
 from ddssm.nn.aggregators import ContextProducerAggregator
 from ddssm.nn.aux_posterior import AuxPosterior
-from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.centering.baselines import ZeroBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
     DiffusionScheduleConfig,
 )
-from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 J = 2
 DATA_DIM = 3
@@ -107,19 +106,13 @@ def _make_decoder() -> GaussianDecoder:
 
 
 def _make_diffusion_model() -> DDSSM_base:
-    """Build a stage-2 model with DiffusionTransition (psi is real)."""
-    baseline = MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
+    """Build a model with DiffusionTransition (psi is real)."""
+    baseline = ZeroBaseline(latent_dim=LATENT_DIM, j=J)
     schedule = DiffusionScheduleConfig(
         S_k=1,
         k_chunk=1,
         num_steps=20,
         k_sampling_mode="uniform",
-    )
-    stage1_transition = BaselineGaussianTransition(
-        baseline=baseline,
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
     )
     transition = DiffusionTransition(
         baseline=baseline,
@@ -143,38 +136,15 @@ def _make_diffusion_model() -> DDSSM_base:
         aux_posterior=aux,
         baseline=baseline,
         sigma_data=sigma_data,
-        stage1_transition=stage1_transition,
     )
-    model.stage_selector = "stage_2"
     return model
 
 
-def _make_gaussian_model() -> DDSSM_base:
-    """Build a stage-1 model with BaselineGaussianTransition (psi = 0)."""
-    baseline = MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
-    transition = BaselineGaussianTransition(
-        baseline=baseline,
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
-    )
-    aux = AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=2)
-    sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed")
-    model = DDSSM_base(
-        encoder=_make_encoder(),
-        decoder=_make_decoder(),
-        transition=transition,
-        j=J,
-        data_dim=DATA_DIM,
-        latent_dim=LATENT_DIM,
-        emb_time_dim=EMB_TIME,
-        aux_posterior=aux,
-        baseline=baseline,
-        sigma_data=sigma_data,
-        stage1_transition=transition,
-    )
-    model.stage_selector = "stage_1"
-    return model
+# ``_make_gaussian_model`` was removed — BaselineGaussianTransition is gone
+# and there is no longer a separate stage-1 transition slot on DDSSM_base.
+# The zero-psi assertion moved to
+# tests/test_training/test_split_loss.py::test_score_init_step_zero_psi_for_nondiffusion
+# (which still covers the plain GaussianTransition path).
 
 
 def _make_batch(B: int = 2, T: int = 5) -> dict:
@@ -229,26 +199,10 @@ def test_forward_components_carry_real_psi_values() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_forward_zero_psi_for_nondiffusion_transition() -> None:
-    """Non-diffusion transition: trans_kl_psi == 0 and init_kl_psi == 0."""
-    model = _make_gaussian_model()
-    model.train()
-    batch = _make_batch()
-
-    components, _, _ = model(
-        batch["observed_data"],
-        batch["observation_mask"],
-        batch["timepoints"],
-    )
-
-    assert components.trans_kl_psi.item() == pytest.approx(0.0, abs=1e-9), (
-        f"Expected trans_kl_psi == 0.0 for Gaussian transition, "
-        f"got {components.trans_kl_psi.item()}"
-    )
-    assert components.init_kl_psi.item() == pytest.approx(0.0, abs=1e-9), (
-        f"Expected init_kl_psi == 0.0 for Gaussian transition, "
-        f"got {components.init_kl_psi.item()}"
-    )
+# ``test_forward_zero_psi_for_nondiffusion_transition`` was removed together
+# with ``_make_gaussian_model`` / ``BaselineGaussianTransition``. The
+# zero-psi guarantee for plain (non-diffusion) transitions is covered by
+# tests/test_training/test_split_loss.py.
 
 
 # ---------------------------------------------------------------------------

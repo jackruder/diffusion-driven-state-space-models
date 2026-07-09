@@ -180,17 +180,10 @@ class DDSSMTrainer:
         self._model_config_yaml: str | None = model_config_yaml
 
         self.global_step = 0
-        # Per-stage λ schedule installed by ``StageOrchestrator`` before
-        # each stage. Retained for backwards-compat introspection by
-        # tests; the loss object now owns scheduling shape per
-        # ADR-0004. Single-fit runs use the constant λ inside the
-        # default ``FullELBO``.
-        self._stage_lambda_fn: Callable[[int], float] | None = None
+        # Global step at which the current fit phase began. 0 for a fresh
+        # run; restored from the checkpoint on resume so ``step_within_stage``
+        # (which drives the loss λ schedule) counts from the phase origin.
         self._stage_start_step: int = 0
-        # 1-based index of the stage currently running (set by
-        # StageOrchestrator); 0 for single-fit runs with no stages. Logged as
-        # ``stage/idx`` so multi-stage curves are interpretable from the CSV.
-        self._current_stage_idx: int = 0
         # Opt-in fail-fast: when True, a non-finite optimized loss raises
         # instead of silently NaN-poisoning the weights. Off by default so
         # existing runs are unchanged; the logger always counts it regardless.
@@ -358,7 +351,7 @@ class DDSSMTrainer:
 
         Args:
             t: A ``StageTrainable``-like object with ``encoder`` / ``decoder``
-                / ``transition`` / ``baseline`` boolean flags.
+                / ``transition`` boolean flags.
         """
 
         def maybe_flag(mod, flag: bool):
@@ -374,12 +367,6 @@ class DDSSMTrainer:
         maybe_flag(getattr(self.model, "static_embeddings", None), t.encoder)
         # aux_posterior is part of the encoder family (q_Φ in the doc).
         maybe_flag(getattr(self.model, "aux_posterior", None), t.encoder)
-        # Baseline μ_p — declarative per-stage flag.  Stage 1 trains it,
-        # stage 2 freezes it under Pinned mode (matches the imperative
-        # freeze in :func:`perform_centering_handoff`).  Default ``True``
-        # keeps legacy models that lack a baseline a no-op.
-        baseline_flag = getattr(t, "baseline", True)
-        maybe_flag(getattr(self.model, "baseline", None), baseline_flag)
 
     def _hparams_psi_betas(self) -> tuple[float, float] | None:
         """Single-mode ψ betas from hparams, as a tuple (or ``None``).
@@ -473,8 +460,7 @@ class DDSSMTrainer:
             baseline_lr=getattr(self.hparams, "baseline_lr", None),
         )
         # Cache the UNFILTERED per-side partition (frozen params included):
-        # per-stage trainable masks flip ``requires_grad`` after install
-        # (e.g. the centering handoff freezing the baseline), so the
+        # a trainable mask may flip ``requires_grad`` after install, so the
         # backward filters by the live flag instead of a stale snapshot.
         self._phith_params, self._psi_params = split_params_phith_psi(
             self.model, include_frozen=True
@@ -557,20 +543,11 @@ class DDSSMTrainer:
     # ------------------------
     # Serialization / Checkpoint  (schema owned by ddssm.training.checkpoint)
     # ------------------------
-    def save_checkpoint(
-        self,
-        path: str,
-        *,
-        stage_prefix: str | None = None,
-    ) -> None:
-        """Persist trainer state via :mod:`ddssm.training.checkpoint`.
-
-        ``stage_prefix`` is forwarded to the payload so multi-stage resume
-        (ADR-0009) can identify the originating stage on retry.
-        """
+    def save_checkpoint(self, path: str) -> None:
+        """Persist trainer state via :mod:`ddssm.training.checkpoint`."""
         from ddssm.training.checkpoint import save as _save
 
-        _save(self, path, stage_prefix=stage_prefix)
+        _save(self, path)
 
     def restore_from_checkpoint(self, path: str, strict: bool = True) -> None:
         """Resume: load model weights + optimiser + EMA tracker + step.
@@ -755,13 +732,10 @@ class DDSSMTrainer:
             random.setstate(ckpt.rng_state["python"])
 
     def _build_default_loss(self):
-        """Default loss for single-fit runs: full ELBO with no rate ramp.
+        """Default loss when the caller declares none: full ELBO, no rate ramp.
 
-        Multi-stage runs receive per-stage loss objects from
-        ``StageOrchestrator``; a single ``fit()`` with no declared loss
-        falls back here. Post-ADR-0004 all λ-shape config lives on loss
-        objects (not ``Hparams``), so the single-fit default is simply
-        the unramped full ELBO.
+        Post-ADR-0004 all λ-shape config lives on the loss object (not
+        ``Hparams``), so the default is simply the unramped full ELBO.
         """
         from ddssm.model.losses import FullELBO
 
@@ -1018,15 +992,6 @@ class DDSSMTrainer:
         log_values["time/elapsed_s"] = torch.tensor(
             _time.time() - self.metrics._t0, device=device
         )
-        # Stage markers so a multi-stage curve is interpretable from the CSV
-        # alone: which stage a row belongs to, and the stage-relative step
-        # (where the λ-ramp reset / centering handoff fired). 0 for single-fit.
-        log_values["stage/idx"] = torch.tensor(
-            float(self._current_stage_idx), device=device
-        )
-        log_values["stage/step_within"] = torch.tensor(
-            float(self.global_step - self._stage_start_step), device=device
-        )
         # Grad-skip diagnostics: the combined grad norm of the last
         # optimizer step (NaN on a skipped step) and the cumulative skip
         # count. Both fit the existing ``optim/*`` MetricSpec. Under the
@@ -1146,10 +1111,7 @@ class DDSSMTrainer:
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         ckpt_name = os.path.join(self.checkpoint_dir, ckpt_name)
         latest_name = os.path.join(self.checkpoint_dir, latest_name)
-        # ADR-0009: stamp the originating stage prefix into the payload so a
-        # preempt-retry's StageOrchestrator can identify which stage produced
-        # this ckpt and resume into the right one.
-        self.save_checkpoint(ckpt_name, stage_prefix=checkpoint_prefix)
+        self.save_checkpoint(ckpt_name)
         # The pair (step-N, latest) must be atomic at the FS level: a SIGKILL
         # between the two writes would otherwise leave ``ckpt_step{N}`` on disk
         # while ``ckpt_latest`` still points to the previous N-K snapshot, and

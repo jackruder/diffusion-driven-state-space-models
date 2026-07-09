@@ -14,7 +14,7 @@ from ddssm.nn.diffnets import (
     DiffResidualBlockConfig,
 )
 from ddssm.nn.aux_posterior import AuxPosterior
-from ddssm.model.centering.baselines import MLPBaseline, ZeroBaseline
+from ddssm.model.centering.baselines import ZeroBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
@@ -89,12 +89,12 @@ def _make_batch(j: int = J, T: int = T):
 def test_constructor_rejects_baseline_with_wrong_dim() -> None:
     """The baseline's latent_dim must match."""
     with pytest.raises(ValueError):
-        _make_diffusion(MLPBaseline(latent_dim=D + 1, j=J))
+        _make_diffusion(ZeroBaseline(latent_dim=D + 1, j=J))
 
 
 def test_constructor_zero_inits_final_layer() -> None:
     """Diffusion builds its CSDIUnet with ``zero_init_output=True``."""
-    transition = _make_diffusion(MLPBaseline(latent_dim=D, j=J))
+    transition = _make_diffusion(ZeroBaseline(latent_dim=D, j=J))
     # CSDIUnet's final layer is ``output_projection2``.
     w = transition.diffmodel.output_projection2.weight.detach()
     assert torch.equal(w, torch.zeros_like(w))
@@ -102,7 +102,7 @@ def test_constructor_zero_inits_final_layer() -> None:
 
 def test_constructor_side_dim_bumps_by_one() -> None:
     """The side-info dim accommodates the padding-mask channel."""
-    transition = _make_diffusion(MLPBaseline(latent_dim=D, j=J))
+    transition = _make_diffusion(ZeroBaseline(latent_dim=D, j=J))
     # E_t + E_f + cond_mask + padding_mask = EMB_TIME + EMB_TIME + 1 + 1
     expected = EMB_TIME + EMB_TIME + 1 + 1
     assert transition.side_dim == expected
@@ -142,7 +142,7 @@ def test_edm_constants_reduce_to_v2_at_sigma_data_unit() -> None:
 
 def test_transition_kl_runs_and_returns_finite() -> None:
     """``transition_kl`` produces a finite scalar loss."""
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline)
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
@@ -165,7 +165,7 @@ def test_transition_kl_does_not_mutate_sigma_data_under_no_grad() -> None:
     (obj1) by ~2-4x — the bug this guards. With autograd enabled (training) the
     same call DOES update σ_data.
     """
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline)
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
@@ -249,7 +249,7 @@ def test_transition_kl_is_invariant_to_num_steps() -> None:
 
 def test_transition_kl_rejects_mc_only_encoder() -> None:
     """No silent MC fallback — Gaussian (mus, logvars) required."""
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline)
     zs, _, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
@@ -286,7 +286,7 @@ def test_score_matches_closed_form_under_zero_init_diffmodel() -> None:
     α(τ), σ̃(τ) closed-form for downstream prob-flow ODE use.
     """
     torch.manual_seed(42)
-    baseline = MLPBaseline(latent_dim=D, j=J)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline)
     transition.eval()
 
@@ -479,7 +479,7 @@ def test_log_prob_hutchinson_matches_exact_for_diagonal_jacobian() -> None:
 def test_transition_kl_updates_sigma_data_per_t() -> None:
     """``transition_kl`` updates buffer slots for every visited t."""
     j = J
-    baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=j)
     transition = _make_diffusion(baseline)
     zs, enc_stats, time_embed, logq_paths = _make_batch(j=j)
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t", ema_decay=0.0)
@@ -506,7 +506,7 @@ def test_transition_kl_updates_sigma_data_per_t() -> None:
 @pytest.mark.parametrize("j", [1, 2])
 def test_transition_kl_init_shape_and_finite(j: int) -> None:
     """Init term returns finite ``loss_init`` and ``kl_aux``."""
-    baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=j)
     transition = _make_diffusion(baseline, j=j)
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
     zs, enc_stats, time_embed, _ = _make_batch(j=j)
@@ -530,7 +530,7 @@ def test_transition_kl_init_shape_and_finite(j: int) -> None:
 def test_transition_kl_init_updates_sigma_data_at_init_slots() -> None:
     """Init walks update buffer slots t = 1 … j."""
     j = 2
-    baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=j)
     transition = _make_diffusion(baseline, j=j)
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
     zs, enc_stats, time_embed, _ = _make_batch(j=j)
@@ -553,7 +553,7 @@ def test_transition_kl_init_updates_sigma_data_at_init_slots() -> None:
 def test_transition_kl_init_grad_flows_to_aux_posterior() -> None:
     """Gradient propagates through the aux posterior at init."""
     j = 1
-    baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=j)
     transition = _make_diffusion(baseline, j=j)
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
     zs, enc_stats, time_embed, _ = _make_batch(j=j)
@@ -578,7 +578,7 @@ def test_transition_kl_init_grad_flows_to_aux_posterior() -> None:
 @pytest.mark.parametrize("j", [1, 2])
 def test_log_prob_init_shape_and_finite(j: int) -> None:
     """``log_prob_init`` returns a finite ``(B, S)`` per-trajectory log-density."""
-    baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=j)
     transition = _make_diffusion(baseline, j=j)
     transition.eval()
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
@@ -597,7 +597,7 @@ def test_log_prob_init_shape_and_finite(j: int) -> None:
 def test_log_prob_init_does_not_update_sigma_data() -> None:
     """Unlike ``transition_kl_init``, log-density eval must not touch the buffer."""
     j = 2
-    baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=j)
     transition = _make_diffusion(baseline, j=j)
     transition.eval()
     aux = AuxPosterior(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
@@ -622,7 +622,7 @@ def test_log_prob_init_does_not_update_sigma_data() -> None:
 
 def test_sample_shape_and_baseline_shift() -> None:
     """``sample`` returns ``(B, 1, d)`` and adds μ_p back to the centered draw."""
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline)
     z_hist = torch.randn(B, D, J)
     ctx = {
@@ -638,7 +638,7 @@ def test_sample_reads_sigma_data_buffer_at_t() -> None:
     """``sample`` indexes the frozen σ_data² buffer at the 1-based ``t`` in ctx."""
     from unittest import mock
 
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline)
     z_hist = torch.randn(B, D, J)
     buf = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed")
@@ -660,7 +660,7 @@ def test_sample_clamps_sigma_data_beyond_horizon() -> None:
     """Beyond the trained horizon, ``sample`` holds σ_data²[T_max] (no IndexError)."""
     from unittest import mock
 
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline)
     z_hist = torch.randn(B, D, J)
     buf = SigmaDataBuffer(T_max=T_MAX, tracking_mode="fixed")
@@ -1120,7 +1120,7 @@ def test_adaptive_is_full_call_site_reduces_per_coordinate(monkeypatch) -> None:
     """
     import ddssm.model.transitions.diffusion as diff_mod
 
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     sched = DiffusionScheduleConfig(
         S_k=1,
         k_chunk=1,
@@ -1187,7 +1187,7 @@ def test_adaptive_is_full_call_site_reduces_per_coordinate(monkeypatch) -> None:
 
 def test_adaptive_is_transition_kl_runs_and_returns_finite() -> None:
     """transition_kl produces a finite scalar loss under adaptive_is."""
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline, schedule=_adaptive_is_schedule())
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
@@ -1203,7 +1203,7 @@ def test_adaptive_is_transition_kl_runs_and_returns_finite() -> None:
 
 def test_adaptive_is_transition_kl_gradients_flow() -> None:
     """Backward through the adaptive_is loss produces nonzero diffmodel gradients."""
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline, schedule=_adaptive_is_schedule())
     zs, enc_stats, time_embed, logq_paths = _make_batch()
     sigma_data = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t")
@@ -1222,7 +1222,7 @@ def test_adaptive_is_transition_kl_gradients_flow() -> None:
 
 def test_adaptive_is_full_transition_kl_runs_and_returns_finite() -> None:
     """transition_kl produces a finite scalar loss under adaptive_is_full."""
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     sched = DiffusionScheduleConfig(
         S_k=1,
         k_chunk=1,
@@ -1728,7 +1728,7 @@ def test_local_esm_chunk_loss_ratio_matches_weight_at_forced_k() -> None:
     symmetrically on both accumulators (renamed from the local
     ``test_esm_chunk_loss_sk_division_applied_to_both``).
     """
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     schedule = DiffusionScheduleConfig(
         S_k=2, k_chunk=2, num_steps=20,
         beta_min=0.1, beta_max=20.0, tau_min=1e-3,
@@ -1782,7 +1782,7 @@ def test_local_esm_chunk_loss_ratio_matches_weight_at_forced_k() -> None:
 
 def test_local_transition_kl_returns_kl_phith_kl_psi_and_alias() -> None:
     """``transition_kl`` returns both KL sides plus a ``kl`` alias to phith."""
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     schedule = DiffusionScheduleConfig(
         S_k=2, k_chunk=2, num_steps=20,
         beta_min=0.1, beta_max=20.0, tau_min=1e-3,
@@ -1813,7 +1813,7 @@ def test_local_transition_kl_returns_kl_phith_kl_psi_and_alias() -> None:
 
 def test_local_transition_kl_returns_kl_psi_per_sample() -> None:
     """Under ``return_per_sample`` the dict also carries ``kl_psi_per_sample``."""
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     schedule = DiffusionScheduleConfig(
         S_k=2, k_chunk=2, num_steps=20,
         beta_min=0.1, beta_max=20.0, tau_min=1e-3,
@@ -1844,7 +1844,7 @@ def test_local_transition_kl_init_returns_loss_psi_with_return_psi() -> None:
     unchanged (loss = entropy + loss_init + kl_aux, with the diffusion
     ``_init_entropy_term`` cancelling to zero).
     """
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     transition = _make_diffusion(baseline)
     aux = AuxPosterior(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
     zs, enc_stats, time_embed, _ = _make_batch()
@@ -1875,28 +1875,22 @@ def test_local_transition_kl_init_returns_loss_psi_with_return_psi() -> None:
 
 @pytest.mark.parametrize(
     "transition_kind",
-    ["gaussian", "baseline_gaussian"],
+    ["gaussian"],
 )
 def test_local_score_init_step_nondiffusion_returns_zero_psi(transition_kind: str) -> None:
     """Non-diffusion transitions return a zero ψ tensor from ``_score_init_step``.
 
-    The hook contract is a 2-tuple ``(phith, psi)``. Gaussian and
-    BaselineGaussian have no ψ score-net side so they return
-    ``loss.new_zeros(())``.
+    The hook contract is a 2-tuple ``(phith, psi)``. GaussianTransition has
+    no ψ score-net side so it returns ``loss.new_zeros(())``.
+    (``BaselineGaussianTransition`` was removed post-refactor.)
     """
     from ddssm.model.transitions.transitions import GaussianTransition
-    from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
     j = 1
-    if transition_kind == "gaussian":
-        transition = GaussianTransition(
-            latent_dim=D, j=j, emb_time_dim=EMB_TIME, hidden_dim=8
-        )
-    else:
-        baseline = MLPBaseline(latent_dim=D, j=j, hidden_dim=4, n_layers=1)
-        transition = BaselineGaussianTransition(
-            baseline=baseline, latent_dim=D, j=j, emb_time_dim=EMB_TIME
-        )
+    assert transition_kind == "gaussian"
+    transition = GaussianTransition(
+        latent_dim=D, j=j, emb_time_dim=EMB_TIME, hidden_dim=8
+    )
 
     torch.manual_seed(0)
     BS = B * S
@@ -1962,7 +1956,7 @@ def test_local_pk_clip_threaded_through_transition_kl_via_spy() -> None:
     """
     import ddssm.model.transitions.diffusion as diff_mod
 
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     schedule_clip = DiffusionScheduleConfig(
         S_k=1, k_chunk=1, num_steps=20,
         beta_min=0.1, beta_max=20.0, tau_min=1e-3,

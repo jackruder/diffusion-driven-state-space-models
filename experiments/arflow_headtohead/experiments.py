@@ -47,10 +47,20 @@ from ddssm.experiment.stores import experiment_store
 from ddssm.experiment.builders import Eval, Objective
 from experiments.gluonts_forecast.model import GluonModel
 from experiments.gluonts_forecast.hparams import (
-    GluonStages,
     GluonHparams,
     GluonTraining,
 )
+
+
+def _training(steps: int, log_every: int = 50, validate_every: int = 100, checkpoint_every: int = 2000):
+    """Convenience: derive a per-cell Training from the shared GluonTraining defaults."""
+    return dataclasses.replace(
+        GluonTraining,
+        steps=steps,
+        log_every=log_every,
+        validate_every=validate_every,
+        checkpoint_every=checkpoint_every,
+    )
 
 _T = 32
 _LATENT_DIM = 8  # held constant across datasets so only data + encoder vary.
@@ -240,33 +250,13 @@ def _model(encoder_key: str, data_dim: int, j: int = 1):
 
 
 def _phase2_cell(encoder_key: str, dataset_key: str, j: int = 1):
-    """Single-stage ELBO cell (stage-2-only); stage hyperparameters are SWEPT.
-
-    Stage-1 pretraining is dropped here (harmful in early arflow runs): with
-    ``run=["stage_2"]`` no centering handoff fires, so there is no μ_p
-    snapshot/pin and no encoder perturbation, and ``per_t`` σ_data
-    self-calibrates from cold via its EMA warmup.
-    """
+    """Single-phase ELBO cell; training hyperparameters may be SWEPT."""
     data, data_dim = _DATASETS[dataset_key]
     return experiment(
         data=data,
         model=_model(encoder_key, data_dim, j),
         hparams=dataclasses.replace(GluonHparams, batch_size=32),
-        training=GluonTraining,
-        # Budget/cadence fixed from calibration (plateau ~3700); everything else
-        # (base_lr, dec/trans_mult, λ start + warmup frac) is left at neutral
-        # defaults for +sweep=h2h_full. Stage-2-only: the stage-1 knobs
-        # (n_pretrain, sigma_pert, lambda_sigma_p, stage_1_*) are inert.
-        stages=GluonStages(
-            run=["stage_2"],
-            n_stage2=10000,
-            validate_every=100,
-            log_every=50,
-            checkpoint_every=2000,
-        ),
-        # Per-trial objective eval: forecast CRPS-sum on the VAL split (select on
-        # val, report on test). One forecast pass per trial; finalists get the
-        # full {crps,energy,nll}-on-test eval via `python -m ddssm.evaluate`.
+        training=_training(steps=10000),
         eval=Eval(
             metrics=["crps_sum"],
             split="val",
@@ -279,32 +269,13 @@ def _phase2_cell(encoder_key: str, dataset_key: str, j: int = 1):
 
 
 def _phase1_cell(encoder_key: str, dataset_key: str, j: int = 1):
-    """Pure-AE capacity probe: λ≡0 (no ramp), stage-1 only; objective = recon."""
+    """Pure-AE capacity probe (recon-only budget); objective = recon."""
     data, data_dim = _DATASETS[dataset_key]
     return experiment(
         data=data,
         model=_model(encoder_key, data_dim, j),
         hparams=dataclasses.replace(GluonHparams, batch_size=32),
-        training=GluonTraining,
-        stages=GluonStages(
-            run=["stage_1"],
-            n_pretrain=3000,
-            # λ ≡ 0 (start=end=0) AND no σ_p regulariser → loss == pure recon.
-            stage_1_lambda_start=0.0,
-            stage_1_lambda_end=0.0,
-            lambda_sigma_p=0.0,
-            validate_every=100,
-            log_every=50,
-            checkpoint_every=1000,
-            early_stop_enabled=True,
-            early_stop_window=500,
-            early_stop_min_improvement=1e-4,
-            early_stop_warmup_steps=500,
-        ),
-        # CAPACITY METRIC = reconstruction MSE on the decoded posterior MEAN. λ=0
-        # leaves the decoder σ unregularised, so the distortion NLL collapses to −∞
-        # (σ_dec→0) — degenerate and non-discriminating. recon_mse scores μ_x only,
-        # so it is bounded and stays a clean encoder-capacity measure.
+        training=_training(steps=3000, checkpoint_every=1000),
         eval=Eval(
             metrics=["recon_mse"],
             split="val",
@@ -431,11 +402,7 @@ experiment_store(
             GluonHparams, batch_size=32,
             enc_lr=8e-4, dec_lr=8e-4, trans_lr=8e-4,
         ),
-        training=GluonTraining,
-        stages=GluonStages(
-            run=["stage_2"], n_stage2=20000,
-            validate_every=100, log_every=50, checkpoint_every=4000,
-        ),
+        training=_training(steps=20000, checkpoint_every=4000),
         eval=Eval(
             metrics=["crps_sum"], split="val", num_samples=100,
             T_split=_T_SPLIT, output_filename="metrics.json",

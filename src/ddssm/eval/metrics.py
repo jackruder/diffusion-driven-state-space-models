@@ -871,8 +871,6 @@ def eval_stage2_elbo_surrogate(
         "init_kl_aux": 0.0,
         "init_entropy": 0.0,
         "trans_kl": 0.0,
-        "r_sigma_p": 0.0,
-        "r_mu_p": 0.0,
     }
     n_batches = 0
     transform = ctx.batch_transform
@@ -899,10 +897,7 @@ def eval_stage2_elbo_surrogate(
             )
             # Reconstruct a "loss/total"-style surrogate from the
             # unweighted LossComponents: distortion + the ELBO rate
-            # terms. Both regulariser weights (λ_σp, λ_μp) live on the
-            # per-stage loss objects (ADR-0004 follow-up), which this
-            # read-only eval has no handle on, so the regulariser terms
-            # are omitted — the surrogate is the unregularised ELBO sum.
+            # terms.
             loss = components.recon + components.init_kl + components.trans_kl
             sums["stage2_elbo_surrogate"] += float(loss.item())
             sums["recon"] += float(
@@ -929,16 +924,6 @@ def eval_stage2_elbo_surrogate(
                 metrics.get("loss/rate/trans/kl", 0.0).item()
                 if hasattr(metrics.get("loss/rate/trans/kl", 0.0), "item")
                 else metrics.get("loss/rate/trans/kl", 0.0)
-            )
-            sums["r_sigma_p"] += float(
-                metrics.get("loss/rate/trans/r_sigma_p", 0.0).item()
-                if hasattr(metrics.get("loss/rate/trans/r_sigma_p", 0.0), "item")
-                else metrics.get("loss/rate/trans/r_sigma_p", 0.0)
-            )
-            sums["r_mu_p"] += float(
-                metrics.get("loss/rate/trans/r_mu_p", 0.0).item()
-                if hasattr(metrics.get("loss/rate/trans/r_mu_p", 0.0), "item")
-                else metrics.get("loss/rate/trans/r_mu_p", 0.0)
             )
             n_batches += 1
 

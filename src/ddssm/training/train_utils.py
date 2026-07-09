@@ -14,9 +14,8 @@ _PSI_TRANSITION_SUBMODULES: tuple[str, ...] = ("diffmodel", "embed_layer")
 
 # Transition top-level submodules that are explicitly known to belong to
 # the φθ side. Enumerated from today's transition classes:
-#   - DiffusionTransition:        baseline (shared μ_p head)
-#   - BaselineGaussianTransition: baseline
-#   - GaussianTransition:         z_hist_proj, context_producer, gaussian_head
+#   - DiffusionTransition: baseline (shared μ_p head)
+#   - GaussianTransition:  z_hist_proj, context_producer, gaussian_head
 # Any transition child that is neither here nor in
 # ``_PSI_TRANSITION_SUBMODULES`` hard-errors in the split helpers so a
 # future module cannot land silently mis-routed.
@@ -31,12 +30,8 @@ _KNOWN_PHITH_TRANSITION_SUBMODULES: frozenset[str] = frozenset({
 def _validate_transition_routing(model: nn.Module) -> None:
     """Hard-error on transition submodules with no explicit φθ/ψ routing.
 
-    Checks the top-level children of ``model.transition`` (and, when
-    present, ``model.stage1_transition``) against the explicit ψ and
-    known-φθ allowlists. On ``stage1_transition`` a ψ-named child is
-    accepted only when it aliases the active transition's module of the
-    same name — a *distinct* score net there would silently escape the
-    ψ partition.
+    Checks the top-level children of ``model.transition`` against the
+    explicit ψ and known-φθ allowlists.
 
     Args:
         model: The ``DDSSM_base`` model.
@@ -45,30 +40,24 @@ def _validate_transition_routing(model: nn.Module) -> None:
         ValueError: Listing the offending submodule names, if any
             transition child is neither explicitly ψ nor known-φθ.
     """
-    transition = getattr(model, "transition", None)
-    for attr in ("transition", "stage1_transition"):
-        trans = getattr(model, attr, None)
-        if trans is None:
-            continue
-        unknown = []
-        for name, child in trans.named_children():
-            if name in _KNOWN_PHITH_TRANSITION_SUBMODULES:
-                continue
-            if name in _PSI_TRANSITION_SUBMODULES:
-                if attr == "transition":
-                    continue
-                if transition is not None and child is getattr(transition, name, None):
-                    continue  # alias of the active transition's ψ module
-            unknown.append(name)
-        if unknown:
-            raise ValueError(
-                f"model.{attr} has top-level submodule(s) {unknown!r} with no "
-                f"explicit phith/psi routing. Add them to "
-                f"_PSI_TRANSITION_SUBMODULES or "
-                f"_KNOWN_PHITH_TRANSITION_SUBMODULES in "
-                f"ddssm.training.train_utils so the split-loss parameter "
-                f"partition stays exhaustive."
-            )
+    trans = getattr(model, "transition", None)
+    if trans is None:
+        return
+    unknown = [
+        name
+        for name, _ in trans.named_children()
+        if name not in _KNOWN_PHITH_TRANSITION_SUBMODULES
+        and name not in _PSI_TRANSITION_SUBMODULES
+    ]
+    if unknown:
+        raise ValueError(
+            f"model.transition has top-level submodule(s) {unknown!r} with no "
+            f"explicit phith/psi routing. Add them to "
+            f"_PSI_TRANSITION_SUBMODULES or "
+            f"_KNOWN_PHITH_TRANSITION_SUBMODULES in "
+            f"ddssm.training.train_utils so the split-loss parameter "
+            f"partition stays exhaustive."
+        )
 
 
 def _iter_psi_modules(model: nn.Module) -> Iterator[nn.Module]:

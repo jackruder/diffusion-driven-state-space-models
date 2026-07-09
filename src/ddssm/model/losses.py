@@ -32,8 +32,7 @@ class LossComponents:
     score net ψ, used only under split-loss mode). The legacy names
     ``init_kl`` / ``trans_kl`` remain available as **read-only**
     property aliases of the ``*_phith`` fields — they cannot be set or
-    passed as constructor kwargs. ``elbo()`` / ``elbo_reg()`` /
-    ``total()`` keep their pre-split semantics (phith fields only).
+    passed as constructor kwargs.
     """
 
     recon: torch.Tensor
@@ -41,8 +40,6 @@ class LossComponents:
     init_kl_psi: torch.Tensor
     trans_kl_phith: torch.Tensor
     trans_kl_psi: torch.Tensor
-    r_sigma_p: torch.Tensor
-    r_mu_p: torch.Tensor
 
     @property
     def init_kl(self) -> torch.Tensor:
@@ -59,12 +56,12 @@ class LossComponents:
         return self.recon + self.init_kl + self.trans_kl
 
     def elbo_reg(self) -> torch.Tensor:
-        """ELBO plus the (unweighted) centering regularizers."""
-        return self.elbo() + self.r_sigma_p + self.r_mu_p
+        """Alias for :meth:`elbo` (no centering regularizers remain)."""
+        return self.elbo()
 
     def total(self) -> torch.Tensor:
-        """Alias for :meth:`elbo_reg` — the full unweighted diagnostic sum."""
-        return self.elbo_reg()
+        """Alias for :meth:`elbo` — the full unweighted diagnostic sum."""
+        return self.elbo()
 
 
 @dataclass
@@ -138,20 +135,11 @@ class Loss(abc.ABC):
 
 @dataclass
 class FullELBO(Loss):
-    """Default loss: ELBO with always-on centering regularizers.
+    """Default loss: the ELBO with a rate-λ ramp on the KL terms.
 
     Computes::
 
         loss = recon + rate_lambda(step) * (init_kl + trans_kl)
-               + lambda_sigma_p * r_sigma_p
-               + lambda_mu_p * r_mu_p
-
-    The centering regularizers (``r_sigma_p``, ``r_mu_p``) carry their own
-    per-term weights and are deliberately NOT gated by `rate_lambda`:
-    σ_p collapse is most likely during recon-only warmup (λ→0) when
-    the KL isn't yet pulling against the prior, so the σ_p anchor must
-    stay on the whole time. See `handoff_protocol_invariants`
-    — `sigma_pert > 0` is mandatory protocol.
 
     With ``use_split_loss=True`` the return value is a :class:`SplitLoss`
     instead: the φθ side is the composition above (over the ``*_phith``
@@ -163,8 +151,6 @@ class FullELBO(Loss):
     """
 
     rate_lambda: Callable[[int], float]
-    lambda_sigma_p: float = 0.0
-    lambda_mu_p: float = 0.0
     use_split_loss: bool = False
 
     def lambda_at(self, step: int) -> float | None:
@@ -177,11 +163,7 @@ class FullELBO(Loss):
         """Compose the loss; ``SplitLoss`` when ``use_split_loss`` is set."""
         lam = self.rate_lambda(step)
         rate = components.init_kl + components.trans_kl
-        reg = (
-            self.lambda_sigma_p * components.r_sigma_p
-            + self.lambda_mu_p * components.r_mu_p
-        )
-        loss_phith = components.recon + lam * rate + reg
+        loss_phith = components.recon + lam * rate
         if not self.use_split_loss:
             return loss_phith
         loss_psi = components.trans_kl_psi + components.init_kl_psi

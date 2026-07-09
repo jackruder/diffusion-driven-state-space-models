@@ -114,9 +114,7 @@ def summarize_run(run_dir: str | Path, *, tail_n: int = 20) -> dict[str, Any]:
             else None,
         }
 
-    # Stages observed + run health.
-    stage_idx = _col(train, "stage/idx")
-    summary["stages_run"] = sorted({int(s) for s in stage_idx}) if stage_idx else None
+    # Run health.
     nf = _col(train, "nonfinite/total")
     summary["nonfinite_total"] = int(nf[-1]) if nf else 0
     el = _col(train, "time/elapsed_s")

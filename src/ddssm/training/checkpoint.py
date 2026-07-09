@@ -85,25 +85,17 @@ class Checkpoint:
     ema_state: dict | None = None
     global_step: int = 0
     grad_accum_steps: int = 1
-    # ADR-0009 multi-stage resume: the stage key (e.g. "stage_1", "stage_2")
-    # the trainer was in when this ckpt was written. ``StageOrchestrator.run``
-    # uses this to skip earlier stages on a preempt-retry and to suppress the
-    # centering handoff on the resumed stage (the handoff already happened
-    # before this ckpt was written). ``None`` for single-stage checkpoints
-    # and for legacy ckpts that pre-date this field.
-    stage_prefix: str | None = None
     # v2 additions. ``None`` means "the producer wasn't using one" (e.g.
     # GradScaler disabled, no LR scheduler); a non-None value carries the
     # corresponding ``state_dict()`` and the trainer's restore path will
     # refuse to silently drop it on the live side.
     scaler_state: dict | None = None
     scheduler_state: dict | None = None
-    # ADR-0009 companion to ``stage_prefix``: the trainer's
-    # ``_stage_start_step`` (the global step at which the producing stage
-    # began). Restored together with ``global_step`` so a preempt-retry can
-    # compute the resumed stage's remaining budget and λ-ramp origin from the
-    # stage's true start rather than the fresh process's zeroed counter.
-    # Defaults to 0 for legacy payloads and single-fit checkpoints.
+    # The trainer's ``_stage_start_step`` (the global step at which the
+    # current fit phase began). Restored together with ``global_step`` so a
+    # preempt-retry computes the remaining budget and λ-ramp origin from the
+    # phase's true start rather than the fresh process's zeroed counter.
+    # Defaults to 0 for legacy payloads and fresh runs.
     stage_start_step: int = 0
     # Global RNG streams (torch CPU / per-device CUDA, numpy, python) at
     # save time, so a resume continues the same noise / shuffle streams
@@ -126,17 +118,11 @@ class Checkpoint:
     grad_skip_count: int = 0
 
     @classmethod
-    def from_trainer(
-        cls,
-        trainer,
-        *,
-        stage_prefix: str | None = None,
-    ) -> Checkpoint:
+    def from_trainer(cls, trainer) -> Checkpoint:
         """Snapshot a trainer's state into a :class:`Checkpoint`.
 
         Scaler state is captured only when the GradScaler is enabled (a
-        disabled scaler carries nothing worth resuming); ``stage_prefix``
-        records the originating stage for multi-stage resume (ADR-0009).
+        disabled scaler carries nothing worth resuming).
         """
         ema = getattr(trainer, "ema", None)
         scaler = getattr(trainer, "scaler", None)
@@ -158,7 +144,6 @@ class Checkpoint:
             ema_state=getattr(ema, "shadow", None),
             global_step=int(trainer.global_step),
             grad_accum_steps=int(trainer.grad_accum_steps),
-            stage_prefix=stage_prefix,
             stage_start_step=int(getattr(trainer, "_stage_start_step", 0)),
             rng_state={
                 "torch_cpu": torch.get_rng_state(),
@@ -198,7 +183,6 @@ class Checkpoint:
             "ema_state": self.ema_state,
             "global_step": self.global_step,
             "grad_accum_steps": self.grad_accum_steps,
-            "stage_prefix": self.stage_prefix,
             "stage_start_step": self.stage_start_step,
             "rng_state": self.rng_state,
             "scaler_state": self.scaler_state,
@@ -252,7 +236,6 @@ class Checkpoint:
             ema_state=payload.get("ema_state"),
             global_step=int(payload.get("global_step", 0)),
             grad_accum_steps=int(payload.get("grad_accum_steps", 1)),
-            stage_prefix=payload.get("stage_prefix"),
             stage_start_step=int(payload.get("stage_start_step", 0)),
             rng_state=payload.get("rng_state"),
             # v1 payloads never wrote these — ``.get`` defaults to ``None``,
@@ -269,13 +252,9 @@ class Checkpoint:
         )
 
 
-def save(trainer, path: str, *, stage_prefix: str | None = None) -> None:
-    """Persist ``trainer`` state to ``path`` (atomic write).
-
-    ``stage_prefix`` is embedded in the payload so multi-stage resume
-    (ADR-0009) can identify which stage produced the ckpt.
-    """
-    Checkpoint.from_trainer(trainer, stage_prefix=stage_prefix).save(path)
+def save(trainer, path: str) -> None:
+    """Persist ``trainer`` state to ``path`` (atomic write)."""
+    Checkpoint.from_trainer(trainer).save(path)
 
 
 def load_into_model(
@@ -361,12 +340,10 @@ def prepare_model(
     if checkpoint_path is None:
         log.warning("No checkpoint provided; using randomly-initialised weights.")
     else:
-        # strict=False: a two-stage checkpoint carries the training-only
-        # ``baseline_anchor.*`` submodule (snapshotted at the centering handoff,
-        # used only by the r_mu_p regularizer) that the freshly-built eval model
-        # lacks. Shape mismatches still hard-fail inside load_state_dict; this
-        # only tolerates that dynamically-attached anchor (matches the
-        # eval_baselines / probe loaders).
+        # strict=False: a training checkpoint may carry training-only buffers
+        # that a freshly-built eval model lacks. Shape mismatches still
+        # hard-fail inside load_state_dict; this only tolerates such missing/
+        # extra leaf buffers (matches the eval_baselines / probe loaders).
         load_into_model(
             model,
             checkpoint_path,

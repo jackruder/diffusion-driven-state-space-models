@@ -23,7 +23,6 @@ from ddssm.model.encoder import (
 from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.model.centering.baselines import BaseBaseline, PersistenceBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
-from ddssm.model.centering.regularizers import r_mu_p_loss, r_sigma_p_loss
 from ddssm.model.transitions.transitions import BaseTransition
 
 
@@ -101,16 +100,12 @@ class DDSSM_base(nn.Module):
         logvar_max: Max clamp for decoder/encoder log-variance.
         S: Number of Monte Carlo encoder samples.
         aux_posterior: Required ``q_Φ(z_aux | z_{1:j})`` for the init term.
-        baseline: Optional centering baseline for the transition.
-        baseline_anchor: Optional frozen anchor for the ``r_mu_p`` regularizer.
-        baseline_mode: ``"pinned"`` or ``"learnable"``.
+        baseline: Optional (parameter-free) centering baseline for the
+            transition.
         sigma_data: Optional per-t σ_data² buffer consumed by the transition.
-        stage1_transition: Optional transition used when
-            ``stage_selector == "stage_1"``.
 
     Raises:
-        ValueError: If ``aux_posterior`` is ``None`` or ``baseline_mode`` is
-            not ``"pinned"`` / ``"learnable"``.
+        ValueError: If ``aux_posterior`` is ``None``.
     """
 
     def __init__(
@@ -133,10 +128,7 @@ class DDSSM_base(nn.Module):
         # --- VHP-via-diffusion + baseline-centering path (the only init path) ---
         aux_posterior: AuxPosterior | None = None,
         baseline: BaseBaseline | None = None,
-        baseline_anchor: BaseBaseline | None = None,
-        baseline_mode: str = "pinned",
         sigma_data: SigmaDataBuffer | None = None,
-        stage1_transition: BaseTransition | None = None,
         # Reconstruction-loss vectorization knobs. The per-t decode is NOT
         # autoregressive (each x_t depends only on the sampled latent window),
         # so it batches over time exactly like the diffusion ESM loss.
@@ -184,10 +176,6 @@ class DDSSM_base(nn.Module):
                 "state term via the transition's hierarchical VHP walk "
                 "(transition_kl_init), which needs q_Φ(z_aux | z_{1:j})."
             )
-        if baseline_mode not in ("pinned", "learnable"):
-            raise ValueError(
-                f"baseline_mode must be 'pinned' or 'learnable'; got {baseline_mode!r}"
-            )
 
         # Sub-modules (already instantiated)
         self.encoder: BaseEncoder = encoder
@@ -198,13 +186,7 @@ class DDSSM_base(nn.Module):
         self.aux_posterior: AuxPosterior | None = aux_posterior
         self.baseline: BaseBaseline | None = baseline
         _require_persistence_baseline(encoder, baseline)
-        self.baseline_anchor: BaseBaseline | None = baseline_anchor
-        self.baseline_mode: str = baseline_mode
         self.sigma_data: SigmaDataBuffer | None = sigma_data
-        self.stage1_transition: BaseTransition | None = stage1_transition
-
-        # Orchestrator flips this between stages.
-        self.stage_selector: str = "stage_2"
 
     def _encode_latents(
         self,
@@ -471,7 +453,7 @@ class DDSSM_base(nn.Module):
         objective; transitions without a score net return zero for it.
         """
         del logq_paths  # the VHP path scores encoder moments, not sampled log-q
-        return self._active_transition().transition_kl_init(
+        return self.transition.transition_kl_init(
             enc_stats=enc_stats,
             zs=zs,
             aux_posterior=self.aux_posterior,
@@ -480,12 +462,6 @@ class DDSSM_base(nn.Module):
             covariates=covariates,
             return_psi=True,
         )
-
-    def _active_transition(self) -> nn.Module:
-        """Return the transition picked by :attr:`stage_selector`."""
-        if self.stage_selector == "stage_1" and self.stage1_transition is not None:
-            return self.stage1_transition
-        return self.transition
 
     def _compute_transition_kl(
         self,
@@ -497,18 +473,14 @@ class DDSSM_base(nn.Module):
         static_covariates: torch.Tensor | None = None,
         mc_override: dict[str, Any] | None = None,
     ) -> dict:
-        """Compute transition KL term, dispatched on ``self.stage_selector``.
+        """Compute the transition KL term via ``self.transition``.
 
-        When ``stage_selector == "stage_1"`` and ``stage1_transition`` is
-        set, uses it; otherwise uses ``self.transition`` (the stage-2 /
-        legacy slot).  The σ_data buffer is forwarded as a kwarg to
-        whichever transition is called (legacy V2 ignores it; new diffusion /
-        BaselineGaussian consume it).
+        The σ_data buffer is forwarded as a kwarg (the uniform ADR-0006
+        interface); transitions that don't use it ignore it.
 
         Returns the transition's dict (at least ``"kl"``, plus any
         sub-components for logging).
         """
-        active = self._active_transition()
         # Uniform interface (ADR-0006): every transition's ``transition_kl``
         # accepts ``sigma_data``; the ones that don't use it ignore it.
         transition_kwargs: dict[str, Any] = {
@@ -521,24 +493,7 @@ class DDSSM_base(nn.Module):
         }
         if mc_override is not None:
             transition_kwargs["mc_override"] = mc_override
-        return active.transition_kl(**transition_kwargs)
-
-    def _gather_z_hist_samples_for_regularizers(self, zs: torch.Tensor) -> torch.Tensor:
-        """Return ``(N, d, j)`` detached z_hist windows for the regularizers.
-
-        Walks the transition-target range ``t = j … T-1`` (0-based code
-        indexing) and stacks all (B, S, chunk_len=1) histories into a
-        flat ``(N, d, j)`` tensor.  Detached so the regularizer
-        gradient flows only into the baseline / anchor.
-        """
-        B, S, d, T = zs.shape
-        j = self.j
-        if j >= T:
-            return torch.zeros(0, d, j, device=zs.device, dtype=zs.dtype)
-        # (B, S, d, T - j + j - 1 + 1) -> unfold gives (B, S, d, T - j, j)
-        unfolded = zs.unfold(dimension=-1, size=j, step=1)[..., : T - j, :]
-        # Permute to (B, S, T-j, d, j) and flatten leading dims.
-        return unfolded.permute(0, 1, 3, 2, 4).reshape(-1, d, j).detach()
+        return self.transition.transition_kl(**transition_kwargs)
 
     def _embed_static(
         self, static_covariates: torch.Tensor | None
@@ -642,7 +597,7 @@ class DDSSM_base(nn.Module):
                 )
                 log_p_dec[:, k] = log_p_dec[:, k] + logp_t
 
-        transition = self._active_transition()
+        transition = self.transition
         log_p_trans = torch.zeros(B, K_use, device=device, dtype=dtype)
         for t in range(j, T):
             if self.sigma_data is not None:
@@ -709,11 +664,10 @@ class DDSSM_base(nn.Module):
 
         Returns:
             components: ``LossComponents`` with unweighted per-term
-                tensors (recon, init_kl, trans_kl, r_sigma_p, r_mu_p).
-                The loss object applies its own weights and produces
-                the scalar that gets backpropped.
-            metrics: Dict of scalar tensors for logging (regularizer
-                values here are still WEIGHTED for log continuity).
+                tensors (recon, init_kl, trans_kl). The loss object
+                applies its own weights and produces the scalar that
+                gets backpropped.
+            metrics: Dict of scalar tensors for logging.
             stats: Empty dict during training; contains ``zs``, ``mus``,
                 ``logvars`` when ``train=False``.
         """
@@ -778,48 +732,16 @@ class DDSSM_base(nn.Module):
         L_trans = trans_terms["kl"]
         # ψ-side (unit-weighted score-net) transition loss. Diffusion
         # transitions always return ``kl_psi``; non-diffusion transitions
-        # (Gaussian / BaselineGaussian / CSDI) return only ``"kl"`` (+
-        # diagnostics), so the zeros fallback is exact for them. Kept
-        # graph-connected (no detach) for the split backward.
+        # (Gaussian / CSDI) return only ``"kl"`` (+ diagnostics), so the
+        # zeros fallback is exact for them. Kept graph-connected (no
+        # detach) for the split backward.
         L_trans_psi = trans_terms.get("kl_psi", torch.zeros_like(L_trans))
         trans_subterms = {k: v for k, v in trans_terms.items() if k != "kl"}
-
-        # Model-v2 centering regularizers (free functions in
-        # ``centering.regularizers``).  Returned UNWEIGHTED in
-        # `LossComponents`; the loss object applies `lambda_sigma_p`
-        # and `lambda_mu_p` (see ADR-0004). Stage gating stays here:
-        # the regularizer is exactly zero outside its applicable stage,
-        # regardless of the loss object's λ.
-        r_sigma_p_raw = torch.tensor(0.0, device=observed_data.device)
-        r_mu_p_raw = torch.tensor(0.0, device=observed_data.device)
-        if self.baseline is not None:
-            # Build a flat (N, d, j) batch of z_hist samples from the
-            # encoder paths for evaluating the regularizers.  Detached
-            # so gradient flows only into the baseline / anchor, not
-            # back through the encoder.
-            z_hist_samples = self._gather_z_hist_samples_for_regularizers(zs)
-            if self.stage_selector == "stage_1":
-                r_sigma_p_raw = r_sigma_p_loss(
-                    baseline=self.baseline,
-                    z_hist_samples=z_hist_samples,
-                    lambda_sigma_p=1.0,
-                )
-            if (
-                self.stage_selector == "stage_2"
-                and self.baseline_mode == "learnable"
-                and self.baseline_anchor is not None
-            ):
-                r_mu_p_raw = r_mu_p_loss(
-                    baseline=self.baseline,
-                    baseline_anchor=self.baseline_anchor,
-                    z_hist_samples=z_hist_samples,
-                    lambda_mu_p=1.0,
-                )
 
         distortion = L_rec
         # `loss` and `rate` in the metrics dict below are UNWEIGHTED
         # post-ADR-0004 — the loss object owns weights now.
-        rate = L_init + L_trans + r_sigma_p_raw + r_mu_p_raw
+        rate = L_init + L_trans
         loss = distortion + rate
 
         metrics = {
@@ -831,11 +753,6 @@ class DDSSM_base(nn.Module):
             "loss/rate/trans/kl": L_trans.detach(),
             "loss/rate/total": rate.detach(),
             "calib/ratio_res2_to_sigma2": L_rec_calib.detach(),
-            # Post-ADR-0004: report UNWEIGHTED regularizer values.
-            # The loss object that's currently active owns the
-            # weighting; downstream eval applies it when it cares.
-            "loss/rate/trans/r_sigma_p": r_sigma_p_raw.detach(),
-            "loss/rate/trans/r_mu_p": r_mu_p_raw.detach(),
         }
         # Surface model-v2 init-term sub-components when present.
         if self.aux_posterior is not None:
@@ -870,8 +787,6 @@ class DDSSM_base(nn.Module):
             init_kl_psi=L_init_psi,
             trans_kl_phith=L_trans,
             trans_kl_psi=L_trans_psi,
-            r_sigma_p=r_sigma_p_raw,
-            r_mu_p=r_mu_p_raw,
         )
         return components, metrics, stats
 
@@ -1049,10 +964,8 @@ class DDSSM_base(nn.Module):
                     0, 2, 1
                 )  # to (BS, 1, V)
 
-            # Sample z_t using the stage-aware active transition so that
-            # stage-1 checkpoints roll out under the correct prior.
             # transition.sample returns (BS, 1, d) because we pass S=1 (we already flattened S)
-            z_t = self._active_transition().sample(
+            z_t = self.transition.sample(
                 z_hist_flat, S=1, ctx=ctx
             )  # (BS, 1, d)
             z_t = z_t.squeeze(1)  # (BS, d)

@@ -33,7 +33,6 @@ from experiments._make import experiment
 from ddssm.data.presets import HarmonicMixed
 from ddssm.experiment.stores import experiment_store
 from ddssm.experiment.builders import Viz, Eval, Plot, Hparams, Objective, Training
-from experiments.init_centering.hparams import StagesB
 from experiments.synthetic_validation.model import SynthValModel
 
 _SinOverfitData = dataclasses.replace(
@@ -52,21 +51,7 @@ _HPARAMS = Hparams(
     ema_decay=0.997,
 )
 
-_TRAINING = Training(steps=600, log_every=25, amp=False, checkpoint_every=500)
-
-_STAGES = StagesB(
-    baseline_mode="pinned",
-    run_stages=["stage_2"],
-    n_pretrain=200,
-    n_stage2=5000,
-    base_lr=5e-4,
-    log_every=100,
-    checkpoint_every=5000,
-    stage_2_warmup_frac=0.15,
-    stage_2_lambda_start=0.01,
-    stage_2_lambda_end=1.0,
-    stage_2_freeze_enc_dec=False,
-)
+_TRAINING = Training(steps=5000, log_every=100, amp=False, checkpoint_every=5000)
 
 _EVAL = Eval(
     metrics=["mae", "rmse", "crps_sum", "recon_mse"],
@@ -108,7 +93,6 @@ sin_overfit = experiment(
     ),
     hparams=_HPARAMS,
     training=_TRAINING,
-    stages=_STAGES,
     eval=_EVAL,
     viz=_VIZ,
     objective=Objective(metric="rmse", source="json"),

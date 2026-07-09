@@ -2,29 +2,16 @@
 
 Per ``model-v2.org`` § Data-variance tracking and § σ_data buffer
 extension, the diffusion transition needs ``σ_data²(t)`` to scale the EDM
-preconditioning constants ``(c_skip, c_out, c_in)``.  The buffer:
-
-* Covers ``t = 1 … T`` (extended to include the VHP-covered initial
-  ``j`` slots).
-* Accumulates *passively* throughout stage 1 (the stage-1 Gaussian
-  closed-form KL does not consume the buffer, but the stage-1
-  transition still calls ``update(...)`` with the centered moments so
-  the buffer is populated by the close of pretraining).  This stage-1
-  pre-warm is *not required* under ``"per_t"``/``"global_ema"``: the
-  EMA warmup (see :meth:`_update_unchecked`) makes the buffer
-  self-calibrate within ``~1/(1-γ)`` stage-2 updates from any init, so
-  a stage-2-only run still gets a correctly-scaled buffer.  Only
-  ``"fixed"`` (frozen at handoff) genuinely needs a representative
-  encoder before the freeze.
-* Carries its value through the stage-1 → stage-2 handoff
-  (§ Stage-1 → stage-2 handoff step 5); only the EMA *schedule* (step
-  counter, ``frozen`` flag for "fixed" tracking) resets at handoff.
+preconditioning constants ``(c_skip, c_out, c_in)``.  The buffer covers
+``t = 1 … T`` (extended to include the VHP-covered initial ``j`` slots).
+Under the tracking modes the EMA warmup (see :meth:`_update_unchecked`)
+makes the buffer self-calibrate within ``~1/(1-γ)`` updates from any
+init.
 
 Three tracking modes per § Tracking-mode variants:
 
-* ``"fixed"``     — the buffer is held at its handoff value for all of
-  stage 2; ``update`` is a no-op once ``frozen`` is set by
-  :meth:`reset_schedule`.
+* ``"fixed"``     — a true constant ``σ_data² ≡ init_value`` (=1),
+  frozen from construction; ``update`` is a permanent no-op.
 * ``"global_ema"`` — every per-t lookup reads the same scalar; updates
   pool across the timesteps visited in the batch.
 * ``"per_t"``    — independent per-t buffers; each ``update`` touches
@@ -67,13 +54,12 @@ class SigmaDataBuffer(nn.Module):
         T_max: Max latent timestep covered by the buffer (1-based,
             inclusive).
         tracking_mode: One of "fixed", "global_ema", "per_t". Default
-            ``"per_t"`` — each timestep gets its own running EMA, kept
-            tracking through stage 2 so the centered-ESM target
-            preconditioning stays calibrated as the encoder's residual
-            distribution drifts. ``"fixed"`` freezes the buffer at the
-            centering handoff (init_smoke_simple still uses this for
-            its numerical V2 anchor); ``"global_ema"`` collapses all t
-            into one shared scalar.
+            ``"per_t"`` — each timestep gets its own running EMA so the
+            centered-ESM target preconditioning stays calibrated as the
+            encoder's residual distribution drifts. ``"fixed"`` holds the
+            buffer at ``init_value`` for the whole run (frozen from
+            construction, ``update`` a no-op); ``"global_ema"`` collapses
+            all t into one shared scalar.
         ema_decay: Steady-state EMA decay γ in [0, 1).  Larger → slower
             tracking once warmed up.  A per-slot warmup (running-mean
             blend for the first ``~1/(1-γ)`` updates) makes the *initial*
@@ -112,7 +98,9 @@ class SigmaDataBuffer(nn.Module):
         self.tracking_mode = tracking_mode
         self.ema_decay = float(ema_decay)
         self.init_value = float(init_value)
-        self.frozen: bool = False
+        # "fixed" is a true constant σ_data² ≡ init_value: freeze from
+        # construction so `update` is a permanent no-op from step 0.
+        self.frozen: bool = tracking_mode == "fixed"
 
         self.register_buffer(
             "sigma_data2",
@@ -122,11 +110,8 @@ class SigmaDataBuffer(nn.Module):
             "ema_step",
             torch.zeros(self.T_max, dtype=torch.long),
         )
-        # Lifetime per-slot update count driving the EMA warmup. Distinct from
-        # ``ema_step``: it is NOT reset at the stage-1 → stage-2 handoff, so a
-        # slot already primed in stage 1 keeps tracking with the steady-state
-        # EMA instead of re-warming and discarding its persisted value. Persisted
-        # in ``state_dict`` so a preemption-resume does not re-fire the warmup.
+        # Lifetime per-slot update count driving the EMA warmup. Persisted in
+        # ``state_dict`` so a preemption-resume does not re-fire the warmup.
         self.register_buffer(
             "n_updates",
             torch.zeros(self.T_max, dtype=torch.long),
@@ -245,7 +230,8 @@ class SigmaDataBuffer(nn.Module):
             self.n_updates += 1
             return
 
-        # "per_t" or "fixed-but-still-accumulating" (pre-handoff stage 1).
+        # "per_t" (the "fixed" mode is frozen from construction, so `update`
+        # never reaches here).
         ext = idx - 1  # to internal 0-based
         step = self.n_updates[ext].to(torch.float32)
         alpha = torch.clamp(1.0 / (step + 1.0), min=min_alpha)  # (n,)
@@ -362,25 +348,6 @@ class SigmaDataBuffer(nn.Module):
         """
         suff = SigmaDataBuffer._suff_stats_per_t(idx, mu_hat_batch, sigma_t2_batch)
         return SigmaDataBuffer._estimator_from_suff_stats(suff, mu_hat_batch.shape[1])
-
-    # ------------------------------------------------------------------
-    # Schedule
-    # ------------------------------------------------------------------
-    @torch.no_grad()
-    def reset_schedule(self) -> None:
-        """Reset the EMA schedule for the stage-1 → stage-2 handoff.
-
-        Zeros the per-t step counter and (under "fixed" tracking)
-        freezes the buffer.  Does NOT touch ``sigma_data2`` — the
-        values persist across the handoff per
-        ``model-v2.org`` § Stage-1 → stage-2 handoff step 5 — nor
-        ``n_updates``: a slot primed in stage 1 must keep tracking with
-        the steady-state EMA in stage 2, not re-warm and discard its
-        persisted value.
-        """
-        self.ema_step.zero_()
-        if self.tracking_mode == "fixed":
-            self.frozen = True
 
     # ------------------------------------------------------------------
     # Helpers

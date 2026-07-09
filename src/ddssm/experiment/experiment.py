@@ -26,7 +26,7 @@ import torch
 from ddssm.model.dssd import DDSSM_base
 from ddssm.training.train import DDSSMTrainer
 from ddssm.data.datamodule import DDSSMDataModule
-from ddssm.training.stages import StagesConf, StageTrainableConf
+from ddssm.training.stages import StageTrainableConf
 
 log = logging.getLogger(__name__)
 
@@ -49,11 +49,7 @@ class TrainingScalars:
 
     ``trainable`` is applied via ``trainer._set_trainable`` before
     ``fit``; freezing a submodule's ``requires_grad`` is what suppresses
-    its gradient contribution for a stage.
-
-    ``stages`` is the multi-stage spec consumed by
-    :class:`StageOrchestrator` — see ``docs/adr/0004-loss-object-split.md``
-    for why this lives on ``training`` rather than ``model.config``.
+    its gradient contribution.
     """
 
     steps: int = 1000
@@ -65,7 +61,6 @@ class TrainingScalars:
     profile_steps: int = 0
     resume_from: str | None = None
     trainable: StageTrainableConf | None = None
-    stages: StagesConf | None = None
 
     def fit_kwargs(self) -> dict[str, Any]:
         return {
@@ -461,62 +456,7 @@ class Experiment:
             self.data.val_loader() if self.training.validate_every > 0 else None
         )
 
-        stages_cfg = self.training.stages
         try:
-            self._dispatch_training(trainer, stages_cfg, train_loader, val_loader)
-        finally:
-            # Logger lifecycle is owned by the run, not by fit(): fit() runs
-            # once per stage under the orchestrator, so closing there tore
-            # down the CSV/TB/W&B sinks after the first stage. Close exactly
-            # once, after every stage (or on the exception path — W&B's
-            # close uploads the final checkpoint artifact best-effort).
-            trainer.metrics.close()
-
-        # Emit run_summary.json so the run is self-describing (final loss,
-        # λ-warmup state, σ_data² drift, val loss, non-finite count, stages).
-        try:
-            from ddssm.cluster.report import write_run_summary
-
-            write_run_summary(run_dir)
-        except Exception as e:  # never let summary-writing fail a finished run
-            log.warning("Could not write run_summary.json: %s", e)
-
-    def _dispatch_training(self, trainer, stages_cfg, train_loader, val_loader):
-        if stages_cfg is not None and getattr(stages_cfg, "run", None):
-            # Multi-stage path: drive StageOrchestrator instead of a single fit.
-            from ddssm.training.stages import StageOrchestrator
-
-            # Under stages, each StageSpecConf.steps drives the budget;
-            # training.steps / log_every / checkpoint_every are NOT read here
-            # (they apply only to the single-fit branch below). Surface the
-            # effective budget so it isn't a silent shadow of training.steps.
-            stage_steps = {
-                key: int(getattr(getattr(stages_cfg, key), "steps", 0))
-                for key in stages_cfg.run
-                if getattr(stages_cfg, key, None) is not None
-            }
-            log.info(
-                "Starting multi-stage run via StageOrchestrator: stages=%s, "
-                "per-stage steps=%s, total budget=%d. training.steps/log_every "
-                "are ignored under stages — the budget comes from "
-                "training.stages.",
-                stages_cfg.run,
-                stage_steps,
-                sum(stage_steps.values()),
-            )
-            orchestrator = StageOrchestrator(trainer, stages_cfg)
-            orchestrator.run(
-                train_loader=train_loader,
-                val_loader=val_loader,
-                amp=self.training.amp,
-                batch_transform=self.data.batch_transform,
-                # ADR-0009 multi-stage resume: forward the training scalar's
-                # resume_from so a preempt-retry can hand the orchestrator the
-                # saved ckpt; the orchestrator reads its ``stage_prefix`` and
-                # resumes into the right stage without re-firing the handoff.
-                resume_from=self.training.resume_from,
-            )
-        else:
             log.info(
                 "Starting fit (steps=%d, log_every=%d, validate_every=%d, amp=%s)",
                 self.training.steps,
@@ -530,6 +470,21 @@ class Experiment:
                 batch_transform=self.data.batch_transform,
                 **self.training.fit_kwargs(),
             )
+        finally:
+            # Logger lifecycle is owned by the run, not by fit(). Close the
+            # CSV/TB/W&B sinks exactly once, after fit (or on the exception
+            # path — W&B's close uploads the final checkpoint artifact
+            # best-effort).
+            trainer.metrics.close()
+
+        # Emit run_summary.json so the run is self-describing (final loss,
+        # λ-warmup state, σ_data² drift, val loss, non-finite count).
+        try:
+            from ddssm.cluster.report import write_run_summary
+
+            write_run_summary(run_dir)
+        except Exception as e:  # never let summary-writing fail a finished run
+            log.warning("Could not write run_summary.json: %s", e)
 
     def objective_value(
         self,

@@ -5,7 +5,6 @@ import pytest
 from omegaconf import OmegaConf
 
 from ddssm.model.dssd import DDSSMHyperParamsConf
-from ddssm.training.stages import StageSpecConf
 
 
 def test_hyperparams_defaults():
@@ -20,13 +19,6 @@ def test_hyperparams_override():
     assert hp.S == 4
     assert hp.enc_lr == pytest.approx(1e-3)
     assert hp.batch_size == 32
-
-
-def test_stagespec_defaults():
-    spec = StageSpecConf(steps=500)
-    assert spec.steps == 500
-    assert spec.log_every == 10
-    assert spec.val_every == 100
 
 
 def test_yaml_roundtrip(tmp_path):

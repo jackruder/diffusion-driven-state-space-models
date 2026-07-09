@@ -47,13 +47,12 @@ from ddssm.model.encoder import GaussianEncoder
 from ddssm.nn.dist_heads import GaussianDistHead
 from ddssm.nn.aggregators import ContextProducerAggregator
 from ddssm.nn.aux_posterior import AuxPosterior
-from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.centering.baselines import ZeroBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
     DiffusionScheduleConfig,
 )
-from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 from tests.test_likelihood.test_lgssm_integration import (
     M0,
     P0,
@@ -127,7 +126,7 @@ def _make_scalar_stage2_model() -> DDSSM_base:
         context=ctx,
         gaussian_head=GaussianHead,
     )
-    baseline = MLPBaseline(latent_dim=d, j=j, hidden_dim=8, n_layers=2)
+    baseline = ZeroBaseline(latent_dim=d, j=j)
     schedule = DiffusionScheduleConfig(
         S_k=1,
         k_chunk=1,
@@ -136,12 +135,6 @@ def _make_scalar_stage2_model() -> DDSSM_base:
         beta_max=BETA_MAX,
         tau_min=1e-3,
         k_sampling_mode="uniform",
-    )
-    stage1 = BaselineGaussianTransition(
-        baseline=baseline,
-        latent_dim=d,
-        j=j,
-        emb_time_dim=EMB_TIME,
     )
     transition = DiffusionTransition(
         baseline=baseline,
@@ -178,9 +171,7 @@ def _make_scalar_stage2_model() -> DDSSM_base:
         aux_posterior=aux,
         baseline=baseline,
         sigma_data=sigma_data,
-        stage1_transition=stage1,
     )
-    model.stage_selector = "stage_2"
     return model
 
 

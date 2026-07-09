@@ -51,22 +51,6 @@ def test_moo_direction_objective_mismatch_raises() -> None:
         )
 
 
-def test_real_init_ablation_space_validates_against_stagesb() -> None:
-    """The shipped sweep fields all resolve against the live StagesB config."""
-    from experiments.init_centering.hparams import StagesB
-
-    s = SweepSpace(target=StagesB, prefix="experiment.training.stages")
-    # All nine swept knobs are real StagesB fields (raises if any isn't).
-    for f in (
-        "n_pretrain",
-        "sigma_pert",
-        "anchor_lambda",
-        "lambda_sigma_p",
-        "base_lr",
-        "dec_mult",
-        "trans_mult",
-        "stage_1_warmup_frac",
-        "stage_2_warmup_frac",
-    ):
-        s.raw(f, "interval(0, 1)")
-    assert len(s.params()) == 9
+# The StagesB-targeted sweep-field validation test was removed when
+# staged training was retired: ``StagesB`` / ``_build_init_centering_stages``
+# no longer exist and the sweep space now targets ``SmokeHparams``.

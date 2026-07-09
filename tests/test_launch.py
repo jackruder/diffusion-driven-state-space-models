@@ -24,13 +24,7 @@ from experiments.init_centering.study import INIT_CENTERING_STUDY
 
 
 def _single_stage_preempt_study(n_workers: int = 3) -> _Study:
-    """A minimal one-point Study with NO multi-stage training, for preempt tests.
-
-    The orchestrator's multi-stage rejection (ADR-0009) blocks INIT_CENTERING_STUDY
-    points because they all use StagesB. This fixture sidesteps that constraint
-    while still exercising the orchestrator's preempt path end-to-end against
-    a registered-looking point.
-    """
+    """A minimal one-point Study, for preempt tests."""
     point = _StudyPoint(
         name="mock_preempt_point",
         config=SimpleNamespace(training=SimpleNamespace(stages=None)),
@@ -632,8 +626,6 @@ def _force_preemptive_multi_node(n_workers: int, n_trials: int, grace: int = 90)
 
 
 def test_orchestrator_render_passes_preemptspec_to_render_sbatch() -> None:
-    # Use the single-stage mock study: INIT_CENTERING points are multi-stage
-    # (StagesB) and the orchestrator now rejects preemptive+multi-stage (ADR-0009).
     study = _single_stage_preempt_study(n_workers=3)
     orch = StudyOrchestrator(study, study_prefix="abl")
     jobs = orch.render(study.points)
@@ -692,12 +684,10 @@ def test_orchestrator_render_single_job_preemptive_raises() -> None:
 
 
 def test_validate_preempt_compat_allows_multi_stage_now() -> None:
-    """ADR-0009 update: multi-stage experiments now support preemptive=True.
+    """Preemptive rendering succeeds against an INIT_CENTERING_STUDY point.
 
-    Stage-aware resume (via ``stage_prefix`` in the checkpoint payload + the
-    StageOrchestrator's ``resume_from`` path) lifts the v1 multi-stage
-    rejection. Rendering a preemptive multi-node sbatch against a real
-    multi-stage INIT_CENTERING_STUDY point should now succeed.
+    Staged training was retired; this test just guards that the preempt
+    path renders cleanly against a registered study point.
     """
     pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
     override = lambda p: PointLaunch(

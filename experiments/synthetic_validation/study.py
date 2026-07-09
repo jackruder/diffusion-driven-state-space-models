@@ -22,7 +22,6 @@ from ddssm.data.presets import LGSSM, Bimodal, Harmonic
 from ddssm.cluster.study import Axis, Study, StudyPoint
 from ddssm.experiment.stores import experiment_store
 from ddssm.experiment.builders import Eval, Hparams, Training, Objective
-from experiments.init_centering.hparams import StagesB
 from experiments.synthetic_validation.model import SynthValModel
 
 # Dataset axis: tag -> library dataset preset (all D=1, T=32, so one model fits).
@@ -38,7 +37,6 @@ _HPARAMS = Hparams(
     trans_lr=5e-4,
     ema_decay=0.997,
 )
-# `steps` is ignored under `stages`; kept > 0 (sanity convention).
 _TRAINING = Training(steps=400, log_every=25, amp=True)
 
 
@@ -50,8 +48,6 @@ def _build(coords: Mapping[str, Any]):
         model=SynthValModel(data_dim=1, latent_dim=1, j=1),
         hparams=_HPARAMS,
         training=_TRAINING,
-        # Small two-stage budget so a cell finishes quickly.
-        stages=StagesB(baseline_mode="pinned", n_pretrain=100, n_stage2=300),
         eval=Eval(metrics=["mae", "crps_sum", "stage2_elbo_surrogate"], split="val"),
         objective=Objective(metric="loss/total", split="train", source="csv"),
     )
@@ -63,12 +59,11 @@ def _launch(point: StudyPoint) -> PointLaunch:
 
 
 def _smoke_overrides(point: StudyPoint) -> list[str]:
-    """`--size smoke`: a few steps per stage for a fast end-to-end check."""
+    """`--size smoke`: a few steps for a fast end-to-end check."""
     return [
-        "experiment.training.stages.n_pretrain=4",
-        "experiment.training.stages.n_stage2=4",
-        "experiment.training.stages.log_every=1",
-        "experiment.training.stages.checkpoint_every=100",
+        "experiment.training.steps=8",
+        "experiment.training.log_every=1",
+        "experiment.training.checkpoint_every=100",
     ]
 
 

@@ -19,7 +19,6 @@ from ddssm.experiment.stores import experiment_store
 from experiments.gluonts_forecast.evals import GluonEval, ValElboObjective
 from experiments.gluonts_forecast.model import GluonModel
 from experiments.gluonts_forecast.hparams import (
-    GluonStages,
     GluonHparams,
     GluonTraining,
 )
@@ -34,7 +33,6 @@ def _build(coords: Mapping[str, Any]):
         model=GluonModel(data_dim=ds.data_dim, T_max=ds.T_max, latent_dim=64),
         hparams=dataclasses.replace(GluonHparams, batch_size=ds.batch_size),
         training=GluonTraining,
-        stages=GluonStages(),
         eval=GluonEval,  # dormant during the sweep (csv objective);
         objective=ValElboObjective,  # run via ddssm.evaluate on finalists.
     )
@@ -88,18 +86,17 @@ def _launch(point: StudyPoint) -> PointLaunch:
 
 def _smoke_overrides(point: StudyPoint) -> list[str]:
     return [
-        "experiment.training.stages.n_pretrain=20",
-        "experiment.training.stages.n_stage2=20",
-        "experiment.training.stages.log_every=5",
-        "experiment.training.stages.validate_every=10",
-        "experiment.training.stages.checkpoint_every=100",
+        "experiment.training.steps=40",
+        "experiment.training.log_every=5",
+        "experiment.training.validate_every=10",
+        "experiment.training.checkpoint_every=100",
         "experiment.model.latent_dim=16",
     ]
 
 
 def _pilot_overrides(point: StudyPoint) -> list[str]:
-    # Reduced stage-2 budget for the solar pilot (pin T_train + proxy validation).
-    return ["experiment.training.stages.n_stage2=8000"]
+    # Reduced training budget for the solar pilot (pin T_train + proxy validation).
+    return ["experiment.training.steps=8000"]
 
 
 GLUONTS_FORECAST_STUDY = register_study(

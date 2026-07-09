@@ -22,7 +22,7 @@ from ddssm.nn.diffnets import (
     DiffResidualBlockConfig,
 )
 from ddssm.model.encoder import GaussianEncoder
-from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.centering.baselines import ZeroBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
@@ -41,7 +41,7 @@ def _close(a: torch.Tensor, b: torch.Tensor, name: str) -> None:
 
 def _make_diffusion(time_chunk_size: int | None = None) -> DiffusionTransition:
     torch.manual_seed(7)
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     return DiffusionTransition(
         baseline=baseline,
         latent_dim=D,

@@ -80,11 +80,8 @@ from ddssm.data.datamodule import (
 from ddssm.training.stages import StageTrainableConf
 from ddssm.variance.runner import ProbeCell, ProbeSpec, ProbePlotSpec, ProbeMetricSpec
 from ddssm.nn.aux_posterior import AuxPosterior
-from ddssm.model.centering.handoff import CenteringHandoffConf
 from ddssm.model.centering.baselines import (
-    MLPBaseline,
     ZeroBaseline,
-    LinearBaseline,
     PersistenceBaseline,
 )
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
@@ -93,7 +90,6 @@ from ddssm.model.transitions.diffusion import (
     DiffusionScheduleConfig,
 )
 from ddssm.model.transitions.transitions import GaussianTransition
-from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 # ---------------------------------------------------------------------------
 # Mixer + residual block builders.
@@ -353,18 +349,6 @@ PersistenceBaselineB = builds(
     latent_dim=MISSING,
     j=MISSING,
 )
-LinearBaselineB = builds(
-    LinearBaseline,
-    populate_full_signature=True,
-    latent_dim=MISSING,
-    j=MISSING,
-)
-MLPBaselineB = builds(
-    MLPBaseline,
-    populate_full_signature=True,
-    latent_dim=MISSING,
-    j=MISSING,
-)
 AuxPosteriorB = builds(
     AuxPosterior,
     populate_full_signature=True,
@@ -376,14 +360,6 @@ SigmaDataBufferB = builds(
     populate_full_signature=True,
     T_max=MISSING,
 )
-BaselineGaussTransition = builds(
-    BaselineGaussianTransition,
-    populate_full_signature=True,
-    baseline=MISSING,
-    latent_dim=MISSING,
-    j=MISSING,
-)
-
 DiffTransition = builds(
     DiffusionTransition,
     populate_full_signature=True,
@@ -395,8 +371,6 @@ DiffTransition = builds(
     unet=Unet(),
     schedule=DiffSchedule(),
 )
-
-CenteringHandoff = builds(CenteringHandoffConf, populate_full_signature=True)
 
 
 # ---------------------------------------------------------------------------
@@ -496,13 +470,9 @@ __all__ = [
     # Model-v2 baseline-centering builders
     "ZeroBaselineB",
     "PersistenceBaselineB",
-    "LinearBaselineB",
-    "MLPBaselineB",
     "AuxPosteriorB",
     "SigmaDataBufferB",
-    "BaselineGaussTransition",
     "DiffTransition",
-    "CenteringHandoff",
     # Data modules
     "Synthetic",
     "KDD",

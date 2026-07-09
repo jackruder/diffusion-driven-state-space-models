@@ -85,7 +85,6 @@ def experiment(
     model: Any,
     hparams: Any,
     training: Any,
-    stages: Any | None = None,
     eval: Any | None = None,
     viz: Any | None = None,
     objective: Any | None = None,
@@ -101,18 +100,12 @@ def experiment(
     carries a ``hyperparams`` field). It is also stored on the
     experiment so callers can introspect or ``tweak`` it.
 
-    ``stages`` is the multi-stage orchestration spec. When provided,
-    it is attached to ``training.stages``; per ADR-0004 the orchestrator
-    reads it from there rather than from ``model.config.stages``.
-
     ``sbatch`` is purely metadata at training time; it is read by
     ``python -m experiments sbatch <name>`` when emitting a Slurm
     submit script. Leave ``None`` to inherit the project default in
     :mod:`ddssm.cluster.sbatch`. (Study launches read resources from each
     point's ``PointLaunch.resources`` instead — see ADR-0008.)
     """
-    if stages is not None:
-        training = dataclasses.replace(training, stages=stages)
     return ExperimentC(
         data=data,
         model=model,

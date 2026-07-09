@@ -1,44 +1,22 @@
-"""Multi-stage training orchestration via StageOrchestrator.
+"""Reusable single-phase training config pieces.
 
-A stage = a contiguous block of training with a per-stage trainable
-mask, per-stage learning rates, and an optional one-time
-``centering_handoff`` hook that fires *after* the declaring stage's
-training loop — and only when a later stage will run (used at the
-stage-1 → stage-2 boundary per ``model-v2.org`` § Stage-1 → stage-2
-handoff). Declaring it on stage 1 means the handoff snapshots the
-*trained* baseline and is a strict consequence of stage 1 having run:
-a stage-2-only run sees no handoff (no μ_p snapshot/pin, no encoder
-perturbation), and a stage-1-only probe leaves its final checkpoint
-unperturbed.
+These small dataclasses configure a single ``trainer.fit(...)`` run:
+per-module trainable masks, learning rates, an ELBO-plateau early-stop
+spec, and a cosine rate-λ ramp. The multi-stage ``StageOrchestrator``
+and its handoff hook were removed when staged training was retired
+(training is now a single phase keyed on ``training.steps``).
 """
 
 from __future__ import annotations
 
-import os
 import math
-from typing import TYPE_CHECKING
-import logging
-from dataclasses import field, dataclass
+from dataclasses import dataclass
 from collections.abc import Callable
-
-import torch
-from omegaconf import MISSING
-
-from ddssm.model.losses import Loss, FullELBO
-from ddssm.model.centering.handoff import (
-    CenteringHandoffConf,
-    perform_centering_handoff,
-)
-
-log = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from ddssm.training.train import DDSSMTrainer
 
 
 @dataclass
 class StageLrsConf:
-    """Per-stage learning rates passed into ``trainer._rebuild_optimizer``."""
+    """Per-module learning rates passed into ``trainer._rebuild_optimizer``."""
 
     enc_lr: float = 5e-4
     dec_lr: float = 5e-4
@@ -47,27 +25,22 @@ class StageLrsConf:
 
 @dataclass
 class StageTrainableConf:
-    """Per-module ``requires_grad`` mask for the stage.
+    """Per-module ``requires_grad`` mask.
 
     Matches the slot names used by :meth:`DDSSMTrainer._set_trainable`
-    (encoder / decoder / transition / baseline).  The aux posterior is
-    part of the *encoder* family (via DDSSM_base's ``aux_posterior``
-    slot) and shares the encoder flag.  ``baseline`` controls the
-    optional μ_p head from ``model-v2.org`` § Generative baseline;
-    stage 1 typically trains it and stage 2 freezes it under Pinned
-    mode (the :func:`perform_centering_handoff` call also enforces the
-    freeze independently as a belt-and-suspenders safeguard).
+    (encoder / decoder / transition).  The aux posterior is part of the
+    *encoder* family (via DDSSM_base's ``aux_posterior`` slot) and shares
+    the encoder flag.
     """
 
     encoder: bool = True
     decoder: bool = True
     transition: bool = True
-    baseline: bool = True
 
 
 @dataclass
 class EarlyStopSpec:
-    """ELBO-plateau early-stop spec for a single stage.
+    """ELBO-plateau early-stop spec.
 
     The trainer maintains a rolling window of ``loss/total`` values
     (one entry per logged train step).  Once at least ``window``
@@ -75,11 +48,7 @@ class EarlyStopSpec:
     trainer compares the mean of the older half of the window against
     the mean of the newer half; if the relative drop
     ``(old_mean - new_mean) / max(|old_mean|, eps)`` is below
-    ``min_improvement``, the stage exits early.
-
-    Per ``init-experiment.org`` § Hyperparameters this lets the
-    Optuna sweep over ``N_pretrain`` skip trials whose stage 1 has
-    already flatlined.
+    ``min_improvement``, training exits early.
     """
 
     enabled: bool = False
@@ -89,18 +58,10 @@ class EarlyStopSpec:
 
 
 @dataclass
-class StageSchedulerConf:
-    """Per-stage LR scheduler knobs (linear warmup + final-LR scale)."""
-
-    warmup_steps: int = 0
-    final_lr_scale: float = 1.0
-
-
-@dataclass
 class LambdaRampConf:
     """Cosine rate-λ ramp spec consumed by :func:`make_lambda_cosine`.
 
-    The ramp runs from ``start`` to ``end`` over ``steps`` stage-relative
+    The ramp runs from ``start`` to ``end`` over ``steps`` relative
     steps after an initial ``delay``.
     """
 
@@ -108,47 +69,6 @@ class LambdaRampConf:
     delay: int = 0
     steps: int | None = None
     start: float = 0.001
-
-
-@dataclass
-class StageSpecConf:
-    """A single stage of multi-stage training.
-
-    Optional ``centering_handoff`` fires *after* this stage's training
-    loop, and only when a later stage will run (so it snapshots the
-    *trained* baseline and is skipped for a terminal stage).  When it
-    fires, the handoff rebuilds the optimizer with the *next* stage's
-    LRs; the orchestrator then skips that next stage's own
-    ``_rebuild_optimizer`` call.
-    """
-
-    steps: int = MISSING
-    trainable: StageTrainableConf = field(default_factory=StageTrainableConf)
-    lrs: StageLrsConf = field(default_factory=StageLrsConf)
-    scheduler: StageSchedulerConf = field(default_factory=StageSchedulerConf)
-    lambda_ramp: LambdaRampConf = field(default_factory=LambdaRampConf)
-    log_every: int = 10
-    val_every: int = 100
-    checkpoint_every: int = 1000
-    centering_handoff: CenteringHandoffConf | None = None
-    early_stop: EarlyStopSpec | None = None
-    # ADR-0004: per-stage loss object. None ⇒ orchestrator builds a
-    # default `FullELBO` from `lambda_ramp` + model-side reg weights.
-    loss: Loss | None = None
-
-
-@dataclass
-class StagesConf:
-    """Multi-stage plan: up to three stages plus the ``run`` order.
-
-    ``run`` lists the stage keys to execute in order; keys whose
-    ``StageSpecConf`` is ``None`` are skipped.
-    """
-
-    stage_1: StageSpecConf | None = None
-    stage_2: StageSpecConf | None = None
-    stage_3: StageSpecConf | None = None
-    run: list[str] = field(default_factory=lambda: ["stage_1", "stage_2"])
 
 
 def make_lambda_cosine(
@@ -176,280 +96,3 @@ def make_lambda_cosine(
         return float(end + 0.5 * (spec.start - end) * (1.0 + math.cos(math.pi * u)))
 
     return f
-
-
-class StageOrchestrator:
-    """Runs a sequence of training stages defined in ``StagesConf``.
-
-    For each stage in ``stages.run``:
-
-    1. Flip ``trainer.model.stage_selector`` to the stage key.
-    2. Rebuild the optimizer with the stage's LRs — skipped when either
-       (a) the previous stage's post-loop centering handoff already rebuilt
-       it with this stage's LRs, or (b) this stage's LRs equal the previous
-       stage's LRs, in which case rebuilding would only discard live Adam
-       moments for no benefit.
-    3. Set per-module trainable flags.
-    4. Drive ``trainer.fit`` for ``stage.steps`` training steps.
-    5. If ``stage.centering_handoff`` is set *and* a later stage will
-       run, call :func:`perform_centering_handoff` with the *next*
-       stage's LRs.  The handoff rebuilds the optimizer itself, so the
-       next stage skips its own ``_rebuild_optimizer`` step.
-    """
-
-    def __init__(self, trainer: DDSSMTrainer, stages: StagesConf) -> None:
-        self.trainer = trainer
-        self.stages = stages
-
-    def _resolve_resume(self, resume_from: str | None) -> tuple[list[str], str | None]:
-        """Validate ``resume_from`` and return (ordered stage keys, resume-into key).
-
-        Returns the list of stage keys to iterate (``stages.run`` filtered to
-        those that resolve to a real ``StageSpecConf``) and the key of the
-        stage to resume into (``None`` when ``resume_from is None``).
-
-        Raises:
-            FileNotFoundError: ``resume_from`` does not point at a real file.
-            ValueError: the ckpt's ``stage_prefix`` is not in ``stages.run``.
-        """
-        stages = self.stages
-        ordered = [k for k in stages.run if getattr(stages, k, None) is not None]
-        if resume_from is None:
-            return ordered, None
-        if not os.path.isfile(resume_from):
-            raise FileNotFoundError(f"resume_from path not found: {resume_from!r}")
-        # Lightweight payload peek — we only need ``stage_prefix``. ``torch.load``
-        # with ``map_location=cpu`` keeps tensors off-device.
-        payload = torch.load(
-            resume_from,
-            map_location=torch.device("cpu"),
-            weights_only=False,
-        )
-        stage_prefix = (
-            payload.get("stage_prefix") if isinstance(payload, dict) else None
-        )
-        if stage_prefix is None:
-            # Legacy back-compat: pretend the ckpt was written by the first
-            # stage so resume_from flows into stage_1's fit and the rest of
-            # the run proceeds normally. This matches the hand-rolled
-            # single-stage resume pattern from before ADR-0009.
-            return ordered, ordered[0] if ordered else None
-        if stage_prefix not in ordered:
-            raise ValueError(
-                f"resume_from ckpt references stage {stage_prefix!r} which is "
-                f"not in stages.run={ordered!r}"
-            )
-        return ordered, stage_prefix
-
-    def run(
-        self,
-        train_loader,
-        val_loader=None,
-        amp: bool = False,
-        batch_transform=None,
-        resume_from: str | None = None,
-    ) -> None:
-        """Execute every stage listed in ``stages.run``.
-
-        When ``resume_from`` points at a checkpoint carrying
-        ``stage_prefix=<key>`` (see ADR-0009), the orchestrator skips every
-        stage iteration whose key precedes ``<key>`` in ``stages.run``.
-        Because the centering handoff now fires *after* its declaring
-        stage's loop, a stage's checkpoints always pre-date its handoff:
-        resuming into a stage re-runs that stage and then fires the
-        handoff (correct — it had not yet been applied to the ckpt), while
-        resuming into a *later* stage skips the declaring stage entirely
-        and so never re-fires it (no double encoder-perturb / σ_data
-        reset). No explicit suppression is needed.
-        Downstream stages run normally with no ``resume_from``.
-
-        A ``resume_from`` ckpt without a ``stage_prefix`` field (legacy,
-        hand-rolled single-stage resumes) is treated as "resume into the
-        first stage" and the rest of the run proceeds normally.
-
-        The resumed stage's checkpoint is restored by the orchestrator
-        itself (via ``trainer._safe_resume``) *before* the stage budget and
-        λ-ramp origin are computed, and ``fit`` is then called with
-        ``resume_from=None`` — budgets must see the restored
-        ``global_step`` / ``_stage_start_step``, not the fresh process's
-        zeroed counters.
-        """
-        stages = self.stages
-        if stages is None:
-            raise AttributeError("StageOrchestrator.run requires a StagesConf")
-
-        ordered, resume_stage_key = self._resolve_resume(resume_from)
-
-        # Iterate from the resume point onwards (or from the start when
-        # resume_from is None). ``is_resumed_stage`` is True only for the
-        # first iteration of the resumed run; that stage restores the ckpt
-        # before its budget is computed (the post-loop handoff needs no
-        # resume suppression, since a stage's ckpts always pre-date its own
-        # handoff).
-        start_idx = (
-            ordered.index(resume_stage_key) if resume_stage_key is not None else 0
-        )
-        # Set True by a stage's post-loop centering handoff (which rebuilds the
-        # optimizer with the *next* stage's LRs) so that next stage skips its
-        # own rebuild.
-        skip_next_rebuild = False
-        # Track the previous stage's LRs so we can skip a redundant rebuild when
-        # they haven't changed — a fresh AdamW would drop the accumulated
-        # first/second moments, which is a silent slowdown of convergence on the
-        # next stage. The handoff path is intentionally exempt (see its
-        # docstring: stage-1 moments are calibrated to a different loss surface
-        # than stage 2 and are meant to be reset).
-        prev_stage_lrs: StageLrsConf | None = None
-        for i, key in enumerate(ordered[start_idx:]):
-            stage: StageSpecConf = getattr(stages, key)
-            is_resumed_stage = (i == 0) and (resume_from is not None)
-            print(f"\n=== Running {key} for {stage.steps} steps ===")
-
-            # 1. Flip stage selector so DDSSM_base's dispatch picks the right
-            # transition + correctly handles entropy / regularizers per stage.
-            if hasattr(self.trainer.model, "stage_selector"):
-                self.trainer.model.stage_selector = key
-            # 1-based stage index, logged per row as ``stage/idx`` so the CSV
-            # marks each stage and its boundary.
-            self.trainer._current_stage_idx = start_idx + i + 1
-
-            # 2. Rebuild the optimizer with this stage's LRs — unless the
-            # previous stage's post-loop centering handoff already rebuilt it
-            # (with this stage's LRs), or the LRs are unchanged from the
-            # previous stage (in which case a rebuild would only discard live
-            # Adam moments).
-            if skip_next_rebuild:
-                skip_next_rebuild = False
-            elif prev_stage_lrs is not None and stage.lrs == prev_stage_lrs:
-                pass
-            else:
-                self.trainer._rebuild_optimizer(stage.lrs)
-            prev_stage_lrs = stage.lrs
-
-            # 3. Per-module trainable flags.
-            self.trainer._set_trainable(stage.trainable)
-
-            # 4. Install the per-stage λ schedule. Computed on the
-            # stage-relative step counter (resets at every stage
-            # boundary). Per ADR-0004 the loss object owns the
-            # schedule shape; we still keep ``_stage_lambda_fn`` as a
-            # back-compat handle so legacy callers can introspect.
-            default_end = 1.0
-            stage_rate_lambda = make_lambda_cosine(
-                stage.lambda_ramp,
-                total_steps=int(stage.steps),
-                default_end=default_end,
-            )
-            self.trainer._stage_lambda_fn = stage_rate_lambda
-            # Stage-start / budget bookkeeping. On the resumed stage the
-            # checkpoint is restored HERE — before the budget and λ-ramp
-            # origin are computed — because both must be derived from the
-            # restored counters. (Restoring inside ``fit`` after the budget
-            # was fixed made a preempt-retry into stage ≥ 2 compute
-            # ``target = 0 + stage.steps`` while the restored global_step
-            # could already exceed it: the stage trained zero or too few
-            # steps, with the λ ramp restarted from the wrong origin.)
-            # ``restore_from_checkpoint`` brings back ``_stage_start_step``
-            # together with ``global_step``; on the unreadable-ckpt fallback
-            # ``_safe_resume`` resets global_step to 0 and the pre-set below
-            # (still 0 in a fresh retry process) stays — fresh-start
-            # semantics.
-            self.trainer._stage_start_step = int(
-                getattr(self.trainer, "global_step", 0)
-            )
-            stage_resume = resume_from if is_resumed_stage else None
-            if stage_resume is not None:
-                self.trainer._safe_resume(stage_resume)
-                stage_resume = None  # restored here; fit must not re-load
-                if (
-                    start_idx > 0
-                    and int(self.trainer._stage_start_step) == 0
-                    and int(self.trainer.global_step) > 0
-                ):
-                    # Legacy ckpt predating ``stage_start_step``: a stage
-                    # after the first cannot have started at global step 0.
-                    # Treat the restored step as the stage start — training
-                    # the full stage budget from here overtrains slightly but
-                    # beats the alternative (target < global_step → zero
-                    # steps trained).
-                    log.warning(
-                        "[resume] checkpoint carries no stage_start_step; "
-                        "treating restored global_step=%d as the stage start.",
-                        int(self.trainer.global_step),
-                    )
-                    self.trainer._stage_start_step = int(self.trainer.global_step)
-            # Install the active loss object for this stage. If the
-            # preset declared `stage.loss`, use it. Otherwise build a
-            # default `FullELBO` from the stage's `lambda_ramp` with no
-            # regulariser weights: post-ADR-0004 λ_σp and λ_μp live on
-            # the per-stage loss objects, so an un-declared stage carries
-            # no regulariser term.
-            if stage.loss is not None:
-                self.trainer._active_loss = stage.loss
-            else:
-                self.trainer._active_loss = FullELBO(
-                    rate_lambda=stage_rate_lambda,
-                    lambda_sigma_p=0.0,
-                    lambda_mu_p=0.0,
-                )
-
-            # Surface the *resolved* per-stage knobs. The init-centering
-            # hparams factory resolves None LRs (from base_lr × mult) and a
-            # None anchor_lambda (→ lambda_mu_p) at instantiate time, so these
-            # effective values never appear in resolved_config.yaml. Log them
-            # so a run is self-describing.
-            _active = self.trainer._active_loss
-            log.info(
-                "Stage %s effective config: steps=%d, "
-                "lrs(enc=%s, dec=%s, trans=%s), lambda_ramp(start=%s, end=%s), "
-                "reg(lambda_sigma_p=%s, lambda_mu_p=%s)",
-                key,
-                int(stage.steps),
-                stage.lrs.enc_lr,
-                stage.lrs.dec_lr,
-                stage.lrs.trans_lr,
-                stage.lambda_ramp.start,
-                stage.lambda_ramp.end,
-                getattr(_active, "lambda_sigma_p", None),
-                getattr(_active, "lambda_mu_p", None),
-            )
-
-            # 5. Run the stage's training loop.  ``trainer.fit``'s
-            # ``total_steps`` is the *cumulative* max step, not per-stage,
-            # so we add the stage's start step to its budget. On a fresh
-            # stage ``_stage_start_step == global_step``; on a resumed stage
-            # it was restored from the checkpoint, so ``target`` counts the
-            # already-trained steps and fit runs exactly the remainder.
-            target = int(self.trainer._stage_start_step) + int(stage.steps)
-            self.trainer.fit(
-                train_loader=train_loader,
-                val_loader=val_loader,
-                total_steps=target,
-                validate_every=stage.val_every,
-                log_every=stage.log_every,
-                checkpoint_every=stage.checkpoint_every,
-                checkpoint_prefix=f"{key}",
-                amp=amp,
-                batch_transform=batch_transform,
-                early_stop=stage.early_stop,
-                resume_from=stage_resume,
-            )
-
-            # 6. Post-stage centering handoff. Fires *after* this stage's loop
-            # — so it snapshots the *trained* baseline — and only when a later
-            # stage will run. A terminal stage (e.g. a stage-1-only capacity
-            # probe) is skipped, leaving its final checkpoint unperturbed; a
-            # stage-2-only run never reaches a declaring stage_1, so it sees no
-            # handoff at all (no μ_p snapshot/pin, no encoder perturbation).
-            # The handoff rebuilds the optimizer with the next stage's LRs, so
-            # that next stage skips its own rebuild (skip_next_rebuild).
-            abs_idx = start_idx + i
-            has_next = (abs_idx + 1) < len(ordered)
-            if stage.centering_handoff is not None and has_next:
-                next_stage: StageSpecConf = getattr(stages, ordered[abs_idx + 1])
-                perform_centering_handoff(
-                    self.trainer,
-                    stage.centering_handoff,
-                    new_lrs=next_stage.lrs,
-                )
-                skip_next_rebuild = True

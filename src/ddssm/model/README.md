@@ -22,31 +22,26 @@ diffusion-based) scores those paths. The entry class is
 - **`decoder.py`** — `BaseDecoder` interface for `p_θ`; `forward` returns
   `(mu, logvar)` and `log_likelihood` the masked per-step observation likelihood.
 - **`losses.py`** — `LossComponents` (the unweighted per-term ELBO bag returned
-  by `DDSSM_base.forward()`: `recon`, `init_kl`, `trans_kl`, `r_sigma_p`,
-  `r_mu_p`) and the `Loss` objects (e.g. `FullELBO`) that weight and sum them,
-  carrying their own λ schedule (ADR-0004).
+  by `DDSSM_base.forward()`: `recon`, `init_kl`, `trans_kl`) and the `Loss`
+  objects (e.g. `FullELBO`) that weight and sum them, carrying their own λ
+  schedule (ADR-0004).
 
 ## Subpackages
 
 ### `transitions/`
 Pluggable transition priors implementing the `BaseTransition` interface
 (`transition_kl`, `seq_log_prob`, optional `log_prob`/`sample`/`prior_params`).
-- `GaussianTransition` — non-linear diagonal-Gaussian transition.
-- `BaselineGaussianTransition` — stage-1 Gaussian transition delegating its
-  `(μ_p, log σ_p²)` heads to a shared centering `BaseBaseline`.
-- `DiffusionTransition` — stage-2 CSDI-style diffusion transition with a centered
+- `GaussianTransition` — non-linear diagonal-Gaussian transition (ablation).
+- `DiffusionTransition` — CSDI-style diffusion transition with a centered
   ESM target `ẑ_t = z̃_t − μ_p(z_{t-1})`, `σ_data(t)`-driven EDM preconditioning,
   and VHP-via-diffusion at the initial `j` steps.
 
 ### `centering/`
-Baseline-centering machinery (model-v2). `BaseBaseline` and its forms
-(`ZeroBaseline`, `PersistenceBaseline`, `LinearBaseline`, `MLPBaseline`) provide the
-centering head `μ_p(z_{t-1})` with a sibling state-conditional `σ_p`;
-`SigmaDataBuffer` is the EMA buffer tracking the per-step centered-residual
-variance `σ_data²(t)`; `r_mu_p_loss` / `r_sigma_p_loss` are the centering
-regularizers; `perform_centering_handoff` (`CenteringHandoffConf`) runs the
-stage-1 → stage-2 handoff (snapshot μ_p, rebuild optimizer, perturb encoder,
-reset σ_data schedule). These are pure leaves consumed by reference.
+Baseline-centering machinery (model-v2). `BaseBaseline` and its parameter-free
+forms (`ZeroBaseline`, `PersistenceBaseline`) provide the centering head
+`μ_p(z_{t-1})` with a fixed unit prior variance (`σ_p² = 1`); `SigmaDataBuffer`
+is the EMA buffer tracking the per-step centered-residual variance `σ_data²(t)`
+(modes: `fixed`/`global_ema`/`per_t`). These are pure leaves consumed by reference.
 
 ### `likelihood/`
 Exact-likelihood evaluation utilities (model-v2). `solve_prob_flow_logdensity`

@@ -23,7 +23,7 @@ from ddssm.nn.diffnets import (
     FeatureMixerConfig,
     DiffResidualBlockConfig,
 )
-from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.centering.baselines import ZeroBaseline
 from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
     DiffusionScheduleConfig,
@@ -132,7 +132,7 @@ def test_transition_wires_cond_mask_channel() -> None:
     """DiffusionTransition passes the explicit cond_mask index to its U-Net."""
     emb_time = 8
     transition = DiffusionTransition(
-        baseline=MLPBaseline(latent_dim=2, j=1),
+        baseline=ZeroBaseline(latent_dim=2, j=1),
         latent_dim=2,
         j=1,
         emb_time_dim=emb_time,

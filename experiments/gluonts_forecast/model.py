@@ -43,8 +43,8 @@ from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
     DiffusionScheduleConfig,
 )
+from ddssm.model.transitions.transitions import GaussianTransition
 from ddssm.model.transitions.csdi_transition import CSDITransition
-from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
 
 
 def build_gluonts_model(
@@ -143,22 +143,12 @@ def build_gluonts_model(
     if time_mixer == "auto":
         time_mixer = "transformer" if j > 4 else "conv"
 
-    # Shared centering baseline (param-free → pinned both stages); the SAME instance
-    # threads stage-1 → stage-2 so the handoff snapshot is consistent.
+    # Parameter-free centering baseline (σ_p² = 1); consumed by the transition
+    # by reference.
     if baseline_type == "persistence":
-        baseline = PersistenceBaseline(
-            latent_dim=latent_dim,
-            j=j,
-            hidden_dim=width,
-            n_layers=2,
-        )
+        baseline = PersistenceBaseline(latent_dim=latent_dim, j=j)
     elif baseline_type == "zero":
-        baseline = ZeroBaseline(
-            latent_dim=latent_dim,
-            j=j,
-            hidden_dim=width,
-            n_layers=2,
-        )
+        baseline = ZeroBaseline(latent_dim=latent_dim, j=j)
     else:
         raise ValueError(
             f"baseline_type must be 'persistence' or 'zero'; got {baseline_type!r}"
@@ -174,13 +164,6 @@ def build_gluonts_model(
         tracking_mode=tracking_mode,
         init_value=1.0,
         ema_decay=sigma_data_ema_decay,
-    )
-
-    stage1_transition = BaselineGaussianTransition(
-        baseline=baseline,
-        latent_dim=latent_dim,
-        j=j,
-        emb_time_dim=emb_time_dim,
     )
 
     if transition_type == "diffusion":
@@ -221,11 +204,12 @@ def build_gluonts_model(
         )
     elif transition_type == "gaussian":
         # JSD/CRPS calibration baseline: unimodal Gaussian transition prior.
-        stage2_transition = BaselineGaussianTransition(
-            baseline=baseline,
+        # Standalone ablation transition; centering-independent.
+        stage2_transition = GaussianTransition(
             latent_dim=latent_dim,
             j=j,
             emb_time_dim=emb_time_dim,
+            covariate_dim=0,
         )
     elif transition_type == "csdi":
         # Literal ermongroup CSDI in the transition slot (its own capacity, its own
@@ -358,10 +342,7 @@ def build_gluonts_model(
         use_observation_mask=False,
         aux_posterior=aux_posterior,
         baseline=baseline,
-        baseline_anchor=None,  # populated by the handoff
-        baseline_mode="pinned",
         sigma_data=sigma_data,
-        stage1_transition=stage1_transition,
         # Decode the T-window in time chunks (batched, checkpointed) instead of a
         # 192× Python loop — the recon loop is the other launch-bound half of the
         # per-step cost. Same chunk knob as the diffusion ESM loss.

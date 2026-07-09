@@ -1,13 +1,12 @@
-"""Stage-2 diffusion transition for the model-v2 baseline-centering scheme.
+"""Diffusion transition for the model-v2 baseline-centering scheme.
 
-``DiffusionTransition`` implements the model-v2 stage-2 transition along
+``DiffusionTransition`` implements the model-v2 diffusion transition along
 three coupled axes from ``model-v2.org``:
 
 1. **Centered ESM target.**  The score is matched in centered
    coordinates ``ẑ_t = z̃_t − μ_p(z_{t-1})``, where μ_p comes from a
-   shared :class:`BaseBaseline` instance (the *same* baseline the
-   stage-1 :class:`BaselineGaussianTransition` uses, so μ_p's
-   parameters carry through the handoff).  The closed-form encoder
+   :class:`BaseBaseline` instance (a parameter-free centering head).
+   The closed-form encoder
    marginal score in centered coords is
    ``ŝ_q = −(ẑ − μ̂_t) / Σ_t``, where ``μ̂_t = μ_t − μ_p`` and
    ``Σ_t = σ_t² + σ̃²`` (object 2 of the "three variance objects").
@@ -273,9 +272,7 @@ class DiffusionTransition(BaseTransition):
     """Centered ESM/EDM transition with σ_data(t) tracking and VHP at t = 1 … j.
 
     Args:
-        baseline: Shared :class:`BaseBaseline` instance.  *Same* instance
-            as the stage-1 :class:`BaselineGaussianTransition`'s
-            baseline (μ_p parameters carry over the handoff).
+        baseline: :class:`BaseBaseline` centering instance (parameter-free).
         latent_dim: Latent dimension ``d``.
         j: Latent history length.
         emb_time_dim: Time embedding dimension (matches the model's).

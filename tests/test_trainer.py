@@ -247,72 +247,15 @@ def test_log_train_step_records_optimized_loss_not_unweighted_elbo(
 
 
 # ---------------------------------------------------------------------------
-# Phase B: ``StageTrainableConf.baseline`` + ELBO-plateau early-stop.
+# Optimizer-rebuild + ELBO-plateau early-stop coverage.
 # ---------------------------------------------------------------------------
 
 
-def _make_model_with_baseline():
-    """A tiny DDSSM_base with the model-v2 baseline + aux_posterior slots populated."""
-    from ddssm.nn.aux_posterior import AuxPosterior
-    from ddssm.model.centering.baselines import MLPBaseline
-    from ddssm.model.centering.sigma_data import SigmaDataBuffer
-    from ddssm.model.transitions.baseline_gaussian import BaselineGaussianTransition
-
-    base = make_small_model()
-    baseline = MLPBaseline(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=1)
-    aux = AuxPosterior(latent_dim=LATENT_DIM, j=J, hidden_dim=8, n_layers=1)
-    base.baseline = baseline
-    base.aux_posterior = aux
-    base.sigma_data = SigmaDataBuffer(T_max=8, tracking_mode="per_t")
-    base.stage1_transition = BaselineGaussianTransition(
-        baseline=baseline,
-        latent_dim=LATENT_DIM,
-        j=J,
-        emb_time_dim=EMB_TIME,
-    )
-    return base
-
-
-def test_set_trainable_baseline_field_flips_requires_grad(tmp_path):
-    """``StageTrainableConf.baseline=False`` flips ``model.baseline.parameters().requires_grad``."""
-    from ddssm.training.stages import StageTrainableConf
-
-    model = _make_model_with_baseline()
-    trainer = DDSSMTrainer(
-        model=model,
-        device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"),
-        quiet=True,
-    )
-    # Sanity: baseline params start trainable.
-    assert all(p.requires_grad for p in model.baseline.parameters())
-
-    trainer._set_trainable(StageTrainableConf(baseline=False))
-    assert all(not p.requires_grad for p in model.baseline.parameters())
-
-    trainer._set_trainable(StageTrainableConf(baseline=True))
-    assert all(p.requires_grad for p in model.baseline.parameters())
-
-
-def test_rebuild_optimizer_picks_up_baseline_params(tmp_path):
-    """After ``_rebuild_optimizer`` the AdamW groups include baseline params."""
-    from ddssm.training.stages import StageLrsConf
-
-    model = _make_model_with_baseline()
-    trainer = DDSSMTrainer(
-        model=model,
-        device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"),
-        quiet=True,
-    )
-    trainer._rebuild_optimizer(StageLrsConf())
-    baseline_param_ids = {id(p) for p in model.baseline.parameters()}
-    grouped_param_ids = {
-        id(p) for group in trainer.optimizer.param_groups for p in group["params"]
-    }
-    assert baseline_param_ids & grouped_param_ids, (
-        "baseline parameters missing from the rebuilt optimizer"
-    )
+# The ``_make_model_with_baseline`` fixture and the tests below relied on
+# parametric baselines (MLPBaseline) + ``BaselineGaussianTransition`` +
+# ``StageTrainableConf.baseline`` — all removed when the parametric
+# baselines were retired. The remaining trainable/rebuild-optimizer coverage
+# lives in tests/test_training/test_param_split.py.
 
 
 def test_rebuild_optimizer_keeps_frozen_params_in_groups(tmp_path):
@@ -327,22 +270,22 @@ def test_rebuild_optimizer_keeps_frozen_params_in_groups(tmp_path):
     """
     from ddssm.training.stages import StageLrsConf, StageTrainableConf
 
-    model = _make_model_with_baseline()
+    model = make_small_model()
     trainer = DDSSMTrainer(
         model=model,
         device=torch.device("cpu"),
         tensorboard_dir=str(tmp_path / "tb"),
         quiet=True,
     )
-    # Freeze the baseline BEFORE the rebuild — the old filter dropped it here.
-    trainer._set_trainable(StageTrainableConf(baseline=False))
+    # Freeze the encoder BEFORE the rebuild — the old filter dropped it here.
+    trainer._set_trainable(StageTrainableConf(encoder=False))
     trainer._rebuild_optimizer(StageLrsConf())
 
-    baseline_param_ids = {id(p) for p in model.baseline.parameters()}
+    encoder_param_ids = {id(p) for p in model.encoder.parameters()}
     grouped_param_ids = {
         id(p) for group in trainer.optimizer.param_groups for p in group["params"]
     }
-    assert baseline_param_ids <= grouped_param_ids, (
+    assert encoder_param_ids <= grouped_param_ids, (
         "params frozen at rebuild time were dropped from the optimizer groups"
     )
 
