@@ -433,10 +433,10 @@ def test_validation_runs_under_ema_swap(small_model, tmp_path):
 
 
 def test_warn_ema_decay_too_high_for_budget(small_model, tmp_path, caplog):
-    """``fit`` warns when ema_decay's time constant exceeds 5% of ``total_steps``.
+    """``_warn_if_ema_decay_too_high`` fires when τ/budget > 5%.
 
-    τ = 1 / (1 − decay). Budget 500, decay 0.9999 → τ = 10_000 (2000% of budget),
-    which is the footgun the warning targets.
+    τ = 1 / (1 − decay). Budget 500, decay 0.9999 → τ = 10_000 (2000% of budget) —
+    warn. Budget 500, decay 0.9 → τ = 10 (2%) — silent. Also boundary + edges.
     """
     import logging
 
@@ -446,47 +446,22 @@ def test_warn_ema_decay_too_high_for_budget(small_model, tmp_path, caplog):
         tensorboard_dir=str(tmp_path / "tb"),
         quiet=True,
     )
-    trainer.ema_decay = 0.9999
-    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
-    with caplog.at_level(logging.WARNING, logger="ddssm.training.train"):
-        trainer.fit(
-            train_loader=loader,
-            val_loader=None,
-            total_steps=500,
-            validate_every=0,
-            log_every=1,
-            checkpoint_every=None,
-            amp=False,
-        )
-    ema_warns = [r for r in caplog.records if "[ema]" in r.getMessage()]
-    assert ema_warns, "expected an [ema] warning for decay=0.9999 on a 500-step budget"
 
+    def _run(decay: float, total_steps: int) -> list[str]:
+        trainer.ema_decay = decay
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="ddssm.training.train"):
+            trainer._warn_if_ema_decay_too_high(total_steps)
+        return [r.getMessage() for r in caplog.records if "[ema]" in r.getMessage()]
 
-def test_no_ema_warn_when_decay_matches_budget(small_model, tmp_path, caplog):
-    """A decay whose window is ≤5% of the budget must NOT trigger the warning."""
-    import logging
-
-    trainer = DDSSMTrainer(
-        model=small_model,
-        device=torch.device("cpu"),
-        tensorboard_dir=str(tmp_path / "tb"),
-        quiet=True,
-    )
-    # τ = 1/(1-0.9) = 10 steps → 5% of a 200-step budget: exactly at the cutoff.
-    trainer.ema_decay = 0.9
-    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
-    with caplog.at_level(logging.WARNING, logger="ddssm.training.train"):
-        trainer.fit(
-            train_loader=loader,
-            val_loader=None,
-            total_steps=200,
-            validate_every=0,
-            log_every=1,
-            checkpoint_every=None,
-            amp=False,
-        )
-    ema_warns = [r for r in caplog.records if "[ema]" in r.getMessage()]
-    assert not ema_warns, f"unexpected [ema] warnings: {[r.getMessage() for r in ema_warns]}"
+    # Warn: decay=0.9999 with 500 steps — the footgun the warning targets.
+    assert _run(0.9999, 500), "expected an [ema] warning for τ/budget=2000%"
+    # Silent: decay=0.9 (τ=10) with 500-step budget (2% of budget).
+    assert not _run(0.9, 500), "unexpected warning at τ/budget=2%"
+    # Silent edge: decay=1.0 has no defined τ; treat as swap-only, no warn.
+    assert not _run(1.0, 500)
+    # Silent edge: total_steps=0 (should not divide-by-zero, no warn).
+    assert not _run(0.9999, 0)
 
 
 def test_elbo_plateau_disabled_runs_full_budget(small_model, tmp_path):
@@ -522,7 +497,7 @@ def test_train_meters_reset_between_stages(small_model, tmp_path):
     seeded with a stage-1 value and then updated with a stage-2 value must
     report only the stage-2 value.
     """
-    from ddssm.training.loggers import MetricStore, MetricSpec
+    from ddssm.training.loggers import MetricSpec, MetricStore
 
     store = MetricStore(
         spec=[MetricSpec("loss/*", "mean")],
