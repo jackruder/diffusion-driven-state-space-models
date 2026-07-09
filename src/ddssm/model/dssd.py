@@ -20,10 +20,10 @@ from ddssm.model.decoder import BaseDecoder
 from ddssm.model.encoder import (
     BaseEncoder,
 )
+from ddssm.training.stages import LambdaRampConf, LrScheduleGroupConf
 from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.model.centering.baselines import BaseBaseline, PersistenceBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
-from ddssm.model.transitions.transitions import BaseTransition
 
 
 @dataclass
@@ -1034,6 +1034,8 @@ def _default_hyperparams():
         trans_lr=5e-4,
         logvar_min=-13.0,
         logvar_max=13.0,
+        lambda_ramp=None,
+        lr_schedule=None,
     )
 
 
@@ -1070,3 +1072,11 @@ class DDSSMHyperParamsConf:
 
     logvar_min: float = -13.0
     logvar_max: float = 13.0
+
+    # Optional λ-ramp for the FullELBO rate weight on the φθ-side KL terms.
+    # ``None`` (default) keeps the constant λ ≡ 1.0 behavior.
+    lambda_ramp: LambdaRampConf | None = None
+    # Optional per-role LR schedule (φθ / ψ). ``None`` keeps constant LR.
+    # Enabling requires ``lambda_ramp`` set (the resolver anchors decay
+    # windows to λ_end = lambda_ramp.delay + lambda_ramp.steps).
+    lr_schedule: LrScheduleGroupConf | None = None

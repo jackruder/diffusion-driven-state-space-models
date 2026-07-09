@@ -205,6 +205,7 @@ class DDSSMTrainer:
                     weight_decay=self.hparams.weight_decay,
                     psi_betas=self._hparams_psi_betas(),
                     weight_decay_psi=getattr(self.hparams, "weight_decay_psi", None),
+                    claim_psi=getattr(self.hparams, "lr_schedule", None) is not None,
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,
@@ -526,6 +527,70 @@ class DDSSMTrainer:
         )
         self._schedulers = [sched, sched_psi]
 
+    def _install_lr_schedule(
+        self,
+        group_conf,
+        total_steps: int,
+        lambda_ramp,
+    ) -> None:
+        """Install per-role LR schedules from a :class:`LrScheduleGroupConf`.
+
+        ``None`` group_conf is a no-op. Otherwise the resolver fills any
+        None fields from ``lambda_ramp`` + ``total_steps`` (see
+        :func:`resolve_lr_schedule_defaults`) and per-role
+        :func:`make_lr_lambda` callables are attached to the current
+        optimizer topology:
+
+        - Single-optimizer mode: one ``LambdaLR`` whose per-group
+          ``lr_lambda`` list dispatches on each param group's ``role`` tag
+          (``role="phith"`` default when absent). Delegates to
+          :meth:`_install_scheduler` so the legacy install path is reused.
+        - Split-loss mode: two independent ``LambdaLR`` — φθ side on
+          ``_optimizers[0]`` with the φθ schedule, ψ side on ``opt_psi``
+          with the ψ schedule (NOT a broadcast of φθ's). ``self.scheduler``
+          is aliased to the φθ one for the legacy accessor.
+        """
+        if group_conf is None:
+            return
+        from ddssm.training.stages import (
+            make_lr_lambda,
+            resolve_lr_schedule_defaults,
+        )
+
+        resolved = resolve_lr_schedule_defaults(
+            group_conf, lambda_ramp, total_steps
+        )
+        phith_fn = make_lr_lambda(resolved.phith)
+        psi_fn = make_lr_lambda(resolved.psi)
+
+        def _per_group_lambda(opt):
+            return [
+                (phith_fn if g.get("role", "phith") == "phith" else psi_fn)
+                for g in opt.param_groups
+            ]
+
+        if len(self._optimizers) < 2:
+            opt = self._optimizers[0]
+            sched = torch.optim.lr_scheduler.LambdaLR(
+                opt, lr_lambda=_per_group_lambda(opt)
+            )
+            self._install_scheduler(sched)
+            return
+
+        # Split mode: build both schedulers directly. Do NOT route through
+        # ``_install_scheduler`` — it would broadcast φθ's lambda across
+        # the ψ optimizer, which is exactly the asymmetry we exist to fix.
+        opt_phith = self._optimizers[0]
+        opt_psi = self._optimizers[1]
+        sched_phith = torch.optim.lr_scheduler.LambdaLR(
+            opt_phith, lr_lambda=_per_group_lambda(opt_phith)
+        )
+        sched_psi = torch.optim.lr_scheduler.LambdaLR(
+            opt_psi, lr_lambda=_per_group_lambda(opt_psi)
+        )
+        self.scheduler = sched_phith
+        self._schedulers = [sched_phith, sched_psi]
+
     def _rebuild_optimizer(
         self,
         lrs,
@@ -572,6 +637,7 @@ class DDSSMTrainer:
             weight_decay=self.weight_decay,
             psi_betas=self._hparams_psi_betas(),
             weight_decay_psi=self.weight_decay_psi,
+            claim_psi=getattr(self.hparams, "lr_schedule", None) is not None,
         )
         self.optimizer = torch.optim.AdamW(groups, betas=(0.9, 0.999), eps=1e-8)
         self._optimizers = [self.optimizer]
@@ -767,15 +833,24 @@ class DDSSMTrainer:
             np.random.set_state(ckpt.rng_state["numpy"])
             random.setstate(ckpt.rng_state["python"])
 
-    def _build_default_loss(self):
-        """Default loss when the caller declares none: full ELBO, no rate ramp.
+    def _build_default_loss(self, total_steps: int):
+        """Default loss when the caller declares none.
 
-        Post-ADR-0004 all λ-shape config lives on the loss object (not
-        ``Hparams``), so the default is simply the unramped full ELBO.
+        When ``hparams.lambda_ramp`` is set, wrap the FullELBO's rate weight
+        in :func:`make_lambda_cosine` anchored to ``total_steps``; otherwise
+        return the constant-λ FullELBO.
         """
         from ddssm.model.losses import FullELBO
+        from ddssm.training.stages import make_lambda_cosine
 
-        return FullELBO(rate_lambda=lambda _step: 1.0)
+        ramp = getattr(self.hparams, "lambda_ramp", None)
+        if ramp is None:
+            return FullELBO(rate_lambda=lambda _step: 1.0)
+        return FullELBO(
+            rate_lambda=make_lambda_cosine(
+                ramp, total_steps=total_steps, default_end=1.0
+            )
+        )
 
     def _move_batch_to_device(self, batch: dict, device: torch.device) -> dict:
         return {
@@ -1049,6 +1124,38 @@ class DDSSMTrainer:
         log_values["optim/grad_skips"] = torch.tensor(
             float(self.grad_skip_count), device=device
         )
+        # Per-role LR diagnostics: emit both keys when both roles exist so a
+        # scheduled run's asymmetric decay is directly visible in metrics.csv.
+        # Split mode reads each optimizer's first group; single mode picks
+        # the first group per ``role`` tag (roles present when either an
+        # lr_schedule was requested via hparams or the caller opted in via
+        # claim_psi/psi_betas/weight_decay_psi).
+        if len(self._optimizers) > 1:
+            log_values["optim/lr_phith"] = torch.tensor(
+                float(self._optimizers[0].param_groups[0]["lr"]), device=device
+            )
+            log_values["optim/lr_psi"] = torch.tensor(
+                float(self._optimizers[1].param_groups[0]["lr"]), device=device
+            )
+        else:
+            phith_lrs = [
+                g["lr"]
+                for g in self._optimizers[0].param_groups
+                if g.get("role", "phith") == "phith"
+            ]
+            psi_lrs = [
+                g["lr"]
+                for g in self._optimizers[0].param_groups
+                if g.get("role") == "psi"
+            ]
+            if phith_lrs:
+                log_values["optim/lr_phith"] = torch.tensor(
+                    float(phith_lrs[0]), device=device
+                )
+            if psi_lrs:
+                log_values["optim/lr_psi"] = torch.tensor(
+                    float(psi_lrs[0]), device=device
+                )
         self.metrics.update(split="train", values=log_values, weight=accum_weight)
         if log_every and (step % log_every == 0):
             self.metrics.step_end("train", self.global_step)
@@ -1296,7 +1403,7 @@ class DDSSMTrainer:
         # orchestrator installs one per stage; for single-fit runs we
         # build a default ``FullELBO`` from hparams here.
         if self._active_loss is None:
-            self._active_loss = self._build_default_loss()
+            self._active_loss = self._build_default_loss(total_steps)
 
         # Split-loss topology decision happens here (not __init__): the
         # orchestrator installs the per-stage loss after construction.
@@ -1327,6 +1434,7 @@ class DDSSMTrainer:
                     weight_decay=self.hparams.weight_decay,
                     psi_betas=self._hparams_psi_betas(),
                     weight_decay_psi=self.weight_decay_psi,
+                    claim_psi=getattr(self.hparams, "lr_schedule", None) is not None,
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,
@@ -1339,6 +1447,18 @@ class DDSSMTrainer:
             # scheduler when one is installed (it may need reinstalling —
             # _rebuild_optimizer warns on that), drop the ψ-side one.
             self._schedulers = [self.scheduler] if self.scheduler is not None else []
+
+        # Install per-role LR schedules from hparams (opt-in). Runs AFTER
+        # topology reconciliation so it sees the final optimizer list, and
+        # BEFORE _safe_resume so the checkpoint scheduler-contract guards
+        # (in restore_from_checkpoint) see the live schedulers. No-op
+        # when hparams.lr_schedule is None or already installed.
+        if getattr(self.hparams, "lr_schedule", None) is not None and not self._schedulers:
+            self._install_lr_schedule(
+                self.hparams.lr_schedule,
+                total_steps=int(total_steps),
+                lambda_ramp=getattr(self.hparams, "lambda_ramp", None),
+            )
 
         # Rolling window for the ELBO-plateau early-stop check.
         es_active = bool(early_stop and early_stop.enabled)

@@ -300,3 +300,160 @@ def test_local_param_groups_decay_split_preserved_per_side(vhp_model):
     assert embed_ids <= no_decay_psi_ids, (
         "embed_layer params should be in ψ's no-decay group (it's nn.Embedding)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Role-tagging tests (new: param-group role="phith" / role="psi" tagging).
+# ---------------------------------------------------------------------------
+
+
+def test_all_groups_have_role_key_no_psi_args(vhp_model):
+    """Every group from ``param_groups_for_adamw`` (no ψ args) carries ``role``.
+
+    With the ψ pre-claim gate closed (no ``psi_betas``, no
+    ``weight_decay_psi``, no ``claim_psi``), all groups are on the φθ
+    side — every group must carry ``role="phith"`` and none may carry
+    ``role="psi"``.
+    """
+    groups = param_groups_for_adamw(
+        vhp_model,
+        enc_lr=1e-3,
+        dec_lr=1e-4,
+        trans_lr=5e-4,
+        weight_decay=1e-4,
+    )
+    assert all("role" in g for g in groups), "every group must carry a 'role' key"
+    assert all(g["role"] == "phith" for g in groups), (
+        "with gate closed, all groups must be role='phith'"
+    )
+
+
+def test_claim_psi_no_psi_args_tags_score_net_psi(vhp_model):
+    """``claim_psi=True`` with no other ψ args routes score-net to role="psi".
+
+    Checks:
+    - diffmodel + embed_layer params land in role="psi" groups.
+    - ψ groups carry weight_decay equal to the global ``weight_decay``
+      (fallback; no ``weight_decay_psi`` supplied).
+    - ψ groups carry NO ``"betas"`` key (no ``psi_betas`` supplied).
+    - All params covered exactly once (exhaustive, disjoint).
+    - Non-score-net groups carry role="phith".
+    """
+    WD = 2e-4
+    groups = param_groups_for_adamw(
+        vhp_model,
+        enc_lr=1e-3,
+        dec_lr=1e-4,
+        trans_lr=5e-4,
+        weight_decay=WD,
+        claim_psi=True,
+    )
+    score_ids = _ids(vhp_model.transition.diffmodel.parameters()) | _ids(
+        vhp_model.transition.embed_layer.parameters()
+    )
+    psi_groups = [g for g in groups if g.get("role") == "psi"]
+    phith_groups = [g for g in groups if g.get("role") == "phith"]
+
+    assert all("role" in g for g in groups), "every group must carry a 'role' key"
+
+    # Score-net ids must land exclusively in psi groups
+    assert _group_ids(psi_groups) == score_ids, (
+        "psi groups must cover exactly the score-net params"
+    )
+
+    # Fallback weight_decay applied to ψ decay groups (no override given)
+    for g in psi_groups:
+        assert g["weight_decay"] in (WD, 0.0), (
+            "ψ group weight_decay must be WD or 0 (no betas)"
+        )
+
+    # No betas key on ψ groups when psi_betas not given
+    assert all("betas" not in g for g in psi_groups), (
+        "no 'betas' key expected without psi_betas"
+    )
+
+    # φθ groups must not contain any score-net params
+    assert not (_group_ids(phith_groups) & score_ids), (
+        "φθ groups must not contain score-net params"
+    )
+
+    # Exhaustive and disjoint: all model params covered exactly once
+    all_model_ids = {id(p) for p in vhp_model.parameters()}
+    assert _group_ids(groups) == all_model_ids, "groups must cover all model params"
+
+
+def test_claim_psi_with_weight_decay_psi_zero_honored(vhp_model):
+    """``weight_decay_psi=0.0`` overrides the fallback on ψ decay groups."""
+    WD = 1e-4
+    groups = param_groups_for_adamw(
+        vhp_model,
+        enc_lr=1e-3,
+        dec_lr=1e-4,
+        trans_lr=5e-4,
+        weight_decay=WD,
+        claim_psi=True,
+        weight_decay_psi=0.0,
+    )
+    score_ids = _ids(vhp_model.transition.diffmodel.parameters()) | _ids(
+        vhp_model.transition.embed_layer.parameters()
+    )
+    for g in groups:
+        gids = {id(p) for p in g["params"]}
+        if gids & score_ids:
+            assert gids <= score_ids, "ψ groups must not mix in φθ params"
+            assert g["weight_decay"] == 0.0, (
+                "weight_decay_psi=0.0 must force ψ groups to wd=0.0"
+            )
+            assert g.get("role") == "psi"
+        else:
+            assert g.get("role") == "phith"
+
+
+def test_param_groups_phith_all_role_phith(vhp_model):
+    """All groups from ``param_groups_phith`` carry ``role="phith"``."""
+    for model in (vhp_model, make_small_model()):
+        groups = param_groups_phith(
+            model,
+            enc_lr=1e-3,
+            dec_lr=1e-4,
+            trans_lr=5e-4,
+            weight_decay=0.01,
+        )
+        assert groups, "param_groups_phith must return non-empty list"
+        assert all("role" in g for g in groups), "every group must carry a 'role' key"
+        assert all(g["role"] == "phith" for g in groups), (
+            "param_groups_phith must tag all groups role='phith'"
+        )
+
+
+def test_param_groups_psi_all_role_psi(vhp_model):
+    """All groups from ``param_groups_psi`` carry ``role="psi"``."""
+    groups = param_groups_psi(vhp_model, trans_lr=5e-4, weight_decay=0.01)
+    assert groups, "param_groups_psi must return non-empty list for diffusion model"
+    assert all("role" in g for g in groups), "every group must carry a 'role' key"
+    assert all(g["role"] == "psi" for g in groups), (
+        "param_groups_psi must tag all groups role='psi'"
+    )
+
+
+def test_none_equivalence_tests_still_pass_with_identical_roles(vhp_model):
+    """The None-equivalence contracts still hold: same keys, same structure.
+
+    With both ``weight_decay_psi=None`` and ``psi_betas=None`` the gate
+    is closed (no pre-claim), both calls emit identical role keys, and
+    structures are identical — mirroring the assertions in
+    ``test_weight_decay_psi_none_leaves_groups_untouched`` and
+    ``test_psi_betas_none_leaves_groups_untouched``.
+    """
+    kwargs = dict(enc_lr=1e-3, dec_lr=1e-4, trans_lr=5e-4, weight_decay=1e-4)
+    plain = param_groups_for_adamw(vhp_model, **kwargs)
+    none_wd = param_groups_for_adamw(vhp_model, weight_decay_psi=None, **kwargs)
+    none_betas = param_groups_for_adamw(vhp_model, psi_betas=None, **kwargs)
+
+    for variant in (none_wd, none_betas):
+        assert len(plain) == len(variant)
+        for a, b in zip(plain, variant):
+            assert a.keys() == b.keys(), "key sets must be identical"
+            assert a.get("role") == b.get("role"), "role values must match"
+            assert [id(p) for p in a["params"]] == [id(p) for p in b["params"]]
+            assert a["lr"] == b["lr"] and a["weight_decay"] == b["weight_decay"]

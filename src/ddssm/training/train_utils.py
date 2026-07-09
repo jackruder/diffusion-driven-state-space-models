@@ -161,6 +161,7 @@ def _append_module_param_groups(
     lr: float | None,
     weight_decay: float,
     betas: tuple[float, float] | None = None,
+    role: str = "",
 ) -> None:
     """Append the decay/no-decay AdamW groups for one module.
 
@@ -187,6 +188,11 @@ def _append_module_param_groups(
         betas: Optional per-group Adam betas; when not ``None`` the
             appended group dicts carry a ``"betas"`` key, otherwise no
             such key is emitted.
+        role: Optional role tag for the emitted groups. When non-empty,
+            both the decay and no-decay group dicts carry a ``"role"``
+            key set to this value; empty string (default) emits no
+            ``"role"`` key so external callers that pre-date this arg
+            are unaffected.
     """
     if module is None or lr is None:
         return
@@ -236,11 +242,15 @@ def _append_module_param_groups(
         }
         if betas is not None:
             group["betas"] = betas
+        if role:
+            group["role"] = role
         groups.append(group)
     if nodecay_params:
         group = {"params": nodecay_params, "lr": lr, "weight_decay": 0.0}
         if betas is not None:
             group["betas"] = betas
+        if role:
+            group["role"] = role
         groups.append(group)
 
 
@@ -253,6 +263,7 @@ def param_groups_for_adamw(
     baseline_lr: float | None = None,
     psi_betas: tuple[float, float] | None = None,
     weight_decay_psi: float | None = None,
+    claim_psi: bool = False,
 ):
     """Build per-component AdamW parameter groups with selective weight decay.
 
@@ -280,11 +291,19 @@ def param_groups_for_adamw(
             ``None`` (default) the output is identical to the
             pre-``psi_betas`` behavior: no group carries a ``betas`` key.
         weight_decay_psi: Optional weight decay for the score-net family's
-            decay groups (same ψ assignment as ``psi_betas``). ``None``
-            (default) applies ``weight_decay`` uniformly.
+            decay groups (same ψ assignment as ``psi_betas``). When
+            ``None`` (default) the ψ decay groups fall back to the global
+            ``weight_decay``; ``0.0`` is honored as an explicit override.
+        claim_psi: When ``True``, activate the ψ pre-claim gate even if
+            neither ``psi_betas`` nor ``weight_decay_psi`` is given. This
+            routes ``transition.diffmodel`` and ``transition.embed_layer``
+            into ``role="psi"`` groups while keeping the gate closed for
+            callers that pass neither arg. Default ``False``.
 
     Returns:
         List of parameter-group dicts ready to pass to ``torch.optim.AdamW``.
+        Every group carries a ``"role"`` key (``"phith"`` or ``"psi"``)
+        for downstream scheduler routing.
     """
     groups = []
     # Some submodules (notably ``baseline``) are reachable from multiple
@@ -303,6 +322,7 @@ def param_groups_for_adamw(
         lr: float,
         betas: tuple[float, float] | None = None,
         wd: float | None = None,
+        role: str = "",
     ):
         _append_module_param_groups(
             groups,
@@ -311,34 +331,37 @@ def param_groups_for_adamw(
             lr,
             weight_decay if wd is None else wd,
             betas=betas,
+            role=role,
         )
 
-    add_module(getattr(model, "encoder", None), enc_lr)
-    add_module(getattr(model, "decoder", None), dec_lr)
+    add_module(getattr(model, "encoder", None), enc_lr, role="phith")
+    add_module(getattr(model, "decoder", None), dec_lr, role="phith")
 
     transition = getattr(model, "transition", None)
-    if psi_betas is not None or weight_decay_psi is not None:
+    if psi_betas is not None or weight_decay_psi is not None or claim_psi:
         # Claim the score-net family first so exactly its groups carry
-        # the per-group betas / ψ weight decay; the remaining transition
-        # params follow in untagged groups.
+        # the per-group betas / ψ weight decay and role tag; the remaining
+        # transition params follow in phith groups.
+        wd_psi = weight_decay_psi if weight_decay_psi is not None else weight_decay
         for name in _PSI_TRANSITION_SUBMODULES:
             add_module(
                 getattr(transition, name, None) if transition is not None else None,
                 trans_lr,
                 betas=tuple(psi_betas) if psi_betas is not None else None,
-                wd=weight_decay_psi,
+                wd=wd_psi,
+                role="psi",
             )
-    add_module(transition, trans_lr)
+    add_module(transition, trans_lr, role="phith")
 
     # Capture top-level static embeddings (using encoder's LR)
-    add_module(getattr(model, "static_embeddings", None), enc_lr)
+    add_module(getattr(model, "static_embeddings", None), enc_lr, role="phith")
 
     # model-v2 slots: aux_posterior shares the encoder LR (it's part of the
     # variational-inference family); baseline gets its own LR, defaulting to
     # trans_lr if not provided.
-    add_module(getattr(model, "aux_posterior", None), enc_lr)
+    add_module(getattr(model, "aux_posterior", None), enc_lr, role="phith")
     bl_lr = trans_lr if baseline_lr is None else baseline_lr
-    add_module(getattr(model, "baseline", None), bl_lr)
+    add_module(getattr(model, "baseline", None), bl_lr, role="phith")
 
     return groups
 
@@ -357,7 +380,8 @@ def param_groups_phith(
     assignment, and decay/no-decay split) restricted to the φθ side of
     :func:`split_params_phith_psi`: the score-net family
     (``transition.diffmodel`` + ``transition.embed_layer``) is
-    pre-claimed and therefore excluded from every group.
+    pre-claimed and therefore excluded from every group.  Every emitted
+    group carries ``role="phith"``.
 
     Args:
         model: The ``DDSSM_base`` model.
@@ -370,6 +394,7 @@ def param_groups_phith(
 
     Returns:
         List of parameter-group dicts ready to pass to ``torch.optim.AdamW``.
+        Every group carries ``role="phith"``.
 
     Raises:
         ValueError: If a transition top-level submodule has no explicit
@@ -385,7 +410,9 @@ def param_groups_phith(
         claimed_ids.update(id(p) for p in module.parameters())
 
     def add_module(module: nn.Module | None, lr: float) -> None:
-        _append_module_param_groups(groups, claimed_ids, module, lr, weight_decay)
+        _append_module_param_groups(
+            groups, claimed_ids, module, lr, weight_decay, role="phith"
+        )
 
     add_module(getattr(model, "encoder", None), enc_lr)
     add_module(getattr(model, "decoder", None), dec_lr)
@@ -409,7 +436,8 @@ def param_groups_psi(
     ``transition.embed_layer`` — with the same decay/no-decay rules as
     :func:`param_groups_for_adamw` (``embed_layer`` is an
     ``nn.Embedding`` and lands in the zero-weight-decay group). For a
-    non-diffusion transition the result is an empty list.
+    non-diffusion transition the result is an empty list. Every emitted
+    group carries ``role="psi"``.
 
     Args:
         model: The ``DDSSM_base`` model.
@@ -418,6 +446,7 @@ def param_groups_psi(
 
     Returns:
         List of parameter-group dicts ready to pass to ``torch.optim.AdamW``.
+        Every group carries ``role="psi"``.
 
     Raises:
         ValueError: If a transition top-level submodule has no explicit
@@ -428,7 +457,9 @@ def param_groups_psi(
     groups: list[dict] = []
     claimed_ids: set[int] = set()
     for module in _iter_psi_modules(model):
-        _append_module_param_groups(groups, claimed_ids, module, trans_lr, weight_decay)
+        _append_module_param_groups(
+            groups, claimed_ids, module, trans_lr, weight_decay, role="psi"
+        )
     return groups
 
 
