@@ -63,13 +63,12 @@ def _measure_centered_residual_norm(model, data) -> float:
         return total / max(count, 1)
 
 
-@pytest.mark.parametrize("baseline_form", ["zero", "mlp"])
-def test_centered_residual_norm_shrinks_during_stage1(baseline_form: str) -> None:
-    """After stage-1 training, ‖μ̂_t‖ has shrunk vs. its random-init value."""
+@pytest.mark.parametrize("baseline_form", ["zero", "persistence"])
+def test_centered_residual_norm_shrinks_during_training(baseline_form: str) -> None:
+    """After a short single-phase run, ‖μ̂_t‖ has shrunk vs. its random-init value."""
     torch.manual_seed(0)
     model = make_vhp_model(
         baseline_form=baseline_form,
-        lambda_sigma_p=1e-2,
         tracking_mode="per_t",
     )
     batch = make_smooth_sine_data(n_seqs=32, T=8, seed=99)
@@ -77,10 +76,8 @@ def test_centered_residual_norm_shrinks_during_stage1(baseline_form: str) -> Non
     # Baseline measurement at init.
     pre_norm = _measure_centered_residual_norm(model, batch)
 
-    # Train stage 1.
     run_stage(
         model=model,
-        stage="stage_1",
         data_factory=lambda: make_smooth_sine_data(
             n_seqs=8,
             T=8,

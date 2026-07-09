@@ -98,8 +98,6 @@ def _build_trainer(
     )
     trainer._active_loss = FullELBO(
         rate_lambda=lambda _step: 1.0,
-        lambda_sigma_p=0.0,
-        lambda_mu_p=0.0,
         use_split_loss=use_split_loss,
     )
     return trainer
@@ -169,17 +167,13 @@ def test_single_vs_split_agree_at_unit_weight_end_to_end(tmp_path):
         torch.manual_seed(0)
         np.random.seed(0)
         model = make_vhp_model(
-            baseline_form="mlp",
-            baseline_mode="pinned",
+            baseline_form="persistence",
             tracking_mode="fixed",
-            lambda_sigma_p=0.0,
             sigma_data_init=1.0,
-            snapshot_anchor=False,
         )
         # Unit-weight semantics need uniform k-sampling; the fixture's
         # schedule already provides it (cached at transition __init__).
         assert model.transition.k_sampling_mode == "uniform"
-        model.stage_selector = "stage_2"
         return model
 
     model_single = _seeded_model()
@@ -277,14 +271,10 @@ def test_single_loss_off_path_regresses_none():
     np.random.seed(M8_SEED)
     model = make_vhp_model(
         baseline_form=M8_CONFIG["baseline_form"],
-        baseline_mode=M8_CONFIG["baseline_mode"],
         tracking_mode=M8_CONFIG["tracking_mode"],
-        lambda_sigma_p=M8_CONFIG["lambda_sigma_p"],
         sigma_data_init=M8_CONFIG["sigma_data_init"],
-        snapshot_anchor=M8_CONFIG["snapshot_anchor"],
     )
     model.train()
-    model.stage_selector = "stage_2"
 
     def data_factory():
         return make_random_walk_data(
@@ -296,7 +286,6 @@ def test_single_loss_off_path_regresses_none():
     torch.manual_seed(M8_SEED)
     metrics_log = run_stage(
         model=model,
-        stage="stage_2",
         data_factory=data_factory,
         n_steps=5,
         lr=M8_CONFIG["lr"],
@@ -341,14 +330,10 @@ def test_split_loss_end_to_end_finite_updates(tmp_path):
     torch.manual_seed(0)
     np.random.seed(0)
     model = make_vhp_model(
-        baseline_form="mlp",
-        baseline_mode="pinned",
+        baseline_form="persistence",
         tracking_mode="fixed",
-        lambda_sigma_p=0.0,
         sigma_data_init=1.0,
-        snapshot_anchor=False,
     )
-    model.stage_selector = "stage_2"
 
     trainer = _build_trainer(model, tmp_path=tmp_path, use_split_loss=True)
     _fit_n_steps(trainer, n_steps=3, seed=0)
@@ -416,14 +401,10 @@ def test_grad_skip_recovers_training(tmp_path):
     torch.manual_seed(0)
     np.random.seed(0)
     model = make_vhp_model(
-        baseline_form="mlp",
-        baseline_mode="pinned",
+        baseline_form="persistence",
         tracking_mode="fixed",
-        lambda_sigma_p=0.0,
         sigma_data_init=1.0,
-        snapshot_anchor=False,
     )
-    model.stage_selector = "stage_2"
 
     trainer = _build_trainer(model, tmp_path=tmp_path, use_split_loss=False)
 
@@ -497,14 +478,10 @@ def test_clip_grad_norm_bounds_gradient(tmp_path):
     torch.manual_seed(0)
     np.random.seed(0)
     model = make_vhp_model(
-        baseline_form="mlp",
-        baseline_mode="pinned",
+        baseline_form="persistence",
         tracking_mode="fixed",
-        lambda_sigma_p=0.0,
         sigma_data_init=1.0,
-        snapshot_anchor=False,
     )
-    model.stage_selector = "stage_2"
     trainer = _build_trainer(model, tmp_path=tmp_path, use_split_loss=False)
 
     clip_value = 1e-3

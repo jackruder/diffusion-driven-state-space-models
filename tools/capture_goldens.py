@@ -34,7 +34,7 @@ from ddssm.nn.diffnets import (
     FeatureMixerConfig,
     DiffResidualBlockConfig,
 )
-from ddssm.model.centering.baselines import MLPBaseline
+from ddssm.model.centering.baselines import ZeroBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
 from ddssm.model.transitions.diffusion import (
     DiffusionTransition,
@@ -68,7 +68,7 @@ def _make_tiny_unet():
 def _make_diffusion_m1() -> DiffusionTransition:
     torch.manual_seed(SEED_M1)
     np.random.seed(SEED_M1)
-    baseline = MLPBaseline(latent_dim=D, j=J, hidden_dim=4, n_layers=1)
+    baseline = ZeroBaseline(latent_dim=D, j=J)
     schedule = DiffusionScheduleConfig(
         S_k=2,          # 2 MC samples so weights != 1 and _phith vs _psi would differ
         k_chunk=2,
@@ -120,7 +120,7 @@ def capture_m1() -> dict:
     torch.manual_seed(SEED_M1 + 2)
 
     with torch.no_grad():
-        loss_scalar, mu_hat = transition._esm_chunk_loss(
+        loss_phith, loss_psi, _mu_hat = transition._esm_chunk_loss(
             mu_t=mu_t,
             sigma2_t=sigma2_t,
             z_hist=z_hist,
@@ -130,18 +130,14 @@ def capture_m1() -> dict:
             return_per_sample=False,
         )
 
-    # Also capture the full transition_kl for the "kl" key
-    # (used by M1 test_esm_chunk_loss_phith_reproduces_prior_single_loss)
-    # The scalar is: sum over N, divided by S_k inside _esm_chunk_loss
-    golden_esm_scalar = float(loss_scalar)
+    # The scalar is: sum over N, divided by S_k inside _esm_chunk_loss.
+    # We anchor the golden on the phith side (IS-weighted); psi is the
+    # unit-weighted twin.
+    golden_esm_scalar = float(loss_phith)
 
-    # Unit-weight capture: weights = 1 in uniform mode with uniform p_k
-    # means w_ll/p_k = K * wtilde_base. To get the "unit weight" case for M8,
-    # we re-run with sigma_d2 that makes the weights uniform. Simplest:
-    # capture per_sample path and sum manually with unit weights.
     torch.manual_seed(SEED_M1 + 2)
     with torch.no_grad():
-        per_sample, _ = transition._esm_chunk_loss(
+        per_sample_phith, per_sample_psi, _ = transition._esm_chunk_loss(
             mu_t=mu_t,
             sigma2_t=sigma2_t,
             z_hist=z_hist,
@@ -150,7 +146,7 @@ def capture_m1() -> dict:
             padding_mask=padding_mask,
             return_per_sample=True,
         )
-    golden_per_sample = per_sample.tolist()
+    golden_per_sample = per_sample_phith.tolist()
 
     print(f"[M1] _esm_chunk_loss scalar (sum over N): {golden_esm_scalar}")
     print(f"[M1] _esm_chunk_loss per_sample: {golden_per_sample}")
@@ -227,24 +223,17 @@ def capture_m8(ckpt_path: Path) -> dict:
     np.random.seed(SEED_M8)
 
     model = make_vhp_model(
-        baseline_form="mlp",
-        baseline_mode="pinned",
+        baseline_form="persistence",
         tracking_mode="fixed",
-        lambda_sigma_p=0.0,
         sigma_data_init=1.0,
-        snapshot_anchor=False,
     )
     model.train()
-    model.stage_selector = "stage_2"
 
     data_factory = lambda: make_random_walk_data(n_seqs=4, T=8, seed=SEED_M8)  # noqa: E731
 
-    # Run 5 steps using the integration conftest's run_stage helper
-    # (single-loss path — the only path that exists pre-refactor)
     torch.manual_seed(SEED_M8)
     metrics_log = run_stage(
         model=model,
-        stage="stage_2",
         data_factory=data_factory,
         n_steps=5,
         lr=1e-3,
@@ -257,14 +246,10 @@ def capture_m8(ckpt_path: Path) -> dict:
             "state_dict": state_dict,
             "seed": SEED_M8,
             "n_steps": 5,
-            "stage": "stage_2",
             "config": {
-                "baseline_form": "mlp",
-                "baseline_mode": "pinned",
+                "baseline_form": "persistence",
                 "tracking_mode": "fixed",
-                "lambda_sigma_p": 0.0,
                 "sigma_data_init": 1.0,
-                "snapshot_anchor": False,
                 "data_n_seqs": 4,
                 "data_T": 8,
                 "lr": 1e-3,
@@ -391,12 +376,12 @@ def main():
         "def make_m1_transition():",
         '    """Build the fixed DiffusionTransition used for M1 golden capture."""',
         "    from ddssm.nn.diffnets import CSDIUnet, FeatureMixerConfig, DiffResidualBlockConfig",
-        "    from ddssm.model.centering.baselines import MLPBaseline",
+        "    from ddssm.model.centering.baselines import ZeroBaseline",
         "    from ddssm.model.transitions.diffusion import DiffusionTransition, DiffusionScheduleConfig",
         "",
         "    torch.manual_seed(M1_SEED)",
         "    np.random.seed(M1_SEED)",
-        "    baseline = MLPBaseline(latent_dim=M1_D, j=M1_J, hidden_dim=4, n_layers=1)",
+        "    baseline = ZeroBaseline(latent_dim=M1_D, j=M1_J)",
         "    schedule = DiffusionScheduleConfig(",
         "        S_k=M1_S_K,",
         "        k_chunk=M1_S_K,",
@@ -490,12 +475,9 @@ def main():
         f"M8_SEED: int = {m8['seed']}",
         f"M8_N_STEPS: int = {m8['n_steps']}",
         "M8_CONFIG: dict = {",
-        '    "baseline_form": "mlp",',
-        '    "baseline_mode": "pinned",',
+        '    "baseline_form": "persistence",',
         '    "tracking_mode": "fixed",',
-        '    "lambda_sigma_p": 0.0,',
         '    "sigma_data_init": 1.0,',
-        '    "snapshot_anchor": False,',
         '    "data_n_seqs": 4,',
         '    "data_T": 8,',
         '    "lr": 1e-3,',

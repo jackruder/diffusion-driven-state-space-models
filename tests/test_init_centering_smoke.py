@@ -1,22 +1,17 @@
-"""End-to-end smoke test for the model-v2 baseline-centering core.
+"""End-to-end smoke test for ``init_smoke_simple``.
 
-Drives ``init_smoke_simple`` for 5 + 5 steps via the orchestrator,
-asserts that:
+Drives a short single-phase run and asserts:
 
 * The run completes without raising.
-* ``metrics.csv`` carries the new model-v2 columns.
-* Stage-1 has a non-zero ``loss/rate/init/entropy`` while stage-2 has
-  ``entropy == 0`` (the entropy-cancellation invariant from
-  ``model-v2.org`` § Entropy cancellation in stage 2).
-* ``model.baseline_anchor`` is populated by the end of the run (handoff
-  fired before stage 2).
-* The σ_data buffer is frozen at the end (the "fixed" tracking mode
-  has had its schedule reset by the handoff).
+* ``metrics.csv`` carries the model-v2 columns.
+* Recon loss descends over the run.
+* Under ``fixed`` tracking, the σ_data buffer stays frozen at
+  ``σ_data²=1``.
 
-Marked ``slow`` because it constructs the full model + runs the
-orchestrator.  Excluded from the default suite; run with::
+Marked ``slow`` because it constructs the full model. Excluded from the
+default suite; run with::
 
-    pytest tests/test_init_smoke_simple.py -m slow
+    pytest tests/test_init_centering_smoke.py -m slow
 """
 
 from __future__ import annotations
@@ -44,18 +39,14 @@ def _get_experiment_cfg(name: str):
 
 
 def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
-    """5 + 5-step end-to-end run through stage 1 + handoff + stage 2."""
+    """10-step single-phase run reaches metrics.csv without raising."""
     cfg = _get_experiment_cfg("init_smoke_simple")
     exp = instantiate(cfg)
-    # Shrink the stages for a fast smoke run.
-    exp.training.stages.stage_1.steps = 5
-    exp.training.stages.stage_2.steps = 5
-    exp.training.stages.stage_1.log_every = 1
-    exp.training.stages.stage_2.log_every = 1
-    exp.training.stages.stage_1.val_every = 0
-    exp.training.stages.stage_2.val_every = 0
-    exp.training.stages.stage_1.checkpoint_every = 100
-    exp.training.stages.stage_2.checkpoint_every = 100
+    # Shrink the fit budget for a fast smoke run.
+    exp.training.steps = 10
+    exp.training.log_every = 1
+    exp.training.validate_every = 0
+    exp.training.checkpoint_every = 100
 
     # hparams.batch_size is the source of truth: a distinct value (≠ the
     # dataset preset's 32, ≠ the SmokeHparams 16) must reach the loader.
@@ -69,13 +60,9 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     # Reconciliation: the data module's batch_size was overridden from hparams.
     assert exp.data.batch_size == 8
 
-    # run_summary.json is emitted at train exit (task #22).
+    # run_summary.json is emitted at train exit.
     summary_path = run_dir / "run_summary.json"
     assert summary_path.exists(), "run_summary.json missing"
-    import json as _json
-
-    summ = _json.loads(summary_path.read_text())
-    assert summ["available"] is True and summ["stages_run"] == [1, 2]
 
     csv_path = run_dir / "metrics.csv"
     assert csv_path.exists(), "metrics.csv missing"
@@ -84,60 +71,32 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
         fieldnames = reader.fieldnames or []
         rows = list(reader)
     expected_columns = {
+        "loss/distortion/rec",
         "loss/rate/init/loss_init",
         "loss/rate/init/kl_aux",
-        "loss/rate/trans/r_sigma_p",
-        "loss/rate/trans/r_mu_p",
-        "loss/rate/trans/log_sigma_p2_mean",
+        "loss/rate/trans/kl",
+        "loss/total",
+        "optim/lambda",
     }
     assert expected_columns.issubset(set(fieldnames)), (
         f"missing columns: {expected_columns - set(fieldnames)}"
     )
+    # No residual staged-training columns leak through.
+    assert "stage/idx" not in fieldnames
+    assert "loss/rate/trans/r_sigma_p" not in fieldnames
+    assert "loss/rate/trans/r_mu_p" not in fieldnames
 
-    # Identify stage-1 vs stage-2 rows by step.  The trainer's global_step
-    # continues across stages; stage 1 covers steps 1..5, stage 2 covers
-    # steps 6..10.
-    stage1_rows = [r for r in rows if 1 <= int(r["step"]) <= 5]
-    stage2_rows = [r for r in rows if 6 <= int(r["step"]) <= 10]
-    assert stage1_rows, "no stage-1 rows logged"
-    assert stage2_rows, "no stage-2 rows logged"
-
-    # Stage markers (task #20): stage/idx flips 1→2 at the boundary, the
-    # stage-relative counter resets, and optim/lambda is logged every step.
-    assert {"stage/idx", "stage/step_within", "optim/lambda"} <= set(fieldnames)
-    assert all(int(float(r["stage/idx"])) == 1 for r in stage1_rows)
-    assert all(int(float(r["stage/idx"])) == 2 for r in stage2_rows)
-    # step_within resets at the boundary: stage-2's first row is < its global step.
-    assert int(float(stage2_rows[0]["stage/step_within"])) < int(stage2_rows[0]["step"])
-    assert all(r["optim/lambda"] not in ("", None) for r in stage1_rows + stage2_rows)
-
-    # Entropy-cancellation invariant: stage-2 entropy column is exactly 0.
-    for r in stage2_rows:
-        assert float(r["loss/rate/init/entropy"]) == 0.0, (
-            f"stage-2 entropy != 0 at step={r['step']}: {r['loss/rate/init/entropy']}"
-        )
-    # Stage-1 should have a non-zero (negative) entropy term.
-    s1_entropies = [float(r["loss/rate/init/entropy"]) for r in stage1_rows]
-    assert any(abs(v) > 1e-3 for v in s1_entropies), (
-        "stage-1 entropy column unexpectedly all near zero"
-    )
-
-    # The handoff populates ``baseline_anchor``.
-    assert exp.model.baseline_anchor is not None
-    # The handoff resets the σ_data EMA schedule.  Under the canonical
-    # cell's per-t tracking mode the buffer keeps updating after the
-    # handoff (``frozen`` stays False); only the per-t step counter
-    # resets to zero.  Under "fixed" tracking the buffer freezes.
+    # Under the ``fixed`` tracking mode the buffer is frozen from
+    # construction (σ_data² ≡ 1); ``update`` is a permanent no-op.
     if exp.model.sigma_data.tracking_mode == "fixed":
         assert exp.model.sigma_data.frozen is True
+        assert torch.all(exp.model.sigma_data.sigma_data2 == 1.0)
     else:
         assert exp.model.sigma_data.frozen is False
-        assert int(exp.model.sigma_data.ema_step.max()) == 5  # 5 stage-2 steps
 
 
 def test_init_smoke_simple_shares_baseline_instance() -> None:
-    """Both transitions reference the *same* baseline Python object."""
+    """The transition references the same baseline instance as the model."""
     cfg = _get_experiment_cfg("init_smoke_simple")
     exp = instantiate(cfg)
-    assert exp.model.baseline is exp.model.stage1_transition.baseline
     assert exp.model.baseline is exp.model.transition.baseline

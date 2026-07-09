@@ -229,15 +229,8 @@ def run_stage(
     data_factory: Callable[[], dict[str, torch.Tensor]],
     n_steps: int,
     lr: float = 1e-3,
-    stage: str | None = None,
-    lambda_mu_p: float = 0.0,
 ) -> list[dict[str, torch.Tensor]]:
-    """Run ``n_steps`` of training in a single phase; return per-step metrics.
-
-    ``stage`` / ``lambda_mu_p`` are accepted for signature back-compat and
-    silently ignored: staged training and the R_μp anchor were removed.
-    """
-    del stage, lambda_mu_p
+    """Run ``n_steps`` of training in a single phase; return per-step metrics."""
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(params, lr=lr)
     metrics_log = []

@@ -313,14 +313,10 @@ def test_sigma_data_drift_snapshot_with_init_smoke_simple(tmp_path) -> None:
     assert cfg is not None
 
     exp = instantiate(cfg)
-    exp.training.stages.stage_1.steps = 3
-    exp.training.stages.stage_2.steps = 3
-    exp.training.stages.stage_1.log_every = 1
-    exp.training.stages.stage_2.log_every = 1
-    exp.training.stages.stage_1.val_every = 0
-    exp.training.stages.stage_2.val_every = 0
-    exp.training.stages.stage_1.checkpoint_every = 100
-    exp.training.stages.stage_2.checkpoint_every = 100
+    exp.training.steps = 6
+    exp.training.log_every = 1
+    exp.training.validate_every = 0
+    exp.training.checkpoint_every = 100
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     exp.train(device=torch.device("cpu"), run_dir=str(run_dir))
@@ -373,14 +369,10 @@ def test_stage2_elbo_surrogate_with_init_smoke_simple(tmp_path) -> None:
     assert cfg is not None
 
     exp = instantiate(cfg)
-    exp.training.stages.stage_1.steps = 3
-    exp.training.stages.stage_2.steps = 3
-    exp.training.stages.stage_1.log_every = 1
-    exp.training.stages.stage_2.log_every = 1
-    exp.training.stages.stage_1.val_every = 0
-    exp.training.stages.stage_2.val_every = 0
-    exp.training.stages.stage_1.checkpoint_every = 100
-    exp.training.stages.stage_2.checkpoint_every = 100
+    exp.training.steps = 6
+    exp.training.log_every = 1
+    exp.training.validate_every = 0
+    exp.training.checkpoint_every = 100
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     exp.train(device=torch.device("cpu"), run_dir=str(run_dir))
@@ -399,11 +391,12 @@ def test_stage2_elbo_surrogate_with_init_smoke_simple(tmp_path) -> None:
         "stage2_elbo_surrogate_init_kl_aux",
         "stage2_elbo_surrogate_init_entropy",
         "stage2_elbo_surrogate_trans_kl",
-        "stage2_elbo_surrogate_r_sigma_p",
-        "stage2_elbo_surrogate_r_mu_p",
         "stage2_elbo_surrogate_n_batches",
     }
     assert expected.issubset(set(out.keys()))
+    # r_ regularizers were removed — the surrogate should not expose them.
+    assert "stage2_elbo_surrogate_r_sigma_p" not in out
+    assert "stage2_elbo_surrogate_r_mu_p" not in out
     # All scalar components finite.
     for k in expected - {"stage2_elbo_surrogate_n_batches"}:
         assert math.isfinite(out[k]), f"non-finite {k}: {out[k]}"
