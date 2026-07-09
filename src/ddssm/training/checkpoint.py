@@ -274,9 +274,9 @@ def load_into_model(
     drift surfaces loudly (shape mismatches still fail hard in
     ``load_state_dict``).
 
-    With ``load_ema=True`` the diffusion ``transition`` is swapped to its
-    EMA shadows after loading — the weights the sampling path used at
-    training time.
+    With ``load_ema=True`` the model's parameters are swapped to their
+    EMA shadows after loading — the (full-model) weights the sampling
+    path used at training time.
 
     Returns the parsed :class:`Checkpoint` so callers (the resume path)
     can also read optimiser / EMA / step state.
@@ -306,13 +306,13 @@ def load_into_model(
     model.load_state_dict(ckpt.model_state, strict=strict)
 
     if load_ema:
-        if ckpt.ema_state is not None and hasattr(model, "transition"):
-            model.transition.load_state_dict(ckpt.ema_state, strict=strict)
-        else:
+        if ckpt.ema_state is None:
             log.warning(
-                "load_ema requested but checkpoint has no ema_state or model "
-                "has no transition; using live weights."
+                "load_ema requested but checkpoint has no ema_state; using "
+                "live weights."
             )
+        else:
+            model.load_state_dict(ckpt.ema_state, strict=strict)
     return ckpt
 
 
@@ -331,10 +331,10 @@ def prepare_model(
     mode — or train mode when ``train=True`` (e.g. a counterfactual
     runner needing train-mode layers).
 
-    ``load_ema`` defaults to ``True``: inference loads the transition's
-    EMA shadows — the weights the sampling path used at training time
-    (ADR-0005). Pass ``load_ema=False`` for the rare case that wants the
-    raw live weights.
+    ``load_ema`` defaults to ``True``: inference loads the model's EMA
+    shadows — the (full-model) weights the sampling path used at training
+    time (ADR-0005). Pass ``load_ema=False`` for the rare case that wants
+    the raw live weights.
     """
     model = experiment.model.to(device)
     if checkpoint_path is None:

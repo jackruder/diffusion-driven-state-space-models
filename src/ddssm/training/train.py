@@ -264,8 +264,11 @@ class DDSSMTrainer:
         self._last_grad_norms_by_opt: list[float] | None = None
 
         self.ema_decay = self.hparams.ema_decay
-        # EMA on the denoiser (used at sampling time)
-        self.ema = EMA(self.model.transition, decay=self.ema_decay)
+        # EMA on the full model (encoder + decoder + transition). Used at
+        # validation (swap in ``_run_validation``) and sampling time. Full-
+        # model scope keeps the val snapshot self-consistent: swapping only
+        # the transition gave val a Frankenstein model.
+        self.ema = EMA(self.model, decay=self.ema_decay)
 
         loggers = [
             TensorBoardLogger(log_dir=tensorboard_dir),
@@ -382,6 +385,39 @@ class DDSSMTrainer:
         if self.weight_decay_psi is None:
             return self.weight_decay
         return self.weight_decay_psi
+
+    def _warn_if_ema_decay_too_high(self, total_steps: int) -> None:
+        """Warn if the EMA time constant covers >5% of the training budget.
+
+        The EMA has effective window (time constant) ``τ = 1 / (1 − decay)``
+        steps: after τ steps the contribution of the init snapshot has
+        decayed to ``1/e``. When ``τ / total_steps > 5%`` the shadow is
+        still dominated by initialization at the end of training and the
+        EMA weights are worse than the live weights — e.g. ``decay=0.9999``
+        (τ = 10_000) with ``total_steps=500`` gives ``τ/budget = 20×``.
+
+        Cutoff (5%) is the "less than 20 time constants of training" rule
+        of thumb — well short of the ~40+ often used in diffusion practice
+        but tight enough to catch the smoke-preset footgun.
+        """
+        if total_steps <= 0 or self.ema_decay >= 1.0:
+            return
+        tau = 1.0 / (1.0 - self.ema_decay)
+        ratio = tau / total_steps
+        if ratio <= 0.05:
+            return
+        max_decay = max(0.0, 1.0 - 20.0 / total_steps)
+        log.warning(
+            "[ema] ema_decay=%.6g gives an effective window of %.0f steps "
+            "(%.1f%% of the %d-step budget); the shadow will still be "
+            "dominated by initialization at fit end. For this budget, "
+            "prefer ema_decay <= %.4g (window <= 5%% of budget).",
+            self.ema_decay,
+            tau,
+            100.0 * ratio,
+            total_steps,
+            max_decay,
+        )
 
     def _build_split_optimizers(
         self,
@@ -630,14 +666,14 @@ class DDSSMTrainer:
                 if ckpt.ema_decay is not None:
                     self.ema_decay = ckpt.ema_decay
             else:
-                # Live transition weights were just overwritten from the
-                # checkpoint, but ``self.ema.shadow`` still holds the *init*
-                # snapshot from ``EMA.__init__`` (which ran before restore).
-                # Re-snapshot from live so ``EMA.swap`` doesn't validate an
-                # untrained denoiser on the next epoch end.
+                # Live weights were just overwritten from the checkpoint,
+                # but ``self.ema.shadow`` still holds the *init* snapshot
+                # from ``EMA.__init__`` (which ran before restore). Re-
+                # snapshot from live so ``EMA.swap`` doesn't validate an
+                # untrained model on the next epoch end.
                 self.ema.shadow = {
                     k: p.detach().clone()
-                    for k, p in self.model.transition.state_dict().items()
+                    for k, p in self.model.state_dict().items()
                 }
         # GradScaler contract guard. A non-None saved state means the
         # producer was running fp16 AMP; silently dropping it on a
@@ -945,11 +981,12 @@ class DDSSMTrainer:
             self.scheduler.step()
 
         if hasattr(self, "ema") and self.ema is not None and any(
-            p.requires_grad for p in self.model.transition.parameters()
+            p.requires_grad for p in self.model.parameters()
         ):
-            # Skip while the transition is frozen: live weights don't move,
-            # so blending shadows toward them is a no-op that would drain any
-            # warm-started EMA lag over the length of the frozen stage.
+            # Skip only when the whole model is frozen (live weights don't
+            # move, so blending shadows toward them is a no-op that would
+            # drain any warm-started EMA lag). In single-fit training this
+            # guard is always True; it stays as a defensive check.
             with torch.no_grad():
                 self.ema.update()
         return True
@@ -1252,6 +1289,8 @@ class DDSSMTrainer:
         """
         device = self.device
         self.model.to(device)
+
+        self._warn_if_ema_decay_too_high(total_steps)
 
         # Per ADR-0004: ensure an active loss object exists. The
         # orchestrator installs one per stage; for single-fit runs we

@@ -432,6 +432,63 @@ def test_validation_runs_under_ema_swap(small_model, tmp_path):
     assert entered, "validation did not enter the EMA swap"
 
 
+def test_warn_ema_decay_too_high_for_budget(small_model, tmp_path, caplog):
+    """``fit`` warns when ema_decay's time constant exceeds 5% of ``total_steps``.
+
+    τ = 1 / (1 − decay). Budget 500, decay 0.9999 → τ = 10_000 (2000% of budget),
+    which is the footgun the warning targets.
+    """
+    import logging
+
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    trainer.ema_decay = 0.9999
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+    with caplog.at_level(logging.WARNING, logger="ddssm.training.train"):
+        trainer.fit(
+            train_loader=loader,
+            val_loader=None,
+            total_steps=500,
+            validate_every=0,
+            log_every=1,
+            checkpoint_every=None,
+            amp=False,
+        )
+    ema_warns = [r for r in caplog.records if "[ema]" in r.getMessage()]
+    assert ema_warns, "expected an [ema] warning for decay=0.9999 on a 500-step budget"
+
+
+def test_no_ema_warn_when_decay_matches_budget(small_model, tmp_path, caplog):
+    """A decay whose window is ≤5% of the budget must NOT trigger the warning."""
+    import logging
+
+    trainer = DDSSMTrainer(
+        model=small_model,
+        device=torch.device("cpu"),
+        tensorboard_dir=str(tmp_path / "tb"),
+        quiet=True,
+    )
+    # τ = 1/(1-0.9) = 10 steps → 5% of a 200-step budget: exactly at the cutoff.
+    trainer.ema_decay = 0.9
+    loader = DataLoader(_SyntheticBatchDataset(B=2, T=4), batch_size=2)
+    with caplog.at_level(logging.WARNING, logger="ddssm.training.train"):
+        trainer.fit(
+            train_loader=loader,
+            val_loader=None,
+            total_steps=200,
+            validate_every=0,
+            log_every=1,
+            checkpoint_every=None,
+            amp=False,
+        )
+    ema_warns = [r for r in caplog.records if "[ema]" in r.getMessage()]
+    assert not ema_warns, f"unexpected [ema] warnings: {[r.getMessage() for r in ema_warns]}"
+
+
 def test_elbo_plateau_disabled_runs_full_budget(small_model, tmp_path):
     """``early_stop=None`` leaves the loop running until ``total_steps``."""
     trainer = DDSSMTrainer(

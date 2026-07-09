@@ -31,7 +31,7 @@ def _fake_trainer(model: _Toy, *, yaml: str | None = "m: 1") -> SimpleNamespace:
     return SimpleNamespace(
         model=model,
         optimizer=None,
-        ema=SimpleNamespace(shadow=model.transition.state_dict()),
+        ema=SimpleNamespace(shadow=model.state_dict()),
         ema_decay=0.999,
         global_step=7,
         grad_accum_steps=3,
@@ -99,42 +99,41 @@ def test_cross_check_silent_when_match(tmp_path, caplog):
     assert not any("config drift" in r.message for r in caplog.records)
 
 
-def test_load_ema_swaps_transition(tmp_path):
+def test_load_ema_swaps_full_model(tmp_path):
     model = _Toy()
-    # Live transition weights = 0; EMA shadow = 1. The payload records both.
+    # Live weights = 0 across the whole model; EMA shadow = 1 across the
+    # whole model. The payload records both.
     with torch.no_grad():
-        for p in model.transition.parameters():
+        for p in model.parameters():
             p.zero_()
-    ema_shadow = {
-        k: torch.ones_like(v) for k, v in model.transition.state_dict().items()
-    }
+    ema_shadow = {k: torch.ones_like(v) for k, v in model.state_dict().items()}
     trainer = _fake_trainer(model)
     trainer.ema = SimpleNamespace(shadow=ema_shadow)
     path = str(tmp_path / "ckpt.pth")
     Checkpoint.from_trainer(trainer).save(path)
 
-    # load_ema=False → live (zero) transition weights.
+    # load_ema=False → live (zero) weights across encoder-analog (.lin) and transition.
     live = _Toy()
     load_into_model(live, path, device=torch.device("cpu"), load_ema=False)
+    assert torch.allclose(live.lin.weight, torch.zeros_like(live.lin.weight))
     assert torch.allclose(
         live.transition.weight, torch.zeros_like(live.transition.weight)
     )
 
-    # load_ema=True → EMA (one) transition weights.
+    # load_ema=True → EMA (one) weights across the whole model.
     ema = _Toy()
     load_into_model(ema, path, device=torch.device("cpu"), load_ema=True)
+    assert torch.allclose(ema.lin.weight, torch.ones_like(ema.lin.weight))
     assert torch.allclose(ema.transition.weight, torch.ones_like(ema.transition.weight))
 
 
 def _ema_checkpoint(tmp_path) -> str:
-    """Save a checkpoint whose transition live weights are 0 and EMA shadow is 1."""
+    """Save a checkpoint whose live weights are 0 and EMA shadow is 1 model-wide."""
     model = _Toy()
     with torch.no_grad():
-        for p in model.transition.parameters():
+        for p in model.parameters():
             p.zero_()
-    ema_shadow = {
-        k: torch.ones_like(v) for k, v in model.transition.state_dict().items()
-    }
+    ema_shadow = {k: torch.ones_like(v) for k, v in model.state_dict().items()}
     tr = _fake_trainer(model)
     tr.ema = SimpleNamespace(shadow=ema_shadow)
     path = str(tmp_path / "ema.pth")
@@ -148,6 +147,7 @@ def test_prepare_model_defaults_to_ema(tmp_path):
 
     exp = SimpleNamespace(model=_Toy(), model_config_yaml=None)
     m = prepare_model(exp, checkpoint_path=path, device=torch.device("cpu"))
+    assert torch.allclose(m.lin.weight, torch.ones_like(m.lin.weight))
     assert torch.allclose(m.transition.weight, torch.ones_like(m.transition.weight))
 
     exp_live = SimpleNamespace(model=_Toy(), model_config_yaml=None)
@@ -157,6 +157,7 @@ def test_prepare_model_defaults_to_ema(tmp_path):
         device=torch.device("cpu"),
         load_ema=False,
     )
+    assert torch.allclose(m_live.lin.weight, torch.zeros_like(m_live.lin.weight))
     assert torch.allclose(
         m_live.transition.weight, torch.zeros_like(m_live.transition.weight)
     )
