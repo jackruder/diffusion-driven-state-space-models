@@ -37,22 +37,11 @@ def test_no_time_embedding_forward_and_forecast(
     model = _build_init_centering_model(use_time_embedding=False, data_dim=1)
     assert model.emb_time_dim == 0
     assert model.transition.emb_time_dim == 0
-    assert model.stage1_transition.emb_time_dim == 0
 
     device = torch.device("cpu")
     model.to(device)
 
-    # ---- Stage 1: baseline-gaussian closed-form. ----
-    model.stage_selector = "stage_1"
     batch = _make_batch(B=2, T=8, D=1, device=device)
-    components, metrics, _ = model(**batch)
-    loss = components.recon + components.init_kl + components.trans_kl
-    assert torch.isfinite(loss)
-    loss.backward()
-
-    # ---- Stage 2: diffusion transition. ----
-    model.zero_grad()
-    model.stage_selector = "stage_2"
     components, metrics, _ = model(**batch)
     loss = components.recon + components.init_kl + components.trans_kl
     assert torch.isfinite(loss)
@@ -87,4 +76,3 @@ def test_use_time_embedding_true_round_trip() -> None:
     )
     assert model.emb_time_dim == 16
     assert model.transition.emb_time_dim == 16
-    assert model.stage1_transition.emb_time_dim == 16

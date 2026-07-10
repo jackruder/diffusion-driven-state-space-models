@@ -17,8 +17,8 @@ from experiments.init_centering.study import INIT_CENTERING_STUDY
 
 # Two concrete cells (1d) to co-locate in the tests.
 _PTS = INIT_CENTERING_STUDY.select(
-    cell="init_mlp_pinned_per_t", dataset="1d"
-) + INIT_CENTERING_STUDY.select(cell="init_linear_pinned_per_t", dataset="1d")
+    cell="init_persistence_per_t", dataset="1d"
+) + INIT_CENTERING_STUDY.select(cell="init_zero_per_t", dataset="1d")
 _RES = SBatch(
     partition="gpuunsafe",
     gpus=1,
@@ -54,8 +54,8 @@ def test_one_sbatch_per_gpu_co_locates_every_cell() -> None:
     assert [j for j, _ in jobs] == ["r2_colo_g0", "r2_colo_g1"]
     g0 = dict(jobs)["r2_colo_g0"]
     # Both cells, twice each (workers_per_cell_per_gpu=2) -> 4 packed procs.
-    assert g0.count("experiment=init_mlp_pinned_per_t__1d") == 2
-    assert g0.count("experiment=init_linear_pinned_per_t__1d") == 2
+    assert g0.count("experiment=init_persistence_per_t__1d") == 2
+    assert g0.count("experiment=init_zero_per_t__1d") == 2
     assert g0.count("PIDS+=($!)") == 4
     assert "--gres=gpu:b6000:1" in g0 and "--cpus-per-task=32" in g0
     assert "#SBATCH --job-name=ddssm-r2_colo_g0" in g0
@@ -82,7 +82,7 @@ def test_same_cell_shares_one_study_across_gpus() -> None:
     jobs = dict(_render(preemptive=True))
     for g in ("r2_colo_g0", "r2_colo_g1"):
         assert (
-            jobs[g].count("hydra.sweeper.study_name=r2_init_mlp_pinned_per_t__1d") == 2
+            jobs[g].count("hydra.sweeper.study_name=r2_init_persistence_per_t__1d") == 2
         )
         assert "hydra.sweeper.storage=postgresql://h/db" in jobs[g]
 
@@ -96,8 +96,8 @@ def test_preempt_runs_launch_remaining_once_per_cell() -> None:
     assert "#SBATCH --signal=B:USR1@120" in g0
     # One launch_remaining per cell (2 cells), each its own study + NPW var.
     assert g0.count("python -m ddssm.launch_remaining") == 2
-    assert "--study r2_init_mlp_pinned_per_t__1d" in g0
-    assert "--study r2_init_linear_pinned_per_t__1d" in g0
+    assert "--study r2_init_persistence_per_t__1d" in g0
+    assert "--study r2_init_zero_per_t__1d" in g0
     # n_workers = n_gpus * workers_per_cell_per_gpu = 4 (ceiling division).
     assert "NPW_0=$(( (N_REMAINING_0 + 4 - 1) / 4 ))" in g0
     assert "NPW_1=$(( (N_REMAINING_1 + 4 - 1) / 4 ))" in g0
@@ -156,7 +156,7 @@ def test_cli_dry_run_renders_per_gpu_scripts(capsys) -> None:
     rc = C.main([
         "init_centering",
         "--select",
-        "cell=init_mlp_pinned_per_t",
+        "cell=init_persistence_per_t",
         "dataset=1d",
         "--n-gpus",
         "2",
@@ -174,7 +174,7 @@ def test_cli_dry_run_renders_per_gpu_scripts(capsys) -> None:
     assert rc == 0
     out = capsys.readouterr().out
     assert "r2_colo_g0" in out and "r2_colo_g1" in out
-    assert "experiment=init_mlp_pinned_per_t__1d" in out
+    assert "experiment=init_persistence_per_t__1d" in out
 
 
 def test_cli_submit_requires_write_dir() -> None:
@@ -202,7 +202,7 @@ def test_cli_bad_resources_from_errors() -> None:
         C.main([
             "init_centering",
             "--select",
-            "cell=init_mlp_pinned_per_t",
+            "cell=init_persistence_per_t",
             "dataset=1d",
             "--n-gpus",
             "1",

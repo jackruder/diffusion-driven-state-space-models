@@ -12,7 +12,7 @@ from ddssm.training.stages import StageTrainableConf
 
 def test_trainable_modules_defaults_all_true():
     t = StageTrainableConf()
-    assert t.encoder and t.decoder and t.transition and t.baseline
+    assert t.encoder and t.decoder and t.transition
 
 
 def test_recon_only_freezes_transition():

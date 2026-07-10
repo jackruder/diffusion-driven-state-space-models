@@ -157,48 +157,23 @@ def test_global_ema_updates_all_slots_uniformly() -> None:
     assert float((buf.sigma_data2 - buf.sigma_data2[0]).abs().sum().item()) == 0.0
 
 
-def test_fixed_mode_freezes_after_reset_schedule() -> None:
-    """Under ``"fixed"``, updates are no-ops after ``reset_schedule``."""
+def test_fixed_mode_is_frozen_from_construction() -> None:
+    """Under ``"fixed"``, ``update`` is a permanent no-op from construction."""
     buf = SigmaDataBuffer(
         T_max=T_MAX,
         tracking_mode="fixed",
         ema_decay=0.0,
         init_value=0.0,
     )
+    assert buf.frozen
     per_t = 4
     t_idx = torch.tensor([2])
-    mu = torch.randn(per_t, D)
-    s2 = torch.rand(per_t, D)
-
-    # Before reset: updates DO take effect (stage-1 accumulation).
-    buf.update(t_idx=t_idx, mu_hat_batch=mu, sigma_t2_batch=s2)
-    pre_freeze = buf.sigma_data2.clone()
-    assert float((pre_freeze[1] - 0.0).abs().item()) > 0.0
-
-    buf.reset_schedule()
-    assert buf.frozen
-    assert torch.equal(buf.ema_step, torch.zeros(T_MAX, dtype=torch.long))
-    # Buffer values persist.
-    assert torch.equal(buf.sigma_data2, pre_freeze)
-
-    # Post reset: updates are no-ops.
-    buf.update(
-        t_idx=t_idx,
-        mu_hat_batch=torch.full((per_t, D), 999.0),
-        sigma_t2_batch=torch.full((per_t, D), 999.0),
-    )
-    assert torch.equal(buf.sigma_data2, pre_freeze)
-
-
-def test_reset_schedule_preserves_values() -> None:
-    """``reset_schedule`` zeros ``ema_step`` but never touches ``sigma_data2``."""
-    buf = SigmaDataBuffer(T_max=T_MAX, tracking_mode="per_t", init_value=0.0)
-    buf.sigma_data2 = torch.tensor([1.1, 2.2, 3.3, 4.4, 5.5])
-    buf.ema_step = torch.tensor([7, 8, 9, 10, 11], dtype=torch.long)
-
-    buf.reset_schedule()
-    assert torch.equal(buf.sigma_data2, torch.tensor([1.1, 2.2, 3.3, 4.4, 5.5]))
-    assert torch.equal(buf.ema_step, torch.zeros(T_MAX, dtype=torch.long))
+    mu = torch.full((per_t, D), 999.0)
+    s2 = torch.full((per_t, D), 999.0)
+    before = buf.sigma_data2.clone()
+    with torch.enable_grad():
+        buf.update(t_idx=t_idx, mu_hat_batch=mu, sigma_t2_batch=s2)
+    assert torch.equal(buf.sigma_data2, before)
 
 
 def test_update_no_grad_on_buffer() -> None:
@@ -315,34 +290,6 @@ def test_warmup_is_exact_running_mean_then_crosses_to_ema() -> None:
     with torch.enable_grad():
         buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
     assert pytest.approx(float(buf.read(2).item()), rel=1e-4) == 0.9 * 3.0 + 0.1 * 13.0
-
-
-def test_warmup_counter_survives_handoff_reset() -> None:
-    """``reset_schedule`` resets ``ema_step`` but NOT ``n_updates``.
-
-    A slot primed in stage 1 must keep tracking with the slow EMA in stage 2,
-    not re-warm and discard its persisted value (the σ_data-persistence
-    invariant of the centering handoff). So after a handoff a new update moves
-    at the EMA rate, not a full replace.
-    """
-    buf = SigmaDataBuffer(
-        T_max=T_MAX, tracking_mode="per_t", ema_decay=0.9, init_value=0.0
-    )
-    for _ in range(50):
-        mu, s2 = _const_batch(1.0)
-        with torch.enable_grad():
-            buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
-    assert pytest.approx(float(buf.read(2).item()), rel=1e-4) == 1.0
-
-    buf.reset_schedule()
-    assert int(buf.ema_step[1].item()) == 0  # schedule counter reset
-    assert int(buf.n_updates[1].item()) >= 50  # lifetime counter preserved
-
-    mu, s2 = _const_batch(11.0)
-    with torch.enable_grad():
-        buf.update(t_idx=torch.tensor([2]), mu_hat_batch=mu, sigma_t2_batch=s2)
-    # EMA rate, not a full replace → 0.9·1 + 0.1·11 = 2.0.
-    assert pytest.approx(float(buf.read(2).item()), rel=1e-5) == 2.0
 
 
 def test_n_updates_is_persisted_in_state_dict() -> None:

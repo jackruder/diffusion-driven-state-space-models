@@ -63,9 +63,9 @@ def _clear_global_hydra():
 
 
 def test_experiments_registered() -> None:
-    """All 26 init-centering presets are reachable through the store.
+    """All 10 init-centering presets are reachable through the store.
 
-    Composition: 24 ablation-study points (12 cells × 2 datasets, named
+    Composition: 8 ablation-study points (4 cells × 2 datasets, named
     ``init_<cell>__<dataset>``) + 2 role-specific smokes
     (``init_smoke_simple`` and ``init_smoke_high_surface``). Other families
     (e.g. the docs ``synthetic_validation`` worked example) may register
@@ -73,7 +73,7 @@ def test_experiments_registered() -> None:
     rather than the total.
     """
     init_names = [name for name in EXPERIMENTS if name.startswith("init_")]
-    assert len(init_names) == 26, init_names
+    assert len(init_names) == 10, init_names
 
 
 @pytest.mark.parametrize("name", EXPERIMENTS)
@@ -122,13 +122,12 @@ def test_data_group_override_targets_experiment_data() -> None:
 
 
 def test_default_experiment_is_init_smoke_simple() -> None:
-    """The default composes to the canonical (zero, pinned, fixed) anchor cell."""
+    """The default composes to the canonical (zero, fixed) anchor cell."""
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config")
     assert cfg.experiment.data._target_.endswith("SyntheticDataModule")
     assert cfg.experiment.model._target_.endswith("_build_init_centering_model")
     assert cfg.experiment.model.baseline_form == "zero"
-    assert cfg.experiment.model.baseline_mode == "pinned"
     assert cfg.experiment.model.tracking_mode == "fixed"
 
 
