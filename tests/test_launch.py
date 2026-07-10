@@ -251,14 +251,17 @@ def test_strategy_support_gates() -> None:
 
 
 def test_render_bakes_data_and_wires_sweep() -> None:
-    jobs = _orch().render(INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t"))
-    # Headline mlp_pinned_per_t is a single A100 (16-pack) -> one job per dataset.
+    jobs = _orch().render(INIT_CENTERING_STUDY.select(cell="init_persistence_per_t"))
+    # Study points render as packed multi-group jobs (32 workers / 16 per GPU
+    # = 2 groups per point), one sbatch per (dataset, group).
     assert [j for j, _ in jobs] == [
-        "init_mlp_pinned_per_t__1d",
-        "init_mlp_pinned_per_t__mv",
+        "init_persistence_per_t__1d_g0",
+        "init_persistence_per_t__1d_g1",
+        "init_persistence_per_t__mv_g0",
+        "init_persistence_per_t__mv_g1",
     ]
     text = "\n".join(s for _, s in jobs)
-    assert "experiment=init_mlp_pinned_per_t__1d" in text
+    assert "experiment=init_persistence_per_t__1d" in text
     assert "+sweep=init_ablation_moo" in text
     assert "experiment.data.mode=" not in text  # data baked into the preset
     assert "experiment.model.latent_dim=" not in text  # tiny size: no override
@@ -268,7 +271,7 @@ def test_render_paper_size_doubles_latent() -> None:
     text = "\n".join(
         s
         for _, s in _orch().render(
-            INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t"), size="paper"
+            INIT_CENTERING_STUDY.select(cell="init_persistence_per_t"), size="paper"
         )
     )
     assert "experiment.model.latent_dim=2" in text
@@ -276,16 +279,17 @@ def test_render_paper_size_doubles_latent() -> None:
 
 
 def test_render_seed_replication() -> None:
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
+    # Packed multi-group study; group index is appended after the seed suffix.
     job, script = _orch().render(pts, seed=3)[0]
-    assert job == "init_mlp_pinned_per_t__1d__seed3"
+    assert job == "init_persistence_per_t__1d__seed3_g0"
     assert "experiment.seed=3" in script
     # The Hydra preset stays unsuffixed (only ``experiment.seed`` differs across
     # seed replicates); the seed suffix lives on ``--job-name`` + the log dir.
-    assert "experiment=init_mlp_pinned_per_t__1d " in script
-    assert "experiment=init_mlp_pinned_per_t__1d__seed3" not in script
-    assert "--job-name=ddssm-init_mlp_pinned_per_t__1d__seed3" in script
-    assert "runs/init_mlp_pinned_per_t__1d__seed3/slurm-" in script
+    assert "experiment=init_persistence_per_t__1d " in script
+    assert "experiment=init_persistence_per_t__1d__seed3" not in script
+    assert "--job-name=ddssm-init_persistence_per_t__1d__seed3_g0" in script
+    assert "runs/init_persistence_per_t__1d__seed3_g0/slurm-" in script
 
 
 # --- Multi-worker render via orchestrator -----------------------------------
@@ -306,40 +310,40 @@ def _force_multi_node(n_workers: int):
 
 
 def test_render_optuna_multi_node_emits_one_sbatch_per_worker() -> None:
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     jobs = _orch().render(pts, launch_override=_force_multi_node(4))
     names = [j for j, _ in jobs]
     assert names == [
-        "init_mlp_pinned_per_t__1d_w0",
-        "init_mlp_pinned_per_t__1d_w1",
-        "init_mlp_pinned_per_t__1d_w2",
-        "init_mlp_pinned_per_t__1d_w3",
+        "init_persistence_per_t__1d_w0",
+        "init_persistence_per_t__1d_w1",
+        "init_persistence_per_t__1d_w2",
+        "init_persistence_per_t__1d_w3",
     ]
     # Every worker hits the same study + DB; subdirs are per-worker.
     for i, (_, script) in enumerate(jobs):
         # The Hydra preset stays the point name (NOT the worker-suffixed job name).
-        assert "experiment=init_mlp_pinned_per_t__1d " in script
-        assert "experiment=init_mlp_pinned_per_t__1d_w" not in script
-        assert "hydra.sweeper.study_name=abl_init_mlp_pinned_per_t__1d" in script
+        assert "experiment=init_persistence_per_t__1d " in script
+        assert "experiment=init_persistence_per_t__1d_w" not in script
+        assert "hydra.sweeper.study_name=abl_init_persistence_per_t__1d" in script
         assert "hydra.sweeper.storage=sqlite:///" in script
         assert f"hydra.sweep.subdir=w{i}_" in script
         # SBATCH bookkeeping (job_name, log dir) carry the worker suffix.
-        assert f"--job-name=ddssm-init_mlp_pinned_per_t__1d_w{i}" in script
-        assert f"runs/init_mlp_pinned_per_t__1d_w{i}/slurm-" in script
+        assert f"--job-name=ddssm-init_persistence_per_t__1d_w{i}" in script
+        assert f"runs/init_persistence_per_t__1d_w{i}/slurm-" in script
 
 
 def test_render_optuna_multi_node_keeps_single_worker_name_when_n_workers_is_1() -> (
     None
 ):
     """``n_workers=1`` (the degenerate case) keeps the base job name — no ``_w0`` suffix."""
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     jobs = _orch().render(pts, launch_override=_force_multi_node(1))
-    assert [j for j, _ in jobs] == ["init_mlp_pinned_per_t__1d"]
+    assert [j for j, _ in jobs] == ["init_persistence_per_t__1d"]
 
 
 def test_render_local_parallel_rejected() -> None:
     """``local_parallel`` cannot be rendered to sbatch."""
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     override = lambda p: PointLaunch(strategy="local_parallel", sweep="x", n_workers=2)
     with pytest.raises(ValueError, match="sbatch"):
         _orch().render(pts, launch_override=override)
@@ -381,7 +385,7 @@ def _preempt_render(
         preempt_grace_seconds=grace,
     )
     ctx = LaunchContext("abl", "/tmp/store", "/tmp/sweeps")
-    sp = StudyPoint("init_mlp_pinned_per_t__1d", {}, {}, {})
+    sp = StudyPoint("init_persistence_per_t__1d", {}, {}, {})
     overrides = OptunaMultiNode().hydra_overrides(sp, pl, ctx, worker_idx=worker_idx)
     study_name = f"abl_{sp.name}"
     storage_url = f"sqlite:////tmp/store/{study_name}.db"
@@ -487,7 +491,7 @@ def test_render_non_preemptive_unchanged_regression() -> None:
     (Decoupled from the study's default launch policy via an explicit
     non-preemptive override — init_centering's own default is now preemptive.)
     """
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     override = lambda p: PointLaunch(
         strategy="optuna_single_node",
         sweep="init_ablation_moo",
@@ -519,7 +523,7 @@ def test_render_preemptive_extra_flags_appear_after_signal() -> None:
 
 def test_run_local_rejects_optuna_multi_node(tmp_path) -> None:
     """``optuna_multi_node`` is sbatch-only; local execution must fail loudly."""
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     override = lambda p: PointLaunch(
         strategy="optuna_multi_node", sweep="x", n_workers=2
     )
@@ -532,7 +536,7 @@ def test_run_local_local_parallel_spawns_one_popen_per_worker(
     monkeypatch, tmp_path
 ) -> None:
     """``local_parallel`` spawns ``n_workers`` Popens per point and waits for all."""
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     override = lambda p: PointLaunch(
         strategy="local_parallel", sweep="init_ablation_moo", n_trials=5, n_workers=3
     )
@@ -576,7 +580,7 @@ def test_run_local_local_parallel_spawns_one_popen_per_worker(
 def test_run_local_local_parallel_propagates_worker_failure(
     monkeypatch, tmp_path
 ) -> None:
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     override = lambda p: PointLaunch(
         strategy="local_parallel", sweep="init_ablation_moo", n_workers=2
     )
@@ -675,7 +679,7 @@ def test_orchestrator_render_threads_storage_and_study_into_preemptspec() -> Non
 
 
 def test_orchestrator_render_single_job_preemptive_raises() -> None:
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     override = lambda p: PointLaunch(strategy="single_job", preemptive=True)
     with pytest.raises(ValueError) as exc_info:
         _orch().render(pts, launch_override=override)
@@ -689,7 +693,7 @@ def test_validate_preempt_compat_allows_multi_stage_now() -> None:
     Staged training was retired; this test just guards that the preempt
     path renders cleanly against a registered study point.
     """
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     override = lambda p: PointLaunch(
         strategy="optuna_multi_node",
         sweep="init_ablation_moo",
@@ -778,7 +782,7 @@ def test_orchestrator_run_local_non_preemptive_unchanged(monkeypatch, tmp_path) 
     """Without preemptive=True: no env mutation, and n_trials is the (already
     divided) literal — no ``__N_PER_WORKER__`` placeholder to substitute.
     """
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     override = lambda p: PointLaunch(
         strategy="local_parallel",
         sweep="init_ablation_moo",
@@ -830,14 +834,14 @@ def test_cli_dry_run(capsys) -> None:
     rc = L.main([
         "init_centering",
         "--select",
-        "cell=init_mlp_pinned_per_t",
+        "cell=init_persistence_per_t",
         "--study-prefix",
         "abl",
         "--dry-run",
     ])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "experiment=init_mlp_pinned_per_t__1d" in out
+    assert "experiment=init_persistence_per_t__1d" in out
     assert "+sweep=init_ablation_moo" in out
 
 
@@ -854,13 +858,14 @@ def test_cli_submit_requires_write_dir() -> None:
 def test_submit_shells_out_once_per_file(tmp_path, monkeypatch) -> None:
     calls: list[str] = []
     monkeypatch.setattr("ddssm.launch.submit_sbatch", lambda p: calls.append(p) or "ok")
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t")
     orch = _orch(storage_dir=str(tmp_path / "o"), sweeps_root=str(tmp_path / "s"))
     write_dir = tmp_path / "sbatch"
     orch.launch(pts, write_dir=str(write_dir), submit=True)
     written = sorted(str(p) for p in write_dir.glob("*.sbatch"))
-    # mlp_pinned_per_t (single A100) x 2 datasets = 2 sbatch files.
-    assert len(written) == 2
+    # persistence_per_t (packed 32 workers / 16 per GPU = 2 groups) x 2 datasets
+    # = 4 sbatch files.
+    assert len(written) == 4
     assert sorted(calls) == written
 
 
@@ -897,12 +902,12 @@ def test_packed_node_reports_workers_per_job() -> None:
 
 def test_render_packed_single_group_one_sbatch_k_workers() -> None:
     """8 workers, workers_per_gpu=8 → ONE sbatch (base name) running 8 packed procs."""
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     jobs = _orch().render(
         pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8)
     )
     # A single group → no _g suffix.
-    assert [j for j, _ in jobs] == ["init_mlp_pinned_per_t__1d"]
+    assert [j for j, _ in jobs] == ["init_persistence_per_t__1d"]
     _, script = jobs[0]
     # One CPU allocation for the whole pack; each proc pinned to cpus // K = 4.
     assert "--cpus-per-task=32" in script
@@ -921,7 +926,7 @@ def test_render_packed_single_group_one_sbatch_k_workers() -> None:
         )
     assert script.count("PIDS+=($!)") == 8
     # All share one study + DB.
-    assert script.count("hydra.sweeper.study_name=abl_init_mlp_pinned_per_t__1d") == 8
+    assert script.count("hydra.sweeper.study_name=abl_init_persistence_per_t__1d") == 8
 
 
 def test_multiworker_overrides_carry_per_worker_sampler_seed() -> None:
@@ -949,7 +954,7 @@ def test_packed_render_inlines_distinct_sampler_seed_per_worker() -> None:
     (so workers diverge within a job AND resubmissions diverge across jobs), and
     the placeholder never leaks into the rendered script.
     """
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     _, script = _orch().render(
         pts, launch_override=_force_packed(n_workers=4, workers_per_gpu=4)
     )[0]
@@ -973,9 +978,9 @@ def test_precreate_storage_creates_schema_before_submit(tmp_path) -> None:
         storage_dir=str(tmp_path),
         sweeps_root=str(tmp_path),
     )
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="mv")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="mv")
     orch._precreate_storage(pts, (None,))
-    db = tmp_path / "t_init_mlp_pinned_per_t__mv.db"
+    db = tmp_path / "t_init_persistence_per_t__mv.db"
     assert db.exists()
     tables = {
         r[0]
@@ -1082,7 +1087,7 @@ def test_cli_storage_url_flag(capsys) -> None:
     rc = L.main([
         "init_centering",
         "--select",
-        "cell=init_mlp_pinned_per_t",
+        "cell=init_persistence_per_t",
         "--storage-url",
         "postgresql://h/db",
         "--dry-run",
@@ -1098,7 +1103,7 @@ def test_render_packed_nonpreempt_inits_schema_before_workers() -> None:
     K workers spawn, else they race on CREATE TABLE and all-but-one die with
     "table studies already exists". The init must precede the worker loop.
     """
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     jobs = _orch().render(
         pts, launch_override=_force_packed(n_workers=8, workers_per_gpu=8)
     )
@@ -1116,7 +1121,7 @@ def test_render_packed_preempt_skips_redundant_schema_init() -> None:
     """Preempt packed jobs init the schema via launch_remaining, so they must NOT
     also emit the RDBStorage pre-init (it would be redundant).
     """
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     jobs = _orch().render(
         pts,
         launch_override=_force_packed(n_workers=8, workers_per_gpu=8, preemptive=True),
@@ -1128,13 +1133,13 @@ def test_render_packed_preempt_skips_redundant_schema_init() -> None:
 
 def test_render_packed_multi_group_splits_into_g_suffixed_jobs() -> None:
     """4 workers, workers_per_gpu=2 → 2 sbatch jobs (_g0, _g1) of 2 workers each."""
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     jobs = _orch().render(
         pts, launch_override=_force_packed(n_workers=4, workers_per_gpu=2, cpus=8)
     )
     assert [j for j, _ in jobs] == [
-        "init_mlp_pinned_per_t__1d_g0",
-        "init_mlp_pinned_per_t__1d_g1",
+        "init_persistence_per_t__1d_g0",
+        "init_persistence_per_t__1d_g1",
     ]
     # Group 0 packs workers 0,1; group 1 packs workers 2,3 — pinned to cpus//2 = 4.
     _, g0 = jobs[0]
@@ -1157,7 +1162,7 @@ def test_render_packed_preemptive_shares_preamble_and_fans_out_trap() -> None:
     """Preemptive packed job: one launch_remaining preamble, N_PER_WORKER over the
     cell total, and a trap that fans the signal out to every packed PID.
     """
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     jobs = _orch().render(
         pts,
         launch_override=_force_packed(n_workers=8, workers_per_gpu=8, preemptive=True),
@@ -1186,7 +1191,7 @@ def test_real_launch_emits_env_setup_before_python() -> None:
     ``python`` call — otherwise ``python`` is not on the node PATH and the job
     dies with exit 127.
     """
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="mv")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="mv")
     jobs = _orch().render(pts)  # real _launch, no override
     _, script = jobs[0]
     lines = script.splitlines()
@@ -1202,7 +1207,7 @@ def test_real_launch_emits_env_setup_before_python() -> None:
 
 
 def test_packed_node_rejects_local() -> None:
-    pts = INIT_CENTERING_STUDY.select(cell="init_mlp_pinned_per_t", dataset="1d")
+    pts = INIT_CENTERING_STUDY.select(cell="init_persistence_per_t", dataset="1d")
     with pytest.raises(ValueError, match="local"):
         _orch().run_local(
             pts, launch_override=_force_packed(n_workers=2, workers_per_gpu=2)

@@ -33,7 +33,10 @@ _smoke_training = dataclasses.replace(
 
 gluonts_smoke = experiment(
     data=_solar.data_preset,
-    model=GluonModel(data_dim=_solar.data_dim, T_max=_solar.T_max, latent_dim=16),
+    # nheads=4 keeps head_dim = 2·latent/nheads = 8, the SDPA minimum.
+    model=GluonModel(
+        data_dim=_solar.data_dim, T_max=_solar.T_max, latent_dim=16, nheads=4
+    ),
     hparams=dataclasses.replace(GluonHparams, batch_size=16),
     training=_smoke_training,
     eval=GluonEval,

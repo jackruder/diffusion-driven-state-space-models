@@ -180,6 +180,12 @@ def solve_prob_flow_logdensity(
     A0 = torch.zeros(B, device=device, dtype=dtype)
     tau_grid = torch.tensor([tau_min, 1.0], device=device, dtype=dtype)
 
+    # Cap dt at the integration window so an aggressive step-size controller
+    # (dopri5 grows dt ×ifactor when error_ratio=0) cannot overshoot τ=1. An
+    # overshoot drives α(τ) = exp(-½·∫β) to underflow, z/α to overflow, and
+    # the score net to NaN — after which dt_next = NaN → clamped to min_step
+    # (default 0) → the next step trips the ``t0 + dt > t0`` assertion.
+    tau_window = 1.0 - float(tau_min)
     z_traj, A_traj = odeint(
         dynamics,
         (z0, A0),
@@ -187,6 +193,7 @@ def solve_prob_flow_logdensity(
         method=method,
         rtol=rtol,
         atol=atol,
+        options={"max_step": tau_window},
     )
     z_end = z_traj[-1]
     A_end = A_traj[-1]

@@ -124,8 +124,14 @@ def test_recon_chunk_invariance_and_grad_checkpoint() -> None:
     from experiments.gluonts_forecast.model import build_gluonts_model
 
     torch.manual_seed(0)
+    # nheads=1 keeps head_dim = 2·latent = 8, the SDPA minimum, at latent_dim=4.
     m = build_gluonts_model(
-        data_dim=5, latent_dim=4, T_max=8, time_chunk=2, grad_checkpoint=True
+        data_dim=5,
+        latent_dim=4,
+        T_max=8,
+        time_chunk=2,
+        grad_checkpoint=True,
+        nheads=1,
     )
     m.train()
     Bb, Ss, dd, Tt, Dd = 3, 1, 4, 8, 5

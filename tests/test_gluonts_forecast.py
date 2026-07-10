@@ -33,7 +33,6 @@ def test_transformer_future_summary_and_additive_frame() -> None:
 def test_persistence_pinned_and_checkpointing() -> None:
     m = build_gluonts_model(data_dim=137, latent_dim=32, T_max=192)
     assert isinstance(m.baseline, PersistenceBaseline)
-    assert m.baseline_mode == "pinned"
     assert m.encoder.grad_checkpoint is True
     assert m.transition.grad_checkpoint is True
     # Decoder recon is vectorized over time chunks + checkpointed (default

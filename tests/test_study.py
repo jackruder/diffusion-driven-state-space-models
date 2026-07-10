@@ -87,15 +87,14 @@ def test_from_points_escape_hatch_and_register() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_init_study_has_24_points_with_full_tags() -> None:
-    assert len(INIT_CENTERING_STUDY.points) == 24
-    assert len(set(INIT_CENTERING_STUDY.names())) == 24
+def test_init_study_has_8_points_with_full_tags() -> None:
+    assert len(INIT_CENTERING_STUDY.points) == 8
+    assert len(set(INIT_CENTERING_STUDY.names())) == 8
     for p in INIT_CENTERING_STUDY.points:
         assert p.name == f"{p.tags['cell']}__{p.tags['dataset']}"
         assert {
             "cell",
             "baseline_form",
-            "baseline_mode",
             "tracking_mode",
             "dataset",
         } <= set(p.tags)
@@ -103,9 +102,9 @@ def test_init_study_has_24_points_with_full_tags() -> None:
 
 def test_init_study_select_filters() -> None:
     assert (
-        len(INIT_CENTERING_STUDY.select(baseline_form="mlp")) == 8
-    )  # 2 modes × 2 tracking × 2 ds
-    assert len(INIT_CENTERING_STUDY.select(dataset="mv")) == 12
+        len(INIT_CENTERING_STUDY.select(baseline_form="persistence")) == 4
+    )  # 2 tracking × 2 ds
+    assert len(INIT_CENTERING_STUDY.select(dataset="mv")) == 4
     assert (
         len(INIT_CENTERING_STUDY.select(baseline_form="zero", dataset="1d")) == 2
     )  # 2 tracking
@@ -127,18 +126,17 @@ def test_init_points_bake_real_dataset_and_dims() -> None:
 def test_init_variants() -> None:
     v = INIT_CENTERING_STUDY.variants
     assert "tiny" in v and "paper" in v and "smoke" in v
-    p1d = INIT_CENTERING_STUDY.point("init_mlp_pinned_per_t__1d")
-    pmv = INIT_CENTERING_STUDY.point("init_mlp_pinned_per_t__mv")
+    p1d = INIT_CENTERING_STUDY.point("init_persistence_per_t__1d")
+    pmv = INIT_CENTERING_STUDY.point("init_persistence_per_t__mv")
     assert v["tiny"](p1d) == []
     assert v["paper"](p1d) == ["experiment.model.latent_dim=2"]
     assert v["paper"](pmv) == ["experiment.model.latent_dim=8"]
-    assert any("n_pretrain=5" in o for o in v["smoke"](p1d))
+    assert any("steps=5" in o for o in v["smoke"](p1d))
 
 
 def test_one_point_forward_backward_is_finite_with_grads() -> None:
-    exp = instantiate(INIT_CENTERING_STUDY.point("init_zero_pinned_fixed__1d").config)
+    exp = instantiate(INIT_CENTERING_STUDY.point("init_zero_fixed__1d").config)
     model = exp.model
-    model.stage_selector = "stage_1"
     B, D, T = 2, model.data_dim, 8
     torch.manual_seed(0)
     components, _m, _ = model(
