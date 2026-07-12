@@ -284,85 +284,6 @@ def _render_ratio_trajectory(
     log.info("Saved trajectory plot %s (%d curves)", out_path, len(step_curves))
 
 
-def _render_jsd_trajectory(
-    run_dir: str,
-    per_step_jsd: list[tuple[int, dict]],
-) -> None:
-    """Line plot of ``gt_latent_jsd_mean`` vs training step.
-
-    Reads each step's ``jsd.json`` (already loaded into ``per_step_jsd``)
-    and shows the mean JSD across timesteps, one point per checkpoint.
-    Also overlays the per-t curve at the first, middle, and last
-    checkpoint so the reader can see whether early/late timesteps
-    diverge / converge differently over training.
-    """
-    steps: list[int] = []
-    means: list[float] = []
-    per_t_snapshots: list[tuple[int, list[float], list[int]]] = []
-    for step, jsd in per_step_jsd:
-        if not jsd.get("gt_latent_jsd_available", False):
-            continue
-        m = jsd.get("gt_latent_jsd_mean")
-        if m is None:
-            continue
-        steps.append(step)
-        means.append(float(m))
-        per_t_snapshots.append(
-            (step, jsd.get("gt_latent_jsd_per_t", []), jsd.get("gt_latent_jsd_t_indices", [])),
-        )
-    if not steps:
-        log.warning("No usable gt_latent_jsd values — skipping trajectory plot")
-        return
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-
-    # Left: mean JSD across timesteps, one point per checkpoint.
-    ax = axes[0]
-    ax.plot(steps, means, marker="o", markersize=4, linewidth=1.4, color="#c04030")
-    ax.set_xlabel("training step")
-    ax.set_ylabel(r"$\overline{\mathrm{JSD}}(p_\psi \parallel p^\star)$")
-    ax.set_yscale("log")
-    ax.set_title("Mean transition-kernel JSD vs training step")
-    ax.grid(True, which="both", alpha=0.3)
-
-    # Right: per-timestep JSD at snapshots (first / middle / last checkpoint).
-    ax = axes[1]
-    picks = []
-    if len(per_t_snapshots) >= 1:
-        picks.append(per_t_snapshots[0])
-    if len(per_t_snapshots) >= 3:
-        picks.append(per_t_snapshots[len(per_t_snapshots) // 2])
-    if len(per_t_snapshots) >= 2:
-        picks.append(per_t_snapshots[-1])
-    base = plt.colormaps["YlOrRd"]
-    cmap = LinearSegmentedColormap.from_list(
-        "ylorrd_warm", base(np.linspace(0.4, 0.95, 256)),
-    )
-    n_p = max(1, len(picks) - 1)
-    for i, (step, per_t, t_idx) in enumerate(picks):
-        if not per_t or not t_idx:
-            continue
-        color = cmap(i / n_p)
-        ax.plot(t_idx, per_t, marker="o", markersize=3, linewidth=1.4,
-                color=color, alpha=0.9, label=f"step {step}")
-    ax.set_xlabel(r"target timestep $t$")
-    ax.set_ylabel(r"$\mathrm{JSD}(p_\psi \parallel p^\star)$ per $t$")
-    ax.set_yscale("log")
-    ax.set_title("Per-timestep JSD at selected checkpoints")
-    ax.grid(True, which="both", alpha=0.3)
-    ax.legend(fontsize=8, loc="best")
-
-    fig.suptitle(
-        "Transition-kernel divergence from GT kernel across training",
-        fontsize=11,
-    )
-    plt.tight_layout()
-    out_path = os.path.join(run_dir, "jsd_trajectory.png")
-    fig.savefig(out_path, dpi=110)
-    plt.close(fig)
-    log.info("Saved JSD trajectory plot %s (%d points)", out_path, len(steps))
-
-
 def _compile_gif(
     plot_name: str,
     step_frames: list[tuple[int, str]],
@@ -416,28 +337,6 @@ def _worker_probe_step(cfg_yaml: str, step: int, ckpt_path: str, sub_dir: str) -
     experiment.variance_probe(
         device=device, run_dir=sub_dir, checkpoint_path=ckpt_path,
     )
-    # Extra per-checkpoint eval: gt_latent_jsd — the only metric that isolates
-    # the transition kernel from the encoder (compares model p_ψ(z_t | z_{t-1})
-    # samples against the analytic GT kernel on GT-conditioned history). Only
-    # runs when the dataset exposes ``gt_latent`` and a kernel is registered
-    # for the mode; otherwise the metric returns ``available=False`` and we
-    # just note it. Writes to ``sub_dir/jsd.json`` so the trajectory
-    # aggregator can pick it up alongside the variance summary.
-    try:
-        from ddssm.eval.runner import evaluate as _run_eval, EvalSpec as _EvalSpec
-
-        jsd_spec = _EvalSpec(
-            metrics=["gt_latent_jsd"], split="val",
-            num_samples=100, output_filename="jsd.json",
-        )
-        _run_eval(
-            experiment, jsd_spec, device=device, run_dir=sub_dir,
-            checkpoint_path=ckpt_path,
-        )
-    except Exception as e:  # noqa: BLE001 — best-effort
-        _logging.getLogger(__name__).warning(
-            "gt_latent_jsd eval failed for step %d: %s", step, e,
-        )
     return step, sub_dir
 
 
@@ -547,38 +446,21 @@ def _probe_per_step(
         gif_path = os.path.join(run_dir, f"{plot_name}.gif")
         _compile_gif(plot_name, frames, gif_path)
 
-    # Try to load the per-checkpoint gt_latent_jsd values written by
-    # ``_worker_probe_step``'s post-probe eval hook. Best-effort — some
-    # datasets/modes don't have a registered kernel, in which case
-    # ``jsd.json`` records ``gt_latent_jsd_available: False``.
-    per_step_jsd: list[tuple[int, dict]] = []
-    for step, sub_dir in step_outputs:
-        jp = os.path.join(sub_dir, "jsd.json")
-        if not os.path.isfile(jp):
-            continue
-        try:
-            with open(jp) as f:
-                per_step_jsd.append((step, json.load(f)))
-        except (FileNotFoundError, json.JSONDecodeError) as exc:
-            log.warning("Could not load %s: %s", jp, exc)
-
     # Persist the aggregated trajectory data so the plots can be
     # re-rendered / re-styled without rerunning the probe. One entry per
-    # step; ``metrics`` mirrors each per-step ``variance_summary.json``,
-    # ``jsd`` (if present) mirrors ``jsd.json``.
-    jsd_by_step = {s: j for s, j in per_step_jsd}
+    # step; ``metrics`` mirrors each per-step ``variance_summary.json``.
     trajectory_path = os.path.join(run_dir, "trajectory_data.json")
     with open(trajectory_path, "w") as f:
         json.dump(
             [
-                {"step": step, "jsd": jsd_by_step.get(step), **data}
+                {"step": step, **data}
                 for step, data in per_step_data
             ],
             f, indent=2, default=float,
         )
     log.info(
-        "Saved trajectory data → %s (%d steps, %d with JSD)",
-        trajectory_path, len(per_step_data), len(per_step_jsd),
+        "Saved trajectory data → %s (%d steps)",
+        trajectory_path, len(per_step_data),
     )
 
     # Grab the schedule's noise levels σ̃_τ from the parent experiment's
@@ -608,15 +490,6 @@ def _probe_per_step(
         run_dir, per_step_data, kind="grad", mode="adaptive_is",
         noise_levels=noise_levels,
     )
-
-    # gt_latent_jsd trajectory — one point per checkpoint, showing how the
-    # model's transition kernel divergence from the analytic GT kernel
-    # evolves during training. Only renders if any checkpoint actually
-    # produced a JSD value (dataset + mode must expose GT latents + a
-    # registered kernel).
-    if per_step_jsd:
-        log.info("Rendering gt_latent_jsd trajectory plot")
-        _render_jsd_trajectory(run_dir, per_step_jsd)
 
     return {
         "per_step_dir": per_step_dir,

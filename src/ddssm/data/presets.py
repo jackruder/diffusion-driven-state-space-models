@@ -64,10 +64,8 @@ Robot2D = Synthetic(
     N_per_split=N_PER_SPLIT,
     batch_size=BATCH_SIZE,
 )
-# Init-centering ablation datasets. Both expose GT latents so
-# ``gt_latent_jsd`` works headline-side; see
-# :mod:`ddssm.eval.synthetic_kernels` for the matching closed-form
-# transition kernels.
+# Init-centering ablation datasets. Both expose GT latents for the
+# ``crps_sum_latent`` metric.
 NonlinBimodalLift1D = Synthetic(
     mode="nonlinear-bimodal-lift",
     D=1,

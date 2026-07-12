@@ -4,9 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-# Nonlinear-bimodal-lift constants shared with
-# ``ddssm.eval.synthetic_kernels`` so the closed-form transition kernel
-# matches the data generator exactly.
+# Nonlinear-bimodal-lift constants.
 NLBL_DELTA = 2.0
 NLBL_SIGMA_Z = 0.1
 NLBL_SIGMA_X = 0.1
@@ -20,6 +18,7 @@ NLBL_MV_LATENT_D = 4
 NLBL_MV_OBS_D = 8
 NLBL_MV_HIDDEN_DIM = 16
 NLBL_MV_A_SEED = 12345
+NLBL_MV_LIFT_SEED = 67890  # deterministic RNG seed for the DGP obs-lift MLP.
 # Sign-persistence p for the mode impulse: s_t = s_{t-1} w.p. p, flips w.p. 1-p
 # (a 2-state Markov chain per latent dim). p=0.5 recovers the original i.i.d.
 # Rademacher sign (which mode is taken is 50/50 → unpredictable → forecast stuck at
@@ -45,6 +44,35 @@ HENON_SIGMA_Z = 0.01
 HENON_SIGMA_X = 0.1
 HENON_BURN_IN = 100
 HENON_A_SEED = 23456
+
+
+def _mv_mixing_matrix() -> np.ndarray:
+    """Reconstruct the ``nlblmv`` latent mixing matrix ``A`` (d, d)."""
+    A_gen = torch.Generator().manual_seed(NLBL_MV_A_SEED)
+    A = torch.randn(NLBL_MV_LATENT_D, NLBL_MV_LATENT_D, generator=A_gen)
+    return A.detach().cpu().numpy()
+
+
+def _mv_lift_matrices() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Reconstruct ``(W1, b1, W2, b2)`` for the ``nlblmv`` obs lift.
+
+    Shapes: ``(NLBL_MV_HIDDEN_DIM, NLBL_MV_LATENT_D)``,
+    ``(NLBL_MV_HIDDEN_DIM,)``, ``(NLBL_MV_OBS_D, NLBL_MV_HIDDEN_DIM)``,
+    ``(NLBL_MV_OBS_D,)``. Deterministic in ``NLBL_MV_LIFT_SEED``, so the
+    ``obs_space_jsd`` metric can lift the analytic DGP kernel through the
+    same MLP the generator used.
+    """
+    g = torch.Generator().manual_seed(NLBL_MV_LIFT_SEED)
+    W1 = torch.randn(NLBL_MV_HIDDEN_DIM, NLBL_MV_LATENT_D, generator=g)
+    b1 = torch.randn(NLBL_MV_HIDDEN_DIM, generator=g)
+    W2 = torch.randn(NLBL_MV_OBS_D, NLBL_MV_HIDDEN_DIM, generator=g)
+    b2 = torch.randn(NLBL_MV_OBS_D, generator=g)
+    return (
+        W1.detach().cpu().numpy(),
+        b1.detach().cpu().numpy(),
+        W2.detach().cpu().numpy(),
+        b2.detach().cpu().numpy(),
+    )
 
 
 class SyntheticDataset(Dataset):
@@ -81,10 +109,12 @@ class SyntheticDataset(Dataset):
             expose_gt_latents: When True, ``__getitem__`` returns an
                 additional ``gt_latent`` field containing the
                 ground-truth latent ``z`` underlying each sequence.
-                Available for modes whose latent dynamics have a
-                registered closed-form transition kernel in
-                :mod:`ddssm.eval.synthetic_kernels`. Today: ``lgssm``,
-                ``nonlinear-bimodal-lift``, ``nonlinear-bimodal-lift-mv``.
+                For ``nonlinear-bimodal-lift-mv`` (and
+                ``nonlinear-bimodal-lift`` where supported) an
+                additional ``gt_signs`` field is emitted containing the
+                bimodal sign trajectory ``s_t ∈ {-1, +1}^d``.
+                Supported modes: ``lgssm``, ``nonlinear-bimodal-lift``,
+                ``nonlinear-bimodal-lift-mv``, ``henon-lift``.
         """
         self.mode = mode
         self.split = split
@@ -95,6 +125,11 @@ class SyntheticDataset(Dataset):
         # Populated by _generate_data when the mode supports it.
         self._all_gt_latents: torch.Tensor | None = None
         self.gt_latents: torch.Tensor | None = None
+        # Populated by _generate_data for bimodal-lift modes: the sign
+        # trajectory ``s_t`` driving the mode impulse. Consumed by the
+        # ``obs_space_jsd`` metric to lift the analytic DGP kernel.
+        self._all_gt_signs: torch.Tensor | None = None
+        self.gt_signs: torch.Tensor | None = None
 
         self.N_total = 3 * N_per_split
         # Sandbox generation: draws are seeded with ``dataset_seed`` inside a
@@ -110,14 +145,22 @@ class SyntheticDataset(Dataset):
             self.data = all_data[:N_per_split]
             if self._all_gt_latents is not None:
                 self.gt_latents = self._all_gt_latents[:N_per_split]
+            if self._all_gt_signs is not None:
+                self.gt_signs = self._all_gt_signs[:N_per_split]
         elif split == "val":
             self.data = all_data[N_per_split : 2 * N_per_split]
             if self._all_gt_latents is not None:
                 self.gt_latents = self._all_gt_latents[N_per_split : 2 * N_per_split]
+            if self._all_gt_signs is not None:
+                self.gt_signs = self._all_gt_signs[N_per_split : 2 * N_per_split]
         elif split == "test":
             self.data = all_data[2 * N_per_split : 3 * N_per_split]
             if self._all_gt_latents is not None:
                 self.gt_latents = self._all_gt_latents[
+                    2 * N_per_split : 3 * N_per_split
+                ]
+            if self._all_gt_signs is not None:
+                self.gt_signs = self._all_gt_signs[
                     2 * N_per_split : 3 * N_per_split
                 ]
         else:
@@ -125,6 +168,7 @@ class SyntheticDataset(Dataset):
 
         # Free the full tensor; the per-split slice is what we keep.
         self._all_gt_latents = None
+        self._all_gt_signs = None
 
         self.N = len(self.data)
 
@@ -155,10 +199,9 @@ class SyntheticDataset(Dataset):
                 )
             data = z + 0.1 * torch.randn(self.N_total, self.D, self.T)
             # Retain the underlying clean latent for the GT-latent
-            # surface (used by ``gt_latent_jsd`` and
-            # ``crps_sum_latent`` metrics) only when explicitly
-            # requested — otherwise drop the reference so it can be
-            # garbage-collected.
+            # surface (used by the ``crps_sum_latent`` metric) only
+            # when explicitly requested — otherwise drop the reference
+            # so it can be garbage-collected.
             if self.expose_gt_latents:
                 self._all_gt_latents = z
 
@@ -330,8 +373,7 @@ class SyntheticDataset(Dataset):
             # Multivariate variant: latent d = NLBL_MV_LATENT_D, observation
             # lifted to D = NLBL_MV_OBS_D via a tanh-MLP. Per-dim independent
             # bimodal signs (2^d attractors). A is sampled once from a fixed
-            # seed so ``synthetic_kernels.nonlinear_bimodal_lift_mv_kernel``
-            # can reconstruct it.
+            # seed.
             assert self.D == NLBL_MV_OBS_D, (
                 f"nonlinear-bimodal-lift-mv expects D={NLBL_MV_OBS_D} "
                 f"(matching NLBL_MV_OBS_D); got D={self.D}"
@@ -348,9 +390,14 @@ class SyntheticDataset(Dataset):
             # Persistent Markov sign: keep s_{t-1} w.p. p, flip w.p. 1-p (per dim).
             # p=0.5 == the original i.i.d. Rademacher impulse.
             s_t = (torch.randint(0, 2, (self.N_total, latent_d)).float() * 2.0) - 1.0
+            # Full sign trajectory (N, d, T); s_all[:, :, 0] is the s_0 draw
+            # (unused by z_0 but recorded so the shape matches z's).
+            s_all = torch.zeros(self.N_total, latent_d, self.T)
+            s_all[:, :, 0] = s_t
             for t in range(1, self.T):
                 keep = torch.rand(self.N_total, latent_d) < NLBL_MV_SIGN_PERSISTENCE
                 s_t = torch.where(keep, s_t, -s_t)
+                s_all[:, :, t] = s_t
                 Az = z[:, :, t - 1] @ A.t()
                 z[:, :, t] = (
                     torch.tanh(Az)
@@ -358,10 +405,13 @@ class SyntheticDataset(Dataset):
                     + NLBL_SIGMA_Z * torch.randn(self.N_total, latent_d)
                 )
 
-            W1 = torch.randn(NLBL_MV_HIDDEN_DIM, latent_d)
-            b1 = torch.randn(NLBL_MV_HIDDEN_DIM)
-            W2 = torch.randn(self.D, NLBL_MV_HIDDEN_DIM)
-            b2 = torch.randn(self.D)
+            # Deterministic MLP weights so the ``obs_space_jsd`` metric can
+            # reconstruct the exact same lift used to generate the data.
+            g_lift = torch.Generator().manual_seed(NLBL_MV_LIFT_SEED)
+            W1 = torch.randn(NLBL_MV_HIDDEN_DIM, latent_d, generator=g_lift)
+            b1 = torch.randn(NLBL_MV_HIDDEN_DIM, generator=g_lift)
+            W2 = torch.randn(self.D, NLBL_MV_HIDDEN_DIM, generator=g_lift)
+            b2 = torch.randn(self.D, generator=g_lift)
 
             for t in range(self.T):
                 h_t = torch.tanh(z[:, :, t] @ W1.t() + b1)
@@ -370,6 +420,7 @@ class SyntheticDataset(Dataset):
 
             if self.expose_gt_latents:
                 self._all_gt_latents = z
+                self._all_gt_signs = s_all
 
         elif self.mode == "robot-basis-pursuit":
             assert self.D >= 2, "robot-basis-pursuit requires D>=2 (X and Y)"
@@ -538,6 +589,8 @@ class SyntheticDataset(Dataset):
         }
         if self.expose_gt_latents and self.gt_latents is not None:
             item["gt_latent"] = self.gt_latents[idx]
+        if self.expose_gt_latents and self.gt_signs is not None:
+            item["gt_signs"] = self.gt_signs[idx]
         return item
 
 

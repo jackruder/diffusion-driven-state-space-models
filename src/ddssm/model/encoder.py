@@ -209,14 +209,13 @@ class GaussianEncoder(BaseEncoder):
         )
 
         self.fut_sum_module = maybe_compile(self.fut_sum_module, dynamic=True)
-        # Compile the per-step body of the autoregressive ``sample_paths`` loop —
-        # it's the launch-bound bottleneck (~670 tiny ops/iter × T). Fuses the
-        # combiner + dist_head into one graph per iteration. dynamic=True because
-        # the latent-history length grows over the first j steps. Off-cluster (no
-        # working triton) this falls back to eager; on the cluster it's ~1.3×.
-        self._forward_with_stats = maybe_compile_fn(
-            self._forward_with_stats, dynamic=True
-        )
+        # Compile the whole autoregressive ``sample_paths`` outer loop as a
+        # single fx graph — dynamo unrolls the ``for t in range(T)`` (T is
+        # a Python int) so all T iterations of ``_forward_with_stats``
+        # collapse into one graph invocation per encode instead of T
+        # separate launches. dynamic=True because T can vary across calls
+        # (forecast history vs full sequence).
+        self.sample_paths = maybe_compile_fn(self.sample_paths, dynamic=True)
 
     @property
     def is_gaussian_family(self) -> bool:

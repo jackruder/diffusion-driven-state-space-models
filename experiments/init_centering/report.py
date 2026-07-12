@@ -9,8 +9,8 @@ Three-stage pipeline keeps **plot iteration** decoupled from
    * ``summary.csv`` — one row per (cell, trial), scalar columns only.
      Suitable for spreadsheet inspection / pandas.
    * ``records.jsonl`` — full records including per-timestep arrays
-     (σ_data²(t) buffer + empirical decomposition, CRPS-per-t,
-     GT-latent-JSD-per-t).  This is the canonical source for plots.
+     (σ_data²(t) buffer + empirical decomposition, CRPS-per-t).
+     This is the canonical source for plots.
 
 2. ``plot`` — *reads* the artifacts (no model touched, no eval re-run)
    and renders the three Phase-E figures + the headline markdown table.
@@ -101,7 +101,6 @@ class TrialRecord:
     wallclock_to_relative_target_step: int | None = None
     wallclock_to_relative_target_implied_target: float | None = None
     crps_sum_latent_mean: float | None = None
-    gt_latent_jsd_mean: float | None = None
     # σ_data²(t) summary scalars (mean of the buffer / decomposition sum).
     sigma_data2_buffer_mean: float | None = None
     sigma_data2_decomposition_sum_mean: float | None = None
@@ -112,7 +111,6 @@ class TrialRecord:
     sigma_data2_component1_per_t: list[float] = field(default_factory=list)
     sigma_data2_component2_per_t: list[float] = field(default_factory=list)
     crps_sum_latent_per_t: list[float] = field(default_factory=list)
-    gt_latent_jsd_per_t: list[float] = field(default_factory=list)
 
 
 _SCALAR_COLUMNS: tuple[str, ...] = (
@@ -134,7 +132,6 @@ _SCALAR_COLUMNS: tuple[str, ...] = (
     "wallclock_to_relative_target_step",
     "wallclock_to_relative_target_implied_target",
     "crps_sum_latent_mean",
-    "gt_latent_jsd_mean",
     "sigma_data2_buffer_mean",
     "sigma_data2_decomposition_sum_mean",
 )
@@ -186,10 +183,6 @@ def _populate_metrics(record: TrialRecord, payload: dict[str, Any]) -> None:
     if payload.get("crps_sum_latent_available"):
         record.crps_sum_latent_mean = float(payload.get("crps_sum_latent_mean", 0.0))
         record.crps_sum_latent_per_t = list(payload.get("crps_sum_latent_per_t", []))
-
-    if payload.get("gt_latent_jsd_available"):
-        record.gt_latent_jsd_mean = float(payload.get("gt_latent_jsd_mean", 0.0))
-        record.gt_latent_jsd_per_t = list(payload.get("gt_latent_jsd_per_t", []))
 
     if payload.get("sigma_data_drift_available"):
         record.sigma_data2_buffer = list(payload.get("sigma_data2_buffer", []))
@@ -610,14 +603,14 @@ def write_headline_table(records: list[TrialRecord], out_path: str) -> str:
     lines: list[str] = [
         "# Phase E — headline metrics (init-centering ablation grid)",
         "",
-        "| cell | form | mode | tracking | best stage2_elbo_surrogate | wallclock_to_target (s) | crps_sum_latent | gt_latent_jsd | σ_data² buffer mean | n_trials |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| cell | form | mode | tracking | best stage2_elbo_surrogate | wallclock_to_target (s) | crps_sum_latent | σ_data² buffer mean | n_trials |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for cell in sorted(grouped.keys()):
         trials = grouped[cell]
         best = _best_trial(trials)
         lines.append(
-            f"| {cell} | {best.baseline_form} | {best.baseline_mode} | {best.tracking_mode} | {_fmt(best.stage2_elbo_surrogate)} | {_fmt(best.wallclock_to_target_seconds, 3)} | {_fmt(best.crps_sum_latent_mean)} | {_fmt(best.gt_latent_jsd_mean)} | {_fmt(best.sigma_data2_buffer_mean)} | {len(trials)} |"
+            f"| {cell} | {best.baseline_form} | {best.baseline_mode} | {best.tracking_mode} | {_fmt(best.stage2_elbo_surrogate)} | {_fmt(best.wallclock_to_target_seconds, 3)} | {_fmt(best.crps_sum_latent_mean)} | {_fmt(best.sigma_data2_buffer_mean)} | {len(trials)} |"
         )
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -636,7 +629,6 @@ _DISTRIBUTION_METRICS: tuple[tuple[str, str, int], ...] = (
     ("stage2_elbo_surrogate", "stage2_elbo_surrogate", 4),
     ("wallclock_to_target_seconds", "wallclock_to_target (s)", 3),
     ("crps_sum_latent_mean", "crps_sum_latent", 4),
-    ("gt_latent_jsd_mean", "gt_latent_jsd", 4),
     ("sigma_data2_buffer_mean", "σ_data² buffer mean", 4),
 )
 

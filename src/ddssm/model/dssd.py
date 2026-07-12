@@ -188,6 +188,21 @@ class DDSSM_base(nn.Module):
         _require_persistence_baseline(encoder, baseline)
         self.sigma_data: SigmaDataBuffer | None = sigma_data
 
+        # Consolidate the whole training-forward into a single compiled graph.
+        # Wraps the outer ``forward`` (encoder → decoder → transition → loss
+        # composition) so dynamo can see across sub-module boundaries and
+        # fuse the small orchestration ops (reshape/detach/dict-writes)
+        # that would otherwise sit at the CPU-dispatch layer between the
+        # pre-compiled sub-modules.
+        #
+        # NOTE: ``compile_mode="reduce-overhead"`` (CUDA graphs) segfaults
+        # here — likely a nested-compile conflict with the already-compiled
+        # sub-modules (encoder.sample_paths, decoder.context_producer,
+        # transition.diffmodel) whose independent CUDA-graph captures
+        # collide with an outer capture. Keeping the default compile mode.
+        from ddssm.nn.torch_compile import maybe_compile_fn as _mcf
+        self.forward = _mcf(self.forward, dynamic=True)
+
     def _encode_latents(
         self,
         observed_data: torch.Tensor,  # (B,D,T)
@@ -1036,6 +1051,7 @@ def _default_hyperparams():
         logvar_max=13.0,
         lambda_ramp=None,
         lr_schedule=None,
+        use_split_loss=False,
     )
 
 
@@ -1080,3 +1096,7 @@ class DDSSMHyperParamsConf:
     # Enabling requires ``lambda_ramp`` set (the resolver anchors decay
     # windows to λ_end = lambda_ramp.delay + lambda_ramp.steps).
     lr_schedule: LrScheduleGroupConf | None = None
+    # Enable split-loss training: the FullELBO returns a SplitLoss (φθ / ψ)
+    # so the transition (ψ) and encoder/decoder (φθ) get separate optimizers
+    # and separate objectives. Default False keeps the single-loss path.
+    use_split_loss: bool = False

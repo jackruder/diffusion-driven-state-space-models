@@ -844,12 +844,16 @@ class DDSSMTrainer:
         from ddssm.training.stages import make_lambda_cosine
 
         ramp = getattr(self.hparams, "lambda_ramp", None)
+        split = bool(getattr(self.hparams, "use_split_loss", False))
         if ramp is None:
-            return FullELBO(rate_lambda=lambda _step: 1.0)
+            return FullELBO(
+                rate_lambda=lambda _step: 1.0, use_split_loss=split
+            )
         return FullELBO(
             rate_lambda=make_lambda_cosine(
                 ramp, total_steps=total_steps, default_end=1.0
-            )
+            ),
+            use_split_loss=split,
         )
 
     def _move_batch_to_device(self, batch: dict, device: torch.device) -> dict:

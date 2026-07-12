@@ -619,6 +619,217 @@ def eval_bimodal_jsd(
 
 
 # ---------------------------------------------------------------------------
+# Obs-space sliced JSD: model's decoded forecast one-step samples vs. K resamples
+# of the DGP's analytic transition kernel lifted through the SAME random MLP the
+# data generator used. Specific to ``nonlinear-bimodal-lift-mv`` — the only mode
+# that exposes both ``gt_latent`` and ``gt_signs``. Frame-invariant successor of
+# the (purged) latent-frame JSD.
+# ---------------------------------------------------------------------------
+
+
+@register_metric("obs_space_jsd")
+def eval_obs_space_jsd(
+    ctx: EvalContext,
+    *,
+    origins: tuple[int, ...] = (8, 16, 24),
+    n_random_projections: int = 32,
+    n_bins: int = 60,
+    max_batches: int = 4,
+    proj_seed: int = 42,
+) -> dict[str, Any]:
+    """Sliced JSD between decoded forecast samples and DGP-lifted samples.
+
+    For each batch element, at each forecast origin ``t`` in ``origins``:
+
+    1. Model side: call ``model.forecast(x_hist=obs[..., :t], ...,
+       num_samples=S)`` with ``S = ctx.num_samples`` and take the first
+       future step ``pred_samples[:, :, :, 0]`` → ``(B, S, D)``.
+    2. Truth side: from the stored ``gt_latent[:, :, t-1]`` and
+       ``gt_signs[:, :, t-1]``, draw ``K = S`` fresh sign transitions and
+       process-noise samples to produce ``z_t``, then lift through the
+       deterministic DGP MLP + ``σ_x`` obs-noise → ``(B, K=S, D)``.
+    3. Project both sample sets onto ``n_random_projections`` random unit
+       vectors + ``D`` axis-aligned directions, bin each 1D projection into
+       ``n_bins`` shared bins (edges from combined min/max), and compute
+       the discrete JSD between the two histograms.
+
+    Aggregation is mean-over-batch then mean-over-directions. Reports
+    ``obs_space_jsd_mean`` (all origins × directions × batch),
+    ``obs_space_jsd_per_origin`` (dict), and ``obs_space_jsd_per_dim``
+    (list of D floats aggregating only the axis-aligned directions).
+
+    Skipped cleanly (returns ``{obs_space_jsd_available: False, reason}``)
+    unless the loader's dataset is ``nonlinear-bimodal-lift-mv`` and both
+    ``gt_latent`` and ``gt_signs`` are present.
+    """
+    from ddssm.data.synthetic import (
+        NLBL_DELTA,
+        NLBL_MV_OBS_D,
+        NLBL_MV_SIGN_PERSISTENCE,
+        NLBL_SIGMA_X,
+        NLBL_SIGMA_Z,
+        _mv_lift_matrices,
+        _mv_mixing_matrix,
+    )
+
+    if ctx.model is None or ctx.loader is None:
+        return {
+            "obs_space_jsd_available": False,
+            "obs_space_jsd_reason": "no model or loader",
+        }
+    dataset = getattr(ctx.loader, "dataset", None)
+    mode = getattr(dataset, "mode", None) if dataset is not None else None
+    if mode != "nonlinear-bimodal-lift-mv":
+        return {
+            "obs_space_jsd_available": False,
+            "obs_space_jsd_reason": f"unsupported mode {mode!r}",
+        }
+
+    D_obs = int(NLBL_MV_OBS_D)
+    W1, b1, W2, b2 = _mv_lift_matrices()  # (H, d), (H,), (D, H), (D,)
+    A = _mv_mixing_matrix()  # (d, d)
+
+    # 40 directions: n_random unit vectors in R^D + D axis-aligned.
+    rng = np.random.default_rng(int(proj_seed))
+    rand_dirs = rng.standard_normal(size=(int(n_random_projections), D_obs))
+    rand_dirs /= np.linalg.norm(rand_dirs, axis=1, keepdims=True) + 1e-12
+    axis_dirs = np.eye(D_obs, dtype=np.float64)
+    directions = np.concatenate([rand_dirs, axis_dirs], axis=0)  # (n_dir, D)
+    n_random = int(n_random_projections)
+    n_dirs = directions.shape[0]
+
+    model = ctx.model
+    device = ctx.device
+    transform = ctx.batch_transform
+    S = int(ctx.num_samples)
+
+    # Accumulators: per-origin lists of per-(batch-element, direction) JSD floats.
+    per_origin_dir: dict[int, list[np.ndarray]] = {int(o): [] for o in origins}
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(ctx.loader):
+            if batch_idx >= int(max_batches):
+                break
+            if transform is not None:
+                batch = transform(batch, device)
+            else:
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+            gt_latent = batch.get("gt_latent")
+            gt_signs = batch.get("gt_signs")
+            if gt_latent is None or gt_signs is None:
+                return {
+                    "obs_space_jsd_available": False,
+                    "obs_space_jsd_reason": "missing gt_latent or gt_signs",
+                }
+
+            obs = batch["observed_data"]
+            mask = batch["observation_mask"]
+            timepoints = batch["timepoints"]
+            B_ = obs.shape[0]
+            T_full = obs.shape[-1]
+
+            for origin in origins:
+                origin = int(origin)
+                if origin < 1 or origin >= T_full:
+                    continue
+
+                past_time = timepoints[:, :origin]
+                future_time = timepoints[:, origin:]
+
+                out = model.forecast(
+                    x_hist=obs[..., :origin],
+                    x_mask=mask[..., :origin],
+                    past_time=past_time,
+                    future_time=future_time,
+                    num_samples=S,
+                )
+                # First future step: (B, S, D)
+                model_samples = (
+                    out["pred_samples"][:, :, :, 0].detach().cpu().numpy()
+                )
+
+                # Truth side: z_{t-1}, s_{t-1} are stored at index origin-1.
+                z_prev = gt_latent[:, :, origin - 1].detach().cpu().numpy()  # (B, d)
+                s_prev = gt_signs[:, :, origin - 1].detach().cpu().numpy()  # (B, d)
+                latent_d = z_prev.shape[-1]
+
+                # Draw K=S sign transitions per batch element per dim.
+                keep = (
+                    rng.random(size=(B_, S, latent_d)) < NLBL_MV_SIGN_PERSISTENCE
+                )
+                s_new = np.where(keep, s_prev[:, None, :], -s_prev[:, None, :])
+                z_noise = rng.standard_normal(size=(B_, S, latent_d))
+                # z_t = tanh(A z_{t-1}) + delta * s_t + sigma_z * eta
+                # z_prev @ A.T -> (B, d); broadcast over sample axis.
+                Az = z_prev @ A.T  # (B, d)
+                z_t = (
+                    np.tanh(Az)[:, None, :]
+                    + NLBL_DELTA * s_new
+                    + NLBL_SIGMA_Z * z_noise
+                )  # (B, S, d)
+                # Lift: h = tanh(z_t @ W1.T + b1); x = h @ W2.T + b2 + sigma_x * xi
+                h = np.tanh(z_t @ W1.T + b1)  # (B, S, H)
+                x_noise = rng.standard_normal(size=(B_, S, D_obs))
+                truth_samples = h @ W2.T + b2 + NLBL_SIGMA_X * x_noise  # (B, S, D)
+
+                # Project + JSD per (batch-element, direction).
+                # model_samples: (B, S, D); truth_samples: (B, S, D)
+                # projections: (n_dir, D)
+                m_proj = np.einsum("bsd,kd->bks", model_samples, directions)
+                t_proj = np.einsum("bsd,kd->bks", truth_samples, directions)
+                jsd_bd = np.zeros((B_, n_dirs), dtype=np.float64)
+                for b in range(B_):
+                    for k in range(n_dirs):
+                        mv = m_proj[b, k]
+                        tv = t_proj[b, k]
+                        lo = float(min(mv.min(), tv.min()))
+                        hi = float(max(mv.max(), tv.max()))
+                        if hi <= lo:
+                            hi = lo + 1e-6
+                        edges = np.linspace(lo, hi, n_bins + 1)
+                        p = _hist_mass(mv, edges)
+                        q = _hist_mass(tv, edges)
+                        jsd_bd[b, k] = _jsd_discrete(p, q)
+                per_origin_dir[origin].append(jsd_bd)
+
+    # Reduce.
+    per_origin_mean: dict[int, float] = {}
+    per_origin_arrays: list[np.ndarray] = []
+    for origin in origins:
+        origin = int(origin)
+        arrs = per_origin_dir.get(origin, [])
+        if not arrs:
+            per_origin_mean[origin] = float("nan")
+            continue
+        stacked = np.concatenate(arrs, axis=0)  # (total_B, n_dirs)
+        per_origin_arrays.append(stacked)
+        # Mean over batch elements, mean over directions.
+        per_origin_mean[origin] = float(stacked.mean())
+
+    if not per_origin_arrays:
+        return {
+            "obs_space_jsd_available": False,
+            "obs_space_jsd_reason": "no batches processed",
+        }
+    all_stacked = np.concatenate(per_origin_arrays, axis=0)  # (Σ_B, n_dirs)
+    headline = float(all_stacked.mean())
+    # Per-dim: only the axis-aligned block (columns n_random .. n_random + D).
+    per_dim = [
+        float(all_stacked[:, n_random + di].mean()) for di in range(D_obs)
+    ]
+
+    return {
+        "obs_space_jsd_available": True,
+        "obs_space_jsd_mean": headline,
+        "obs_space_jsd_per_origin": per_origin_mean,
+        "obs_space_jsd_per_dim": per_dim,
+    }
+
+
+# ---------------------------------------------------------------------------
 # CSV-derived metrics: cheap post-hoc summaries of the training log.
 # ---------------------------------------------------------------------------
 
@@ -1498,125 +1709,3 @@ def eval_crps_sum_latent(
     }
 
 
-@register_metric("gt_latent_jsd")
-def eval_gt_latent_jsd(
-    ctx: EvalContext,
-    *,
-    max_batches: int = 2,
-    n_bins: int = 60,
-    edges_min: float = -3.0,
-    edges_max: float = 3.0,
-) -> dict[str, Any]:
-    """JSD between model-transition samples and the GT transition kernel.
-
-    For each ``t ∈ [1, T-1]``, draws ``S`` samples from the model's
-    learned ``p_ψ(z_t | z_{t-1})`` (with GT ``z_{t-1}`` as the
-    conditioning), plus ``S`` samples from the analytic ground-truth
-    transition kernel via :mod:`ddssm.eval.synthetic_kernels`.  Bins
-    both into shared histograms and computes Jensen-Shannon divergence
-    per t.
-
-    Per ``init-experiment.org`` § Headline metrics, metric 3
-    ("Transition JSD on ground-truth latents").  This metric is the
-    *only* one that isolates the transition model from the encoder —
-    both sample sets are conditioned on the same GT z_{t-1}.
-
-    Skips with ``{gt_latent_jsd_available: False}`` when GT latents
-    aren't exposed by the loader or when the synthetic mode lacks a
-    registered closed-form kernel.
-    """
-    if ctx.model is None or ctx.loader is None:
-        return {"gt_latent_jsd_available": False}
-    from ddssm.eval.synthetic_kernels import KERNEL_REGISTRY
-
-    # Look up the data module's mode from the loader's dataset.
-    mode = _infer_synthetic_mode(ctx.loader)
-    if mode is None or mode not in KERNEL_REGISTRY:
-        return {
-            "gt_latent_jsd_available": False,
-            "gt_latent_jsd_reason": f"no kernel for mode={mode!r}",
-        }
-
-    kernel = KERNEL_REGISTRY[mode]
-    model = ctx.model
-    device = ctx.device
-    transform = ctx.batch_transform
-    j = int(model.j)
-    S = int(ctx.num_samples)
-
-    edges = np.linspace(edges_min, edges_max, n_bins + 1)
-    per_t_jsd: dict[int, list[float]] = {}
-    n_batches = 0
-
-    with torch.no_grad():
-        for batch_idx, batch in enumerate(ctx.loader):
-            if batch_idx >= int(max_batches):
-                break
-            if transform is not None:
-                batch = transform(batch, device)
-            else:
-                batch = {
-                    k: v.to(device) if isinstance(v, torch.Tensor) else v
-                    for k, v in batch.items()
-                }
-            gt_latent = batch.get("gt_latent")
-            if gt_latent is None:
-                return {
-                    "gt_latent_jsd_available": False,
-                    "gt_latent_jsd_reason": "no gt_latent",
-                }
-            B, d, T = gt_latent.shape
-            for t in range(j, T):
-                # GT conditioning history (B, d, j).
-                z_hist_gt = gt_latent[:, :, t - j : t]
-                # Tile across S samples.
-                z_hist_flat = (
-                    z_hist_gt.unsqueeze(1).expand(B, S, d, j).reshape(B * S, d, j)
-                )
-
-                ctx_dict = {
-                    "hist_time_emb": torch.zeros(
-                        B * S, j, model.emb_time_dim, device=device
-                    ),
-                    "target_time_emb": torch.zeros(
-                        B * S, 1, model.emb_time_dim, device=device
-                    ),
-                }
-                z_next_model = model.transition.sample(z_hist_flat, S=1, ctx=ctx_dict)
-                z_next_model = z_next_model.squeeze(1).view(B, S, d).cpu().numpy()
-                z_next_gt = kernel(
-                    z_hist_gt.cpu().numpy(), S, batch_idx=batch_idx, t=t
-                )  # (B, S, d)
-
-                # Per-dim JSD, averaged.
-                jsds_d = []
-                for di in range(d):
-                    for b in range(B):
-                        p = _hist_mass(z_next_model[b, :, di], edges)
-                        q = _hist_mass(z_next_gt[b, :, di], edges)
-                        jsds_d.append(_jsd_discrete(p, q))
-                per_t_jsd.setdefault(t + 1, []).append(float(np.mean(jsds_d)))
-            n_batches += 1
-
-    if not per_t_jsd:
-        return {"gt_latent_jsd_available": False}
-    sorted_ts = sorted(per_t_jsd.keys())
-    per_t_list = [float(np.mean(per_t_jsd[t])) for t in sorted_ts]
-    return {
-        "gt_latent_jsd_available": True,
-        "gt_latent_jsd_mean": float(np.mean(per_t_list)),
-        "gt_latent_jsd_per_t": per_t_list,
-        "gt_latent_jsd_t_indices": sorted_ts,
-        "gt_latent_jsd_n_batches": int(n_batches),
-    }
-
-
-def _infer_synthetic_mode(loader) -> str | None:
-    """Best-effort lookup of the synthetic dataset's ``mode`` attribute."""
-    try:
-        ds = loader.dataset
-        if hasattr(ds, "mode"):
-            return str(ds.mode)
-    except AttributeError:
-        return None
-    return None
