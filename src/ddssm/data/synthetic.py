@@ -46,6 +46,27 @@ HENON_SIGMA_X = 0.1
 HENON_BURN_IN = 100
 HENON_A_SEED = 23456
 
+# Four-well-fold variant (``four-well-fold``): a 2D latent SDE on the
+# double-double-well potential V(x, y) = (x² - 1)² + (y² - 1)², whose four
+# attractors sit at (±1, ±1). The Euler-Maruyama integrator advances the
+# latent by ``FOUR_WELL_SUB_STEPS`` inner steps of size ``FOUR_WELL_DT``
+# per emitted timestep. Emissions (D = FOUR_WELL_OBS_D = 2) fold the four
+# latent modes into two observable modes:
+#   y1 = x1 · x2 + τ1 · ε      (bimodal at ±1)
+#   y2 = sin(x1 · x2) + τ2 · ε (bimodal at ±sin(1))
+# — the (+1, +1)/(−1, −1) wells map to y1 ≈ +1 and (+1, −1)/(−1, +1) to
+# y1 ≈ −1, so the emission is not injective in the latent. Sigma and
+# sub-step count are tuned to give O(a few) barrier crossings per T=32
+# window (Kramers escape time ≈ exp(2/σ²) ≈ 22 time units at σ=0.8; the
+# defaults yield ≈ 26 time units per sequence).
+FOUR_WELL_LATENT_D = 2
+FOUR_WELL_OBS_D = 2
+FOUR_WELL_DT = 0.02
+FOUR_WELL_SUB_STEPS = 40
+FOUR_WELL_SIGMA = 0.8
+FOUR_WELL_TAU1 = 0.10
+FOUR_WELL_TAU2 = 0.05
+
 # Rendered-pendulum variant (``pendulum``): a damped stochastic pendulum
 # rendered as a 32×32 grayscale image sequence — the standard latent-SSM
 # benchmark from DVBF (Karl et al. 2017, 16×16) / RKN (Becker et al.
@@ -490,53 +511,43 @@ class SyntheticDataset(Dataset):
                 z[:, :, t] = 0.9 * z[:, :, t - 1] + 0.1 * t_noise
             data = z
 
-        elif self.mode == "henon-lift":
-            # Deterministic Hénon map (chaotic) latent d=2, lifted to D via a
-            # tanh-MLP. x_t = 1 - a x_{t-1}^2 + y_{t-1}; y_t = b x_{t-1}.
-            assert self.D == HENON_OBS_D, (
-                f"henon-lift expects D={HENON_OBS_D}; got D={self.D}"
+        elif self.mode == "four-well-fold":
+            # 2D four-well SDE latent under V(x, y) = (x² − 1)² + (y² − 1)²,
+            # integrated by Euler-Maruyama over ``FOUR_WELL_SUB_STEPS`` inner
+            # steps of size ``FOUR_WELL_DT`` per emitted timestep. Emissions
+            # (D = 2) fold the four latent modes into two observable modes.
+            assert self.D == FOUR_WELL_OBS_D, (
+                f"four-well-fold expects D={FOUR_WELL_OBS_D}; got D={self.D}"
             )
-            latent_d = HENON_LATENT_D
+            latent_d = FOUR_WELL_LATENT_D
             data = torch.zeros(self.N_total, self.D, self.T)
 
-            # Random ICs near the origin (in the attractor's basin); burn in.
-            x = torch.rand(self.N_total) * 0.2 - 0.1
-            y = torch.rand(self.N_total) * 0.2 - 0.1
-            for _ in range(HENON_BURN_IN):
-                x, y = (1.0 - HENON_A * x * x + y).clamp(-2.0, 2.0), HENON_B * x
-
+            # Initial condition: uniform random over the 4 wells (±1, ±1),
+            # so no single well is preferred by the training marginal.
+            x = (
+                torch.randint(0, 2, (self.N_total, latent_d)).float() * 2.0 - 1.0
+            )
             z = torch.zeros(self.N_total, latent_d, self.T)
-            z[:, 0, 0], z[:, 1, 0] = x, y
+            z[:, :, 0] = x
+
+            sqrt_dt = FOUR_WELL_DT**0.5
             for t in range(1, self.T):
-                xp, yp = z[:, 0, t - 1], z[:, 1, t - 1]
-                xn = (
-                    1.0
-                    - HENON_A * xp * xp
-                    + yp
-                    + HENON_SIGMA_Z * torch.randn(self.N_total)
-                )
-                yn = HENON_B * xp + HENON_SIGMA_Z * torch.randn(self.N_total)
-                z[:, 0, t] = xn.clamp(-2.0, 2.0)
-                z[:, 1, t] = yn.clamp(-1.0, 1.0)
+                for _ in range(FOUR_WELL_SUB_STEPS):
+                    drift = -4.0 * x * (x * x - 1.0)
+                    x = (
+                        x
+                        + drift * FOUR_WELL_DT
+                        + FOUR_WELL_SIGMA
+                        * sqrt_dt
+                        * torch.randn(self.N_total, latent_d)
+                    )
+                z[:, :, t] = x
 
-            # Standardise each dim using train-split stats only (indices
-            # [:N_per_split]) so val/test normalisation does not leak
-            # information from those splits.
-            z_train = z[: self.N_per_split]
-            z_mean = z_train.mean(dim=(0, 2), keepdim=True)
-            z_std = z_train.std(dim=(0, 2), keepdim=True) + 1e-6
-            z = (z - z_mean) / z_std
-
-            # tanh-MLP lift sampled once from a fixed seed.
-            g_lift = torch.Generator().manual_seed(HENON_A_SEED)
-            W1 = torch.randn(HENON_HIDDEN_DIM, latent_d, generator=g_lift)
-            b1 = torch.randn(HENON_HIDDEN_DIM, generator=g_lift)
-            W2 = torch.randn(self.D, HENON_HIDDEN_DIM, generator=g_lift)
-            b2 = torch.randn(self.D, generator=g_lift)
-            for t in range(self.T):
-                h_t = torch.tanh(z[:, :, t] @ W1.t() + b1)
-                x_t = h_t @ W2.t() + b2
-                data[:, :, t] = x_t + HENON_SIGMA_X * torch.randn(self.N_total, self.D)
+            prod = z[:, 0, :] * z[:, 1, :]
+            data[:, 0, :] = prod + FOUR_WELL_TAU1 * torch.randn(self.N_total, self.T)
+            data[:, 1, :] = torch.sin(prod) + FOUR_WELL_TAU2 * torch.randn(
+                self.N_total, self.T
+            )
 
             if self.expose_gt_latents:
                 self._all_gt_latents = z
@@ -592,6 +603,57 @@ class SyntheticDataset(Dataset):
                 data[:, :, t] = img.view(
                     self.N_total, -1
                 ) + PENDULUM_TAU * torch.randn(self.N_total, self.D)
+
+            if self.expose_gt_latents:
+                self._all_gt_latents = z
+
+        elif self.mode == "henon-lift":
+            # Deterministic Hénon map (chaotic) latent d=2, lifted to D via a
+            # tanh-MLP. x_t = 1 - a x_{t-1}^2 + y_{t-1}; y_t = b x_{t-1}.
+            assert self.D == HENON_OBS_D, (
+                f"henon-lift expects D={HENON_OBS_D}; got D={self.D}"
+            )
+            latent_d = HENON_LATENT_D
+            data = torch.zeros(self.N_total, self.D, self.T)
+
+            # Random ICs near the origin (in the attractor's basin); burn in.
+            x = torch.rand(self.N_total) * 0.2 - 0.1
+            y = torch.rand(self.N_total) * 0.2 - 0.1
+            for _ in range(HENON_BURN_IN):
+                x, y = (1.0 - HENON_A * x * x + y).clamp(-2.0, 2.0), HENON_B * x
+
+            z = torch.zeros(self.N_total, latent_d, self.T)
+            z[:, 0, 0], z[:, 1, 0] = x, y
+            for t in range(1, self.T):
+                xp, yp = z[:, 0, t - 1], z[:, 1, t - 1]
+                xn = (
+                    1.0
+                    - HENON_A * xp * xp
+                    + yp
+                    + HENON_SIGMA_Z * torch.randn(self.N_total)
+                )
+                yn = HENON_B * xp + HENON_SIGMA_Z * torch.randn(self.N_total)
+                z[:, 0, t] = xn.clamp(-2.0, 2.0)
+                z[:, 1, t] = yn.clamp(-1.0, 1.0)
+
+            # Standardise each dim using train-split stats only (indices
+            # [:N_per_split]) so val/test normalisation does not leak
+            # information from those splits.
+            z_train = z[: self.N_per_split]
+            z_mean = z_train.mean(dim=(0, 2), keepdim=True)
+            z_std = z_train.std(dim=(0, 2), keepdim=True) + 1e-6
+            z = (z - z_mean) / z_std
+
+            # tanh-MLP lift sampled once from a fixed seed.
+            g_lift = torch.Generator().manual_seed(HENON_A_SEED)
+            W1 = torch.randn(HENON_HIDDEN_DIM, latent_d, generator=g_lift)
+            b1 = torch.randn(HENON_HIDDEN_DIM, generator=g_lift)
+            W2 = torch.randn(self.D, HENON_HIDDEN_DIM, generator=g_lift)
+            b2 = torch.randn(self.D, generator=g_lift)
+            for t in range(self.T):
+                h_t = torch.tanh(z[:, :, t] @ W1.t() + b1)
+                x_t = h_t @ W2.t() + b2
+                data[:, :, t] = x_t + HENON_SIGMA_X * torch.randn(self.N_total, self.D)
 
             if self.expose_gt_latents:
                 self._all_gt_latents = z

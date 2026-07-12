@@ -13,7 +13,7 @@ CLI overrides resolve) happens in :mod:`experiments.datasets`.
 
 from __future__ import annotations
 
-from ddssm.data.synthetic import NLBL_MV_OBS_D, PENDULUM_OBS_D
+from ddssm.data.synthetic import NLBL_MV_OBS_D, PENDULUM_OBS_D, FOUR_WELL_OBS_D
 from ddssm.experiment.builders import KDD, Mocap, GluonTS, Synthetic
 
 T = 32
@@ -84,6 +84,16 @@ NonlinBimodalLiftMV = Synthetic(
     batch_size=BATCH_SIZE,
     expose_gt_latents=True,
 )
+# 2D four-well SDE with folding emissions: 4 latent modes at (±1, ±1)
+# collapse to 2 observable modes via y1 = x1·x2, y2 = sin(x1·x2).
+FourWellFold = Synthetic(
+    mode="four-well-fold",
+    D=FOUR_WELL_OBS_D,
+    T=T,
+    N_per_split=N_PER_SPLIT,
+    batch_size=BATCH_SIZE,
+    expose_gt_latents=True,
+)
 # 32×32 rendered stochastic damped pendulum (DVBF/RKN-style benchmark).
 # Latent (θ, ω) SDE, emission = Gaussian blob at bob position, flattened
 # to D = 1024. GT latents exposed.
@@ -120,6 +130,7 @@ __all__ = [
     "Bimodal",
     "BimodalNoisy",
     "Electricity",
+    "FourWellFold",
     "Harmonic",
     "HarmonicMixed",
     "KDDBeijing",

@@ -31,6 +31,7 @@ from ddssm.data.presets import (
     KDDStation,
     Electricity,
     BimodalNoisy,
+    FourWellFold,
     HarmonicMixed,
     NonlinBimodalLift1D,
     NonlinBimodalLiftMV,
@@ -46,6 +47,7 @@ data_store(BimodalNoisy, name="bimodal_noisy")
 data_store(Robot2D, name="robot2d")
 data_store(NonlinBimodalLift1D, name="nonlin_bimodal_lift_1d")
 data_store(NonlinBimodalLiftMV, name="nonlin_bimodal_lift_mv")
+data_store(FourWellFold, name="four_well_fold")
 data_store(Pendulum, name="pendulum")
 
 # GluonTS repository datasets (windowed; fetched lazily on first loader access).
