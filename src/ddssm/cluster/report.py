@@ -154,7 +154,7 @@ def _print_single(summary: dict[str, Any]) -> None:
     print(f"run: {summary['run_dir']}")
     print(
         f"  rows={summary['rows']}  final_step={_fmt(summary['final_step'])}  "
-        f"stages={summary['stages_run']}  elapsed_s={_fmt(summary['elapsed_s'])}"
+        f"elapsed_s={_fmt(summary['elapsed_s'])}"
     )
     print(
         f"  loss/total   head={_fmt(lt['head'])} tail={_fmt(lt['tail'])} last={_fmt(lt['last'])}"

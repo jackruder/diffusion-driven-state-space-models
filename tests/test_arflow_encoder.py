@@ -283,9 +283,7 @@ def test_identity_baseline_guard() -> None:
     _require_persistence_baseline(enc, PersistenceBaseline(latent_dim=4, j=1))
     # any other baseline (or None) is rejected — the additive frame would mis-center
     with pytest.raises(NotImplementedError):
-        _require_persistence_baseline(
-            enc, ZeroBaseline(latent_dim=4, j=1, hidden_dim=8, n_layers=2)
-        )
+        _require_persistence_baseline(enc, ZeroBaseline(latent_dim=4, j=1))
     with pytest.raises(NotImplementedError):
         _require_persistence_baseline(enc, None)
 

@@ -235,7 +235,7 @@ def test_log_prob_at_k1_equals_single_trajectory_iwae_weight() -> None:
         )
         log_p_dec[:, 0] = log_p_dec[:, 0] + logp_t
 
-    transition = model._active_transition()
+    transition = model.transition
     log_p_trans = torch.zeros(B, 1)
     for t in range(j, T):
         sigma_d2 = model.sigma_data.read(t + 1).expand(B).to(dtype=zs.dtype)
