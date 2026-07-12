@@ -98,6 +98,20 @@ def _compile_mode() -> str:
     return "strict"
 
 
+def _inner_compile_enabled() -> bool:
+    """Whether sub-module (leaf) compiles should fire.
+
+    Gated by ``DDSSM_TORCH_COMPILE_INNER`` — set to ``0/false/no/off`` to
+    disable compile on the encoder/decoder/transition sub-modules, so the
+    OUTER :meth:`DDSSM_base.forward` compile is the sole owner of the fx
+    graph. Necessary for ``mode="reduce-overhead"`` (CUDA graphs) at the
+    outer scope, which segfaults on nested compile / capture conflicts.
+    Enabled by default so today's per-sub-module compile still works.
+    """
+    v = os.environ.get("DDSSM_TORCH_COMPILE_INNER", "1").strip().lower()
+    return v not in _OFF_VALUES
+
+
 def _configure_dynamo(mode: str) -> None:
     """Dynamo settings applied whenever we compile anything.
 
@@ -109,13 +123,29 @@ def _configure_dynamo(mode: str) -> None:
       scalars symbolically instead of graph-breaking. The encoder per-step
       body hits one (a torch-internal scalar read); without this, compiling
       it graph-breaks and most of the fusion win is lost.
+    * ``cudagraph_skip_dynamic_graphs``: when ``mode="reduce-overhead"`` is
+      requested, permits reduce-overhead to bail on dynamic subgraphs
+      instead of failing hard. Off by default.
     """
     _autoset_nixos_triton_paths()
     torch._dynamo.config.suppress_errors = (mode == "soft")
     torch._dynamo.config.capture_scalar_outputs = True
+    # Give reduce-overhead a chance to work: skip dynamic-shape captures,
+    # allow input mutation, turn off cudagraph_trees (the pool-manager
+    # version — its aliasing tracker trips over persistent buffers like
+    # SigmaDataBuffer's EMA tensor), and disable size_asserts (the
+    # defensive data_ptr sanity check that fires for any tensor whose
+    # address changes across replays — including gradients zeroed with
+    # set_to_none=True and various views).
+    torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True
+    torch._inductor.config.triton.cudagraph_support_input_mutation = True
+    torch._inductor.config.triton.cudagraph_trees = False
+    torch._inductor.config.size_asserts = False
 
 
-def maybe_compile(module: nn.Module, *, dynamic: bool = False) -> nn.Module:
+def maybe_compile(
+    module: nn.Module, *, dynamic: bool = False, inner: bool = True
+) -> nn.Module:
     """Compile ``module`` in place when enabled, preserving its ``state_dict``.
 
     Uses :meth:`torch.nn.Module.compile` rather than :func:`torch.compile` so the
@@ -129,9 +159,18 @@ def maybe_compile(module: nn.Module, *, dynamic: bool = False) -> nn.Module:
       - ``0/false/no/off``: disabled (returns module unchanged)
       - ``soft/permissive``: try to compile, silently fall back to eager on failure
       - default / unknown: **strict** — any compile-call failure raises
+
+    ``inner=True`` (default) tags this compile as a leaf / sub-module compile.
+    Set ``inner=False`` for an OUTER compile (the module owning the whole
+    forward). ``DDSSM_TORCH_COMPILE_INNER=0`` disables all ``inner=True``
+    compiles so the outer compile is the sole graph owner — required for
+    ``mode="reduce-overhead"`` at outer scope, which conflicts with nested
+    CUDA-graph captures.
     """
     mode = _compile_mode()
     if mode == "off":
+        return module
+    if inner and not _inner_compile_enabled():
         return module
     _configure_dynamo(mode)
     try:
@@ -149,7 +188,11 @@ def maybe_compile(module: nn.Module, *, dynamic: bool = False) -> nn.Module:
 
 
 def maybe_compile_fn(
-    fn, *, dynamic: bool = False, compile_mode: str | None = None
+    fn,
+    *,
+    dynamic: bool = False,
+    compile_mode: str | None = None,
+    inner: bool = True,
 ):
     """Compile a callable / bound method (not an ``nn.Module``) when enabled.
 
@@ -163,9 +206,15 @@ def maybe_compile_fn(
         compile_mode: optional ``mode=`` for ``torch.compile``. ``None`` keeps
             the default (``"default"``); ``"reduce-overhead"`` activates CUDA
             graphs (static shapes only; captures inputs to fixed buffers).
+        inner: True (default) means this is a leaf / sub-module compile that
+            defers to ``DDSSM_TORCH_COMPILE_INNER`` (disable-able so an outer
+            compile can own everything). False = outer compile, always fires
+            (subject only to ``DDSSM_TORCH_COMPILE``).
     """
     mode = _compile_mode()
     if mode == "off":
+        return fn
+    if inner and not _inner_compile_enabled():
         return fn
     _configure_dynamo(mode)
     kwargs: dict = {"dynamic": dynamic}

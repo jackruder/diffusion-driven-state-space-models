@@ -39,9 +39,14 @@ except ImportError:
 _TRACKING_MODES = ("fixed", "global_ema", "per_t")
 
 
-def _coerce_t_idx(t_idx: int | torch.Tensor) -> torch.Tensor:
+def _coerce_t_idx(
+    t_idx: int | torch.Tensor, *, device: torch.device | None = None
+) -> torch.Tensor:
     if isinstance(t_idx, int):
-        return torch.tensor([t_idx], dtype=torch.long)
+        # ``device=`` matters under CUDA graph capture — creating a CPU
+        # tensor and letting the caller move it is not permitted (unpinned
+        # CPU→GPU copies fail capture). Caller passes the buffer's device.
+        return torch.tensor([t_idx], dtype=torch.long, device=device)
     if t_idx.dim() == 0:
         return t_idx.long().reshape(1)
     return t_idx.long()
@@ -127,7 +132,7 @@ class SigmaDataBuffer(nn.Module):
         slot (we keep all entries synchronised, so any read returns the
         right value).
         """
-        idx = _coerce_t_idx(t_idx)
+        idx = _coerce_t_idx(t_idx, device=self.sigma_data2.device)
         self._check_in_range(idx)
         # External 1-based → internal 0-based.
         return self.sigma_data2[idx - 1]
@@ -174,7 +179,7 @@ class SigmaDataBuffer(nn.Module):
         sigma_t2_batch: torch.Tensor,
     ) -> None:
         """The EMA update body; assumes the caller already gated on frozen/grad."""
-        idx = _coerce_t_idx(t_idx).to(self.sigma_data2.device)
+        idx = _coerce_t_idx(t_idx, device=self.sigma_data2.device)
         self._check_in_range(idx)
 
         suff = self._suff_stats_per_t(idx, mu_hat_batch, sigma_t2_batch)

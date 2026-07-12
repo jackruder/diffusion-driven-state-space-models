@@ -4,6 +4,7 @@ Owns the ELBO forward pass, encoder/decoder/transition dispatch, and the
 autoregressive forecast rollout.
 """
 
+import os
 from types import SimpleNamespace
 from typing import Any, final
 from dataclasses import dataclass
@@ -201,7 +202,26 @@ class DDSSM_base(nn.Module):
         # transition.diffmodel) whose independent CUDA-graph captures
         # collide with an outer capture. Keeping the default compile mode.
         from ddssm.nn.torch_compile import maybe_compile_fn as _mcf
-        self.forward = _mcf(self.forward, dynamic=True)
+        # inner=False marks this as the OUTER compile — it always fires
+        # (subject to DDSSM_TORCH_COMPILE), whereas the sub-module compiles
+        # (inner=True default) defer to DDSSM_TORCH_COMPILE_INNER. Set that
+        # to 0 to make this compile the sole graph owner so mode=
+        # "reduce-overhead" (CUDA graphs) can work without nested-capture
+        # conflicts.
+        _compile_mode_outer = os.environ.get(
+            "DDSSM_TORCH_COMPILE_MODE", ""
+        ).strip() or None
+        # reduce-overhead / CUDA graphs require static shapes — force
+        # dynamic=False when the caller asks for it. Otherwise keep
+        # dynamic=True so the same compiled forward accepts training
+        # AND forecast batches (they differ in T).
+        _dynamic = _compile_mode_outer not in {"reduce-overhead", "max-autotune"}
+        self.forward = _mcf(
+            self.forward,
+            dynamic=_dynamic,
+            compile_mode=_compile_mode_outer,
+            inner=False,
+        )
 
     def _encode_latents(
         self,
@@ -732,9 +752,15 @@ class DDSSM_base(nn.Module):
         # score net return an exact zero. Kept graph-connected (no detach)
         # for the split backward.
         L_init_psi = init_terms.get("loss_psi", torch.zeros_like(L_init))
-        L_vhp = init_terms.get("vhp", torch.tensor(0.0, device=observed_data.device))
+        # ``torch.zeros((), device=...)`` allocates the scalar directly on
+        # the target device — critical for CUDA graph capture, where
+        # ``torch.tensor(0.0, device=cuda)`` would attempt a CPU→GPU copy
+        # of an unpinned scalar and raise.
+        L_vhp = init_terms.get(
+            "vhp", torch.zeros((), device=observed_data.device)
+        )
         L_ent_init = init_terms.get(
-            "entropy", torch.tensor(0.0, device=observed_data.device)
+            "entropy", torch.zeros((), device=observed_data.device)
         )
 
         trans_terms = self._compute_transition_kl(
