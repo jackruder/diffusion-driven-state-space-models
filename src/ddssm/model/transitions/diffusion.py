@@ -766,11 +766,15 @@ class DiffusionTransition(BaseTransition):
         sigma_d2_per_row = sigma_data.read(t_external).to(dtype=dtype).expand(BS)
 
         # Padding mask: first ``j - step`` slots are aux (1.0); target slot 0.
+        # Branch-free construction: dynamo can't trace ``if n_aux_slots > 0:``
+        # on a SymInt (data-dependent branch). Comparing a real tensor
+        # (``positions``) against the SymInt lifts the check into a
+        # tensor-vs-symint compare that dynamo handles cleanly; when
+        # ``step >= j`` the row is all zeros, matching the original.
         j = self.j
-        padding_mask = torch.zeros(BS, j + 1, device=device, dtype=dtype)
-        n_aux_slots = j - step
-        if n_aux_slots > 0:
-            padding_mask[:, :n_aux_slots] = 1.0
+        positions = torch.arange(j + 1, device=device)
+        padding_row = (positions < (j - step)).to(dtype)  # (j+1,)
+        padding_mask = padding_row.unsqueeze(0).expand(BS, -1).contiguous()
 
         ctx_step = self._init_step_time_ctx(step, time_embed, B, S, T)
 

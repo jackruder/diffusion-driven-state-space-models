@@ -216,10 +216,22 @@ class DDSSM_base(nn.Module):
         # dynamic=True so the same compiled forward accepts training
         # AND forecast batches (they differ in T).
         _dynamic = _compile_mode_outer not in {"reduce-overhead", "max-autotune"}
+        # fullgraph=True enforces zero graph breaks. Off by default because
+        # ``DDSSM_base.forward`` returns a metrics dict of detached tensors
+        # — inductor's generated backward gets ``None`` tangents for those
+        # entries and hits ``copy_misaligned(None) → TypeError`` at the
+        # bottom of the backward call. Fixing needs a forward refactor to
+        # not return detached tensors (side-channel the metrics instead).
+        # Opt in with DDSSM_TORCH_COMPILE_FULLGRAPH=1 to surface any new
+        # graph breaks during development.
+        _fullgraph = os.environ.get(
+            "DDSSM_TORCH_COMPILE_FULLGRAPH", "0"
+        ).strip().lower() not in {"0", "false", "no", "off"}
         self.forward = _mcf(
             self.forward,
             dynamic=_dynamic,
             compile_mode=_compile_mode_outer,
+            fullgraph=_fullgraph,
             inner=False,
         )
 

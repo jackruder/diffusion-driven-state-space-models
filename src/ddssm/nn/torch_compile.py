@@ -192,6 +192,7 @@ def maybe_compile_fn(
     *,
     dynamic: bool = False,
     compile_mode: str | None = None,
+    fullgraph: bool = False,
     inner: bool = True,
 ):
     """Compile a callable / bound method (not an ``nn.Module``) when enabled.
@@ -206,6 +207,8 @@ def maybe_compile_fn(
         compile_mode: optional ``mode=`` for ``torch.compile``. ``None`` keeps
             the default (``"default"``); ``"reduce-overhead"`` activates CUDA
             graphs (static shapes only; captures inputs to fixed buffers).
+        fullgraph: ``fullgraph=`` on ``torch.compile``. True enforces zero
+            graph breaks — dynamo raises on any break instead of splitting.
         inner: True (default) means this is a leaf / sub-module compile that
             defers to ``DDSSM_TORCH_COMPILE_INNER`` (disable-able so an outer
             compile can own everything). False = outer compile, always fires
@@ -220,6 +223,8 @@ def maybe_compile_fn(
     kwargs: dict = {"dynamic": dynamic}
     if compile_mode is not None:
         kwargs["mode"] = compile_mode
+    if fullgraph:
+        kwargs["fullgraph"] = True
     try:
         return torch.compile(fn, **kwargs)
     except RuntimeError as e:
