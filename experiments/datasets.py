@@ -22,6 +22,7 @@ from ddssm.data.presets import (
     Solar,
     Bimodal,
     KDDFull,
+    Mocap35,
     Robot2D,
     Traffic,
     Harmonic,
@@ -58,3 +59,6 @@ data_store(Wiki, name="wiki")
 data_store(KDDFull, name="kdd")
 data_store(KDDBeijing, name="kdd_beijing")
 data_store(KDDStation, name="kdd_station")
+
+# CMU MoCap subject-35 walking (sequence; mocap35.mat auto-downloaded).
+data_store(Mocap35, name="mocap35")

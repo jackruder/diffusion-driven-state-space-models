@@ -30,6 +30,10 @@ windows with real masks, KDD); both route through `parse_batch`.
   (IID, LGSSM, harmonic, bimodal, nonlinear-bimodal-lift 1-D and multivariate,
   henon-lift); also defines the NLBL constants shared with
   `ddssm.eval.synthetic_kernels`.
+- `mocap.py` — `MocapDataModule` (sequence) for the CMU MoCap subject-35
+  walking benchmark (Wang-2007 preprocessing; 16/3/4 sequences × 300 × 50), with
+  on-demand download of `data/mocap35.mat` from the canonical Course & Nair
+  Dropbox mirror. Emits the same canonical batch dict as `SyntheticDataModule`.
 - `presets.py` — reusable DataModule configs registered into the Hydra
   `data_store` by `experiments.datasets`: synthetic (LGSSM, Harmonic, Bimodal,
   NLBL 1-D/MV, …), GluonTS (solar / electricity / …), and KDD payloads.

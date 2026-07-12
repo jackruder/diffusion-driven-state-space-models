@@ -35,6 +35,7 @@ from hydra_zen import builds
 from omegaconf import MISSING
 
 from ddssm.nn.futsum import GRUFutureSummary, TransformerFutureSummary
+from ddssm.data.mocap import MocapDataModule
 from ddssm.experiment import (
     SBatch as _SBatchDC,
     Experiment,
@@ -380,6 +381,7 @@ DiffTransition = builds(
 Synthetic = builds(SyntheticDataModule, populate_full_signature=True)
 KDD = builds(KDDDataModule, populate_full_signature=True)
 GluonTS = builds(GluonTSDataModule, populate_full_signature=True)
+Mocap = builds(MocapDataModule, populate_full_signature=True)
 Null = builds(NullDataModule, populate_full_signature=True)
 
 

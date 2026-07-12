@@ -228,3 +228,6 @@ docs/_autosummary/
 # direnv + Claude Code agent worktrees (local, not project assets)
 .direnv/
 .claude/worktrees/
+
+# Auto-downloaded dataset payloads (fetched on demand by their loaders).
+data/mocap35.mat

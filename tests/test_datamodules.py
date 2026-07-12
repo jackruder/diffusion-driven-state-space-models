@@ -299,7 +299,8 @@ def test_henon_lift_standardization_uses_train_stats() -> None:
     full-population mean is pulled away from the train-slice mean).
     """
     import torch
-    from ddssm.data.synthetic import SyntheticDataset, HENON_OBS_D
+
+    from ddssm.data.synthetic import HENON_OBS_D, SyntheticDataset
 
     N = 64
     T = 40
@@ -356,7 +357,8 @@ def test_henon_lift_gt_latents_train_slice_is_unit_normalised() -> None:
     inspect it directly (the normalisation happens before the tanh-MLP lift).
     """
     import torch
-    from ddssm.data.synthetic import SyntheticDataset, HENON_OBS_D
+
+    from ddssm.data.synthetic import HENON_OBS_D, SyntheticDataset
 
     N = 64
     T = 30

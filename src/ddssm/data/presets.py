@@ -14,7 +14,7 @@ CLI overrides resolve) happens in :mod:`experiments.datasets`.
 from __future__ import annotations
 
 from ddssm.data.synthetic import NLBL_MV_OBS_D, PENDULUM_OBS_D
-from ddssm.experiment.builders import KDD, GluonTS, Synthetic
+from ddssm.experiment.builders import KDD, Mocap, GluonTS, Synthetic
 
 T = 32
 BATCH_SIZE = 32
@@ -109,6 +109,11 @@ KDDFull = KDD(filepath="data/kdd.pt")
 KDDBeijing = KDD(filepath="data/kdd-beijing-pm25.pt")
 KDDStation = KDD(filepath="data/kdd-aotizhongxin_aq.pt")
 
+# CMU MoCap subject-35 walking — 16/3/4 sequences × 300 × 50, from the
+# Wang-2007 preprocessing shared by Yildiz, Li, Course & Nair, Bartosh.
+# ``mocap35.mat`` is fetched on demand into ``data/`` on first construction.
+Mocap35 = Mocap(filepath="data/mocap35.mat")
+
 
 __all__ = [
     "LGSSM",
@@ -120,6 +125,7 @@ __all__ = [
     "KDDBeijing",
     "KDDFull",
     "KDDStation",
+    "Mocap35",
     "NonlinBimodalLift1D",
     "NonlinBimodalLiftMV",
     "Pendulum",
