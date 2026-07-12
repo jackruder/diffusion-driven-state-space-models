@@ -46,6 +46,32 @@ HENON_SIGMA_X = 0.1
 HENON_BURN_IN = 100
 HENON_A_SEED = 23456
 
+# Rendered-pendulum variant (``pendulum``): a damped stochastic pendulum
+# rendered as a 32×32 grayscale image sequence — the standard latent-SSM
+# benchmark from DVBF (Karl et al. 2017, 16×16) / RKN (Becker et al.
+# 2019, 24×24), scaled to 32 px. Latent (θ, ω) evolves under
+#   dθ = ω dt
+#   dω = (−(g/L) sin θ − γ ω) dt + σ dW,
+# integrated by Euler-Maruyama over ``PENDULUM_SUB_STEPS`` inner steps
+# of size ``PENDULUM_DT`` per emitted frame. Each frame is a Gaussian
+# blob at bob position ((W−1)/2 + R sin θ, (W−1)/2 + R cos θ) with
+# pixel-scale ``PENDULUM_BOB_SIGMA``, flattened row-major to
+# D = W² = 1024 channels, plus per-pixel Gaussian noise τ. θ = 0 is the
+# stable equilibrium (bob directly below the pivot in +row = down image
+# coords). Defaults: natural period 2π/√(g/L) = π ≈ 3.14 s; total time
+# T · SUB_STEPS · DT = 6.4 s ≈ 2 periods per window.
+PENDULUM_LATENT_D = 2
+PENDULUM_IMG_SIZE = 32
+PENDULUM_OBS_D = PENDULUM_IMG_SIZE * PENDULUM_IMG_SIZE
+PENDULUM_DT = 0.05
+PENDULUM_SUB_STEPS = 4
+PENDULUM_OMEGA_SQ = 4.0
+PENDULUM_GAMMA = 0.1
+PENDULUM_SIGMA = 0.5
+PENDULUM_RADIUS = 12.0
+PENDULUM_BOB_SIGMA = 1.5
+PENDULUM_TAU = 0.02
+
 
 class SyntheticDataset(Dataset):
     """Sequence dataset of synthetically generated time series.
@@ -511,6 +537,61 @@ class SyntheticDataset(Dataset):
                 h_t = torch.tanh(z[:, :, t] @ W1.t() + b1)
                 x_t = h_t @ W2.t() + b2
                 data[:, :, t] = x_t + HENON_SIGMA_X * torch.randn(self.N_total, self.D)
+
+            if self.expose_gt_latents:
+                self._all_gt_latents = z
+
+        elif self.mode == "pendulum":
+            # 32×32 rendered stochastic pendulum. Latent (θ, ω) SDE, then
+            # each frame is a Gaussian blob at the bob, flattened row-major.
+            # See constants above for the SDE / rendering parameters.
+            assert self.D == PENDULUM_OBS_D, (
+                f"pendulum expects D={PENDULUM_OBS_D}; got D={self.D}"
+            )
+            latent_d = PENDULUM_LATENT_D
+            img_size = PENDULUM_IMG_SIZE
+            data = torch.zeros(self.N_total, self.D, self.T)
+            z = torch.zeros(self.N_total, latent_d, self.T)
+
+            # IC: uniform angle, small-variance angular velocity.
+            theta = torch.empty(self.N_total).uniform_(-torch.pi, torch.pi)
+            omega = 0.5 * torch.randn(self.N_total)
+            z[:, 0, 0] = theta
+            z[:, 1, 0] = omega
+
+            sqrt_dt = PENDULUM_DT**0.5
+            for t in range(1, self.T):
+                for _ in range(PENDULUM_SUB_STEPS):
+                    theta = theta + omega * PENDULUM_DT
+                    omega = (
+                        omega
+                        + (
+                            -PENDULUM_OMEGA_SQ * torch.sin(theta)
+                            - PENDULUM_GAMMA * omega
+                        )
+                        * PENDULUM_DT
+                        + PENDULUM_SIGMA * sqrt_dt * torch.randn(self.N_total)
+                    )
+                z[:, 0, t] = theta
+                z[:, 1, t] = omega
+
+            # Render frames: Gaussian blob at bob position. Row axis = image
+            # +y (down), col axis = image +x. θ = 0 → bob at row-max (down).
+            grid_row = torch.arange(img_size).float().view(1, img_size, 1)
+            grid_col = torch.arange(img_size).float().view(1, 1, img_size)
+            center = (img_size - 1) / 2.0
+            two_sigma_sq = 2.0 * PENDULUM_BOB_SIGMA**2
+            for t in range(self.T):
+                th = z[:, 0, t]
+                bob_col = center + PENDULUM_RADIUS * torch.sin(th)
+                bob_row = center + PENDULUM_RADIUS * torch.cos(th)
+                d2 = (grid_row - bob_row.view(-1, 1, 1)) ** 2 + (
+                    grid_col - bob_col.view(-1, 1, 1)
+                ) ** 2
+                img = torch.exp(-d2 / two_sigma_sq)
+                data[:, :, t] = img.view(
+                    self.N_total, -1
+                ) + PENDULUM_TAU * torch.randn(self.N_total, self.D)
 
             if self.expose_gt_latents:
                 self._all_gt_latents = z

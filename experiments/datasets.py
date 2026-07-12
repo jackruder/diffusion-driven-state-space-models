@@ -25,6 +25,7 @@ from ddssm.data.presets import (
     Robot2D,
     Traffic,
     Harmonic,
+    Pendulum,
     KDDBeijing,
     KDDStation,
     Electricity,
@@ -44,6 +45,7 @@ data_store(BimodalNoisy, name="bimodal_noisy")
 data_store(Robot2D, name="robot2d")
 data_store(NonlinBimodalLift1D, name="nonlin_bimodal_lift_1d")
 data_store(NonlinBimodalLiftMV, name="nonlin_bimodal_lift_mv")
+data_store(Pendulum, name="pendulum")
 
 # GluonTS repository datasets (windowed; fetched lazily on first loader access).
 data_store(Solar, name="solar")
