@@ -228,6 +228,7 @@ class DDSSMTrainer:
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,
+                fused=True,
             )
         # Optimizer topology: single-mode is ``[self.optimizer]``;
         # ``_install_split_topology`` (split-loss mode) replaces this with
@@ -482,8 +483,11 @@ class DDSSMTrainer:
             ),
             betas=(0.9, 0.999),
             eps=1e-8,
+            fused=True,
         )
-        opt_psi = torch.optim.AdamW(psi_groups, betas=(0.9, 0.99), eps=1e-8)
+        opt_psi = torch.optim.AdamW(
+            psi_groups, betas=(0.9, 0.99), eps=1e-8, fused=True
+        )
         self._optimizers = [opt_phith, opt_psi]
         # ``self.optimizer`` stays the φθ alias so existing single-optimizer
         # call sites (checkpointing, external LR pokes) keep a target.
@@ -658,7 +662,9 @@ class DDSSMTrainer:
             weight_decay_psi=self.weight_decay_psi,
             claim_psi=getattr(self.hparams, "lr_schedule", None) is not None,
         )
-        self.optimizer = torch.optim.AdamW(groups, betas=(0.9, 0.999), eps=1e-8)
+        self.optimizer = torch.optim.AdamW(
+            groups, betas=(0.9, 0.999), eps=1e-8, fused=True
+        )
         self._optimizers = [self.optimizer]
 
     # ------------------------
@@ -1461,6 +1467,7 @@ class DDSSMTrainer:
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,
+                fused=True,
             )
             self._optimizers = [self.optimizer]
             self.opt_psi = None
