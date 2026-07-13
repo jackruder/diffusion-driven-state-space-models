@@ -135,6 +135,76 @@ class EMA:
             self._module.load_state_dict(backup, strict=True)
 
 
+def _compiled_step_enabled() -> bool:
+    """Whether the fused compiled train-step is opt-in.
+
+    Gated by ``DDSSM_COMPILE_STEP=1``. Applies only when the trainer is
+    in single-loss mode with ``grad_accum_steps=1``; falls back to the
+    per-microstep eager path otherwise. Off by default while the
+    scaffold is still being validated.
+    """
+    v = os.environ.get("DDSSM_COMPILE_STEP", "0").strip().lower()
+    return v not in _COMPILE_OFF_VALUES
+
+
+_COMPILE_OFF_VALUES = {"0", "false", "no", "off"}
+
+
+def _make_fused_step(
+    model,
+    active_loss,
+    optimizer,
+    params_flat,
+    max_norm: float,
+) -> "callable":
+    """Build a compile-friendly fused train-step.
+
+    The returned function takes ``(batch, lam_tensor)`` and does the
+    whole step (forward + loss composition + backward + clip +
+    optim.step + zero_grad) in one traceable region. Returns
+    ``(loss_detached, grad_norm)`` — only two tensors so AOT autograd
+    doesn't allocate spurious tangent slots.
+
+    Not compiled here — the caller decides via ``torch.compile(...)``
+    (typically once, at ``fit()`` entry).
+
+    Constraints (checked by the caller):
+    * Single-optimizer mode (no split-loss two-backward routing).
+    * ``grad_accum_steps == 1`` (multi-microstep would need to defer
+      the ``optimizer.step()`` until after the last microstep — not
+      handled here yet).
+    * ``lam`` passed as a tensor scalar so dynamo doesn't specialize
+      per-step (the caller precomputes it from
+      ``active_loss.rate_lambda(step)`` in eager and wraps in a
+      ``torch.as_tensor`` with the correct device).
+    """
+    def _step(batch, lam):
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=True):
+            components, _metrics, _ = model(
+                batch["observed_data"],
+                batch["observation_mask"],
+                batch["timepoints"],
+                covariates=batch.get("covariates"),
+                static_covariates=batch.get("static_covariates"),
+                train=True,
+            )
+        # Inline the FullELBO single-loss composition so the ``lam``
+        # tensor threads through without a per-step ``rate_lambda(int)``
+        # Python call. Matches ``FullELBO.__call__`` for the
+        # ``use_split_loss=False`` branch exactly.
+        loss = components.recon + lam * (
+            components.init_kl_phith + components.trans_kl_phith
+        )
+        loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            params_flat, max_norm, foreach=True,
+        )
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        return loss.detach(), grad_norm
+    return _step
+
+
 def _compile_optimizer_step(optimizers) -> None:
     """Wrap each optimizer's ``.step()`` with ``torch.compile``.
 
