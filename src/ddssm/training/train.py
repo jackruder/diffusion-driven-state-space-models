@@ -90,18 +90,39 @@ class EMA:
         self.decay = decay
         self.shadow = {k: p.detach().clone() for k, p in module.state_dict().items()}
         self._module = module
+        # Cache the (float / int) key partition. state_dict returns fresh
+        # views each call but the dtypes are fixed at construction, so we
+        # can partition once and use the cached key lists forever after.
+        # This avoids the per-step Python filter over ~all model tensors.
+        self._float_keys: tuple[str, ...] = tuple(
+            k for k, v in self.shadow.items() if torch.is_floating_point(v)
+        )
+        self._int_keys: tuple[str, ...] = tuple(
+            k for k in self.shadow if k not in set(self._float_keys)
+        )
+        # Cached shadow tensor lists in float-key order (stable across calls
+        # because self.shadow tensors are allocated once). Used as the input
+        # for the batched _foreach ops.
+        self._float_shadow: list[torch.Tensor] = [
+            self.shadow[k] for k in self._float_keys
+        ]
 
     @torch.no_grad()
     def update(self):
+        # Batched EMA via _foreach ops: replaces the per-parameter Python
+        # loop (~N launches for N params) with 2 launches — one per
+        # foreach op. Non-floating buffers (flags, counters, integer
+        # codes) are snapshotted separately since they have no meaningful
+        # running average; the pre-cached key partition lets us skip
+        # per-step type checks.
         msd = self._module.state_dict()
-        for k, v in msd.items():
-            # Non-floating buffers (flags, counters, integer codes — e.g. a
-            # transition's one-shot "calibrated" flag) have no meaningful running
-            # average; snapshot the live value so ``swap`` restores it intact.
-            if torch.is_floating_point(v):
-                self.shadow[k].mul_(self.decay).add_(v, alpha=1.0 - self.decay)
-            else:
-                self.shadow[k].copy_(v)
+        live_floats = [msd[k] for k in self._float_keys]
+        torch._foreach_mul_(self._float_shadow, self.decay)
+        torch._foreach_add_(
+            self._float_shadow, live_floats, alpha=1.0 - self.decay
+        )
+        for k in self._int_keys:
+            self.shadow[k].copy_(msd[k])
 
     @contextmanager
     def swap(self):
@@ -236,6 +257,10 @@ class DDSSMTrainer:
         # the φθ side. Every step/zero_grad/unscale site loops this list.
         self._optimizers: list[optim.Optimizer] = [self.optimizer]
         self.opt_psi: optim.Optimizer | None = None
+        # Cache of per-optimizer flat param lists for clip_grad_norm_ /
+        # zero_grad. Invalidated (set to None) any time ``self._optimizers``
+        # is reassigned; lazily rebuilt on the next _optimizer_step call.
+        self._opt_param_cache: list[list[torch.nn.Parameter]] | None = None
         # Cached (φθ, ψ) parameter lists for the split backward; populated
         # by ``_install_split_topology`` with ``include_frozen=True`` (the
         # full per-side partition). ``_backward_loss`` re-filters them by
@@ -489,6 +514,7 @@ class DDSSMTrainer:
             psi_groups, betas=(0.9, 0.99), eps=1e-8, fused=True
         )
         self._optimizers = [opt_phith, opt_psi]
+        self._opt_param_cache = None  # invalidated on topology change
         # ``self.optimizer`` stays the φθ alias so existing single-optimizer
         # call sites (checkpointing, external LR pokes) keep a target.
         self.optimizer = opt_phith
@@ -666,6 +692,7 @@ class DDSSMTrainer:
             groups, betas=(0.9, 0.999), eps=1e-8, fused=True
         )
         self._optimizers = [self.optimizer]
+        self._opt_param_cache = None  # invalidated on topology change
 
     # ------------------------
     # Serialization / Checkpoint  (schema owned by ddssm.training.checkpoint)
@@ -1015,12 +1042,24 @@ class DDSSMTrainer:
             if self.clip_grad_norm is not None
             else float("inf")
         )
+        # Cache per-optimizer flat param lists to skip the per-step Python
+        # comprehension over param_groups. The param membership is fixed
+        # after construction (frozen/unfrozen state changes ``requires_grad``
+        # but not the list itself); ``clip_grad_norm_`` internally skips
+        # tensors whose ``.grad is None``. Pass ``foreach=True`` so the
+        # norm/scale use batched ``_foreach`` kernels.
+        if getattr(self, "_opt_param_cache", None) is None or len(
+            self._opt_param_cache
+        ) != len(self._optimizers):
+            self._opt_param_cache = [
+                [p for group in opt.param_groups for p in group["params"]]
+                for opt in self._optimizers
+            ]
         norms = [
             torch.nn.utils.clip_grad_norm_(
-                [p for group in opt.param_groups for p in group["params"]],
-                max_norm,
+                params, max_norm, foreach=True,
             )
-            for opt in self._optimizers
+            for params in self._opt_param_cache
         ]
 
         if not all(torch.isfinite(n) for n in norms):
@@ -1470,6 +1509,7 @@ class DDSSMTrainer:
                 fused=True,
             )
             self._optimizers = [self.optimizer]
+            self._opt_param_cache = None  # invalidated on topology change
             self.opt_psi = None
             self._phith_params = None
             self._psi_params = None
