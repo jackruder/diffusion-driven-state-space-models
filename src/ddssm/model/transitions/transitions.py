@@ -398,9 +398,13 @@ class BaseTransition(nn.Module):
         j = self.j
         E = self.emb_time_dim
         device = time_embed.device
-        hist_idx = torch.arange(step - j, step, device=device, dtype=torch.long).clamp(
-            min=0, max=T - 1
-        )
+        # ``max=T-1`` was defensive against out-of-range history indices —
+        # but ``step`` iterates 0…j-1 here (called only from the init walk),
+        # so the arange tops out at ``j-2 << T-1`` and the clamp-max never
+        # fires. Dropping it also removes ``T`` from the compiled graph as a
+        # symbolic scalar — one fewer chance for dynamo to trip.
+        del T  # unused now; keep the parameter for API compatibility
+        hist_idx = torch.arange(step - j, step, device=device, dtype=torch.long).clamp(min=0)
         hist_te = time_embed.index_select(1, hist_idx)  # (B, j, E)
         tgt_te = time_embed[:, step : step + 1, :]  # (B, 1, E)
         win = torch.cat([hist_te, tgt_te], dim=1)  # (B, j+1, E)

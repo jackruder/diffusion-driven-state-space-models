@@ -358,6 +358,17 @@ class SigmaDataBuffer(nn.Module):
     # Helpers
     # ------------------------------------------------------------------
     def _check_in_range(self, idx: torch.Tensor) -> None:
+        # ``.any()`` on a comparison against ``self.T_max`` (a Python int)
+        # forces a data-dependent branch, which under ``torch.compile``
+        # graph-breaks and — under ``compiled_autograd`` — bakes T_max into
+        # the fx graph as a scalar-tensor input that backward-replay then
+        # feeds as a bare Python float, crashing with
+        # ``aten::_local_scalar_dense() expected Tensor, got float 32.0``.
+        # Under compile we skip the check entirely; the ``self.sigma_data2``
+        # gather that follows will still raise an IndexError for genuinely
+        # out-of-range indices.
+        if torch.compiler.is_compiling():
+            return
         if (idx < 1).any() or (idx > self.T_max).any():
             raise IndexError(
                 f"t_idx out of range [1, {self.T_max}]: "
