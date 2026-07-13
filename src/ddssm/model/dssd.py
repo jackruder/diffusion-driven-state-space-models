@@ -216,19 +216,19 @@ class DDSSM_base(nn.Module):
         # dynamic=True so the same compiled forward accepts training
         # AND forecast batches (they differ in T).
         _dynamic = _compile_mode_outer not in {"reduce-overhead", "max-autotune"}
-        # fullgraph=True enforces zero graph breaks — dynamo raises on
-        # any break rather than silently splitting. On by default so
-        # regressions surface immediately. Opt out with
-        # ``DDSSM_TORCH_COMPILE_FULLGRAPH=0``.
+        # fullgraph=True enforces zero graph breaks. Off by default because
+        # ``DDSSM_base.forward`` returns a metrics dict of detached tensors
+        # — inductor's generated backward gets ``None`` tangents for those
+        # entries and hits ``copy_misaligned(None) → TypeError`` at the
+        # bottom of the backward call. Fixing needs a forward refactor to
+        # not return detached tensors (side-channel the metrics instead).
+        # Opt in with DDSSM_TORCH_COMPILE_FULLGRAPH=1 to surface any new
+        # graph breaks during development.
         _fullgraph = os.environ.get(
-            "DDSSM_TORCH_COMPILE_FULLGRAPH", "1"
+            "DDSSM_TORCH_COMPILE_FULLGRAPH", "0"
         ).strip().lower() not in {"0", "false", "no", "off"}
-        # Compile ``_forward_core`` (not ``forward``): the core returns
-        # only graph-connected tensors, so the compiled backward never
-        # sees a ``None`` tangent. ``forward`` stays eager and detaches
-        # the ``aux`` dict into the public metrics dict.
-        self._forward_core = _mcf(
-            self._forward_core,
+        self.forward = _mcf(
+            self.forward,
             dynamic=_dynamic,
             compile_mode=_compile_mode_outer,
             fullgraph=_fullgraph,
@@ -701,66 +701,22 @@ class DDSSM_base(nn.Module):
     ):
         """Compute ELBO loss and its components for a batch.
 
-        Uncompiled eager wrapper: delegates the numerical work to
-        :meth:`_forward_core` (which IS compiled) and builds the
-        (detached) metrics dict from its graph-connected returns.
-        Splitting these keeps the compiled region free of detached
-        outputs — under ``torch.compile`` a detached return produces
-        ``None`` tangents at the compiled backward and inductor's
-        generated code then hits ``copy_misaligned(None) → TypeError``.
+        Args:
+            observed_data: Observed time-series, shape ``(B, D, T)``.
+            observation_mask: Binary mask (1 = observed, 0 = missing), shape ``(B, D, T)``.
+            timepoints: Integer or real timestamps, shape ``(B, T)``.
+            covariates: Optional time-varying covariates, shape ``(B, V, T)``.
+            static_covariates: Optional static categorical features, shape ``(B, D, V_s)``.
+            train: If ``False``, also returns posterior samples/stats in ``stats``.
 
         Returns:
             components: ``LossComponents`` with unweighted per-term
                 tensors (recon, init_kl, trans_kl). The loss object
                 applies its own weights and produces the scalar that
                 gets backpropped.
-            metrics: Dict of detached scalar tensors for logging.
+            metrics: Dict of scalar tensors for logging.
             stats: Empty dict during training; contains ``zs``, ``mus``,
                 ``logvars`` when ``train=False``.
-        """
-        components, aux, stats = self._forward_core(
-            observed_data,
-            observation_mask,
-            timepoints,
-            covariates=covariates,
-            static_covariates=static_covariates,
-            train=train,
-        )
-        # Detach and expose aux as the logging metrics dict. The compiled
-        # core keeps aux graph-connected so the backward never sees a
-        # ``None`` tangent for a returned tensor.
-        metrics = {k: v.detach() for k, v in aux.items()}
-        # Surface per-t σ_data²[t] buffer values whenever a buffer exists.
-        # Runs OUTSIDE the compiled core because it's uncompiled + eager
-        # is fine for these detached reads.
-        if self.sigma_data is not None:
-            buf = self.sigma_data.sigma_data2.detach()
-            for slot, value in enumerate(buf):
-                metrics[f"diag/sigma_data2/t={slot + 1}"] = value
-        return components, metrics, stats
-
-    def _forward_core(
-        self,
-        observed_data: torch.Tensor,  # (B, D, T)
-        observation_mask: torch.Tensor,  # (B, D, T)
-        timepoints: torch.Tensor,  # (B, T)
-        covariates: torch.Tensor | None = None,  # (B, V, T) or None
-        static_covariates: torch.Tensor | None = None,  # (B, D, V_s) or None
-        train: bool = True,
-    ):
-        """Numerical core of :meth:`forward` — compiled with ``fullgraph=True``.
-
-        Returns only graph-connected tensors so the compiled backward
-        never sees a ``None`` tangent. The eager :meth:`forward`
-        wrapper detaches the ``aux`` dict into the public metrics dict.
-
-        Returns:
-            components: :class:`LossComponents`.
-            aux: ``dict[str, Tensor]`` of graph-connected diagnostic
-                tensors keyed by the metric names the wrapper will
-                surface (``loss/total``, ``loss/distortion/rec``, etc.).
-            stats: ``dict`` with posterior samples/stats when
-                ``train=False``, else empty.
         """
         static_embed = self._embed_static(static_covariates)
         time_embed = time_embedding(
@@ -841,31 +797,36 @@ class DDSSM_base(nn.Module):
         rate = L_init + L_trans
         loss = distortion + rate
 
-        # ``aux`` mirrors the public metrics dict but keeps everything
-        # graph-connected (no ``.detach()``); the eager :meth:`forward`
-        # wrapper does the detaching once ``_forward_core`` returns.
-        aux: dict[str, torch.Tensor] = {
-            "loss/total": loss,
-            "loss/distortion/rec": L_rec,
-            "loss/rate/init/tot": L_init,
-            "loss/rate/init/vhp": L_vhp,
-            "loss/rate/init/entropy": L_ent_init,
-            "loss/rate/trans/kl": L_trans,
-            "loss/rate/total": rate,
-            "calib/ratio_res2_to_sigma2": L_rec_calib,
+        metrics = {
+            "loss/total": loss.detach(),
+            "loss/distortion/rec": L_rec.detach(),
+            "loss/rate/init/tot": L_init.detach(),
+            "loss/rate/init/vhp": L_vhp.detach(),
+            "loss/rate/init/entropy": L_ent_init.detach(),
+            "loss/rate/trans/kl": L_trans.detach(),
+            "loss/rate/total": rate.detach(),
+            "calib/ratio_res2_to_sigma2": L_rec_calib.detach(),
         }
         # Surface model-v2 init-term sub-components when present.
         if self.aux_posterior is not None:
             if "kl_aux" in init_terms:
-                aux["loss/rate/init/kl_aux"] = init_terms["kl_aux"]
+                metrics["loss/rate/init/kl_aux"] = init_terms["kl_aux"].detach()
             if "loss_init" in init_terms:
-                aux["loss/rate/init/loss_init"] = init_terms["loss_init"]
+                metrics["loss/rate/init/loss_init"] = init_terms["loss_init"].detach()
             if "loss_psi" in init_terms:
-                aux["loss/rate/init/loss_psi"] = init_terms["loss_psi"]
+                metrics["loss/rate/init/loss_psi"] = init_terms["loss_psi"].detach()
+        # Surface per-t σ_data²[t] buffer values whenever a buffer exists.
+        # These feed the post-hoc ``sigma_data_drift`` metric's trajectory
+        # plot (init-experiment.org § Headline metrics, metric 6); logged once
+        # per step so the trajectory is recoverable from metrics.csv alone.
+        if self.sigma_data is not None:
+            buf = self.sigma_data.sigma_data2.detach()
+            for slot, value in enumerate(buf):
+                metrics[f"diag/sigma_data2/t={slot + 1}"] = value
         # Surface any optional transition sub-components (e.g. L_p, L_q) under
         # transition-driven keys.
         for key, val in trans_subterms.items():
-            aux[f"loss/rate/trans/{key}"] = val
+            metrics[f"loss/rate/trans/{key}"] = val.detach()
 
         stats = {}  # return optional params
         if not train:  # Optionally return posterior stats/samples for analysis
@@ -880,7 +841,7 @@ class DDSSM_base(nn.Module):
             trans_kl_phith=L_trans,
             trans_kl_psi=L_trans_psi,
         )
-        return components, aux, stats
+        return components, metrics, stats
 
     @torch.no_grad()
     def forecast(

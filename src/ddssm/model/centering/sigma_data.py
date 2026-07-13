@@ -358,13 +358,6 @@ class SigmaDataBuffer(nn.Module):
     # Helpers
     # ------------------------------------------------------------------
     def _check_in_range(self, idx: torch.Tensor) -> None:
-        # Defensive bounds check — off under compile because ``.any()`` +
-        # Python ``if`` is a data-dependent branch dynamo can't trace.
-        # If ``idx`` really is out of range the downstream index below
-        # will raise ``IndexError`` on its own; we don't need this to fire
-        # first.
-        if torch.compiler.is_compiling():
-            return
         if (idx < 1).any() or (idx > self.T_max).any():
             raise IndexError(
                 f"t_idx out of range [1, {self.T_max}]: "
