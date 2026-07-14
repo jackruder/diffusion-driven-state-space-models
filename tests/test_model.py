@@ -260,6 +260,54 @@ def test_ddssm_forward(model):
     assert "loss/rate/trans/entropy" not in metrics
 
 
+def test_ddssm_forward_metrics_contract(model):
+    """Metric key set is exactly the pre-`_forward_core`-refactor set.
+
+    The forward wrapper rebuilds the metrics dict outside the compiled
+    graph from the ``ForwardCoreOut`` tuple — this pins the key parity
+    (Gaussian encoder + Gaussian transition + aux posterior, no
+    sigma_data buffer).
+    """
+    B, T = 2, 5
+    x = torch.randn(B, DATA_DIM, T)
+    mask = torch.ones(B, DATA_DIM, T)
+    timepoints = torch.arange(T).unsqueeze(0).expand(B, -1)
+    components, metrics, stats = model(
+        observed_data=x, observation_mask=mask, timepoints=timepoints
+    )
+    assert set(metrics.keys()) == {
+        "loss/total",
+        "loss/distortion/rec",
+        "loss/rate/init/tot",
+        "loss/rate/init/vhp",
+        "loss/rate/init/entropy",
+        "loss/rate/trans/kl",
+        "loss/rate/total",
+        "calib/ratio_res2_to_sigma2",
+        "loss/rate/init/kl_aux",
+        "loss/rate/init/loss_init",
+        "loss/rate/init/loss_psi",
+    }
+    # Metrics are detached (logging only); loss components stay
+    # graph-connected for backward.
+    for k, v in metrics.items():
+        assert not v.requires_grad, k
+        assert v.ndim == 0, k
+    assert components.recon.requires_grad
+    assert components.trans_kl_phith.requires_grad
+    assert stats == {}
+    # train=False surfaces posterior stats through the core's eval_stats.
+    _, _, stats_eval = model(
+        observed_data=x,
+        observation_mask=mask,
+        timepoints=timepoints,
+        train=False,
+    )
+    assert stats_eval["zs"].shape[0] == B
+    assert stats_eval["mus"] is not None
+    assert stats_eval["logvars"] is not None
+
+
 # ---------------------------------------------------------------------------
 # Encoder with each aggregator backbone — end-to-end ELBO smoke test
 # ---------------------------------------------------------------------------

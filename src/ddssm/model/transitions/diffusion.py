@@ -555,6 +555,10 @@ class DiffusionTransition(BaseTransition):
     # ------------------------------------------------------------------
     # transition_kl  (t = j+1 … T)
     # ------------------------------------------------------------------
+    def kl_extra_keys(self, encoder_gaussian: bool) -> tuple[str, ...]:
+        del encoder_gaussian
+        return ("kl_phith", "kl_psi")
+
     def transition_kl(
         self,
         enc_stats: GaussianStats,

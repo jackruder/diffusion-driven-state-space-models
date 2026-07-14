@@ -1,19 +1,20 @@
-"""Compare baseline / fused-eager / fused-compiled train-step wall times.
+"""Bench the two-region compiled train step against the eager trainer path.
 
-Reuses one built trainer across all three variants (warm cache carries over)
-and prints per-variant ``step=Xms  proj20K=Ymin  peakVRAM=ZMB``. Used to
-measure the payoff of :func:`ddssm.training.train._make_fused_step` and its
-outer-``torch.compile`` variant relative to the current ``fit()`` codepath.
+Prints per-variant ``step=Xms  proj20K=Ymin  peakVRAM=ZMB`` for:
+  * ``baseline`` — current ``DDSSMTrainer._compute_loss_and_metrics`` +
+    ``_backward_loss`` + ``_optimizer_step`` (the pre-Phase-C path).
+  * ``split_eager`` — the two-region split step as plain Python
+    (measures the Python-overhead cost of the fused-step shape).
+  * ``split_compiled`` — the docs-blessed pattern: fwd+bwd compiled via
+    the compiled_autograd hook, opt.step compiled standalone
+    (fullgraph=False).
 
 Env vars:
-    * ``DDSSM_TORCH_COMPILE`` — defaults to ``"strict"``; sub-module compiles
-      inside the trainer are governed by this.
-    * ``DDSSM_TORCH_COMPILE_MODE`` — forwarded to ``torch.compile(..., mode=)``
-      on the outer fused variant. Set to ``"reduce-overhead"`` to test CUDA
-      graphs on the fused step.
-
-The preset forces ``use_split_loss=False`` so we're in the single-loss
-regime the fused step assumes.
+  * ``DDSSM_TORCH_COMPILE`` — defaults to ``"strict"``; sub-module compiles
+    inside the trainer are governed by this.
+  * ``DDSSM_TORCH_COMPILE_MODE`` — forwarded to ``torch.compile(..., mode=)``
+    on the fwd+bwd region. On this preset ``reduce-overhead`` / ``max-autotune``
+    regress wall time (denoiser shape variance blocks stable capture).
 
 Usage:
     .venv/bin/python scripts/prof_compiled_step.py
@@ -31,7 +32,7 @@ from hydra import compose, initialize_config_module  # noqa: E402
 from hydra.utils import instantiate  # noqa: E402
 
 from ddssm.experiment.registry import register_experiments  # noqa: E402
-from ddssm.training.train import _compile_optimizer_step, _make_fused_step  # noqa: E402
+from ddssm.training.train import _make_split_step  # noqa: E402
 
 N_WARMUP = 8
 N_TIMED = 5
@@ -47,7 +48,7 @@ def build():
             overrides=[
                 f"experiment={PRESET}",
                 f"++experiment.hparams.batch_size={BATCH_SIZE}",
-                # Fused step assumes single-loss; force off explicitly.
+                # Fused step assumes single-loss.
                 "++experiment.hparams.use_split_loss=false",
                 "experiment.training.steps=1",
                 "experiment.training.log_every=100000",
@@ -71,11 +72,10 @@ def build():
         trans_lr=exp.hparams.trans_lr,
     ))
     trainer._scaler = torch.amp.GradScaler("cuda", enabled=False)
-    _compile_optimizer_step(trainer._optimizers)
     return exp, trainer, device
 
 
-def _current_trainer_step(trainer, batch, amp):
+def _baseline_step(trainer, batch, amp):
     for opt in trainer._optimizers:
         opt.zero_grad(set_to_none=True)
     loss, _, _ = trainer._compute_loss_and_metrics(batch, amp=amp)
@@ -108,8 +108,6 @@ def main():
     print(f"DDSSM_TORCH_COMPILE_MODE={compile_mode!r}")
     print()
 
-    # Build once; reuse the trainer / model / optimizer state across all
-    # three variants. Warm caches carry over. Only the step function differs.
     exp, trainer, device = build()
     loader = exp.data.train_loader()
     xform = exp.data.batch_transform
@@ -127,7 +125,7 @@ def main():
             for k, v in b.items()
         }
 
-    baseline = lambda batch: _current_trainer_step(trainer, batch, True)
+    baseline = lambda batch: _baseline_step(trainer, batch, True)
 
     opt = trainer._optimizers[0]
     params_flat = [p for g in opt.param_groups for p in g["params"]]
@@ -135,25 +133,37 @@ def main():
         float(trainer.clip_grad_norm)
         if trainer.clip_grad_norm is not None else float("inf")
     )
-    fused_eager = _make_fused_step(
+    split_fwd_bwd, split_opt_ema = _make_split_step(
         trainer.model, trainer._active_loss, opt, params_flat, max_norm,
+        ema=trainer.ema,
     )
-    _compile_mode = os.environ.get("DDSSM_TORCH_COMPILE_MODE", "").strip() or None
-    fused_compiled = torch.compile(
-        _make_fused_step(
-            trainer.model, trainer._active_loss, opt, params_flat, max_norm,
-        ),
-        **({"mode": _compile_mode} if _compile_mode else {}),
-    )
+    _mode = os.environ.get("DDSSM_TORCH_COMPILE_MODE", "").strip() or None
+    _fwd_kwargs = {"mode": _mode} if _mode else {}
+    if _mode in {"reduce-overhead", "max-autotune"}:
+        _fwd_kwargs["dynamic"] = False
+    compiled_fwd_bwd = torch.compile(split_fwd_bwd, **_fwd_kwargs)
+    # opt.step compiled standalone (torch's "Compiling the optimizer" recipe).
+    # Wrapping opt_ema in a compile would nest and thrash on per-param-group
+    # ``maybe_fallback`` guards.
+    if not getattr(opt.step, "_ddssm_compiled", False):
+        opt.step = torch.compile(opt.step, fullgraph=False)
+        opt.step._ddssm_compiled = True
+
     lam = torch.tensor(
         float(trainer._active_loss.rate_lambda(1)), device=device
     )
-    fused_eager_step = lambda batch, _f=fused_eager, _l=lam: _f(batch, _l)
-    fused_compiled_step = lambda batch, _f=fused_compiled, _l=lam: _f(batch, _l)
+
+    def split_eager_step(batch):
+        split_fwd_bwd(batch, lam)
+        split_opt_ema()
+
+    def split_compiled_step(batch):
+        compiled_fwd_bwd(batch, lam)
+        split_opt_ema()
 
     _time_it(baseline, nb, "baseline")
-    _time_it(fused_eager_step, nb, "fused_eager")
-    _time_it(fused_compiled_step, nb, "fused_compiled")
+    _time_it(split_eager_step, nb, "split_eager")
+    _time_it(split_compiled_step, nb, "split_compiled")
 
 
 if __name__ == "__main__":

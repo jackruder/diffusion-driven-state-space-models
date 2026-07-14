@@ -130,23 +130,16 @@ def _configure_dynamo(mode: str) -> None:
     _autoset_nixos_triton_paths()
     torch._dynamo.config.suppress_errors = (mode == "soft")
     torch._dynamo.config.capture_scalar_outputs = True
-    # ``compiled_autograd``: when True, dynamo traces the backward() call
-    # into the same compiled region as the forward, cutting the Python
-    # dispatch overhead between the two. On by default here (default:
-    # False in torch) to reduce the ~150 ms/step CPU cost we're bound by.
-    # Opt out with ``DDSSM_TORCH_COMPILE_AUTOGRAD=0`` if it causes issues
-    # (compiled_autograd is opt-in in torch for now — some models break).
+    # compiled_autograd: routes ``.backward()`` through a compiled hook
+    # (Compiled Autograd tutorial). Opt out with
+    # DDSSM_TORCH_COMPILE_AUTOGRAD=0 for models that break under it.
     if os.environ.get(
         "DDSSM_TORCH_COMPILE_AUTOGRAD", "1"
     ).strip().lower() not in {"0", "false", "no", "off"}:
         torch._dynamo.config.compiled_autograd = True
-    # Give reduce-overhead a chance to work: skip dynamic-shape captures,
-    # allow input mutation, turn off cudagraph_trees (the pool-manager
-    # version — its aliasing tracker trips over persistent buffers like
-    # SigmaDataBuffer's EMA tensor), and disable size_asserts (the
-    # defensive data_ptr sanity check that fires for any tensor whose
-    # address changes across replays — including gradients zeroed with
-    # set_to_none=True and various views).
+    # reduce-overhead compat: skip dynamic-shape captures, allow input
+    # mutation, disable trees + size_asserts (persistent buffer aliasing
+    # + address changes across zero_grad(set_to_none=False)).
     torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True
     torch._inductor.config.triton.cudagraph_support_input_mutation = True
     torch._inductor.config.triton.cudagraph_trees = False

@@ -58,6 +58,19 @@ def _mc_entropy_from_logq(
 class BaseTransition(nn.Module):
     """Abstract transition interface."""
 
+    def kl_extra_keys(self, encoder_gaussian: bool) -> tuple[str, ...]:
+        """Diagnostic keys :meth:`transition_kl` returns besides ``"kl"``.
+
+        Declared up front (resolved once at model construction) so
+        ``DDSSM_base`` can fix the ordered metrics contract of its
+        compiled forward core — a dict with data-dependent keys cannot
+        cross a ``fullgraph`` boundary. ``encoder_gaussian`` is
+        :attr:`BaseEncoder.is_gaussian_family`, which decides the
+        analytic-vs-MC path for the Gaussian transition.
+        """
+        del encoder_gaussian
+        return ()
+
     def prior_params(
         self, z_hist: torch.Tensor, ctx: dict[str, Any] | None = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -751,6 +764,11 @@ class GaussianTransition(BaseTransition):
         log_p = self.log_prob(z_t, z_hist, ctx=ctx_step)  # (BS,)
         loss = (-log_p).sum()
         return loss, loss.new_zeros(())
+
+    def kl_extra_keys(self, encoder_gaussian: bool) -> tuple[str, ...]:
+        # Analytic path (Gaussian encoder stats) returns only "kl"; the
+        # MC fallback additionally surfaces L_p / L_q.
+        return () if encoder_gaussian else ("L_p", "L_q")
 
     def transition_kl(
         self,
