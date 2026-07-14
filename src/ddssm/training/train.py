@@ -1162,7 +1162,17 @@ class DDSSMTrainer:
             for params in self._opt_param_cache
         ]
 
-        if not all(torch.isfinite(n) for n in norms):
+        # Single batched host sync: stack per-optimizer norms + the
+        # aggregated L2-of-norms into one tensor, transfer once. Replaces
+        # the previous per-norm ``bool()`` / ``float()`` calls (6+ host
+        # syncs per step under split-loss) that broke CPU/GPU pipelining.
+        stacked_norms = torch.stack(norms)
+        combined = torch.linalg.vector_norm(stacked_norms)
+        norm_vals = torch.cat([stacked_norms, combined.reshape(1)]).cpu().tolist()
+        per_opt_norm_vals = norm_vals[:-1]
+        combined_val = norm_vals[-1]
+
+        if not all(math.isfinite(v) for v in per_opt_norm_vals):
             # Discard the macro-batch on EITHER side going non-finite: both
             # sides backward from the same forward pass on the same
             # (possibly poisoned) batch, so a partial step would poison
@@ -1172,11 +1182,11 @@ class DDSSMTrainer:
             self.grad_skip_count += 1
             self._last_grad_norm = float("nan")
             self._last_grad_norms_by_opt = (
-                [float(n) for n in norms] if len(self._optimizers) > 1 else None
+                per_opt_norm_vals if len(self._optimizers) > 1 else None
             )
             log.warning(
                 "[grad-skip] non-finite grad norm(s) %s at step %d (total skips: %d)",
-                [float(n) for n in norms],
+                per_opt_norm_vals,
                 self.global_step + 1,
                 self.grad_skip_count,
             )
@@ -1191,11 +1201,9 @@ class DDSSMTrainer:
         # Aggregate as a single L2 norm over the per-optimizer norms for the
         # ``optim/grad_norm`` metric (equals the one norm in single-optimizer
         # mode); per-optimizer values are logged separately when split.
-        self._last_grad_norm = float(
-            torch.linalg.vector_norm(torch.stack(norms))
-        )
+        self._last_grad_norm = combined_val
         if len(self._optimizers) > 1:
-            self._last_grad_norms_by_opt = [float(n) for n in norms]
+            self._last_grad_norms_by_opt = per_opt_norm_vals
         else:
             self._last_grad_norms_by_opt = None
         if amp:
