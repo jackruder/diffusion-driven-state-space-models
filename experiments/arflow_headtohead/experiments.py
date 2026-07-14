@@ -1133,7 +1133,7 @@ experiment_store(
         model=_model("gaussian_csdilike_ais_big_wideenc_conv", 8, j=4),
         hparams=dataclasses.replace(
             GluonHparams,
-            batch_size=32,
+            batch_size=512,
             enc_lr=8e-4, dec_lr=8e-4, trans_lr=8e-4,
             lambda_ramp=_GAUSSIAN_BIG_JSD_LAMBDA_RAMP_FAST,
             lr_schedule=LrScheduleGroupConf(
@@ -1141,7 +1141,7 @@ experiment_store(
             ),
             use_split_loss=True,
         ),
-        training=_training(steps=20000, checkpoint_every=4000),
+        training=_training(steps=3000, checkpoint_every=600),
         eval=Eval(
             metrics=["obs_space_jsd", "crps_sum"], split="val",
             num_samples=100, T_split=_T_SPLIT,

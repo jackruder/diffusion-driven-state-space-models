@@ -34,16 +34,18 @@ sweep_store(H2HFullSweep, name="h2h_full")
 # on every trial via the sweep's params dict — see below for the raw form).
 # 7 dims + 1 tie = effectively 7 tunable knobs.
 _arch_lr_lambda_params = {
-    # LRs (dec_lr tied via interpolation to enc_lr — see the value below)
-    "experiment.hparams.enc_lr": "tag(log, interval(3e-4, 5e-3))",
-    "experiment.hparams.trans_lr": "tag(log, interval(3e-4, 5e-3))",
-    # Note: this is not a search dim — Optuna leaves it as a fixed override
-    # so dec_lr always equals whatever value enc_lr takes for the current
-    # trial. Optuna sees only enc_lr / trans_lr as tunable LRs.
+    # LRs (dec_lr tied via interpolation to enc_lr — see the value below).
+    # Upper bound shifted from 5e-3 → 2e-2 for the batch=32 → 512 bump
+    # (~√16 = 4× scaling); floor held at 5e-4 to keep the low end reachable.
+    "experiment.hparams.enc_lr": "tag(log, interval(5e-4, 2e-2))",
+    "experiment.hparams.trans_lr": "tag(log, interval(5e-4, 2e-2))",
+    # Not a search dim — Optuna leaves it as a fixed override so dec_lr
+    # always equals whatever value enc_lr takes for the current trial.
     "experiment.hparams.dec_lr": r"${experiment.hparams.enc_lr}",
-    # Lambda ramp
+    # Lambda ramp — rescaled from (2000, 8000) to keep the same
+    # 10–50 % fraction of the new 3000-step budget.
     "experiment.hparams.lambda_ramp.start": "tag(log, interval(1e-7, 1e-3))",
-    "experiment.hparams.lambda_ramp.steps": "range(2000, 8000)",
+    "experiment.hparams.lambda_ramp.steps": "range(300, 1500)",
     # Architecture size (score-net + encoder width)
     "experiment.model.channels": "choice(48, 64, 96, 128)",
     "experiment.model.diffusion_layers": "choice(3, 4, 5, 6)",
