@@ -137,7 +137,13 @@ def Conv1d_with_init(in_channels, out_channels, kernel_size):
 def _precompute_rope_freqs(
     head_dim: int, max_len: int, theta: float = 10000.0
 ) -> torch.Tensor:
-    """Precompute RoPE complex exponentials for up to ``max_len`` positions.
+    """Precompute RoPE ``(cos, sin)`` rotation factors for up to ``max_len``.
+
+    Returns a REAL tensor of shape ``(max_len, head_dim // 2, 2)`` where
+    ``[..., 0]`` is ``cos(θ)`` and ``[..., 1]`` is ``sin(θ)``. Kept as a
+    single stacked real tensor (rather than a complex ``polar()`` output)
+    so inductor codegen accepts it — its complex-op path warns and hurts
+    perf even when the ``_apply_rope`` body no longer uses ``view_as_complex``.
 
     Args:
         head_dim: Per-head dimension; must be even.
@@ -157,8 +163,8 @@ def _precompute_rope_freqs(
         theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim)
     )
     t = torch.arange(max_len, dtype=torch.float32)
-    angles = torch.outer(t, freqs)
-    return torch.polar(torch.ones_like(angles), angles)
+    angles = torch.outer(t, freqs)  # (max_len, head_dim // 2)
+    return torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
 
 
 def _apply_rope(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
@@ -166,7 +172,9 @@ def _apply_rope(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
 
     Args:
         x: ``(B, T, nheads, head_dim)`` query or key tensor.
-        freqs_cis: ``(max_len, head_dim // 2)`` complex rotation factors.
+        freqs_cis: real ``(max_len, head_dim // 2, 2)`` tensor with
+            ``[..., 0] = cos(θ)`` and ``[..., 1] = sin(θ)`` — as produced
+            by :func:`_precompute_rope_freqs`.
 
     Raises:
         ValueError: If the sequence length ``T`` exceeds ``max_len``.
@@ -178,10 +186,23 @@ def _apply_rope(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
             f"Sequence length T={T} exceeds RoPE max_len={max_len}. "
             "Increase max_len when constructing TransformerEncoder (rope=True)."
         )
-    xf = x.float().reshape(B, T, H, D // 2, 2).contiguous()
-    x_c = torch.view_as_complex(xf)
-    fc = freqs_cis[:T].unsqueeze(0).unsqueeze(2)
-    return torch.view_as_real(x_c * fc).reshape(B, T, H, D).to(x.dtype)
+    # Real-valued formulation. Freqs are stored as a stacked (cos, sin) real
+    # tensor rather than complex so inductor accepts them (see
+    # ``_precompute_rope_freqs``). Numerically identical to the complex form:
+    # for freqs = cos + i sin and paired channels (x_even, x_odd), the complex
+    # rotation (x_even + i x_odd) * (cos + i sin) gives
+    #   (x_even*cos - x_odd*sin) + i (x_even*sin + x_odd*cos).
+    x_f = x.float()
+    x_pair = x_f.reshape(B, T, H, D // 2, 2)
+    x_even = x_pair[..., 0]  # (B, T, H, D//2)
+    x_odd = x_pair[..., 1]
+    fc_slice = freqs_cis[:T]  # (T, D//2, 2)
+    cos_freqs = fc_slice[..., 0].unsqueeze(0).unsqueeze(2)  # (1, T, 1, D//2)
+    sin_freqs = fc_slice[..., 1].unsqueeze(0).unsqueeze(2)
+    y_even = x_even * cos_freqs - x_odd * sin_freqs
+    y_odd = x_even * sin_freqs + x_odd * cos_freqs
+    y = torch.stack([y_even, y_odd], dim=-1).reshape(B, T, H, D)
+    return y.to(x.dtype)
 
 
 class TransformerBlock(nn.Module):

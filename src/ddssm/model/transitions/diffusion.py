@@ -555,6 +555,10 @@ class DiffusionTransition(BaseTransition):
     # ------------------------------------------------------------------
     # transition_kl  (t = j+1 … T)
     # ------------------------------------------------------------------
+    def kl_extra_keys(self, encoder_gaussian: bool) -> tuple[str, ...]:
+        del encoder_gaussian
+        return ("kl_phith", "kl_psi")
+
     def transition_kl(
         self,
         enc_stats: GaussianStats,
@@ -766,11 +770,15 @@ class DiffusionTransition(BaseTransition):
         sigma_d2_per_row = sigma_data.read(t_external).to(dtype=dtype).expand(BS)
 
         # Padding mask: first ``j - step`` slots are aux (1.0); target slot 0.
+        # Branch-free construction: dynamo can't trace ``if n_aux_slots > 0:``
+        # on a SymInt (data-dependent branch). Comparing a real tensor
+        # (``positions``) against the SymInt lifts the check into a
+        # tensor-vs-symint compare that dynamo handles cleanly; when
+        # ``step >= j`` the row is all zeros, matching the original.
         j = self.j
-        padding_mask = torch.zeros(BS, j + 1, device=device, dtype=dtype)
-        n_aux_slots = j - step
-        if n_aux_slots > 0:
-            padding_mask[:, :n_aux_slots] = 1.0
+        positions = torch.arange(j + 1, device=device)
+        padding_row = (positions < (j - step)).to(dtype)  # (j+1,)
+        padding_mask = padding_row.unsqueeze(0).expand(BS, -1).contiguous()
 
         ctx_step = self._init_step_time_ctx(step, time_embed, B, S, T)
 
@@ -967,7 +975,14 @@ class DiffusionTransition(BaseTransition):
         ``mu_hat_t`` is the centered mean ``μ̂ = μ_t − μ_p(z_hist)`` so
         callers can feed the σ_data update without re-running the
         baseline.  The sampler draws ``ẑ_t^(τ) = μ̂ + √(σ_t² + σ̃²)·ε``
-        in centered coords.
+        in centered coords for the default ESM path.
+
+        The score-matching objective is normally ESM (analytical
+        Wiener/Tweedie target ``E[ẑ_t | z_hat]``), but the variance
+        probe can request DSM via ``mc_override["objective"] = "dsm"``
+        — see :meth:`_vp_precondition_dsm`. Only the (z_in, F_target)
+        pair changes; the weight, score-net call, and reduction are
+        shared.
         """
         N, d = mu_t.shape
         device = mu_t.device
@@ -1011,10 +1026,16 @@ class DiffusionTransition(BaseTransition):
         override_k_idx = None
         override_eps = None
         override_p_k = None
+        objective = "esm"
         if mc_override is not None:
             override_k_idx = mc_override.get("k_idx")
             override_eps = mc_override.get("eps")
             override_p_k = mc_override.get("p_k")
+            objective = mc_override.get("objective", "esm")
+        if objective not in ("esm", "dsm"):
+            raise ValueError(
+                f"Unknown score-matching objective {objective!r}; expected 'esm' or 'dsm'."
+            )
 
         # Build per-row p_k once per chunk-loss call. Static modes
         # (uniform / lsgm_is) get a no-copy expand view of self.p_k; the
@@ -1078,13 +1099,22 @@ class DiffusionTransition(BaseTransition):
                 eps_n = torch.randn(N, d, kc, device=device, dtype=dtype)
             k_cursor += kc
 
-            z_in, F_target = self._vp_precondition(
-                mu_hat_t=mu_hat_t,
-                sigma2_t=sigma2_t,
-                k_idx=k_idx,
-                eps=eps_n,
-                sigma_d2_per_row=sigma_d2_per_row,
-            )  # (N, d, kc) each
+            if objective == "esm":
+                z_in, F_target = self._vp_precondition(
+                    mu_hat_t=mu_hat_t,
+                    sigma2_t=sigma2_t,
+                    k_idx=k_idx,
+                    eps=eps_n,
+                    sigma_d2_per_row=sigma_d2_per_row,
+                )  # (N, d, kc) each
+            else:
+                z_in, F_target = self._vp_precondition_dsm(
+                    mu_hat_t=mu_hat_t,
+                    sigma2_t=sigma2_t,
+                    k_idx=k_idx,
+                    eps=eps_n,
+                    sigma_d2_per_row=sigma_d2_per_row,
+                )  # (N, d, kc) each
 
             # Latent window: [z_hist, z_in].
             z_hist_rep = z_hist.unsqueeze(-1).expand(N, d, self.j, kc)
@@ -1230,6 +1260,70 @@ class DiffusionTransition(BaseTransition):
         F_target = (D_star - cskip_ * z_hat) / cout_
         z_in = cin_ * z_hat
 
+        return z_in, F_target
+
+    # ------------------------------------------------------------------
+    # DSM preconditioning — same EDM constants, different target.
+    # ------------------------------------------------------------------
+    def _vp_precondition_dsm(
+        self,
+        mu_hat_t: torch.Tensor,        # (N, d) — CENTERED mean
+        sigma2_t: torch.Tensor,        # (N, d)
+        k_idx: torch.Tensor,           # (N, S_k)
+        eps: torch.Tensor,             # (N, d, S_k) — τ-noise ε_τ
+        sigma_d2_per_row: torch.Tensor,  # (N,)
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """DSM variant of :meth:`_vp_precondition` — decoupled (η, ε_τ).
+
+        Denoising score matching regresses the score-net's denoiser
+        against a *specific* clean encoder sample rather than its
+        Wiener-MMSE closed form. In centered coords:
+
+          η    ~ 𝒩(0, I)                          — encoder noise
+          ẑ_t  = μ̂ + σ_t · η                       — specific clean draw
+          z_hat = ẑ_t + σ̃ · ε_τ                    — τ-diffusion noise
+          D_target = ẑ_t                           — DSM regression target
+          F_target = (D_target − c_skip · z_hat) / c_out
+
+        ESM instead uses ``D_target = E[ẑ_t | z_hat]`` (the analytical
+        Wiener/Tweedie mean). Both give unbiased score-matching in
+        expectation; DSM has extra estimator variance from η, which is
+        exactly what the ESM-vs-DSM variance probe measures.
+
+        ``eps`` here is *only* the τ-noise ε_τ (not the marginalised
+        z_hat draw used by ESM); η is drawn fresh from the current RNG
+        stream. EDM constants are identical to :meth:`_vp_precondition`.
+        """
+        eps_dtype = torch.finfo(mu_hat_t.dtype).eps
+        sigma_tilde = self.sigma_tilde[k_idx]               # (N, S_k)
+        sigma_tilde2 = sigma_tilde * sigma_tilde
+
+        sd2 = sigma_d2_per_row.view(-1, 1).clamp_min(eps_dtype)  # (N, 1)
+        sd = sd2.sqrt()
+        denom = (sigma_tilde2 + sd2).clamp_min(eps_dtype)  # (N, S_k)
+        sqrt_denom = denom.sqrt()
+
+        c_skip = sd2 / denom                            # (N, S_k)
+        c_out = (sigma_tilde * sd) / sqrt_denom         # (N, S_k)
+        c_in = 1.0 / sqrt_denom                         # (N, S_k)
+
+        # (N, 1, S_k) broadcasts for the latent dim.
+        st_ = sigma_tilde.unsqueeze(1)                  # σ̃
+        cskip_ = c_skip.unsqueeze(1)
+        cout_ = c_out.unsqueeze(1).clamp_min(eps_dtype)
+        cin_ = c_in.unsqueeze(1)
+
+        sigma_t_ = sigma2_t.clamp_min(0.0).sqrt().unsqueeze(-1)  # (N, d, 1)
+        mu_hat_t_ = mu_hat_t.unsqueeze(-1)                      # (N, d, 1)
+
+        # η is drawn fresh — it's the extra sampling source that gives DSM its
+        # higher estimator variance vs. ESM's Wiener-MMSE target.
+        eta = torch.randn_like(eps)                             # (N, d, S_k)
+        z_clean = mu_hat_t_ + sigma_t_ * eta                    # ẑ_t
+        z_hat = z_clean + st_ * eps                             # τ-noised
+
+        F_target = (z_clean - cskip_ * z_hat) / cout_
+        z_in = cin_ * z_hat
         return z_in, F_target
 
     # ------------------------------------------------------------------

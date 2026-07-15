@@ -39,9 +39,14 @@ except ImportError:
 _TRACKING_MODES = ("fixed", "global_ema", "per_t")
 
 
-def _coerce_t_idx(t_idx: int | torch.Tensor) -> torch.Tensor:
+def _coerce_t_idx(
+    t_idx: int | torch.Tensor, *, device: torch.device | None = None
+) -> torch.Tensor:
     if isinstance(t_idx, int):
-        return torch.tensor([t_idx], dtype=torch.long)
+        # ``device=`` matters under CUDA graph capture — creating a CPU
+        # tensor and letting the caller move it is not permitted (unpinned
+        # CPU→GPU copies fail capture). Caller passes the buffer's device.
+        return torch.tensor([t_idx], dtype=torch.long, device=device)
     if t_idx.dim() == 0:
         return t_idx.long().reshape(1)
     return t_idx.long()
@@ -127,7 +132,7 @@ class SigmaDataBuffer(nn.Module):
         slot (we keep all entries synchronised, so any read returns the
         right value).
         """
-        idx = _coerce_t_idx(t_idx)
+        idx = _coerce_t_idx(t_idx, device=self.sigma_data2.device)
         self._check_in_range(idx)
         # External 1-based → internal 0-based.
         return self.sigma_data2[idx - 1]
@@ -174,7 +179,7 @@ class SigmaDataBuffer(nn.Module):
         sigma_t2_batch: torch.Tensor,
     ) -> None:
         """The EMA update body; assumes the caller already gated on frozen/grad."""
-        idx = _coerce_t_idx(t_idx).to(self.sigma_data2.device)
+        idx = _coerce_t_idx(t_idx, device=self.sigma_data2.device)
         self._check_in_range(idx)
 
         suff = self._suff_stats_per_t(idx, mu_hat_batch, sigma_t2_batch)
@@ -353,6 +358,17 @@ class SigmaDataBuffer(nn.Module):
     # Helpers
     # ------------------------------------------------------------------
     def _check_in_range(self, idx: torch.Tensor) -> None:
+        # ``.any()`` on a comparison against ``self.T_max`` (a Python int)
+        # forces a data-dependent branch, which under ``torch.compile``
+        # graph-breaks and — under ``compiled_autograd`` — bakes T_max into
+        # the fx graph as a scalar-tensor input that backward-replay then
+        # feeds as a bare Python float, crashing with
+        # ``aten::_local_scalar_dense() expected Tensor, got float 32.0``.
+        # Under compile we skip the check entirely; the ``self.sigma_data2``
+        # gather that follows will still raise an IndexError for genuinely
+        # out-of-range indices.
+        if torch.compiler.is_compiling():
+            return
         if (idx < 1).any() or (idx > self.T_max).any():
             raise IndexError(
                 f"t_idx out of range [1, {self.T_max}]: "

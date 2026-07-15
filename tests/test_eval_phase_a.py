@@ -1,4 +1,4 @@
-"""Tests for the five Phase-A headline metrics.
+"""Tests for the Phase-A headline metrics.
 
 Covers:
 
@@ -9,8 +9,6 @@ Covers:
   two-component decomposition).
 - ``crps_sum_latent`` (latent-space CRPS with the GT-latent surface;
   smoke-marked).
-- ``gt_latent_jsd`` (JSD against the closed-form LGSSM kernel;
-  slow-marked).
 """
 
 from __future__ import annotations
@@ -29,7 +27,6 @@ from ddssm.eval.metrics import (
     eval_wallclock_to_target,
     eval_stage2_elbo_surrogate,
 )
-from ddssm.eval.synthetic_kernels import KERNEL_REGISTRY
 
 # ---------------------------------------------------------------------------
 # wallclock_to_target — CSV-derived, no model needed
@@ -188,97 +185,6 @@ def test_crps_sum_latent_zero_when_samples_match_gt() -> None:
     z_samples = z_gt.unsqueeze(1) + 1e-3 * torch.randn(B, S, d, L2)
     mean, _ = crps_sum_latent_metrics(z_samples, z_gt)
     assert float(mean.item()) < 0.05
-
-
-# ---------------------------------------------------------------------------
-# Synthetic kernel registry (gt_latent_jsd helper)
-# ---------------------------------------------------------------------------
-
-
-def test_lgssm_kernel_registered() -> None:
-    """``lgssm`` is in the kernel registry."""
-    assert "lgssm" in KERNEL_REGISTRY
-
-
-def test_lgssm_kernel_samples_have_right_shape_and_drift() -> None:
-    """Kernel output shape and (loose) mean/std match the DGP."""
-    import numpy as np
-
-    kernel = KERNEL_REGISTRY["lgssm"]
-    B, d, j, S = 5, 1, 1, 10_000
-    z_hist = np.full((B, d, j), 1.0)  # all z_{t-1} = 1.0
-    samples = kernel(z_hist, S=S)
-    assert samples.shape == (B, S, d)
-    # Expected mean: a * z_prev = 0.9 * 1.0 = 0.9.
-    means = samples.mean(axis=1)  # (B, d)
-    stds = samples.std(axis=1)
-    assert abs(means.mean() - 0.9) < 0.01
-    assert abs(stds.mean() - 0.1) < 0.01
-
-
-def test_nonlinear_bimodal_lift_kernel_registered_1d_and_mv() -> None:
-    """Both nonlinear-bimodal-lift variants land in the kernel registry."""
-    assert "nonlinear-bimodal-lift" in KERNEL_REGISTRY
-    assert "nonlinear-bimodal-lift-mv" in KERNEL_REGISTRY
-
-
-def test_nonlinear_bimodal_lift_kernel_samples_are_bimodal_1d() -> None:
-    """The 1D kernel samples cluster around tanh(z_{t-1}) ± δ."""
-    import numpy as np
-
-    from ddssm.data.synthetic import NLBL_DELTA
-
-    kernel = KERNEL_REGISTRY["nonlinear-bimodal-lift"]
-    B, d, j, S = 1, 1, 1, 20_000
-    z_prev = 0.5
-    z_hist = np.full((B, d, j), z_prev, dtype=np.float32)
-    samples = kernel(z_hist, S=S)
-    assert samples.shape == (B, S, d)
-    expected_centers = np.array([
-        np.tanh(z_prev) - NLBL_DELTA,
-        np.tanh(z_prev) + NLBL_DELTA,
-    ])
-    # Bin around each expected centre; both should hold roughly half of
-    # the samples (per-sample Rademacher sign).
-    mid = np.tanh(z_prev)
-    frac_below = float((samples[0, :, 0] < mid).mean())
-    assert 0.45 < frac_below < 0.55  # 50/50 bimodal
-    # Each cluster's empirical mean is near the expected centre.
-    below = samples[0, samples[0, :, 0] < mid, 0]
-    above = samples[0, samples[0, :, 0] >= mid, 0]
-    assert abs(below.mean() - expected_centers[0]) < 0.05
-    assert abs(above.mean() - expected_centers[1]) < 0.05
-
-
-def test_nonlinear_bimodal_lift_mv_kernel_uses_consistent_A() -> None:
-    """The MV kernel's A matrix matches what the data generator uses."""
-    import numpy as np
-    import torch
-
-    from ddssm.data.synthetic import (
-        NLBL_MV_A_SEED,
-        NLBL_MV_LATENT_D,
-    )
-    from ddssm.eval.synthetic_kernels import _mv_mixing_matrix
-
-    # Reconstruct what the data generator's matrix would be.
-    gen = torch.Generator().manual_seed(NLBL_MV_A_SEED)
-    A_data = torch.randn(NLBL_MV_LATENT_D, NLBL_MV_LATENT_D, generator=gen).numpy()
-    A_kernel = _mv_mixing_matrix()
-    np.testing.assert_array_equal(A_data, A_kernel)
-
-
-def test_nonlinear_bimodal_lift_mv_kernel_samples_shape() -> None:
-    """The MV kernel returns (B, S, d=NLBL_MV_LATENT_D)."""
-    import numpy as np
-
-    from ddssm.data.synthetic import NLBL_MV_LATENT_D
-
-    kernel = KERNEL_REGISTRY["nonlinear-bimodal-lift-mv"]
-    B, j, S = 3, 1, 100
-    z_hist = np.zeros((B, NLBL_MV_LATENT_D, j), dtype=np.float32)
-    samples = kernel(z_hist, S=S)
-    assert samples.shape == (B, S, NLBL_MV_LATENT_D)
 
 
 # ---------------------------------------------------------------------------
@@ -550,22 +456,8 @@ def test_nll_rejects_non_positive_probe_count() -> None:
 
 
 # ---------------------------------------------------------------------------
-# gt_latent_jsd + crps_sum_latent on an LGSSM smoke fixture
+# crps_sum_latent — unavailable path (no gt_latent)
 # ---------------------------------------------------------------------------
-
-
-def _build_lgssm_eval_fixture():
-    """Construct an LGSSM data module with GT latents exposed."""
-    from ddssm.data.datamodule import SyntheticDataModule
-
-    return SyntheticDataModule(
-        mode="lgssm",
-        T=8,
-        D=1,
-        N_per_split=4,
-        batch_size=2,
-        expose_gt_latents=True,
-    )
 
 
 def test_crps_sum_latent_returns_unavailable_without_gt_latents() -> None:
@@ -583,26 +475,3 @@ def test_crps_sum_latent_returns_unavailable_without_gt_latents() -> None:
     )
     out = eval_crps_sum_latent(ctx, max_batches=1)
     assert out["crps_sum_latent_available"] is False
-
-
-def test_gt_latent_jsd_returns_unavailable_without_kernel() -> None:
-    """A mode without a registered kernel → ``available: False``."""
-    from ddssm.eval.metrics import eval_gt_latent_jsd
-    from ddssm.data.datamodule import SyntheticDataModule
-
-    dm = SyntheticDataModule(
-        mode="harmonic",  # no kernel registered
-        T=4,
-        D=1,
-        N_per_split=2,
-        batch_size=1,
-        expose_gt_latents=True,
-    )
-    ctx = EvalContext(
-        model=object(),
-        loader=dm.val_loader(),
-        device=torch.device("cpu"),
-        batch_transform=dm.batch_transform,
-    )
-    out = eval_gt_latent_jsd(ctx, max_batches=1)
-    assert out["gt_latent_jsd_available"] is False

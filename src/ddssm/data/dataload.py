@@ -549,10 +549,16 @@ def parse_batch(batch: dict, device: torch.device):
 
         # Optional ground-truth latents (synthetic data with
         # ``expose_gt_latents=True``; used by the model-v2 evaluation
-        # metrics ``gt_latent_jsd`` and ``crps_sum_latent``).
+        # metric ``crps_sum_latent``).
         if batch.get("gt_latent") is not None:
             out["gt_latent"] = torch.as_tensor(
                 batch["gt_latent"], device=device, dtype=torch.float32
+            )
+        # Optional ground-truth sign trajectory for the ``obs_space_jsd``
+        # metric on ``nonlinear-bimodal-lift-mv``.
+        if batch.get("gt_signs") is not None:
+            out["gt_signs"] = torch.as_tensor(
+                batch["gt_signs"], device=device, dtype=torch.float32
             )
 
         return out

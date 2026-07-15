@@ -23,7 +23,11 @@ from functools import partial
 
 from hydra_zen import builds
 
-from ddssm.nn.futsum import IdentityFutureSummary, TransformerFutureSummary
+from ddssm.nn.futsum import (
+    GRUFutureSummary,
+    IdentityFutureSummary,
+    TransformerFutureSummary,
+)
 from ddssm.model.dssd import DDSSM_base
 from ddssm.nn.diffnets import (
     CSDIUnet,
@@ -107,6 +111,12 @@ def build_gluonts_model(
     arflow_channels: int | None = None,  # None → = channels; must be ÷ nheads
     arflow_causal_layers: int = 2,
     grad_checkpoint: bool = True,
+    # Encoder AR-loop checkpointing. 0 disables; N>0 wraps groups of N timesteps
+    # in the encoder sample_paths loop with a non-reentrant checkpoint. Trades
+    # roughly T/N× extra encoder compute for ~N/T activation memory. Only active
+    # for the sequential Gaussian encoder (ARFlow has no AR loop; param is
+    # accepted for API symmetry).
+    encoder_ar_checkpoint_chunk: int = 0,
     # Centering baseline for the diffusion/gaussian transition: "persistence"
     # (μ_p = last latent) or "zero" (μ_p ≡ 0). Persistence centers on the *last*
     # latent, which under a bimodal data conditional sits on one mode → the
@@ -132,10 +142,26 @@ def build_gluonts_model(
     # "csdi"-transition time embedding width (the vendored ermongroup CSDI). 0 turns
     # CSDI's time-conditioning OFF to match our emb_time_dim==0 (embedding parity).
     csdi_timeemb: int = 128,
+    # Overrides the encoder-side width (fut_summary + encoder body). None → keep
+    # the 2×latent single-width rule. Decoder hidden stays at 2×latent regardless
+    # so the transition-input dim is unchanged. Use to grow encoder capacity when
+    # 2×latent under-parameterises it (e.g. small latent_dim + big observation).
+    encoder_hidden_dim: int | None = None,
+    # Score-net (diffusion transition) feature-mixer type. "transformer" (default)
+    # matches CSDI; "conv" is the cheaper 3-tap alternative.
+    feature_mixer: str = "transformer",
+    # ArFlow encoder causal_net backbone. "transformer" (default) or "conv".
+    # Only used when encoder_type == "arflow".
+    arflow_backbone: str = "transformer",
+    # Encoder-side fut_summary backbone. "transformer" (default) or "gru".
+    # GRU is sequential (per-t recurrence) but cheap per step.
+    fut_summary_type: str = "transformer",
+    fut_summary_gru_layers: int = 1,
 ) -> DDSSM_base:
     """Build a gluonts-forecast DDSSM (persistence-pinned, additive encoder)."""
     # Single width rule: 2×latent for summary + encoder + decoder hidden.
     width = 2 * latent_dim
+    enc_width = encoder_hidden_dim if encoder_hidden_dim is not None else width
     emb_time_dim = 0  # time-conditioning OFF (v1); collapses the time-cond ops out.
 
     # "auto" time-mixer: a j+1 window only wide enough to need attention (j>4) gets the
@@ -179,7 +205,7 @@ def build_gluonts_model(
                     type=time_mixer, nheads=nheads, n_layers=1, dropout=0.0
                 ),
                 feature=FeatureMixerConfig(
-                    type="transformer", nheads=nheads, n_layers=1, dropout=0.0
+                    type=feature_mixer, nheads=nheads, n_layers=1, dropout=0.0
                 ),
             ),
         )
@@ -232,24 +258,39 @@ def build_gluonts_model(
             f"{transition_type!r}"
         )
 
-    fut_summary = partial(
-        TransformerFutureSummary,
-        summary_dim=width,
-        nheads=nheads,
-        transformer_layers=summary_layers,
-    )
-    # Forward-causal twin of the future summary (no time-flip) → the f_t message
-    # for ARFlow's "fwd_data" context. Same width/heads/depth as the backward b_t.
-    fut_summary_fwd = partial(
-        TransformerFutureSummary,
-        summary_dim=width,
-        nheads=nheads,
-        transformer_layers=summary_layers,
-        reverse_time=False,
-    )
+    if fut_summary_type == "gru":
+        fut_summary = partial(
+            GRUFutureSummary,
+            summary_dim=enc_width,
+            gru_layers=fut_summary_gru_layers,
+        )
+        fut_summary_fwd = partial(
+            GRUFutureSummary,
+            summary_dim=enc_width,
+            gru_layers=fut_summary_gru_layers,
+            reverse_time=False,
+        )
+    elif fut_summary_type == "transformer":
+        fut_summary = partial(
+            TransformerFutureSummary,
+            summary_dim=enc_width,
+            nheads=nheads,
+            transformer_layers=summary_layers,
+        )
+        fut_summary_fwd = partial(
+            TransformerFutureSummary,
+            summary_dim=enc_width,
+            nheads=nheads,
+            transformer_layers=summary_layers,
+            reverse_time=False,
+        )
+    else:
+        raise ValueError(
+            f"fut_summary_type must be 'transformer' or 'gru'; got {fut_summary_type!r}"
+        )
     # Local twin of the future summary: h_t = Linear(x_t), no time mixing. Drives the
     # filtering "gaussian_local" encoder (matched inverse for the per-timestep lift).
-    fut_summary_local = partial(IdentityFutureSummary, summary_dim=width)
+    fut_summary_local = partial(IdentityFutureSummary, summary_dim=enc_width)
     if encoder_type in ("gaussian", "gaussian_local"):
         encoder = GaussianEncoder(
             data_dim=data_dim,
@@ -257,12 +298,13 @@ def build_gluonts_model(
             j=j,
             emb_time_dim=emb_time_dim,
             use_mask=False,
-            hidden_dim=width,
+            hidden_dim=enc_width,
             mu_mode="additive",
             fut_summary=(
                 fut_summary_local if encoder_type == "gaussian_local" else fut_summary
             ),
             grad_checkpoint=grad_checkpoint,
+            ar_checkpoint_chunk=encoder_ar_checkpoint_chunk,
         )
     elif encoder_type == "arflow":
         # Head logvar clamp pinned to the DDSSM_base default [-7, 7] (dssd.py:130-131)
@@ -273,18 +315,19 @@ def build_gluonts_model(
             j=j,
             emb_time_dim=emb_time_dim,
             use_mask=False,
-            hidden_dim=width,
+            hidden_dim=enc_width,
             fut_summary=fut_summary,
             channels=arflow_channels if arflow_channels is not None else channels,
             causal_layers=arflow_causal_layers,
             nheads=nheads,
-            backbone="transformer",
+            backbone=arflow_backbone,
             init_logvar_bias=arflow_init_logvar_bias,
             stochastic_state=arflow_stochastic_state,
             forward_message=arflow_forward_message,
             fwd_summary=fut_summary_fwd,
             fwd_layers=summary_layers,
             grad_checkpoint=grad_checkpoint,
+            ar_checkpoint_chunk=encoder_ar_checkpoint_chunk,
         )
     elif encoder_type == "identity":
         # Pinned z_t = x_t (requires latent_dim == data_dim): the latent frame IS

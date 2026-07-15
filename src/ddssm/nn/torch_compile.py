@@ -1,8 +1,22 @@
-"""Opt-in ``torch.compile`` wrapper gated by ``DDSSM_TORCH_COMPILE``."""
+"""Opt-in ``torch.compile`` wrapper gated by ``DDSSM_TORCH_COMPILE``.
+
+Default is STRICT: any compile-call failure or dynamo tracing error raises,
+so runs never silently drop to eager. Set ``DDSSM_TORCH_COMPILE=soft`` to
+restore the previous silent-fallback behavior, or ``=0`` to disable compile.
+
+On NixOS the triton backend calls ``/sbin/ldconfig`` to locate
+``libcuda.so.1`` and ``ptxas``; that binary doesn't exist, so triton (and
+therefore inductor codegen) fails. :func:`_autoset_nixos_triton_paths`
+detects the standard NixOS locations (``/run/opengl-driver/lib`` and the
+CUDA-merged store path exposed by ``CUDA_HOME``) and populates
+``TRITON_LIBCUDA_PATH`` / ``TRITON_PTXAS_PATH`` when they are unset — so
+compile works out of the box on this machine.
+"""
 
 from __future__ import annotations
 
 import os
+import shutil
 import logging
 
 import torch
@@ -12,27 +26,129 @@ import torch._dynamo
 log = logging.getLogger(__name__)
 
 
-def _compile_enabled() -> bool:
-    mode = os.environ.get("DDSSM_TORCH_COMPILE", "auto").strip().lower()
-    return mode not in {"0", "false", "no"}
+def _autoset_nixos_triton_paths() -> None:
+    """Populate ``TRITON_LIBCUDA_PATH`` / ``TRITON_PTXAS_PATH`` and ensure
+    ``openssl`` is on ``PATH`` for inductor's header cache.
+
+    Triton's NVIDIA driver backend shells out to ``/sbin/ldconfig -p`` unless
+    ``TRITON_LIBCUDA_PATH`` is set. On NixOS ldconfig doesn't exist at that
+    path, so the subprocess raises ``FileNotFoundError`` and inductor codegen
+    then bubbles it up as ``InductorError``. Inductor's precompiled-header
+    cache also shells out to ``openssl sha512`` for content hashing, which
+    fails identically when openssl isn't on ``PATH`` in the dev shell.
+    Setting the two env vars ahead of time short-circuits triton's lookup;
+    extending ``PATH`` short-circuits inductor's.
+
+    Only writes an env var / extends PATH when (a) the value is not already
+    set / a suitable binary isn't already on PATH, and (b) the target path
+    exists — so a user-supplied override always wins and this is a no-op on
+    non-NixOS hosts.
+    """
+    # libcuda: /run/opengl-driver/lib/libcuda.so.1 on NixOS with driver present
+    if os.environ.get("TRITON_LIBCUDA_PATH") is None:
+        p = "/run/opengl-driver/lib"
+        if os.path.exists(os.path.join(p, "libcuda.so.1")):
+            os.environ["TRITON_LIBCUDA_PATH"] = p
+            log.debug("torch_compile: set TRITON_LIBCUDA_PATH=%s", p)
+    # ptxas: prefer PATH, else fall back to $CUDA_HOME/bin
+    if os.environ.get("TRITON_PTXAS_PATH") is None:
+        ptxas = shutil.which("ptxas")
+        if ptxas is None and (cuda_home := os.environ.get("CUDA_HOME")):
+            candidate = os.path.join(cuda_home, "bin", "ptxas")
+            if os.path.exists(candidate):
+                ptxas = candidate
+        if ptxas is not None:
+            os.environ["TRITON_PTXAS_PATH"] = ptxas
+            log.debug("torch_compile: set TRITON_PTXAS_PATH=%s", ptxas)
+    # openssl (inductor cache):  add its containing dir to PATH if absent.
+    if shutil.which("openssl") is None:
+        import glob
+        # Try a few candidate globs common on NixOS: nix profile + nix store.
+        candidates = []
+        for pattern in (
+            "/nix/store/*-openssl-*-bin/bin/openssl",
+            "/etc/profiles/*/bin/openssl",
+            "/run/current-system/sw/bin/openssl",
+        ):
+            candidates.extend(glob.glob(pattern))
+        for cand in candidates:
+            if os.path.exists(cand):
+                bin_dir = os.path.dirname(cand)
+                os.environ["PATH"] = f"{bin_dir}:{os.environ.get('PATH', '')}"
+                log.debug("torch_compile: prepended %s to PATH for openssl", bin_dir)
+                break
 
 
-def _configure_dynamo() -> None:
+_OFF_VALUES = {"0", "false", "no", "off"}
+_SOFT_VALUES = {"soft", "permissive"}
+
+
+def _compile_mode() -> str:
+    """Return one of ``"off" | "soft" | "strict"`` from ``DDSSM_TORCH_COMPILE``.
+
+    Default (unset or any unknown value) is ``"strict"``: compile failures
+    and dynamo tracing errors both raise — the run never silently drops to
+    eager. Opt out with ``=0`` (disabled) or ``=soft`` (silent fallback).
+    """
+    mode = os.environ.get("DDSSM_TORCH_COMPILE", "strict").strip().lower()
+    if mode in _OFF_VALUES:
+        return "off"
+    if mode in _SOFT_VALUES:
+        return "soft"
+    return "strict"
+
+
+def _inner_compile_enabled() -> bool:
+    """Whether sub-module (leaf) compiles should fire.
+
+    Gated by ``DDSSM_TORCH_COMPILE_INNER`` — set to ``0/false/no/off`` to
+    disable compile on the encoder/decoder/transition sub-modules, so the
+    OUTER :meth:`DDSSM_base.forward` compile is the sole owner of the fx
+    graph. Necessary for ``mode="reduce-overhead"`` (CUDA graphs) at the
+    outer scope, which segfaults on nested compile / capture conflicts.
+    Enabled by default so today's per-sub-module compile still works.
+    """
+    v = os.environ.get("DDSSM_TORCH_COMPILE_INNER", "1").strip().lower()
+    return v not in _OFF_VALUES
+
+
+def _configure_dynamo(mode: str) -> None:
     """Dynamo settings applied whenever we compile anything.
 
-    * ``suppress_errors``: fall back to eager (never crash) on a graph that won't
-      compile — the try/except only guards the compile *call*, not the first
-      forward where most backend errors surface.
-    * ``capture_scalar_outputs``: trace ``Tensor.item()`` / data-dependent scalars
-      symbolically instead of graph-breaking. The encoder per-step body hits one
-      (a torch-internal scalar read); without this, compiling it graph-breaks and
-      most of the fusion win is lost.
+    * Runs :func:`_autoset_nixos_triton_paths` first so the triton backend
+      can find libcuda / ptxas without shelling out to ``/sbin/ldconfig``.
+    * ``suppress_errors``: True under ``"soft"`` (dynamo tracing errors
+      silently fall back to eager); False under ``"strict"`` (they raise).
+    * ``capture_scalar_outputs``: trace ``Tensor.item()`` / data-dependent
+      scalars symbolically instead of graph-breaking. The encoder per-step
+      body hits one (a torch-internal scalar read); without this, compiling
+      it graph-breaks and most of the fusion win is lost.
+    * ``cudagraph_skip_dynamic_graphs``: when ``mode="reduce-overhead"`` is
+      requested, permits reduce-overhead to bail on dynamic subgraphs
+      instead of failing hard. Off by default.
     """
-    torch._dynamo.config.suppress_errors = True
+    _autoset_nixos_triton_paths()
+    torch._dynamo.config.suppress_errors = (mode == "soft")
     torch._dynamo.config.capture_scalar_outputs = True
+    # compiled_autograd: routes ``.backward()`` through a compiled hook
+    # (Compiled Autograd tutorial). Opt out with
+    # DDSSM_TORCH_COMPILE_AUTOGRAD=0 for models that break under it.
+    if os.environ.get(
+        "DDSSM_TORCH_COMPILE_AUTOGRAD", "1"
+    ).strip().lower() not in {"0", "false", "no", "off"}:
+        torch._dynamo.config.compiled_autograd = True
+    # reduce-overhead compat: skip dynamic-shape captures, allow input
+    # mutation, disable trees + size_asserts (persistent buffer aliasing
+    # + address changes across zero_grad(set_to_none=False)).
+    torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True
+    torch._inductor.config.triton.cudagraph_support_input_mutation = True
+    torch._inductor.config.triton.cudagraph_trees = False
+    torch._inductor.config.size_asserts = False
 
 
-def maybe_compile(module: nn.Module, *, dynamic: bool = False) -> nn.Module:
+def maybe_compile(
+    module: nn.Module, *, dynamic: bool = False, inner: bool = True
+) -> nn.Module:
     """Compile ``module`` in place when enabled, preserving its ``state_dict``.
 
     Uses :meth:`torch.nn.Module.compile` rather than :func:`torch.compile` so the
@@ -42,33 +158,86 @@ def maybe_compile(module: nn.Module, *, dynamic: bool = False) -> nn.Module:
     ``__call__`` (``module(...)``), not ``module.forward(...)``** — the in-place
     compile only hooks ``__call__``.
 
-    Env var ``DDSSM_TORCH_COMPILE`` controls behavior:
-      - ``0/false/no``: disabled
-      - ``1/true/yes`` / unset / ``auto``: enabled (CUDA and CPU)
+    Env var ``DDSSM_TORCH_COMPILE`` controls behavior (see module docstring):
+      - ``0/false/no/off``: disabled (returns module unchanged)
+      - ``soft/permissive``: try to compile, silently fall back to eager on failure
+      - default / unknown: **strict** — any compile-call failure raises
+
+    ``inner=True`` (default) tags this compile as a leaf / sub-module compile.
+    Set ``inner=False`` for an OUTER compile (the module owning the whole
+    forward). ``DDSSM_TORCH_COMPILE_INNER=0`` disables all ``inner=True``
+    compiles so the outer compile is the sole graph owner — required for
+    ``mode="reduce-overhead"`` at outer scope, which conflicts with nested
+    CUDA-graph captures.
     """
-    if not _compile_enabled():
+    mode = _compile_mode()
+    if mode == "off":
         return module
-    _configure_dynamo()
+    if inner and not _inner_compile_enabled():
+        return module
+    _configure_dynamo(mode)
     try:
         module.compile(dynamic=dynamic)
-    except RuntimeError as e:  # pragma: no cover - defensive fallback
-        log.warning("torch.compile disabled after failure: %s", e, exc_info=True)
+    except RuntimeError as e:
+        if mode == "soft":
+            log.warning("torch.compile disabled after failure: %s", e, exc_info=True)
+            return module
+        raise RuntimeError(
+            f"torch.compile failed on {type(module).__name__} in strict mode; "
+            f"set DDSSM_TORCH_COMPILE=soft to fall back to eager, "
+            f"or =0 to disable compile."
+        ) from e
     return module
 
 
-def maybe_compile_fn(fn, *, dynamic: bool = False):
+def maybe_compile_fn(
+    fn,
+    *,
+    dynamic: bool = False,
+    compile_mode: str | None = None,
+    fullgraph: bool = False,
+    inner: bool = True,
+):
     """Compile a callable / bound method (not an ``nn.Module``) when enabled.
 
     For per-step bodies like the encoder's ``_forward_with_stats`` that orchestrate
     several sub-modules and aren't themselves modules. Returns a ``torch.compile``
     wrapper (there's no ``state_dict`` to preserve, so the ``_orig_mod`` concern
-    doesn't apply) or ``fn`` unchanged when disabled / on failure.
+    doesn't apply) or ``fn`` unchanged when disabled / soft-fallback / on failure.
+
+    Args:
+        dynamic: dynamic shape support (``dynamic=`` on ``torch.compile``).
+        compile_mode: optional ``mode=`` for ``torch.compile``. ``None`` keeps
+            the default (``"default"``); ``"reduce-overhead"`` activates CUDA
+            graphs (static shapes only; captures inputs to fixed buffers).
+        fullgraph: ``fullgraph=`` on ``torch.compile``. True enforces zero
+            graph breaks — dynamo raises on any break instead of splitting.
+        inner: True (default) means this is a leaf / sub-module compile that
+            defers to ``DDSSM_TORCH_COMPILE_INNER`` (disable-able so an outer
+            compile can own everything). False = outer compile, always fires
+            (subject only to ``DDSSM_TORCH_COMPILE``).
     """
-    if not _compile_enabled():
+    mode = _compile_mode()
+    if mode == "off":
         return fn
-    _configure_dynamo()
+    if inner and not _inner_compile_enabled():
+        return fn
+    _configure_dynamo(mode)
+    kwargs: dict = {"dynamic": dynamic}
+    if compile_mode is not None:
+        kwargs["mode"] = compile_mode
+    if fullgraph:
+        kwargs["fullgraph"] = True
     try:
-        return torch.compile(fn, dynamic=dynamic)
-    except RuntimeError as e:  # pragma: no cover - defensive fallback
-        log.warning("torch.compile(fn) disabled after failure: %s", e, exc_info=True)
-        return fn
+        return torch.compile(fn, **kwargs)
+    except RuntimeError as e:
+        if mode == "soft":
+            log.warning(
+                "torch.compile(fn) disabled after failure: %s", e, exc_info=True
+            )
+            return fn
+        raise RuntimeError(
+            f"torch.compile failed on {getattr(fn, '__qualname__', repr(fn))} "
+            f"in strict mode; set DDSSM_TORCH_COMPILE=soft to fall back to eager, "
+            f"or =0 to disable compile."
+        ) from e

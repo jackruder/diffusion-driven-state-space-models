@@ -82,7 +82,6 @@ PilotEval = Eval(
         "wallclock_to_target",
         "wallclock_to_relative_target",
         "crps_sum_latent",
-        "gt_latent_jsd",
         "q_aux_kl_trajectory",
         "log_sigma_p2_collapse",
     ],

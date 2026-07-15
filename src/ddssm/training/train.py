@@ -90,18 +90,38 @@ class EMA:
         self.decay = decay
         self.shadow = {k: p.detach().clone() for k, p in module.state_dict().items()}
         self._module = module
+        self._float_keys: tuple[str, ...] = tuple(
+            k for k, v in self.shadow.items() if torch.is_floating_point(v)
+        )
+        self._int_keys: tuple[str, ...] = tuple(
+            k for k in self.shadow if k not in set(self._float_keys)
+        )
+        self._float_shadow: list[torch.Tensor] = [
+            self.shadow[k] for k in self._float_keys
+        ]
+        # Cache the live-tensor lists once so per-step ``update()`` does not
+        # call ``state_dict()`` — the returned dict is dynamo-opaque and
+        # would graph-break inside a compiled train step.
+        msd = self._module.state_dict()
+        self._float_live: list[torch.Tensor] = [msd[k] for k in self._float_keys]
+        self._int_pairs: list[tuple[torch.Tensor, torch.Tensor]] = [
+            (self.shadow[k], msd[k]) for k in self._int_keys
+        ]
+
+    def _recache_live(self) -> None:
+        """Refresh the live-tensor cache — call after any state_dict swap."""
+        msd = self._module.state_dict()
+        self._float_live = [msd[k] for k in self._float_keys]
+        self._int_pairs = [(self.shadow[k], msd[k]) for k in self._int_keys]
 
     @torch.no_grad()
     def update(self):
-        msd = self._module.state_dict()
-        for k, v in msd.items():
-            # Non-floating buffers (flags, counters, integer codes — e.g. a
-            # transition's one-shot "calibrated" flag) have no meaningful running
-            # average; snapshot the live value so ``swap`` restores it intact.
-            if torch.is_floating_point(v):
-                self.shadow[k].mul_(self.decay).add_(v, alpha=1.0 - self.decay)
-            else:
-                self.shadow[k].copy_(v)
+        torch._foreach_mul_(self._float_shadow, self.decay)
+        torch._foreach_add_(
+            self._float_shadow, self._float_live, alpha=1.0 - self.decay
+        )
+        for shadow_t, live_t in self._int_pairs:
+            shadow_t.copy_(live_t)
 
     @contextmanager
     def swap(self):
@@ -112,6 +132,126 @@ class EMA:
             yield
         finally:
             self._module.load_state_dict(backup, strict=True)
+            # Defensive: refresh live-tensor cache in case load_state_dict
+            # replaces param/buffer tensors.
+            self._recache_live()
+
+
+_COMPILE_OFF_VALUES = {"0", "false", "no", "off"}
+
+
+def _compiled_step_enabled() -> bool:
+    """Whether the compiled two-region train step is opt-in (``DDSSM_COMPILE_STEP=1``).
+
+    Applies only when the trainer is in single-loss mode with
+    ``grad_accum_steps=1``; falls back to the per-microstep eager path
+    otherwise.
+    """
+    v = os.environ.get("DDSSM_COMPILE_STEP", "0").strip().lower()
+    return v not in _COMPILE_OFF_VALUES
+
+
+def _make_split_step(
+    model,
+    active_loss,
+    optimizer,
+    params_flat,
+    max_norm: float,
+    ema: "EMA | None" = None,
+) -> "tuple[callable, callable]":
+    """Build the two-region train-step callables per torch's docs pattern.
+
+    Returns ``(fwd_bwd_fn, opt_ema_fn)`` — two callables the caller
+    compiles independently via ``torch.compile``. Matches the pattern
+    from PyTorch's Compiled Autograd tutorial + "Compiling the optimizer"
+    recipe: forward+backward as one region (compiled_autograd hook makes
+    backward a fullgraph), optimizer.step + EMA as a separate region
+    (never fullgraph — ``_use_grad`` graph-breaks otherwise).
+
+    * ``fwd_bwd_fn(batch, lam)``: bf16-autocast raw forward core +
+      single-loss ``recon + λ·(init_kl_phith + trans_kl_phith)`` +
+      ``loss.backward()``. Returns a flat tuple of detached metric
+      tensors — ``(loss, recon, init_kl_phith, init_kl_psi,
+      trans_kl_phith, trans_kl_psi, init_vhp, init_entropy,
+      init_kl_aux, init_loss_init, recon_calib, *trans_extras)`` —
+      so AOT autograd allocates a tangent slot only for ``loss``.
+    * ``opt_ema_fn()``: clip + ``optimizer.step()`` +
+      ``zero_grad(set_to_none=False)`` + in-graph EMA. Returns the
+      pre-clip ``grad_norm``.
+
+    Caller constraints: single-optimizer, ``grad_accum_steps == 1``,
+    ``lam`` passed as a 0-d device tensor filled per step, ``fused=True``
+    AdamW.
+    """
+    ema_decay = float(ema.decay) if ema is not None else 0.0
+    ema_float_shadow = ema._float_shadow if ema is not None else None
+    ema_float_live = ema._float_live if ema is not None else None
+    ema_int_pairs = ema._int_pairs if ema is not None else None
+
+    del active_loss  # signature stability; loss composition is inlined below
+
+    def _fwd_bwd(batch, lam):
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=True):
+            core = model._forward_core_raw(
+                batch["observed_data"],
+                batch["observation_mask"],
+                batch["timepoints"],
+                covariates=batch.get("covariates"),
+                static_covariates=batch.get("static_covariates"),
+                train=True,
+            )
+        # Inline FullELBO single-loss composition so ``lam`` stays a tensor.
+        loss = core.recon + lam * (core.init_kl_phith + core.trans_kl_phith)
+        loss.backward()
+        return (
+            loss.detach(),
+            core.recon.detach(),
+            core.init_kl_phith.detach(),
+            core.init_kl_psi.detach(),
+            core.trans_kl_phith.detach(),
+            core.trans_kl_psi.detach(),
+            core.init_vhp.detach(),
+            core.init_entropy.detach(),
+            core.init_kl_aux.detach(),
+            core.init_loss_init.detach(),
+            core.recon_calib.detach(),
+            *(t.detach() for t in core.trans_extras),
+        )
+
+    def _opt_ema():
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            params_flat, max_norm, foreach=True,
+        )
+        optimizer.step()
+        # set_to_none=False keeps grad tensor storage stable across steps.
+        optimizer.zero_grad(set_to_none=False)
+        if ema_float_shadow is not None:
+            torch._foreach_mul_(ema_float_shadow, ema_decay)
+            torch._foreach_add_(
+                ema_float_shadow, ema_float_live, alpha=1.0 - ema_decay
+            )
+            for shadow_t, live_t in ema_int_pairs:
+                shadow_t.copy_(live_t)
+        return grad_norm
+
+    return _fwd_bwd, _opt_ema
+
+
+def _compile_optimizer_step(optimizers) -> None:
+    """Wrap each optimizer's ``.step()`` with ``torch.compile``.
+
+    Idempotent via the ``_ddssm_compiled`` sentinel; opt out with
+    ``DDSSM_TORCH_COMPILE_OPTIMIZER=0``.
+    """
+    if os.environ.get(
+        "DDSSM_TORCH_COMPILE_OPTIMIZER", "1"
+    ).strip().lower() in _COMPILE_OFF_VALUES:
+        return
+    for opt in optimizers:
+        if getattr(opt.step, "_ddssm_compiled", False):
+            continue
+        opt.step = torch.compile(opt.step, fullgraph=False)
+        opt.step._ddssm_compiled = True
 
 
 @final
@@ -209,6 +349,7 @@ class DDSSMTrainer:
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,
+                fused=True,
             )
         # Optimizer topology: single-mode is ``[self.optimizer]``;
         # ``_install_split_topology`` (split-loss mode) replaces this with
@@ -216,6 +357,10 @@ class DDSSMTrainer:
         # the φθ side. Every step/zero_grad/unscale site loops this list.
         self._optimizers: list[optim.Optimizer] = [self.optimizer]
         self.opt_psi: optim.Optimizer | None = None
+        # Cache of per-optimizer flat param lists for clip_grad_norm_ /
+        # zero_grad. Invalidated (set to None) any time ``self._optimizers``
+        # is reassigned; lazily rebuilt on the next _optimizer_step call.
+        self._opt_param_cache: list[list[torch.nn.Parameter]] | None = None
         # Cached (φθ, ψ) parameter lists for the split backward; populated
         # by ``_install_split_topology`` with ``include_frozen=True`` (the
         # full per-side partition). ``_backward_loss`` re-filters them by
@@ -463,9 +608,13 @@ class DDSSMTrainer:
             ),
             betas=(0.9, 0.999),
             eps=1e-8,
+            fused=True,
         )
-        opt_psi = torch.optim.AdamW(psi_groups, betas=(0.9, 0.99), eps=1e-8)
+        opt_psi = torch.optim.AdamW(
+            psi_groups, betas=(0.9, 0.99), eps=1e-8, fused=True
+        )
         self._optimizers = [opt_phith, opt_psi]
+        self._opt_param_cache = None  # invalidated on topology change
         # ``self.optimizer`` stays the φθ alias so existing single-optimizer
         # call sites (checkpointing, external LR pokes) keep a target.
         self.optimizer = opt_phith
@@ -639,8 +788,11 @@ class DDSSMTrainer:
             weight_decay_psi=self.weight_decay_psi,
             claim_psi=getattr(self.hparams, "lr_schedule", None) is not None,
         )
-        self.optimizer = torch.optim.AdamW(groups, betas=(0.9, 0.999), eps=1e-8)
+        self.optimizer = torch.optim.AdamW(
+            groups, betas=(0.9, 0.999), eps=1e-8, fused=True
+        )
         self._optimizers = [self.optimizer]
+        self._opt_param_cache = None  # invalidated on topology change
 
     # ------------------------
     # Serialization / Checkpoint  (schema owned by ddssm.training.checkpoint)
@@ -844,12 +996,16 @@ class DDSSMTrainer:
         from ddssm.training.stages import make_lambda_cosine
 
         ramp = getattr(self.hparams, "lambda_ramp", None)
+        split = bool(getattr(self.hparams, "use_split_loss", False))
         if ramp is None:
-            return FullELBO(rate_lambda=lambda _step: 1.0)
+            return FullELBO(
+                rate_lambda=lambda _step: 1.0, use_split_loss=split
+            )
         return FullELBO(
             rate_lambda=make_lambda_cosine(
                 ramp, total_steps=total_steps, default_end=1.0
-            )
+            ),
+            use_split_loss=split,
         )
 
     def _move_batch_to_device(self, batch: dict, device: torch.device) -> dict:
@@ -986,15 +1142,37 @@ class DDSSMTrainer:
             if self.clip_grad_norm is not None
             else float("inf")
         )
+        # Cache per-optimizer flat param lists to skip the per-step Python
+        # comprehension over param_groups. The param membership is fixed
+        # after construction (frozen/unfrozen state changes ``requires_grad``
+        # but not the list itself); ``clip_grad_norm_`` internally skips
+        # tensors whose ``.grad is None``. Pass ``foreach=True`` so the
+        # norm/scale use batched ``_foreach`` kernels.
+        if getattr(self, "_opt_param_cache", None) is None or len(
+            self._opt_param_cache
+        ) != len(self._optimizers):
+            self._opt_param_cache = [
+                [p for group in opt.param_groups for p in group["params"]]
+                for opt in self._optimizers
+            ]
         norms = [
             torch.nn.utils.clip_grad_norm_(
-                [p for group in opt.param_groups for p in group["params"]],
-                max_norm,
+                params, max_norm, foreach=True,
             )
-            for opt in self._optimizers
+            for params in self._opt_param_cache
         ]
 
-        if not all(torch.isfinite(n) for n in norms):
+        # Single batched host sync: stack per-optimizer norms + the
+        # aggregated L2-of-norms into one tensor, transfer once. Replaces
+        # the previous per-norm ``bool()`` / ``float()`` calls (6+ host
+        # syncs per step under split-loss) that broke CPU/GPU pipelining.
+        stacked_norms = torch.stack(norms)
+        combined = torch.linalg.vector_norm(stacked_norms)
+        norm_vals = torch.cat([stacked_norms, combined.reshape(1)]).cpu().tolist()
+        per_opt_norm_vals = norm_vals[:-1]
+        combined_val = norm_vals[-1]
+
+        if not all(math.isfinite(v) for v in per_opt_norm_vals):
             # Discard the macro-batch on EITHER side going non-finite: both
             # sides backward from the same forward pass on the same
             # (possibly poisoned) batch, so a partial step would poison
@@ -1004,11 +1182,11 @@ class DDSSMTrainer:
             self.grad_skip_count += 1
             self._last_grad_norm = float("nan")
             self._last_grad_norms_by_opt = (
-                [float(n) for n in norms] if len(self._optimizers) > 1 else None
+                per_opt_norm_vals if len(self._optimizers) > 1 else None
             )
             log.warning(
                 "[grad-skip] non-finite grad norm(s) %s at step %d (total skips: %d)",
-                [float(n) for n in norms],
+                per_opt_norm_vals,
                 self.global_step + 1,
                 self.grad_skip_count,
             )
@@ -1023,11 +1201,9 @@ class DDSSMTrainer:
         # Aggregate as a single L2 norm over the per-optimizer norms for the
         # ``optim/grad_norm`` metric (equals the one norm in single-optimizer
         # mode); per-optimizer values are logged separately when split.
-        self._last_grad_norm = float(
-            torch.linalg.vector_norm(torch.stack(norms))
-        )
+        self._last_grad_norm = combined_val
         if len(self._optimizers) > 1:
-            self._last_grad_norms_by_opt = [float(n) for n in norms]
+            self._last_grad_norms_by_opt = per_opt_norm_vals
         else:
             self._last_grad_norms_by_opt = None
         if amp:
@@ -1438,8 +1614,10 @@ class DDSSMTrainer:
                 ),
                 betas=(0.9, 0.999),
                 eps=1e-8,
+                fused=True,
             )
             self._optimizers = [self.optimizer]
+            self._opt_param_cache = None  # invalidated on topology change
             self.opt_psi = None
             self._phith_params = None
             self._psi_params = None
@@ -1480,6 +1658,49 @@ class DDSSMTrainer:
         # see if we should resume
         self._safe_resume(resume_from)
 
+        # Compile each optimizer's ``.step()`` — reduces the ~1.5 ms/step
+        # AdamW Python dispatch to one compiled kernel launch. Applied
+        # here (rather than at optimizer construction) so it runs after
+        # topology is settled and LR schedules are installed. Idempotent:
+        # ``_ddssm_compiled`` guard prevents re-compilation on repeated
+        # fit() calls.
+        _compile_optimizer_step(self._optimizers)
+
+        # Two-region compiled step (Compiled Autograd tutorial + "Compiling
+        # the optimizer" recipe). Gate: DDSSM_COMPILE_STEP=1 AND
+        # single-loss AND grad_accum_steps==1.
+        _use_compiled_step = (
+            _compiled_step_enabled()
+            and not loss_wants_split
+            and self.grad_accum_steps == 1
+        )
+        compiled_fwd_bwd = None
+        compiled_opt_ema = None
+        lam_t = None
+        if _use_compiled_step:
+            opt0 = self._optimizers[0]
+            _params_flat = [p for g in opt0.param_groups for p in g["params"]]
+            _max_norm = (
+                float(self.clip_grad_norm)
+                if self.clip_grad_norm is not None else float("inf")
+            )
+            _fwd_bwd_fn, _opt_ema_fn = _make_split_step(
+                self.model, self._active_loss, opt0, _params_flat, _max_norm,
+                ema=self.ema,
+            )
+            _fused_mode = os.environ.get(
+                "DDSSM_TORCH_COMPILE_MODE", ""
+            ).strip() or None
+            _fused_kwargs: dict = {"mode": _fused_mode} if _fused_mode else {}
+            if _fused_mode in {"reduce-overhead", "max-autotune"}:
+                _fused_kwargs["dynamic"] = False
+            compiled_fwd_bwd = torch.compile(_fwd_bwd_fn, **_fused_kwargs)
+            # ``opt.step`` is compiled standalone by _compile_optimizer_step;
+            # wrapping the opt/EMA function in another compile would nest
+            # and trigger per-param-group recompiles.
+            compiled_opt_ema = _opt_ema_fn
+            lam_t = torch.zeros((), device=device)
+
         data_iter = iter(train_loader)
         # The autocast above uses bf16, which has fp32's exponent range and
         # needs no gradient scaling — so the scaler stays disabled even under
@@ -1515,63 +1736,121 @@ class DDSSMTrainer:
             with profiler_cm as prof:
                 for step in range(start_step + 1, total_steps + 1):
                     self.model.train()
-                    for opt in self._optimizers:
-                        opt.zero_grad(set_to_none=True)
 
-                    accum_loss_t: torch.Tensor | None = None
-                    accum_metrics = None
-                    accum_weight = 0
-
-                    for _ in range(self.grad_accum_steps):
+                    if _use_compiled_step:
                         try:
                             batch = next(data_iter)
                         except StopIteration:
                             data_iter = iter(train_loader)
                             batch = next(data_iter)
-
-                        batch = self._prepare_batch(batch, device, batch_transform)
-                        loss, metrics, weight = self._compute_loss_and_metrics(
-                            batch=batch,
-                            amp=amp,
+                        batch = self._prepare_batch(
+                            batch, device, batch_transform
                         )
-
-                        loss_detached = loss.detach()
-                        if isinstance(loss_detached, SplitLoss):
-                            # Normalize to a scalar tensor (φθ + ψ) so the
-                            # microstep accumulation below stays plain tensor
-                            # arithmetic; single-mode passes through untouched.
-                            loss_detached = loss_detached.total
-                        # Per-microstep guard: check before ``_backward_loss``
-                        # so a NaN/Inf micro-batch never poisons ``.grad`` via
-                        # backprop. Checking the summed accum_loss post-backward
-                        # would already be too late. The host-side read forces
-                        # a device sync per microstep, so it only runs when the
-                        # guard is enabled; otherwise the loss accumulates
-                        # on-device and syncs once per optimizer step.
-                        if self.abort_on_nonfinite_loss:
-                            loss_scalar = float(loss_detached)
-                            if not math.isfinite(loss_scalar):
-                                raise FloatingPointError(
-                                    f"Non-finite training loss ({loss_scalar}) "
-                                    f"at step {step}; aborting "
-                                    f"(abort_on_nonfinite_loss=True)."
-                                )
-
-                        self._backward_loss(loss, scaler=scaler, amp=amp)
-
-                        accum_loss_t = (
-                            loss_detached
-                            if accum_loss_t is None
-                            else accum_loss_t + loss_detached
+                        step_within_stage = (
+                            self.global_step - self._stage_start_step + 1
                         )
-                        accum_metrics = self._accumulate_metrics(accum_metrics, metrics)
-                        accum_weight += weight
+                        lam_val = float(
+                            self._active_loss.rate_lambda(step_within_stage)
+                        )
+                        lam_t.fill_(lam_val)
+                        fwd_result = compiled_fwd_bwd(batch, lam_t)
+                        grad_norm = compiled_opt_ema()
+                        metrics = self.model._build_metrics_from_flat(
+                            (fwd_result[0], grad_norm, *fwd_result[1:])
+                        )
+                        if self._active_loss.lambda_at(step_within_stage) is not None:
+                            metrics["optim/lambda"] = torch.tensor(lam_val)
+                        # Nonfinite policy under compile is detect-and-count
+                        # (opt.step already ran); DDSSM_COMPILE_STEP=0
+                        # restores the eager pre-step skip semantics.
+                        gn_val = float(grad_norm)
+                        if not math.isfinite(gn_val):
+                            self.grad_skip_count += 1
+                            self._last_grad_norm = float("nan")
+                            log.warning(
+                                "[grad-skip:compiled] non-finite grad norm "
+                                "%s at step %d (total skips: %d) — step was "
+                                "applied before detection",
+                                gn_val, step, self.grad_skip_count,
+                            )
+                        else:
+                            self._last_grad_norm = gn_val
+                        if self._schedulers:
+                            for sched in self._schedulers:
+                                sched.step()
+                        elif self.scheduler is not None:
+                            self.scheduler.step()
+                        accum_loss_t = fwd_result[0]
+                        accum_metrics = self._accumulate_metrics(None, metrics)
+                        accum_weight = batch["observed_data"].size(0)
+                        accum_loss = float(accum_loss_t)
+                        if self.abort_on_nonfinite_loss and not math.isfinite(
+                            accum_loss
+                        ):
+                            raise FloatingPointError(
+                                f"Non-finite training loss ({accum_loss}) at "
+                                f"step {step}; aborting "
+                                f"(abort_on_nonfinite_loss=True)."
+                            )
+                        accum_metrics = self._finalize_accum_metrics(accum_metrics)
+                    else:
+                        for opt in self._optimizers:
+                            opt.zero_grad(set_to_none=True)
 
-                    self._optimizer_step(scaler=scaler, amp=amp)
-                    # Single host sync per optimizer step, queued after the
-                    # optimizer kernels so it doesn't stall them.
-                    accum_loss = float(accum_loss_t)
-                    accum_metrics = self._finalize_accum_metrics(accum_metrics)
+                        accum_loss_t: torch.Tensor | None = None
+                        accum_metrics = None
+                        accum_weight = 0
+
+                        for _ in range(self.grad_accum_steps):
+                            try:
+                                batch = next(data_iter)
+                            except StopIteration:
+                                data_iter = iter(train_loader)
+                                batch = next(data_iter)
+
+                            batch = self._prepare_batch(batch, device, batch_transform)
+                            loss, metrics, weight = self._compute_loss_and_metrics(
+                                batch=batch,
+                                amp=amp,
+                            )
+
+                            loss_detached = loss.detach()
+                            if isinstance(loss_detached, SplitLoss):
+                                # Normalize to a scalar tensor (φθ + ψ) so the
+                                # microstep accumulation below stays plain tensor
+                                # arithmetic; single-mode passes through untouched.
+                                loss_detached = loss_detached.total
+                            # Per-microstep guard: check before ``_backward_loss``
+                            # so a NaN/Inf micro-batch never poisons ``.grad`` via
+                            # backprop. Checking the summed accum_loss post-backward
+                            # would already be too late. The host-side read forces
+                            # a device sync per microstep, so it only runs when the
+                            # guard is enabled; otherwise the loss accumulates
+                            # on-device and syncs once per optimizer step.
+                            if self.abort_on_nonfinite_loss:
+                                loss_scalar = float(loss_detached)
+                                if not math.isfinite(loss_scalar):
+                                    raise FloatingPointError(
+                                        f"Non-finite training loss ({loss_scalar}) "
+                                        f"at step {step}; aborting "
+                                        f"(abort_on_nonfinite_loss=True)."
+                                    )
+
+                            self._backward_loss(loss, scaler=scaler, amp=amp)
+
+                            accum_loss_t = (
+                                loss_detached
+                                if accum_loss_t is None
+                                else accum_loss_t + loss_detached
+                            )
+                            accum_metrics = self._accumulate_metrics(accum_metrics, metrics)
+                            accum_weight += weight
+
+                        self._optimizer_step(scaler=scaler, amp=amp)
+                        # Single host sync per optimizer step, queued after the
+                        # optimizer kernels so it doesn't stall them.
+                        accum_loss = float(accum_loss_t)
+                        accum_metrics = self._finalize_accum_metrics(accum_metrics)
 
                     self._log_train_step(
                         step=step,

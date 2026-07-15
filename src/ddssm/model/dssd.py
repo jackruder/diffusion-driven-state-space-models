@@ -4,8 +4,9 @@ Owns the ELBO forward pass, encoder/decoder/transition dispatch, and the
 autoregressive forecast rollout.
 """
 
+import os
 from types import SimpleNamespace
-from typing import Any, final
+from typing import Any, final, NamedTuple
 from dataclasses import dataclass
 
 import torch
@@ -45,6 +46,35 @@ class ProbeBatch:
             "time_embed": self.time_embed,
             "covariates": self.covariates,
         }
+
+
+class ForwardCoreOut(NamedTuple):
+    """Graph-pure output contract of :meth:`DDSSM_base._forward_core`.
+
+    Every field is graph-connected (never ``.detach()``ed); detaching for
+    the logging metrics happens outside the compiled region, in
+    :meth:`DDSSM_base._build_metrics`. AOT autograd would otherwise
+    allocate ``None``-tangent slots for detached outputs and crash the
+    inductor backward under ``compiled_autograd``.
+
+    ``trans_extras`` is ordered by ``DDSSM_base._transition_extra_keys``
+    (a data-dependent dict cannot cross a ``fullgraph`` boundary).
+    ``eval_stats`` is ``()`` during training and ``(zs, mus, logvars)``
+    when ``train=False``.
+    """
+
+    recon: torch.Tensor
+    recon_calib: torch.Tensor
+    init_kl_phith: torch.Tensor
+    init_kl_psi: torch.Tensor
+    init_vhp: torch.Tensor
+    init_entropy: torch.Tensor
+    init_kl_aux: torch.Tensor
+    init_loss_init: torch.Tensor
+    trans_kl_phith: torch.Tensor
+    trans_kl_psi: torch.Tensor
+    trans_extras: tuple[torch.Tensor, ...]
+    eval_stats: tuple
 
 
 def _require_persistence_baseline(encoder: nn.Module, baseline) -> None:
@@ -187,6 +217,62 @@ class DDSSM_base(nn.Module):
         self.baseline: BaseBaseline | None = baseline
         _require_persistence_baseline(encoder, baseline)
         self.sigma_data: SigmaDataBuffer | None = sigma_data
+
+        # Order the transition's diagnostic ``kl_extra_keys`` at construction
+        # so ``_forward_core`` can return them as a positionally-ordered
+        # tuple (dict keys can't cross a fullgraph boundary).
+        self._transition_extra_keys: tuple[str, ...] = tuple(
+            transition.kl_extra_keys(encoder.is_gaussian_family)
+        )
+
+        from ddssm.nn.torch_compile import maybe_compile_fn as _mcf
+        _compile_mode_outer = os.environ.get(
+            "DDSSM_TORCH_COMPILE_MODE", ""
+        ).strip() or None
+        # reduce-overhead / max-autotune capture CUDA graphs, which need
+        # static shapes — force dynamic=False for them.
+        _dynamic = _compile_mode_outer not in {"reduce-overhead", "max-autotune"}
+        # fullgraph auto-detect: on for CUDA runs, off on CPU (nn.GRU trips
+        # a dynamo polyfill on CPU). Override via
+        # DDSSM_TORCH_COMPILE_FULLGRAPH=1|0.
+        _fullgraph_env = os.environ.get(
+            "DDSSM_TORCH_COMPILE_FULLGRAPH", "auto"
+        ).strip().lower()
+        # Compile install is deferred to the first _forward_core call so
+        # the auto-detect sees the post-``.to(device)`` param placement.
+        self._forward_core_raw = self._forward_core
+        _compile_cfg = dict(
+            dynamic=_dynamic,
+            compile_mode=_compile_mode_outer,
+            inner=False,
+        )
+
+        def _install_compiled_core(*args, **kwargs):
+            # DDSSM_COMPILE_STEP=1 hands compile ownership to the fused
+            # train step in DDSSMTrainer.fit; skip this outer compile so
+            # its CUDA-graph capture doesn't compete with the fused
+            # step's. Non-training callers get raw eager here.
+            if os.environ.get(
+                "DDSSM_COMPILE_STEP", "0"
+            ).strip().lower() not in {"0", "false", "no", "off"}:
+                self._forward_core = self._forward_core_raw
+                return self._forward_core_raw(*args, **kwargs)
+            if _fullgraph_env in {"", "auto"}:
+                fullgraph = any(p.is_cuda for p in self.parameters())
+            else:
+                fullgraph = _fullgraph_env not in {"0", "false", "no", "off"}
+            # Sub-modules can veto fullgraph (e.g. encoder AR-loop checkpoint
+            # opens a compile break the outer trace can't cross).
+            if fullgraph and not getattr(self.encoder, "fullgraph_safe", True):
+                fullgraph = False
+            compiled = _mcf(
+                self._forward_core_raw, fullgraph=fullgraph, **_compile_cfg
+            )
+            # Shadow the class method so future calls skip this trampoline.
+            self._forward_core = compiled
+            return compiled(*args, **kwargs)
+
+        self._forward_core = _install_compiled_core
 
     def _encode_latents(
         self,
@@ -654,6 +740,11 @@ class DDSSM_base(nn.Module):
     ):
         """Compute ELBO loss and its components for a batch.
 
+        Thin eager wrapper: the heavy lifting (and the compiled graph)
+        lives in :meth:`_forward_core`; this rebuilds the metrics dict
+        (detaching outside the graph) so the compiled region never
+        returns detached tensors.
+
         Args:
             observed_data: Observed time-series, shape ``(B, D, T)``.
             observation_mask: Binary mask (1 = observed, 0 = missing), shape ``(B, D, T)``.
@@ -670,6 +761,139 @@ class DDSSM_base(nn.Module):
             metrics: Dict of scalar tensors for logging.
             stats: Empty dict during training; contains ``zs``, ``mus``,
                 ``logvars`` when ``train=False``.
+        """
+        core = self._forward_core(
+            observed_data,
+            observation_mask,
+            timepoints,
+            covariates=covariates,
+            static_covariates=static_covariates,
+            train=train,
+        )
+        components = LossComponents(
+            recon=core.recon,
+            init_kl_phith=core.init_kl_phith,
+            init_kl_psi=core.init_kl_psi,
+            trans_kl_phith=core.trans_kl_phith,
+            trans_kl_psi=core.trans_kl_psi,
+        )
+        metrics = self._build_metrics(core)
+        stats = {}
+        if not train:
+            zs, mus, logvars = core.eval_stats
+            stats["zs"] = zs
+            stats["mus"] = mus
+            stats["logvars"] = logvars
+        return components, metrics, stats
+
+    def _build_metrics_from_flat(
+        self,
+        fused_out: tuple[torch.Tensor, ...],
+    ) -> dict[str, torch.Tensor]:
+        """Reverse the split-step's flat detached tuple into the metrics dict.
+
+        Companion to :func:`ddssm.training.train._make_split_step`. The
+        tuple layout is ``(loss, grad_norm, recon, init_kl_phith,
+        init_kl_psi, trans_kl_phith, trans_kl_psi, init_vhp,
+        init_entropy, init_kl_aux, init_loss_init, recon_calib,
+        *trans_extras)``. Key set matches :meth:`_build_metrics` exactly
+        so eager and compiled paths log identically.
+        """
+        (
+            _loss,
+            _grad_norm,
+            rec,
+            init,
+            init_psi,
+            trans,
+            _trans_psi,
+            init_vhp,
+            init_entropy,
+            init_kl_aux,
+            init_loss_init,
+            recon_calib,
+            *trans_extras,
+        ) = fused_out
+        rate = init + trans
+        metrics = {
+            "loss/total": rec + rate,
+            "loss/distortion/rec": rec,
+            "loss/rate/init/tot": init,
+            "loss/rate/init/vhp": init_vhp,
+            "loss/rate/init/entropy": init_entropy,
+            "loss/rate/trans/kl": trans,
+            "loss/rate/total": rate,
+            "calib/ratio_res2_to_sigma2": recon_calib,
+        }
+        if self.aux_posterior is not None:
+            metrics["loss/rate/init/kl_aux"] = init_kl_aux
+            metrics["loss/rate/init/loss_init"] = init_loss_init
+            metrics["loss/rate/init/loss_psi"] = init_psi
+        # σ_data buffer read is identical to the eager path.
+        if self.sigma_data is not None:
+            buf = self.sigma_data.sigma_data2.detach().clone()
+            for slot in range(buf.shape[0]):
+                metrics[f"diag/sigma_data2/t={slot + 1}"] = buf[slot]
+        for key, val in zip(self._transition_extra_keys, trans_extras):
+            metrics[f"loss/rate/trans/{key}"] = val
+        return metrics
+
+    def _build_metrics(self, core: ForwardCoreOut) -> dict[str, torch.Tensor]:
+        """Assemble the logging-metrics dict from a core output (eager only).
+
+        Runs outside the compiled graph: detach here is metadata-only and
+        keeps AOT autograd from seeing non-differentiable outputs.
+        Key set is identical to the pre-refactor ``forward`` metrics.
+        """
+        rec = core.recon.detach()
+        init = core.init_kl_phith.detach()
+        trans = core.trans_kl_phith.detach()
+        # `loss` and `rate` are UNWEIGHTED post-ADR-0004 — the loss
+        # object owns weights now.
+        rate = init + trans
+        metrics = {
+            "loss/total": rec + rate,
+            "loss/distortion/rec": rec,
+            "loss/rate/init/tot": init,
+            "loss/rate/init/vhp": core.init_vhp.detach(),
+            "loss/rate/init/entropy": core.init_entropy.detach(),
+            "loss/rate/trans/kl": trans,
+            "loss/rate/total": rate,
+            "calib/ratio_res2_to_sigma2": core.recon_calib.detach(),
+        }
+        # Surface model-v2 init-term sub-components when present.
+        if self.aux_posterior is not None:
+            metrics["loss/rate/init/kl_aux"] = core.init_kl_aux.detach()
+            metrics["loss/rate/init/loss_init"] = core.init_loss_init.detach()
+            metrics["loss/rate/init/loss_psi"] = core.init_kl_psi.detach()
+        # Surface per-t σ_data²[t] buffer values whenever a buffer exists.
+        # The buffer is mutated inside the compiled core; read it back out
+        # here. ``.clone()`` so the logged tensors survive the next step's
+        # in-place update (mandatory under CUDA-graph replay).
+        if self.sigma_data is not None:
+            buf = self.sigma_data.sigma_data2.detach().clone()
+            for slot in range(buf.shape[0]):
+                metrics[f"diag/sigma_data2/t={slot + 1}"] = buf[slot]
+        # Surface any optional transition sub-components (e.g. L_p, L_q)
+        # under transition-driven keys, ordered by the init-time contract.
+        for key, val in zip(self._transition_extra_keys, core.trans_extras):
+            metrics[f"loss/rate/trans/{key}"] = val.detach()
+        return metrics
+
+    def _forward_core(
+        self,
+        observed_data: torch.Tensor,  # (B, D, T)
+        observation_mask: torch.Tensor,  # (B, D, T)
+        timepoints: torch.Tensor,  # (B, T)
+        covariates: torch.Tensor | None = None,  # (B, V, T) or None
+        static_covariates: torch.Tensor | None = None,  # (B, D, V_s) or None
+        train: bool = True,
+    ) -> ForwardCoreOut:
+        """Graph-pure ELBO forward: encoder → decoder → transition → terms.
+
+        This is the compiled region (see ``__init__``). Every returned
+        tensor is graph-connected — no ``.detach()``, no dict-of-metrics;
+        see :class:`ForwardCoreOut` for the contract.
         """
         static_embed = self._embed_static(static_covariates)
         time_embed = time_embedding(
@@ -717,9 +941,15 @@ class DDSSM_base(nn.Module):
         # score net return an exact zero. Kept graph-connected (no detach)
         # for the split backward.
         L_init_psi = init_terms.get("loss_psi", torch.zeros_like(L_init))
-        L_vhp = init_terms.get("vhp", torch.tensor(0.0, device=observed_data.device))
+        # ``torch.zeros((), device=...)`` allocates the scalar directly on
+        # the target device — critical for CUDA graph capture, where
+        # ``torch.tensor(0.0, device=cuda)`` would attempt a CPU→GPU copy
+        # of an unpinned scalar and raise.
+        L_vhp = init_terms.get(
+            "vhp", torch.zeros((), device=observed_data.device)
+        )
         L_ent_init = init_terms.get(
-            "entropy", torch.tensor(0.0, device=observed_data.device)
+            "entropy", torch.zeros((), device=observed_data.device)
         )
 
         trans_terms = self._compute_transition_kl(
@@ -736,59 +966,39 @@ class DDSSM_base(nn.Module):
         # zeros fallback is exact for them. Kept graph-connected (no
         # detach) for the split backward.
         L_trans_psi = trans_terms.get("kl_psi", torch.zeros_like(L_trans))
-        trans_subterms = {k: v for k, v in trans_terms.items() if k != "kl"}
 
-        distortion = L_rec
-        # `loss` and `rate` in the metrics dict below are UNWEIGHTED
-        # post-ADR-0004 — the loss object owns weights now.
-        rate = L_init + L_trans
-        loss = distortion + rate
+        # Eager-only contract check: a transition adding a diagnostic key
+        # without declaring it in ``kl_extra_keys`` fails loudly here
+        # instead of silently dropping the metric under compile.
+        if not torch.compiler.is_compiling():
+            got = {k for k in trans_terms if k != "kl"}
+            if got != set(self._transition_extra_keys):
+                raise RuntimeError(
+                    f"{type(self.transition).__name__}.transition_kl returned "
+                    f"extra keys {sorted(got)} but kl_extra_keys declared "
+                    f"{sorted(self._transition_extra_keys)}"
+                )
+        trans_extras = tuple(
+            trans_terms[k] for k in self._transition_extra_keys
+        )
 
-        metrics = {
-            "loss/total": loss.detach(),
-            "loss/distortion/rec": L_rec.detach(),
-            "loss/rate/init/tot": L_init.detach(),
-            "loss/rate/init/vhp": L_vhp.detach(),
-            "loss/rate/init/entropy": L_ent_init.detach(),
-            "loss/rate/trans/kl": L_trans.detach(),
-            "loss/rate/total": rate.detach(),
-            "calib/ratio_res2_to_sigma2": L_rec_calib.detach(),
-        }
-        # Surface model-v2 init-term sub-components when present.
-        if self.aux_posterior is not None:
-            if "kl_aux" in init_terms:
-                metrics["loss/rate/init/kl_aux"] = init_terms["kl_aux"].detach()
-            if "loss_init" in init_terms:
-                metrics["loss/rate/init/loss_init"] = init_terms["loss_init"].detach()
-            if "loss_psi" in init_terms:
-                metrics["loss/rate/init/loss_psi"] = init_terms["loss_psi"].detach()
-        # Surface per-t σ_data²[t] buffer values whenever a buffer exists.
-        # These feed the post-hoc ``sigma_data_drift`` metric's trajectory
-        # plot (init-experiment.org § Headline metrics, metric 6); logged once
-        # per step so the trajectory is recoverable from metrics.csv alone.
-        if self.sigma_data is not None:
-            buf = self.sigma_data.sigma_data2.detach()
-            for slot, value in enumerate(buf):
-                metrics[f"diag/sigma_data2/t={slot + 1}"] = value
-        # Surface any optional transition sub-components (e.g. L_p, L_q) under
-        # transition-driven keys.
-        for key, val in trans_subterms.items():
-            metrics[f"loss/rate/trans/{key}"] = val.detach()
-
-        stats = {}  # return optional params
-        if not train:  # Optionally return posterior stats/samples for analysis
-            stats["zs"] = zs
-            stats["mus"] = mus
-            stats["logvars"] = logvars
-
-        components = LossComponents(
+        zdev = observed_data.device
+        return ForwardCoreOut(
             recon=L_rec,
+            recon_calib=L_rec_calib,
             init_kl_phith=L_init,
             init_kl_psi=L_init_psi,
+            init_vhp=L_vhp,
+            init_entropy=L_ent_init,
+            init_kl_aux=init_terms.get("kl_aux", torch.zeros((), device=zdev)),
+            init_loss_init=init_terms.get(
+                "loss_init", torch.zeros((), device=zdev)
+            ),
             trans_kl_phith=L_trans,
             trans_kl_psi=L_trans_psi,
+            trans_extras=trans_extras,
+            eval_stats=() if train else (zs, mus, logvars),
         )
-        return components, metrics, stats
 
     @torch.no_grad()
     def forecast(
@@ -1036,6 +1246,7 @@ def _default_hyperparams():
         logvar_max=13.0,
         lambda_ramp=None,
         lr_schedule=None,
+        use_split_loss=False,
     )
 
 
@@ -1080,3 +1291,7 @@ class DDSSMHyperParamsConf:
     # Enabling requires ``lambda_ramp`` set (the resolver anchors decay
     # windows to λ_end = lambda_ramp.delay + lambda_ramp.steps).
     lr_schedule: LrScheduleGroupConf | None = None
+    # Enable split-loss training: the FullELBO returns a SplitLoss (φθ / ψ)
+    # so the transition (ψ) and encoder/decoder (φθ) get separate optimizers
+    # and separate objectives. Default False keeps the single-loss path.
+    use_split_loss: bool = False
