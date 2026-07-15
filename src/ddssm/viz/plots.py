@@ -13,6 +13,7 @@ also drawing the 2-D spatial path.
 from __future__ import annotations
 
 import csv as _csv
+from typing import Any
 from dataclasses import dataclass
 from collections.abc import Callable
 
@@ -21,6 +22,8 @@ import torch
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
+from ddssm.adapters.base import MetricNotSupported
+
 
 @dataclass
 class PlotContext:
@@ -28,15 +31,37 @@ class PlotContext:
 
     ``model`` and ``loader`` may be unused by purely CSV-driven plots
     (e.g. training-loss curves), so both are nullable.
+
+    ``model`` is the :class:`~ddssm.adapters.base.ModelAdapter`, not the raw
+    ``nn.Module``. Forecast-based plots call the adapter surface
+    (``model.forecast``); DDSSM-only plots reach the owned module via
+    :meth:`require_module`.
     """
 
-    model: torch.nn.Module | None
+    model: Any | None
     loader: DataLoader | None
     device: torch.device
     batch_transform: Callable[[dict, torch.device], dict] | None = None
     csv_path: str | None = None
     T_split: int | None = None
     num_samples: int = 10
+
+    def require_module(self, cls: type) -> torch.nn.Module:
+        """Return the adapter's owned module iff it is a ``cls``; else raise.
+
+        The gating prelude for DDSSM-only plots (mirrors
+        :meth:`ddssm.eval.metrics.EvalContext.require_module`). A non-matching
+        family raises :class:`MetricNotSupported`, which the viz runner catches
+        to skip the plot -- NOT ``AttributeError`` (which would mask real bugs).
+        Callers pass ``cls`` (lazy-imported at the call site) so this helper
+        stays cycle-free.
+        """
+        module = self.model.module
+        if not isinstance(module, cls):
+            raise MetricNotSupported(
+                f"{type(self.model).__name__} does not provide a {cls.__name__} module"
+            )
+        return module
 
 
 PlotFn = Callable[..., None]
@@ -85,9 +110,15 @@ def _gather_batch(ctx: PlotContext, sample_indices: list[int] | None):
 def _run_recon_and_forecast(
     ctx: PlotContext, batch: dict, T_split: int, num_samples: int
 ):
-    model, device = ctx.model, ctx.device
-    if model is None:
+    from ddssm.model.dssd import DDSSM_base
+
+    if ctx.model is None:
         raise ValueError("Reconstruction/forecast plots need a non-None model.")
+    # DDSSM-only prelude: the recon path calls ``model(...)`` and reaches
+    # ``.emb_time_dim`` / ``.j`` / ``.decoder``, so a forecast-only adapter is
+    # gated here (raises ``MetricNotSupported`` → the viz runner skips the plot).
+    model = ctx.require_module(DDSSM_base)
+    device = ctx.device
     if ctx.batch_transform is not None:
         batch = ctx.batch_transform(batch, device)
 

@@ -15,6 +15,7 @@ import pytest
 from ddssm.viz import PLOT_REGISTRY, VizSpec, PlotSpec, PlotContext, visualize
 from ddssm.adapters import DDSSMAdapter
 from ddssm.viz.plots import plot_metrics_csv
+from ddssm.model.dssd import DDSSM_base
 from ddssm.model.config import ModelConfig
 from ddssm.data.datamodule import DataMetadata, TimeSeriesDataModule
 
@@ -145,8 +146,13 @@ def test_visualize_runner_unknown_plot_raises(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-class _StubReconForecastModel(torch.nn.Module):
-    """Stub providing both ``__call__`` (recon path) and ``.forecast()``."""
+class _StubReconForecastModel(DDSSM_base):
+    """Stub providing both ``__call__`` (recon path) and ``.forecast()``.
+
+    Subclasses ``DDSSM_base`` (bypassing its heavy ``__init__``) so the
+    ``PlotContext.require_module(DDSSM_base)`` gate resolves it as a DDSSM
+    family member — the recon plots are DDSSM-only and now guard on that.
+    """
 
     emb_time_dim = 4
     j = 1
@@ -160,7 +166,7 @@ class _StubReconForecastModel(torch.nn.Module):
     decoder = _Decoder()
 
     def __init__(self):
-        super().__init__()
+        torch.nn.Module.__init__(self)
 
     def __call__(self, observed, mask, timepoints, train: bool = False):
         B, D, T = observed.shape
@@ -198,8 +204,10 @@ def test_forecast_distribution_writes_png(tmp_path):
             }
 
     loader = torch.utils.data.DataLoader(_DS(), batch_size=B)
+    # PlotContext.model is a ModelAdapter post-refactor; wrap the DDSSM-family
+    # stub so ``require_module(DDSSM_base)`` inside the recon path resolves.
     ctx = PlotContext(
-        model=_StubReconForecastModel(),
+        model=DDSSMAdapter(config=ModelConfig(), module=_StubReconForecastModel()),
         loader=loader,
         device=torch.device("cpu"),
         T_split=T // 2,
