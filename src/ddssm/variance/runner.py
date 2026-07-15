@@ -166,6 +166,24 @@ def variance(
     """
     os.makedirs(run_dir, exist_ok=True)
     ckpt = checkpoint_path or spec.checkpoint_path
+
+    # DDSSM-only stage. Extract the raw ``nn.Module`` once and guard the family
+    # BEFORE ``run_probe`` (which mutates the module heavily — per-site guards
+    # are the wrong shape there). ``probe.py`` re-loads the module internally
+    # via ``prepare_model``; this early check makes a non-DDSSM adapter fail
+    # clearly with ``MetricNotSupported`` rather than an opaque ``AttributeError``
+    # deep in the probe. The variance runner is NOT wrapped by a skip loop, so a
+    # loud early error is the intended behaviour.
+    from ddssm.model.dssd import DDSSM_base
+    from ddssm.adapters.base import MetricNotSupported
+
+    raw_module = experiment.model.module
+    if not isinstance(raw_module, DDSSM_base):
+        raise MetricNotSupported(
+            f"variance probe requires a DDSSM model, got "
+            f"{type(experiment.model).__name__}"
+        )
+
     log.info("Variance probe → %s (checkpoint=%s)", run_dir, ckpt)
     log.info("Stage 1/3: running probe loop")
     rows, summary, transitions = run_probe(
@@ -181,7 +199,9 @@ def variance(
     loader = experiment.data.loader(spec.split)
 
     ctx = ProbeContext(
-        model=experiment.model,
+        # Pass the raw ``nn.Module`` (guarded above) -- the probe stage is
+        # DDSSM-only and its internals mutate the raw module directly.
+        model=raw_module,
         transitions=transitions,
         loader=loader,
         device=device,

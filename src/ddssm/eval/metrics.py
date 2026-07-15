@@ -28,6 +28,7 @@ from ddssm.eval.eval_metrics import (
     mae_metrics,
     rmse_metrics,
 )
+from ddssm.adapters.base import MetricNotSupported
 
 
 @dataclass
@@ -36,9 +37,14 @@ class EvalContext:
 
     ``loader`` and ``model`` may be ``None`` for metrics that depend
     only on the training CSV log (e.g. tail-mean of ``loss/total``).
+
+    ``model`` is the :class:`~ddssm.adapters.base.ModelAdapter`, not the raw
+    ``nn.Module``. Shared metrics use the adapter surface directly
+    (``model.forecast`` / ``model.log_prob``); family-internal (DDSSM-only)
+    metrics reach the owned module via :meth:`require_module`.
     """
 
-    model: torch.nn.Module | None
+    model: Any | None
     loader: DataLoader | None
     device: torch.device
     batch_transform: Callable[[dict, torch.device], dict] | None = None
@@ -52,6 +58,23 @@ class EvalContext:
     # otherwise). ``None`` ⇒ data was not normalized (e.g. synthetic) → no-op.
     means: torch.Tensor | None = None
     stds: torch.Tensor | None = None
+
+    def require_module(self, cls: type) -> torch.nn.Module:
+        """Return the adapter's owned module iff it is a ``cls``; else raise.
+
+        The single gating prelude for family-internal (DDSSM-only) metrics: it
+        replaces both the raw ``.module`` access and any capability metadata.
+        A non-matching family raises :class:`MetricNotSupported`, which the eval
+        runner catches to skip + omit the metric -- NOT ``AttributeError``,
+        which would mask real bugs deeper in a metric. Callers pass ``cls``
+        (lazy-imported at the call site) so this helper stays cycle-free.
+        """
+        module = self.model.module
+        if not isinstance(module, cls):
+            raise MetricNotSupported(
+                f"{type(self.model).__name__} does not provide a {cls.__name__} module"
+            )
+        return module
 
 
 MetricFn = Callable[[EvalContext], dict[str, Any]]
@@ -388,9 +411,12 @@ def eval_kalman_forecast_nll(
 @register_metric("recon_mse")
 def eval_recon_mse(ctx: EvalContext) -> dict[str, Any]:
     """MSE between the decoded posterior mean and the observed sequence."""
+    from ddssm.model.dssd import DDSSM_base
+
     if ctx.model is None or ctx.loader is None:
         raise ValueError("recon_mse requires model and loader.")
-    model, device = ctx.model, ctx.device
+    model = ctx.require_module(DDSSM_base)
+    device = ctx.device
     transform = ctx.batch_transform
     sums, counts = 0.0, 0
 
@@ -1072,8 +1098,11 @@ def eval_stage2_elbo_surrogate(
     cell-fair ranking alternative is ``nll`` (metric 1, registered
     below); this surrogate is faster but not cell-invariant.
     """
+    from ddssm.model.dssd import DDSSM_base
+
     if ctx.model is None or ctx.loader is None:
         return {"stage2_elbo_surrogate": float("nan")}
+    model = ctx.require_module(DDSSM_base)
 
     sums = {
         "stage2_elbo_surrogate": 0.0,
@@ -1085,7 +1114,6 @@ def eval_stage2_elbo_surrogate(
     }
     n_batches = 0
     transform = ctx.batch_transform
-    model = ctx.model
     device = ctx.device
     with torch.no_grad():
         for batch_idx, batch in enumerate(ctx.loader):
@@ -1192,8 +1220,11 @@ def eval_nll(
         knob values used (``nll_num_iwae_samples``,
         ``nll_num_hutchinson_probes``, ``nll_divergence_mode``).
     """
+    from ddssm.model.dssd import DDSSM_base
+
     if ctx.model is None or ctx.loader is None:
         return {"nll": float("nan")}
+    model = ctx.require_module(DDSSM_base)
 
     if divergence_mode not in {"exact", "hutchinson"}:
         raise ValueError(
@@ -1211,7 +1242,6 @@ def eval_nll(
         else None
     )
 
-    model = ctx.model
     device = ctx.device
     transform = ctx.batch_transform
 
@@ -1288,13 +1318,15 @@ def eval_sigma_data_drift(
     snapshot variant — the trajectory plot in Phase E reads from
     ``diag/sigma_data2/t=N`` columns in ``metrics.csv``.
     """
-    if (
-        ctx.model is None
-        or ctx.loader is None
-        or getattr(ctx.model, "sigma_data", None) is None
-    ):
+    from ddssm.model.dssd import DDSSM_base
+
+    if ctx.model is None or ctx.loader is None:
         return {"sigma_data_drift_available": False}
-    model = ctx.model
+    model = ctx.require_module(DDSSM_base)
+    # Within-DDSSM soft guard: a DDSSM without a sigma_data buffer (e.g. a
+    # non-diffusion transition) has nothing to report -- not a family mismatch.
+    if getattr(model, "sigma_data", None) is None:
+        return {"sigma_data_drift_available": False}
     device = ctx.device
     transform = ctx.batch_transform
 
@@ -1482,13 +1514,15 @@ def eval_log_sigma_p2_collapse(
     four baseline forms provide it, including the parameter-free
     Zero/Persistence via their state-conditional σ_p head).
     """
-    if (
-        ctx.model is None
-        or ctx.loader is None
-        or getattr(ctx.model, "baseline", None) is None
-    ):
+    from ddssm.model.dssd import DDSSM_base
+
+    if ctx.model is None or ctx.loader is None:
         return {"log_sigma_p2_collapse_available": False}
-    model = ctx.model
+    model = ctx.require_module(DDSSM_base)
+    # Within-DDSSM soft guard: a DDSSM without a baseline head has nothing to
+    # report (not a cross-family mismatch).
+    if getattr(model, "baseline", None) is None:
+        return {"log_sigma_p2_collapse_available": False}
     device = ctx.device
     transform = ctx.batch_transform
     j = int(model.j)
@@ -1597,11 +1631,13 @@ def eval_crps_sum_latent(
     is each timestep's numerator (summed over all batch elements) divided by
     the global denominator, so ``sum(crps_sum_latent_per_t) == crps_sum_latent_mean``.
     """
+    from ddssm.model.dssd import DDSSM_base
+
     if ctx.model is None or ctx.loader is None or ctx.T_split is None:
         return {"crps_sum_latent_available": False}
     from ddssm.eval.eval_metrics import _crps_sum_pinball
 
-    model = ctx.model
+    model = ctx.require_module(DDSSM_base)
     device = ctx.device
     transform = ctx.batch_transform
     L1 = int(ctx.T_split)

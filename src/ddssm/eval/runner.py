@@ -22,6 +22,7 @@ from dataclasses import field, dataclass
 import torch
 
 from ddssm.eval.metrics import METRIC_REGISTRY, EvalContext
+from ddssm.adapters.base import MetricNotSupported
 
 log = logging.getLogger(__name__)
 
@@ -94,14 +95,16 @@ def evaluate(
     """
     from ddssm.training.checkpoint import prepare_model
 
-    # ``prepare_model`` returns the ModelAdapter; the eval metrics operate on
-    # the raw ``DDSSM_base`` module (both ``.forecast`` and raw attrs), so pull
-    # the loaded module out here.
+    # ``prepare_model`` returns the ModelAdapter. Shared metrics call the
+    # adapter surface directly (``.forecast`` / ``.log_prob``); family-internal
+    # metrics reach the raw module via ``ctx.require_module(...)``. Keep the
+    # adapter on the context so BOTH paths (and the gating in ``require_module``)
+    # resolve.
     model = prepare_model(
         experiment,
         checkpoint_path=checkpoint_path,
         device=device,
-    ).module
+    )
 
     loader = experiment.data.loader(spec.split)
     metadata = experiment.data.metadata
@@ -131,7 +134,18 @@ def evaluate(
             )
         metric_kwargs = dict(spec.kwargs.get(name, {})) if spec.kwargs else {}
         log.info("Computing metric %s (kwargs=%s)", name, metric_kwargs)
-        results.update(METRIC_REGISTRY[name](ctx, **metric_kwargs))
+        # Method-level gating: a metric the current model family can't support
+        # (forecast-only adapter, missing ``log_prob``, no DDSSM internals)
+        # raises ``MetricNotSupported`` at the point of need. Skip it and omit
+        # it from ``metrics.json`` — json-source objectives route missing keys
+        # through penalties, so omission is safe. Only the narrow subtype is
+        # caught; a deep bare ``NotImplementedError`` (a load-bearing DDSSM
+        # signal) still propagates as a real bug.
+        try:
+            results.update(METRIC_REGISTRY[name](ctx, **metric_kwargs))
+        except MetricNotSupported as exc:
+            log.warning("Skipping metric %s: %s", name, exc)
+            continue
 
     os.makedirs(run_dir, exist_ok=True)
     out_path = os.path.join(run_dir, spec.output_filename)

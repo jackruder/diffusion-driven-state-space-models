@@ -20,6 +20,7 @@ from dataclasses import field, dataclass
 import torch
 
 from ddssm.viz.plots import PLOT_REGISTRY, PlotContext
+from ddssm.adapters.base import MetricNotSupported
 
 log = logging.getLogger(__name__)
 
@@ -89,14 +90,15 @@ def visualize(
     """
     from ddssm.training.checkpoint import prepare_model
 
-    # ``prepare_model`` returns the ModelAdapter; the plot code operates on
-    # the raw ``DDSSM_base`` module (``.forecast`` plus raw attrs), so pull
-    # the loaded module out here.
+    # ``prepare_model`` returns the ModelAdapter. Forecast-based plots call the
+    # adapter surface (``.forecast``) directly; DDSSM-only plots reach the raw
+    # module via ``ctx.require_module(...)``. Keep the adapter on the context so
+    # both paths (and the gating in ``require_module``) resolve.
     model = prepare_model(
         experiment,
         checkpoint_path=checkpoint_path,
         device=device,
-    ).module
+    )
 
     loader = experiment.data.loader(spec.split)
     T_split = experiment.data.metadata.forecast_split_or(spec.T_split)
@@ -133,7 +135,15 @@ def visualize(
         out_name = plot.save_filename or f"{plot.name}.png"
         out_path = os.path.join(run_dir, out_name)
         log.info("Plotting %s -> %s", plot.name, out_path)
-        PLOT_REGISTRY[plot.name](ctx, out_path, **plot.kwargs)
+        # Method-level gating (same shape as the eval runner): a plot the
+        # current model family can't support raises ``MetricNotSupported`` at
+        # the point of need (``ctx.require_module(...)`` inside DDSSM-only
+        # plots). Skip it — don't record a path — and keep rendering the rest.
+        try:
+            PLOT_REGISTRY[plot.name](ctx, out_path, **plot.kwargs)
+        except MetricNotSupported as exc:
+            log.warning("Skipping plot %s: %s", plot.name, exc)
+            continue
         saved.append(out_path)
         if wandb_mod is not None:
             try:

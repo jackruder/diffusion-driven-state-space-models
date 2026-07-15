@@ -469,9 +469,23 @@ def _probe_per_step(
     # transition construction time from the VP schedule params — no
     # checkpoint load needed. Save to disk so post-hoc re-renders can
     # reuse it without rebuilding the experiment.
+    # DDSSM-only access: guard the family up front so a non-DDSSM adapter fails
+    # clearly with ``MetricNotSupported`` (the variance CLI is a DDSSM-only
+    # stage -- a loud early error is acceptable) rather than an opaque
+    # ``AttributeError`` swallowed by the ``except`` below.
+    from ddssm.model.dssd import DDSSM_base
+    from ddssm.adapters.base import MetricNotSupported
+
+    raw_module = experiment.model.module
+    if not isinstance(raw_module, DDSSM_base):
+        raise MetricNotSupported(
+            f"variance ratio-trajectory requires a DDSSM model, got "
+            f"{type(experiment.model).__name__}"
+        )
+
     noise_levels: list[float] | None = None
     try:
-        sigma_tilde = experiment.model.module.transition.sigma_tilde
+        sigma_tilde = raw_module.transition.sigma_tilde
         noise_levels = [float(x) for x in sigma_tilde.detach().cpu().tolist()]
         with open(os.path.join(run_dir, "noise_levels.json"), "w") as f:
             json.dump(noise_levels, f, indent=2)
