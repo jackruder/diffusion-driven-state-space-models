@@ -111,6 +111,12 @@ def build_gluonts_model(
     arflow_channels: int | None = None,  # None → = channels; must be ÷ nheads
     arflow_causal_layers: int = 2,
     grad_checkpoint: bool = True,
+    # Encoder AR-loop checkpointing. 0 disables; N>0 wraps groups of N timesteps
+    # in the encoder sample_paths loop with a non-reentrant checkpoint. Trades
+    # roughly T/N× extra encoder compute for ~N/T activation memory. Only active
+    # for the sequential Gaussian encoder (ARFlow has no AR loop; param is
+    # accepted for API symmetry).
+    encoder_ar_checkpoint_chunk: int = 0,
     # Centering baseline for the diffusion/gaussian transition: "persistence"
     # (μ_p = last latent) or "zero" (μ_p ≡ 0). Persistence centers on the *last*
     # latent, which under a bimodal data conditional sits on one mode → the
@@ -298,6 +304,7 @@ def build_gluonts_model(
                 fut_summary_local if encoder_type == "gaussian_local" else fut_summary
             ),
             grad_checkpoint=grad_checkpoint,
+            ar_checkpoint_chunk=encoder_ar_checkpoint_chunk,
         )
     elif encoder_type == "arflow":
         # Head logvar clamp pinned to the DDSSM_base default [-7, 7] (dssd.py:130-131)
@@ -320,6 +327,7 @@ def build_gluonts_model(
             fwd_summary=fut_summary_fwd,
             fwd_layers=summary_layers,
             grad_checkpoint=grad_checkpoint,
+            ar_checkpoint_chunk=encoder_ar_checkpoint_chunk,
         )
     elif encoder_type == "identity":
         # Pinned z_t = x_t (requires latent_dim == data_dim): the latent frame IS

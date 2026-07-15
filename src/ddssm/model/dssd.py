@@ -261,6 +261,10 @@ class DDSSM_base(nn.Module):
                 fullgraph = any(p.is_cuda for p in self.parameters())
             else:
                 fullgraph = _fullgraph_env not in {"0", "false", "no", "off"}
+            # Sub-modules can veto fullgraph (e.g. encoder AR-loop checkpoint
+            # opens a compile break the outer trace can't cross).
+            if fullgraph and not getattr(self.encoder, "fullgraph_safe", True):
+                fullgraph = False
             compiled = _mcf(
                 self._forward_core_raw, fullgraph=fullgraph, **_compile_cfg
             )
