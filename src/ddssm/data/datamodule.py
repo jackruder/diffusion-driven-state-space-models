@@ -70,7 +70,7 @@ class DataMetadata:
         return int(override) if override is not None else self.forecast_split
 
 
-class DDSSMDataModule(abc.ABC):
+class TimeSeriesDataModule(abc.ABC):
     """Abstract base every concrete DataModule extends.
 
     Subclasses implement the three split loaders plus ``metadata``; the
@@ -103,7 +103,7 @@ class DDSSMDataModule(abc.ABC):
         raise ValueError(f"Unknown split: {split!r}")
 
 
-class NullDataModule(DDSSMDataModule):
+class NullDataModule(TimeSeriesDataModule):
     """No data attached. Replaces the ``dataset=none`` sentinel.
 
     The experiment treats ``train_loader() is None`` as "build only,
@@ -130,7 +130,7 @@ class NullDataModule(DDSSMDataModule):
         return self._meta
 
 
-class SyntheticDataModule(DDSSMDataModule):
+class SyntheticDataModule(TimeSeriesDataModule):
     """Sequence-format DataModule wrapping :class:`SyntheticDataset`.
 
     Each item is a full ``(D, T)`` sequence. ``train``/``val``/``test``
@@ -213,7 +213,7 @@ class SyntheticDataModule(DDSSMDataModule):
         )
 
 
-class WindowedSeriesDataModule(DDSSMDataModule):
+class WindowedSeriesDataModule(TimeSeriesDataModule):
     """Base for windowed-format DataModules built from a ``series_list``.
 
     Subclasses implement :meth:`_load_series` (per-feature series + optional
@@ -539,11 +539,11 @@ class GluonTSDataModule(WindowedSeriesDataModule):
 
 __all__ = [
     "BatchFormat",
-    "DDSSMDataModule",
     "DataMetadata",
     "GluonTSDataModule",
     "KDDDataModule",
     "NullDataModule",
     "SyntheticDataModule",
+    "TimeSeriesDataModule",
     "WindowedSeriesDataModule",
 ]

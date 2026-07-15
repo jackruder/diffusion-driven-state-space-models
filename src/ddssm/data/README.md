@@ -1,7 +1,7 @@
 # `ddssm.data`
 
 Dataset loaders for DDSSM experiments. Everything is exposed through a single
-interface, `DDSSMDataModule`, which advertises `train_loader()`, `val_loader()`,
+interface, `TimeSeriesDataModule`, which advertises `train_loader()`, `val_loader()`,
 `test_loader()` (plus the shared `loader(split)` dispatch) and a
 `batch_transform` that maps a raw batch + device to the canonical model-ready
 dict. A `DataMetadata` block published alongside the loaders carries the shape /
@@ -13,7 +13,7 @@ windows with real masks, KDD); both route through `parse_batch`.
 
 ## Files
 
-- `datamodule.py` — the `DDSSMDataModule` ABC, the `DataMetadata` dataclass, and
+- `datamodule.py` — the `TimeSeriesDataModule` ABC, the `DataMetadata` dataclass, and
   the concrete modules: `SyntheticDataModule` (sequence) and `NullDataModule`
   (`train_loader()` returns `None`, so the experiment skips `trainer.fit` — used
   for smoke tests / interactive use), plus `WindowedSeriesDataModule` — the

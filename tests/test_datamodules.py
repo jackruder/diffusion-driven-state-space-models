@@ -18,9 +18,9 @@ from ddssm.data.datamodule import (
     DataMetadata,
     KDDDataModule,
     NullDataModule,
-    DDSSMDataModule,
     GluonTSDataModule,
     SyntheticDataModule,
+    TimeSeriesDataModule,
     WindowedSeriesDataModule,
 )
 
@@ -39,7 +39,7 @@ def _assert_canonical_batch(batch: dict, *, expect_covariates: bool) -> None:
 
 def test_null_datamodule_returns_no_loaders():
     dm = NullDataModule(data_dim=3)
-    assert isinstance(dm, DDSSMDataModule)
+    assert isinstance(dm, TimeSeriesDataModule)
     assert dm.train_loader() is None
     assert dm.val_loader() is None
     assert dm.test_loader() is None
@@ -49,7 +49,7 @@ def test_null_datamodule_returns_no_loaders():
 
 def test_synthetic_datamodule_smoke():
     dm = SyntheticDataModule(mode="lgssm", T=16, D=2, N_per_split=8, batch_size=4)
-    assert isinstance(dm, DDSSMDataModule)
+    assert isinstance(dm, TimeSeriesDataModule)
     assert dm.batch_format == "sequence"
 
     meta = dm.metadata
@@ -102,7 +102,7 @@ def test_gluonts_datamodule_contract_is_network_free():
     windowed contract with the per-dataset window spec from SPECS.
     """
     dm = GluonTSDataModule(name="solar")
-    assert isinstance(dm, DDSSMDataModule)
+    assert isinstance(dm, TimeSeriesDataModule)
     assert isinstance(dm, WindowedSeriesDataModule)
     assert dm.batch_format == "windowed"
     assert dm.batch_transform is parse_batch
@@ -138,10 +138,10 @@ def test_gluonts_datamodule_fetches_and_windows():
 
 def test_datamodule_abc_membership():
     # All concrete datamodules inherit the ABC (nominal isinstance).
-    assert isinstance(NullDataModule(), DDSSMDataModule)
+    assert isinstance(NullDataModule(), TimeSeriesDataModule)
     assert isinstance(
         SyntheticDataModule(mode="lgssm", T=8, D=1, N_per_split=4, batch_size=2),
-        DDSSMDataModule,
+        TimeSeriesDataModule,
     )
 
 
@@ -190,7 +190,7 @@ def test_synthetic_datamodule_mode_shapes(mode: str, D: int) -> None:
     """Every verification mode must produce canonical (B, D, T) batches without NaNs."""
     T, N, B = 16, 8, 4
     dm = SyntheticDataModule(mode=mode, T=T, D=D, N_per_split=N, batch_size=B)
-    assert isinstance(dm, DDSSMDataModule)
+    assert isinstance(dm, TimeSeriesDataModule)
     assert dm.metadata.data_dim == D
     assert dm.metadata.T == T
     # forecast_split is always None for synthetic data (no canonical split)
@@ -391,3 +391,21 @@ def test_henon_lift_gt_latents_train_slice_is_unit_normalised() -> None:
         f"Train-slice gt_latents std={train_std.tolist()} is not near 1 — "
         "standardization is likely using full-population stats."
     )
+
+
+# ---------------------------------------------------------------------------
+# Rename: DDSSMDataModule → TimeSeriesDataModule
+# ---------------------------------------------------------------------------
+
+
+def test_datamodule_abc_renamed_to_timeseries() -> None:
+    """The model-agnostic ABC is exposed as ``TimeSeriesDataModule``.
+
+    The legacy ``DDSSMDataModule`` name is gone (no backwards-compat alias).
+    """
+    from ddssm.data import datamodule as dm_mod
+    from ddssm.data.datamodule import TimeSeriesDataModule
+
+    assert "TimeSeriesDataModule" in dm_mod.__all__
+    assert not hasattr(dm_mod, "DDSSMDataModule")
+    assert isinstance(NullDataModule(), TimeSeriesDataModule)

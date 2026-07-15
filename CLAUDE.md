@@ -82,7 +82,7 @@ If you need a new experiment, **add a Python file under `experiments/<family>/`*
 ### Experiment object
 `src/ddssm/experiment/experiment.py` defines `Experiment`, a dataclass that owns
 (re-exported as `ddssm.experiment.Experiment`):
-- `data: DDSSMDataModule` — train/val/test loaders + batch transform
+- `data: TimeSeriesDataModule` — train/val/test loaders + batch transform
 - `model: DDSSM_base` — the variational SSM (`src/ddssm/model/dssd.py`)
 - `build_trainer: Callable[..., DDSSMTrainer]` — partial trainer factory
 - `training: TrainingScalars` — `steps`, `log_every`, `validate_every`, `trainable` (per-module `requires_grad` mask), etc.
@@ -114,7 +114,7 @@ Each has its own runner + registry (metric/plot dict). All load a checkpoint and
 Note: `Experiment.viz` and `Experiment.variance` are currently `None` for every registered preset (only `eval` is wired), so the viz/variance CLIs run only against a preset you've added a spec to.
 
 ### Data modules: `src/ddssm/data/`
-`DDSSMDataModule` is the interface (`train_loader()`, `val_loader()`, `test_loader()`, `batch_transform`). Implementations: `SyntheticDataModule`, `KDDDataModule`, `NullDataModule` (skips `trainer.fit(...)` — used for smoke tests). GluonTS loaders live in `gluonts.py`.
+`TimeSeriesDataModule` is the interface (`train_loader()`, `val_loader()`, `test_loader()`, `batch_transform`). Implementations: `SyntheticDataModule`, `KDDDataModule`, `NullDataModule` (skips `trainer.fit(...)` — used for smoke tests). GluonTS loaders live in `gluonts.py`.
 
 ### Sweeps
 Sweeper presets: `src/ddssm/conf/hydra/sweeper/ddssm_optuna.yaml` (single-objective) and `ddssm_optuna_moo.yaml` (multi-objective NSGA-II), both using the `dahlem/hydra` fork branch pinned in `pyproject.toml` for Optuna 4.2 support. Search spaces are **Python presets** registered into the `sweep` group (`experiments/init_centering/sweeps.py`: `init_ablation`, `init_ablation_moo`, `init_ablation_moo_r2`, plus the `init_pilot` alias), activated with `+sweep=<name>` — or arbitrary CLI overrides on `hydra.sweeper.params.*`. SLURM submission is rendered via `python -m experiments sbatch` / `src/ddssm/cluster/sbatch.py`, or orchestrated for a whole study by `python -m ddssm.launch`.

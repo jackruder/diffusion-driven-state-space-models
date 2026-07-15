@@ -1,12 +1,12 @@
 # Step 0 — Picking a dataset
 
-A model trains against a {py:class}`~ddssm.data.datamodule.DDSSMDataModule`. You
+A model trains against a {py:class}`~ddssm.data.datamodule.TimeSeriesDataModule`. You
 either reuse a library preset, configure the synthetic generator, or implement a
 custom data module.
 
 ## The data-module interface
 
-`DDSSMDataModule` (`src/ddssm/data/datamodule.py`) exposes `train_loader()`,
+`TimeSeriesDataModule` (`src/ddssm/data/datamodule.py`) exposes `train_loader()`,
 `val_loader()`, `test_loader()`, a `batch_transform`, and a
 {py:class}`~ddssm.data.datamodule.DataMetadata` (`data_dim`, `T`,
 `covariate_dim`, `forecast_split`, normalization stats, …). Implementations:
@@ -95,7 +95,7 @@ Two things explain the exact syntax (both in `src/ddssm/experiment/stores.py`):
 
 ## A custom dataset
 
-Subclass `DDSSMDataModule`, return loaders yielding the batch dict above, and
+Subclass `TimeSeriesDataModule`, return loaders yielding the batch dict above, and
 expose `DataMetadata`. Then either wrap it in `builds(MyDataModule, ...)` and
 pass it as `experiment(data=...)`, or register it with
 {py:obj}`ddssm.experiment.stores.data_store` (`package="experiment.data"`) so
@@ -128,13 +128,13 @@ for a multivariate run you'd also bump the model's `data_dim`/`latent_dim`
 =======
 # Step 0 — Picking a dataset
 
-A model trains against a {py:class}`~ddssm.data.datamodule.DDSSMDataModule`. You
+A model trains against a {py:class}`~ddssm.data.datamodule.TimeSeriesDataModule`. You
 either reuse a library preset, configure the synthetic generator, or implement a
 custom data module.
 
 ## The data-module interface
 
-`DDSSMDataModule` (`src/ddssm/data/datamodule.py`) exposes `train_loader()`,
+`TimeSeriesDataModule` (`src/ddssm/data/datamodule.py`) exposes `train_loader()`,
 `val_loader()`, `test_loader()`, a `batch_transform`, and a
 {py:class}`~ddssm.data.datamodule.DataMetadata` (`data_dim`, `T`,
 `covariate_dim`, `forecast_split`, normalization stats, …). Implementations:
@@ -197,7 +197,7 @@ python -m ddssm.app experiment=synthval__harmonic +data=bimodal
 
 ## A custom dataset
 
-Subclass `DDSSMDataModule`, return loaders yielding the batch dict above, and
+Subclass `TimeSeriesDataModule`, return loaders yielding the batch dict above, and
 expose `DataMetadata`. Then either wrap it in `builds(MyDataModule, ...)` and
 pass it as `experiment(data=...)`, or register it with
 {py:obj}`ddssm.experiment.stores.data_store` (`package="experiment.data"`) so

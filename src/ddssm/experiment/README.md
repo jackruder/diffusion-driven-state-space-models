@@ -11,7 +11,7 @@ Hydra wires the config; this class orchestrates.
 ## Files
 
 - **`experiment.py`** — the `Experiment` dataclass, the central composition point.
-  It owns `data` (`DDSSMDataModule`), `model` (`DDSSM_base`), `build_trainer` (a
+  It owns `data` (`TimeSeriesDataModule`), `model` (`DDSSM_base`), `build_trainer` (a
   partial `DDSSMTrainer` factory, constructed lazily in `train` since it needs the
   device + run dir), `training` (`TrainingScalars`, including the per-module
   `trainable` mask applied via `trainer._set_trainable` to freeze submodule

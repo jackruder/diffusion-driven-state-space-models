@@ -30,7 +30,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from ddssm.data.dataload import parse_batch
-from ddssm.data.datamodule import BatchFormat, DataMetadata, DDSSMDataModule
+from ddssm.data.datamodule import BatchFormat, DataMetadata, TimeSeriesDataModule
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class MocapDataset(Dataset):
         }
 
 
-class MocapDataModule(DDSSMDataModule):
+class MocapDataModule(TimeSeriesDataModule):
     """Sequence-format DataModule for the CMU MoCap subject-35 benchmark.
 
     Args:
