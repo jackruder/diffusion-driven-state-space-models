@@ -53,11 +53,16 @@ _PLOT_NAMES = (
     "summary_table",
 )
 
-_CKPT_STEP_RE = re.compile(r"ckpt_step(\d+)\.pth$")
+_CKPT_STEP_RE = re.compile(r"ckpt(?:_stage_\d+)?_step(\d+)\.pth$")
 
 
 def _find_step_checkpoints(checkpoints_dir: str) -> list[tuple[int, str]]:
-    """Return [(step, abs_path)] for every ``ckpt_stepN.pth`` in order."""
+    """Return [(step, abs_path)] for every step checkpoint in order.
+
+    Matches both the single-stage ``ckpt_step{N}.pth`` layout and the
+    multi-stage ``ckpt_stage_{i}_step{N}.pth`` layout that
+    :class:`~ddssm.training.stages.StageOrchestrator` writes.
+    """
     if not os.path.isdir(checkpoints_dir):
         return []
     found = []
@@ -157,14 +162,20 @@ def _render_ratio_trajectory(
     *,
     kind: str = "grad",
     mode: str = "adaptive_is",
+    noise_levels: list[float] | None = None,
 ) -> None:
     """One static plot, one curve per checkpoint.
 
-    ESM/DSM ``kind``-variance ratio across τ-bins, with ``mode`` fixed
-    (so every curve uses the same k-sampling). Curves are coloured by
-    training step on a warm sequential colormap — earlier checkpoints
-    sit at the cool end of the palette, the final checkpoint at the
-    hot end. A colorbar maps colour back to step number.
+    ESM/DSM ``kind``-variance ratio across the diffusion τ-axis, with
+    ``mode`` fixed (so every curve uses the same k-sampling). Curves are
+    coloured by training step on a warm sequential colormap — earlier
+    checkpoints sit at the cool end of the palette, the final checkpoint
+    at the hot end. A colorbar maps colour back to step number.
+
+    ``noise_levels`` (optional): the schedule's ``σ̃_τ`` values indexed
+    by ``k``, e.g. ``model.transition.sigma_tilde.tolist()``. When given
+    the x axis becomes noise level on a log scale; otherwise it stays as
+    the raw ``τ``-bin index ``k``.
     """
     step_curves: list[tuple[int, np.ndarray, np.ndarray]] = []
     for step, data in per_step_data:
@@ -174,8 +185,19 @@ def _render_ratio_trajectory(
         if not kvals:
             continue
         items = sorted(kvals.items(), key=lambda kv: int(kv[0]))
-        xs = np.array([int(k) for k, _ in items], dtype=int)
+        ks = np.array([int(k) for k, _ in items], dtype=int)
         ys = np.array([float(v) for _, v in items], dtype=float)
+        if noise_levels is not None:
+            try:
+                xs = np.array([float(noise_levels[k]) for k in ks], dtype=float)
+            except (IndexError, TypeError):
+                log.warning(
+                    "noise_levels missing entry for k in %s — falling back to k axis",
+                    ks.tolist(),
+                )
+                xs = ks.astype(float)
+        else:
+            xs = ks.astype(float)
         step_curves.append((step, xs, ys))
 
     if not step_curves:
@@ -185,6 +207,8 @@ def _render_ratio_trajectory(
             mode,
         )
         return
+
+    use_noise = noise_levels is not None
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
 
@@ -217,13 +241,17 @@ def _render_ratio_trajectory(
         alpha=0.7,
         label="parity (ESM = DSM)",
     )
-    ax.set_xlabel(r"$\tau$-bin index $k$")
+    if use_noise:
+        ax.set_xlabel(r"noise level $\tilde{\sigma}_\tau$")
+        ax.set_xscale("log")
+    else:
+        ax.set_xlabel(r"$\tau$-bin index $k$")
     ax.set_ylabel(f"ESM / DSM {kind} variance ratio")
     ax.set_yscale("log")
+    axis_desc = "noise level" if use_noise else r"$\tau$"
     ax.set_title(
-        f"ESM vs DSM {kind}-variance ratio per "
-        rf"$\tau$, across training steps"
-        f"\n(k-sampling mode: {mode})"
+        f"ESM vs DSM {kind}-variance ratio per {axis_desc}, "
+        f"across training steps\n(k-sampling mode: {mode})"
     )
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(fontsize=8, loc="best")
@@ -247,7 +275,10 @@ def _render_ratio_trajectory(
     )
     plt.tight_layout(rect=(0, 0.03, 1, 1))
 
-    out_path = os.path.join(run_dir, f"ratio_trajectory_{kind}_{mode}.png")
+    axis_slug = "noise" if use_noise else "tau"
+    out_path = os.path.join(
+        run_dir, f"ratio_trajectory_{kind}_{mode}_{axis_slug}.png"
+    )
     fig.savefig(out_path, dpi=110)
     plt.close(fig)
     log.info("Saved trajectory plot %s (%d curves)", out_path, len(step_curves))
@@ -280,8 +311,47 @@ def _compile_gif(
     log.info("Saved animation %s (%d frames)", out_path, len(frames))
 
 
-def _probe_per_step(experiment, device: torch.device, run_dir: str) -> dict:
-    """Probe every ckpt_step*.pth in ``<run_dir>/checkpoints/``."""
+def _worker_probe_step(cfg_yaml: str, step: int, ckpt_path: str, sub_dir: str) -> tuple[int, str]:
+    """Worker entry point (top-level so ``spawn`` can pickle it).
+
+    Runs in a fresh process: re-registers experiments, rebuilds the
+    ``Experiment`` from the parent's serialized config, and probes one
+    checkpoint into ``sub_dir``. Each worker owns its own CUDA context,
+    so multiple workers can share the single GPU with only launch-latency
+    contention — which is exactly what dominates this probe's wall time.
+    """
+    import os as _os
+    import logging as _logging
+    import torch as _torch
+    from omegaconf import OmegaConf as _OmegaConf
+    from hydra_zen import instantiate as _instantiate
+
+    from ddssm.experiment.registry import register_experiments as _reg
+
+    _reg()
+    cfg = _OmegaConf.create(cfg_yaml)
+    experiment = _instantiate(cfg.experiment)
+    device = _torch.device("cuda" if _torch.cuda.is_available() else "cpu")
+    _os.makedirs(sub_dir, exist_ok=True)
+    _logging.basicConfig(level=_logging.INFO, force=True)
+    experiment.variance_probe(
+        device=device, run_dir=sub_dir, checkpoint_path=ckpt_path,
+    )
+    return step, sub_dir
+
+
+def _probe_per_step(
+    experiment, device: torch.device, run_dir: str,
+    *, cfg_yaml: str | None = None, workers: int = 1,
+) -> dict:
+    """Probe every ckpt_step*.pth in ``<run_dir>/checkpoints/``.
+
+    When ``workers > 1`` and ``cfg_yaml`` is provided, checkpoints are
+    probed concurrently in ``spawn``-context subprocesses — each rebuilds
+    the experiment from the serialized parent config. Workers share the
+    GPU (small model → GPU is launch-latency bound, so ~2-3× speedup is
+    typical up to ~4 workers before contention eats the win).
+    """
     ckpt_dir = os.path.join(run_dir, "checkpoints")
     step_ckpts = _find_step_checkpoints(ckpt_dir)
     if not step_ckpts:
@@ -299,24 +369,47 @@ def _probe_per_step(experiment, device: torch.device, run_dir: str) -> dict:
         )
 
     log.info(
-        "Per-step probe: %d checkpoints (steps %s)",
-        len(step_ckpts),
-        [s for s, _ in step_ckpts],
+        "Per-step probe: %d checkpoints (steps %s), workers=%d",
+        len(step_ckpts), [s for s, _ in step_ckpts], workers,
     )
     per_step_dir = os.path.join(run_dir, "probe")
     os.makedirs(per_step_dir, exist_ok=True)
 
     step_outputs: list[tuple[int, str]] = []
-    for i, (step, ckpt_path) in enumerate(step_ckpts, start=1):
-        sub_dir = os.path.join(per_step_dir, f"step_{step:06d}")
-        os.makedirs(sub_dir, exist_ok=True)
-        log.info("[%d/%d] step %d → %s", i, len(step_ckpts), step, sub_dir)
-        experiment.variance_probe(
-            device=device,
-            run_dir=sub_dir,
-            checkpoint_path=ckpt_path,
-        )
-        step_outputs.append((step, sub_dir))
+    if workers > 1 and cfg_yaml is not None:
+        import multiprocessing as _mp
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        ctx = _mp.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=int(workers), mp_context=ctx) as ex:
+            fut_to_step = {}
+            for step, ckpt_path in step_ckpts:
+                sub_dir = os.path.join(per_step_dir, f"step_{step:06d}")
+                fut = ex.submit(
+                    _worker_probe_step, cfg_yaml, step, ckpt_path, sub_dir,
+                )
+                fut_to_step[fut] = step
+            done_count = 0
+            for fut in as_completed(fut_to_step):
+                step_done, sub_dir_done = fut.result()
+                done_count += 1
+                log.info(
+                    "[%d/%d] worker done: step %d",
+                    done_count, len(step_ckpts), step_done,
+                )
+                step_outputs.append((step_done, sub_dir_done))
+        step_outputs.sort()
+    else:
+        for i, (step, ckpt_path) in enumerate(step_ckpts, start=1):
+            sub_dir = os.path.join(per_step_dir, f"step_{step:06d}")
+            os.makedirs(sub_dir, exist_ok=True)
+            log.info("[%d/%d] step %d → %s", i, len(step_ckpts), step, sub_dir)
+            experiment.variance_probe(
+                device=device,
+                run_dir=sub_dir,
+                checkpoint_path=ckpt_path,
+            )
+            step_outputs.append((step, sub_dir))
 
     # Re-render per-step plots with globally-fixed axes so each GIF
     # frame uses identical scales (otherwise the animation jitters as
@@ -353,9 +446,50 @@ def _probe_per_step(experiment, device: torch.device, run_dir: str) -> dict:
         gif_path = os.path.join(run_dir, f"{plot_name}.gif")
         _compile_gif(plot_name, frames, gif_path)
 
+    # Persist the aggregated trajectory data so the plots can be
+    # re-rendered / re-styled without rerunning the probe. One entry per
+    # step; ``metrics`` mirrors each per-step ``variance_summary.json``.
+    trajectory_path = os.path.join(run_dir, "trajectory_data.json")
+    with open(trajectory_path, "w") as f:
+        json.dump(
+            [
+                {"step": step, **data}
+                for step, data in per_step_data
+            ],
+            f, indent=2, default=float,
+        )
+    log.info(
+        "Saved trajectory data → %s (%d steps)",
+        trajectory_path, len(per_step_data),
+    )
+
+    # Grab the schedule's noise levels σ̃_τ from the parent experiment's
+    # transition so the trajectory plot can put actual noise scale on the
+    # x-axis (rather than raw τ-bin index k). Buffers are populated at
+    # transition construction time from the VP schedule params — no
+    # checkpoint load needed. Save to disk so post-hoc re-renders can
+    # reuse it without rebuilding the experiment.
+    noise_levels: list[float] | None = None
+    try:
+        sigma_tilde = experiment.model.transition.sigma_tilde
+        noise_levels = [float(x) for x in sigma_tilde.detach().cpu().tolist()]
+        with open(os.path.join(run_dir, "noise_levels.json"), "w") as f:
+            json.dump(noise_levels, f, indent=2)
+    except AttributeError:
+        log.warning(
+            "Transition has no sigma_tilde buffer — trajectory plot will "
+            "use raw τ-bin index k as x-axis."
+        )
+
     # Static trajectory plot — all checkpoints overlaid, coloured by step.
+    # Only adaptive_is is rendered because that's what these probes actually
+    # sample (uniform/lsgm_is cells are not in the ProbeSpec, so their
+    # ratio_per_tau slots are empty in the summary JSONs).
     log.info("Rendering ratio trajectory plot")
-    _render_ratio_trajectory(run_dir, per_step_data, kind="grad", mode="adaptive_is")
+    _render_ratio_trajectory(
+        run_dir, per_step_data, kind="grad", mode="adaptive_is",
+        noise_levels=noise_levels,
+    )
 
     return {
         "per_step_dir": per_step_dir,
@@ -384,9 +518,16 @@ def main(cfg: DictConfig):
     )
 
     # Per-step sweep mode — auto-trains if no step checkpoints exist
-    # yet, then probes every ckpt_step*.pth.
+    # yet, then probes every ckpt_step*.pth. When ``+parallel_workers=N``
+    # is set (N>1), checkpoints are probed concurrently in spawn workers,
+    # each rebuilding the experiment from the serialised parent config.
     if bool(cfg.get("per_step", False)):
-        return _probe_per_step(experiment, device, run_dir)
+        workers = int(cfg.get("parallel_workers", 1))
+        cfg_yaml = OmegaConf.to_yaml(cfg, resolve=True) if workers > 1 else None
+        return _probe_per_step(
+            experiment, device, run_dir,
+            cfg_yaml=cfg_yaml, workers=workers,
+        )
 
     # Default checkpoint location is ``<run_dir>/checkpoints/ckpt_latest.pth``.
     # Override with ``+checkpoint=path/to/other.pth`` for a one-off file.

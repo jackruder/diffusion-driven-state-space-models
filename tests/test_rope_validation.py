@@ -20,9 +20,11 @@ def test_rope_odd_head_dim_raises_at_construction() -> None:
 
 
 def test_rope_even_head_dim_ok() -> None:
-    """_precompute_rope_freqs succeeds for even head_dim."""
+    """_precompute_rope_freqs succeeds for even head_dim; returns (T, D/2, 2) real."""
     freqs = _precompute_rope_freqs(head_dim=8, max_len=16)
-    assert freqs.shape == (16, 4)
+    # Real (cos, sin) tensor — stacked as last dim (see docstring).
+    assert freqs.shape == (16, 4, 2)
+    assert not freqs.is_complex()
 
 
 def test_rope_seq_len_exceeds_max_len_raises() -> None:

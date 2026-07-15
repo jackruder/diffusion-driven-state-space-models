@@ -264,10 +264,23 @@ class MetricSpec:
 
 
 class SplitStore:
+    """Per-split meter set with a deferred-sync tensor path.
+
+    ``add`` accepts either a Python float or a CUDA/CPU tensor. Tensor
+    values are queued in ``_pending`` and batch-synced to floats in a
+    single ``torch.stack(...).cpu().tolist()`` at ``values()`` time (or
+    when the caller invokes :meth:`_flush_pending` directly). This
+    avoids the per-tensor ``.item()`` host sync that used to fire once
+    per metric per step (~50 syncs/step in ``_log_train_step``) and
+    serialized CPU dispatch against the GPU.
+    """
+
     def __init__(self, spec: list[MetricSpec]):
         self.spec = spec
         self.meters: dict[str, Meter] = {}
         self.order: list[str] = []  # first-seen order
+        # Queued tensor updates awaiting batched host sync.
+        self._pending: list[tuple[str, torch.Tensor, float]] = []
 
     def _make_meter(self, key: str) -> Meter:
         # find first matching spec else default mean
@@ -276,16 +289,52 @@ class SplitStore:
                 return METER_FACTORY.get(s.kind, MeanMeter)()
         return MeanMeter()
 
-    def add(self, key: str, val: float, w: float = 1.0):
+    def add(self, key: str, val: Any, w: float = 1.0):
         if key not in self.meters:
             self.meters[key] = self._make_meter(key)
             self.order.append(key)
-        self.meters[key].add(val, w)
+        if torch.is_tensor(val):
+            self._pending.append((key, val, float(w)))
+        else:
+            self.meters[key].add(float(val), float(w))
+
+    def _flush_pending(
+        self, on_finite_report: Callable[[str, float], None] | None = None
+    ) -> None:
+        """Batch-sync any queued tensor updates into their meters.
+
+        Groups queued tensors by device so all CUDA tensors go through a
+        single ``torch.stack(...).cpu().tolist()`` (one host sync per
+        device instead of one per tensor), and already-CPU tensors are
+        materialised without any device round-trip.
+        """
+        if not self._pending:
+            return
+        by_device: dict[torch.device, list[int]] = {}
+        for i, (_, t, _) in enumerate(self._pending):
+            by_device.setdefault(t.device, []).append(i)
+        floats: list[float | None] = [None] * len(self._pending)
+        for device, indices in by_device.items():
+            batch = torch.stack([
+                self._pending[i][1].detach().reshape(()) for i in indices
+            ])
+            if device.type != "cpu":
+                batch = batch.cpu()
+            batch_floats = batch.tolist()
+            for i, f in zip(indices, batch_floats):
+                floats[i] = f
+        for (key, _tensor, weight), f in zip(self._pending, floats):
+            if on_finite_report is not None:
+                on_finite_report(key, f)
+            self.meters[key].add(f, weight)
+        self._pending.clear()
 
     def values(self) -> dict[str, float]:
+        self._flush_pending()
         return {k: self.meters[k].value() for k in self.order}
 
     def reset(self):
+        self._pending.clear()
         for m in self.meters.values():
             m.reset()
 
@@ -366,6 +415,12 @@ class MetricStore:
 
     @staticmethod
     def _tofloat(x: Any) -> float:
+        """Legacy helper (still used for scalar Python inputs).
+
+        Tensor inputs are now routed through :meth:`SplitStore.add`'s
+        deferred-sync path — do NOT call this on tensors from the hot
+        loop or you will re-introduce a per-metric host sync.
+        """
         if isinstance(x, (float, int)):
             return float(x)
         if isinstance(x, torch.Tensor):
@@ -373,6 +428,12 @@ class MetricStore:
                 x = x.mean()
             return float(x.detach().item())
         return float(x)
+
+    def _mean_scalar(self, x: Any) -> Any:
+        """Return a 0-d tensor when x is a multi-element tensor, else x."""
+        if isinstance(x, torch.Tensor) and x.numel() != 1:
+            return x.mean()
+        return x
 
     def update(
         self,
@@ -384,23 +445,46 @@ class MetricStore:
         """values: dict of metric -> scalar (tensor ok).
         weight: default weight (e.g., batch size)
         weights: per-metric override (e.g., observed elements for recon)
+
+        Tensor values are queued for a single batched host sync at flush
+        time (``SplitStore.values()``) — see :class:`SplitStore` for the
+        rationale. The non-finite check + warning also runs at flush.
         """
+        split_name = split
         ss = self._split(split)
-        for k, v in values.items():
-            w = weights.get(k, weight) if weights else weight
-            f = self._tofloat(v)
-            if not math.isfinite(f):
+
+        # Reused across the loop; captured only when we actually emit a
+        # warning inside the flush callback.
+        def _report_finite(key: str, value: float) -> None:
+            if not math.isfinite(value):
                 self._nonfinite_total += 1
-                if k not in self._nonfinite_warned:
-                    self._nonfinite_warned.add(k)
+                if key not in self._nonfinite_warned:
+                    self._nonfinite_warned.add(key)
                     log.warning(
                         "Non-finite metric %r=%s in split %r; recorded but "
                         "surfaced via nonfinite/total.",
-                        k,
-                        f,
-                        split,
+                        key, value, split_name,
                     )
-            ss.add(k, f, float(w))
+        # Stash the reporter for the next flush; unified across update calls
+        # so warnings still fire even if the caller triggers multiple
+        # updates between flushes.
+        self._finite_reporter_for_split = _report_finite
+
+        for k, v in values.items():
+            w = weights.get(k, weight) if weights else weight
+            if isinstance(v, torch.Tensor):
+                ss.add(k, self._mean_scalar(v), float(w))
+            else:
+                f = self._tofloat(v)
+                _report_finite(k, f)
+                ss.add(k, f, float(w))
+
+    def _flush(self, split: str) -> None:
+        """Force any queued tensor updates in ``split`` to sync + accumulate."""
+        ss = self._split(split)
+        ss._flush_pending(
+            on_finite_report=getattr(self, "_finite_reporter_for_split", None)
+        )
 
     def _with_health(self, row: dict[str, float]) -> dict[str, float]:
         """Attach the run-health counter to a flushed row."""
@@ -409,6 +493,9 @@ class MetricStore:
         return row
 
     def step_end(self, split: str, step: int, also_log: bool = True):
+        # Flush first (with the nonfinite reporter) so the values() call
+        # doesn't do an untracked flush that skips warnings.
+        self._flush(split)
         row = self._with_health(self._split(split).values())
         if also_log:
             for lg in self.loggers:
@@ -416,6 +503,7 @@ class MetricStore:
         return row
 
     def epoch_end(self, split: str, epoch: int, reset: bool = True):
+        self._flush(split)
         row = self._with_health(self._split(split).values())
         for lg in self.loggers:
             lg.on_epoch(split, epoch, row)

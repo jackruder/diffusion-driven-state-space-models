@@ -2,7 +2,7 @@
 
 Verifies that ``expose_gt_latents=True`` correctly threads through the
 data module and exposes the underlying clean latent ``z`` to consumers
-(used by ``crps_sum_latent`` and ``gt_latent_jsd`` metrics).
+(used by the ``crps_sum_latent`` metric).
 """
 
 from __future__ import annotations

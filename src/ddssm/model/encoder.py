@@ -141,12 +141,19 @@ class GaussianEncoder(BaseEncoder):
         fut_summary: Callable[..., FutureSummary] | None = None,
         mu_mode: Literal["free", "additive"] = "additive",
         grad_checkpoint: bool = False,
+        ar_checkpoint_chunk: int = 0,
     ) -> None:
         super().__init__()
         # Gradient-checkpoint the future-summary (its one-shot O(B·T²) attention
         # is the encoder's largest activation at long histories). Recomputed in
         # backward instead of retained.
         self.grad_checkpoint = bool(grad_checkpoint)
+        # AR-loop checkpointing: 0 disables; N>0 wraps groups of N timesteps
+        # in a non-reentrant checkpoint (trades ~T/N× extra compute for ~N/T
+        # activation memory in the sample_paths loop). When on, sample_paths
+        # is opaque to outer compile (see below) → declare not-fullgraph-safe.
+        self.ar_checkpoint_chunk = int(ar_checkpoint_chunk)
+        self.fullgraph_safe = self.ar_checkpoint_chunk == 0
         if combiner is None:
             combiner = partial(
                 CompoundCombiner,
@@ -209,14 +216,25 @@ class GaussianEncoder(BaseEncoder):
         )
 
         self.fut_sum_module = maybe_compile(self.fut_sum_module, dynamic=True)
-        # Compile the per-step body of the autoregressive ``sample_paths`` loop —
-        # it's the launch-bound bottleneck (~670 tiny ops/iter × T). Fuses the
-        # combiner + dist_head into one graph per iteration. dynamic=True because
-        # the latent-history length grows over the first j steps. Off-cluster (no
-        # working triton) this falls back to eager; on the cluster it's ~1.3×.
-        self._forward_with_stats = maybe_compile_fn(
-            self._forward_with_stats, dynamic=True
-        )
+        if self.ar_checkpoint_chunk == 0:
+            # Compile the whole autoregressive ``sample_paths`` outer loop as
+            # a single fx graph — dynamo unrolls the ``for t in range(T)``
+            # (T is a Python int) so all T iterations of
+            # ``_forward_with_stats`` collapse into one graph invocation per
+            # encode instead of T separate launches. dynamic=True because T
+            # can vary across calls (forecast history vs full sequence).
+            self.sample_paths = maybe_compile_fn(self.sample_paths, dynamic=True)
+        else:
+            # When AR-loop checkpointing is on, dynamo can't trace through
+            # the checkpoint HOP with an opaque helper and can't lift the
+            # chunk's Python-int free vars (t_start, n_steps) across
+            # subgraph boundaries. Disable dynamo for the whole
+            # ``sample_paths`` — the outer ``_forward_core`` compile breaks
+            # at the encoder call; sub-modules (fut_sum_module,
+            # _forward_with_stats internals) stay compiled eagerly per call.
+            self.sample_paths = torch.compiler.disable(
+                self.sample_paths, recursive=False
+            )
 
     @property
     def is_gaussian_family(self) -> bool:
@@ -410,23 +428,122 @@ class GaussianEncoder(BaseEncoder):
             BS, self.latent_dim, self.j, device=device, dtype=observed_data.dtype
         )
 
-        zs_list = []
-        logqs_list = []
-        step_params_list: list[dict] = []
+        chunk = (
+            self.ar_checkpoint_chunk
+            if (
+                self.ar_checkpoint_chunk > 0
+                and self.training
+                and torch.is_grad_enabled()
+            )
+            else 0
+        )
 
-        for t in range(T):
+        if chunk > 0:
+            zs_parts: list[torch.Tensor] = []
+            logqs_parts: list[torch.Tensor] = []
+            stats_parts: list[dict] = []
+            t0 = 0
+            while t0 < T:
+                n = min(chunk, T - t0)
+                z_prev_paths, zs_chunk, logqs_chunk, stats_chunk = checkpoint(
+                    self._ar_chunk,
+                    z_prev_paths,
+                    h_expanded,
+                    z_padding,
+                    time_embed_expanded,
+                    cond_mask_expanded,
+                    covariates_expanded,
+                    static_context_expanded,
+                    t0,
+                    n,
+                    BS,
+                    use_reentrant=False,
+                    preserve_rng_state=False,
+                )
+                zs_parts.append(zs_chunk)
+                logqs_parts.append(logqs_chunk)
+                stats_parts.append(stats_chunk)
+                t0 += n
+            zs_bs = torch.cat(zs_parts, dim=-1)  # (BS, d, T)
+            logqs_bs = torch.cat(logqs_parts, dim=-1)  # (BS, T)
+            stats_bs = {
+                k: torch.cat([s[k] for s in stats_parts], dim=-1)
+                for k in stats_parts[0].keys()
+            }
+        else:
+            zs_list = []
+            logqs_list = []
+            step_params_list: list[dict] = []
+
+            for t in range(T):
+                t_idx = torch.full((BS,), t, dtype=torch.long, device=device)
+
+                z_prev = z_prev_paths
+                k = z_prev.shape[-1]
+                if k > self.j:
+                    z_prev_input = z_prev[:, :, -self.j :]
+                else:
+                    z_prev_input = z_prev  # (BS, d, k) k <= j
+
+                h_t = h_expanded[:, t, :]  # (BS, C_summary)
+
+                z_t_sample, logq_t, step_params = self._forward_with_stats(
+                    z_prev=z_prev_input,
+                    z_padding=z_padding,
+                    h_fut=h_t,
+                    time_embed=time_embed_expanded,
+                    time_idx=t_idx,
+                    cond_mask=cond_mask_expanded,
+                    covariates=covariates_expanded,
+                    static_context=static_context_expanded,
+                )
+
+                z_prev_paths = torch.cat(
+                    [z_prev_paths, z_t_sample.unsqueeze(-1)], dim=-1
+                )
+                if z_prev_paths.shape[-1] > self.j:
+                    z_prev_paths = z_prev_paths[..., -self.j :]
+
+                zs_list.append(z_t_sample)
+                logqs_list.append(logq_t)
+                step_params_list.append(step_params)
+
+            zs_bs = torch.stack(zs_list, dim=-1)  # (BS, d, T)
+            logqs_bs = torch.stack(logqs_list, dim=-1)  # (BS, T)
+            stats_bs = self.dist_head.stack_stats(step_params_list)
+
+        zs = zs_bs.view(B, S, self.latent_dim, T)
+        logqs = logqs_bs.view(B, S, T)
+        stats: dict = {k: v.view(B, S, *v.shape[1:]) for k, v in stats_bs.items()}
+        return zs, logqs, stats
+
+    def _ar_chunk(
+        self,
+        z_prev_paths: torch.Tensor,
+        h_expanded: torch.Tensor,
+        z_padding: torch.Tensor,
+        time_embed_expanded: torch.Tensor,
+        cond_mask_expanded: torch.Tensor | None,
+        covariates_expanded: torch.Tensor | None,
+        static_context_expanded: torch.Tensor | None,
+        t_start: int,
+        n_steps: int,
+        BS: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+        device = z_prev_paths.device
+        z_list: list[torch.Tensor] = []
+        q_list: list[torch.Tensor] = []
+        sp_list: list[dict] = []
+        for i in range(n_steps):
+            t = t_start + i
             t_idx = torch.full((BS,), t, dtype=torch.long, device=device)
-
-            z_prev = z_prev_paths
-            k = z_prev.shape[-1]
+            k = z_prev_paths.shape[-1]
             if k > self.j:
-                z_prev_input = z_prev[:, :, -self.j :]
+                z_prev_input = z_prev_paths[:, :, -self.j :]
             else:
-                z_prev_input = z_prev  # (BS, d, k) k <= j
-
-            h_t = h_expanded[:, t, :]  # (BS, C_summary)
-
-            z_t_sample, logq_t, step_params = self._forward_with_stats(
+                z_prev_input = z_prev_paths
+            h_t = h_expanded[:, t, :]
+            z_t, logq_t, step_params = self._forward_with_stats(
                 z_prev=z_prev_input,
                 z_padding=z_padding,
                 h_fut=h_t,
@@ -436,25 +553,16 @@ class GaussianEncoder(BaseEncoder):
                 covariates=covariates_expanded,
                 static_context=static_context_expanded,
             )
-
-            z_prev_paths = torch.cat([z_prev_paths, z_t_sample.unsqueeze(-1)], dim=-1)
+            z_prev_paths = torch.cat([z_prev_paths, z_t.unsqueeze(-1)], dim=-1)
             if z_prev_paths.shape[-1] > self.j:
                 z_prev_paths = z_prev_paths[..., -self.j :]
-
-            zs_list.append(z_t_sample)
-            logqs_list.append(logq_t)
-            step_params_list.append(step_params)
-
-        zs_bs = torch.stack(zs_list, dim=-1)  # (BS, d, T)
-        logqs_bs = torch.stack(logqs_list, dim=-1)  # (BS, T)
-
-        zs = zs_bs.view(B, S, self.latent_dim, T)
-        logqs = logqs_bs.view(B, S, T)
-
-        # Head stacks per-step params along the new last (T) axis; reshape BS -> (B, S).
-        stats_bs = self.dist_head.stack_stats(step_params_list)
-        stats: dict = {k: v.view(B, S, *v.shape[1:]) for k, v in stats_bs.items()}
-        return zs, logqs, stats
+            z_list.append(z_t)
+            q_list.append(logq_t)
+            sp_list.append(step_params)
+        zs_chunk = torch.stack(z_list, dim=-1)
+        logqs_chunk = torch.stack(q_list, dim=-1)
+        stats_chunk = self.dist_head.stack_stats(sp_list)
+        return z_prev_paths, zs_chunk, logqs_chunk, stats_chunk
 
     def entropy_transition(self, stats: dict, j: int) -> torch.Tensor:
         return self.dist_head.entropy_transition(stats, j)
@@ -651,9 +759,14 @@ class ARFlowEncoder(BaseEncoder):
         fwd_summary: Callable[..., FutureSummary] | None = None,
         fwd_layers: int = 2,
         grad_checkpoint: bool = False,
+        ar_checkpoint_chunk: int = 0,
     ) -> None:
         super().__init__()
         self.grad_checkpoint = bool(grad_checkpoint)
+        # ARFlow's causal_net runs in parallel over T, so there is no AR loop to
+        # chunk-checkpoint. Accepted for API symmetry with GaussianEncoder; no-op.
+        self.ar_checkpoint_chunk = int(ar_checkpoint_chunk)
+        self.fullgraph_safe = True
         if fut_summary is None:
             fut_summary = partial(GRUFutureSummary, summary_dim=64, num_layers=2)
 

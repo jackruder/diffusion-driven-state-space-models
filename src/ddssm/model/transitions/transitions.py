@@ -58,6 +58,19 @@ def _mc_entropy_from_logq(
 class BaseTransition(nn.Module):
     """Abstract transition interface."""
 
+    def kl_extra_keys(self, encoder_gaussian: bool) -> tuple[str, ...]:
+        """Diagnostic keys :meth:`transition_kl` returns besides ``"kl"``.
+
+        Declared up front (resolved once at model construction) so
+        ``DDSSM_base`` can fix the ordered metrics contract of its
+        compiled forward core — a dict with data-dependent keys cannot
+        cross a ``fullgraph`` boundary. ``encoder_gaussian`` is
+        :attr:`BaseEncoder.is_gaussian_family`, which decides the
+        analytic-vs-MC path for the Gaussian transition.
+        """
+        del encoder_gaussian
+        return ()
+
     def prior_params(
         self, z_hist: torch.Tensor, ctx: dict[str, Any] | None = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -398,9 +411,13 @@ class BaseTransition(nn.Module):
         j = self.j
         E = self.emb_time_dim
         device = time_embed.device
-        hist_idx = torch.arange(step - j, step, device=device, dtype=torch.long).clamp(
-            min=0, max=T - 1
-        )
+        # ``max=T-1`` was defensive against out-of-range history indices —
+        # but ``step`` iterates 0…j-1 here (called only from the init walk),
+        # so the arange tops out at ``j-2 << T-1`` and the clamp-max never
+        # fires. Dropping it also removes ``T`` from the compiled graph as a
+        # symbolic scalar — one fewer chance for dynamo to trip.
+        del T  # unused now; keep the parameter for API compatibility
+        hist_idx = torch.arange(step - j, step, device=device, dtype=torch.long).clamp(min=0)
         hist_te = time_embed.index_select(1, hist_idx)  # (B, j, E)
         tgt_te = time_embed[:, step : step + 1, :]  # (B, 1, E)
         win = torch.cat([hist_te, tgt_te], dim=1)  # (B, j+1, E)
@@ -747,6 +764,11 @@ class GaussianTransition(BaseTransition):
         log_p = self.log_prob(z_t, z_hist, ctx=ctx_step)  # (BS,)
         loss = (-log_p).sum()
         return loss, loss.new_zeros(())
+
+    def kl_extra_keys(self, encoder_gaussian: bool) -> tuple[str, ...]:
+        # Analytic path (Gaussian encoder stats) returns only "kl"; the
+        # MC fallback additionally surfaces L_p / L_q.
+        return () if encoder_gaussian else ("L_p", "L_q")
 
     def transition_kl(
         self,
