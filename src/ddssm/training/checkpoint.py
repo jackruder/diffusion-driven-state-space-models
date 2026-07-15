@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+from omegaconf import OmegaConf
 
 log = logging.getLogger(__name__)
 
@@ -53,8 +54,14 @@ _FORMAT = "ddssm_ckpt_v3"
 _SUPPORTED_FORMATS = {"ddssm_ckpt_v1", "ddssm_ckpt_v2", "ddssm_ckpt_v3"}
 
 
-def _atomic_save(obj: Any, path: str) -> None:
-    """Write to a temp file in the same dir, then atomically replace."""
+def atomic_save(obj: Any, path: str) -> None:
+    """Write to a temp file in the same dir, then atomically replace.
+
+    Durable save primitive shared across the :class:`ModelAdapter` families:
+    each family owns its own checkpoint schema but persists it through this
+    same write-to-``tmp_save_*``-then-``os.replace`` dance, so a crash
+    mid-save can never leave a truncated file at ``path``.
+    """
     path = str(path)
     d = os.path.dirname(path) or "."
     os.makedirs(d, exist_ok=True)
@@ -72,6 +79,82 @@ def _atomic_save(obj: Any, path: str) -> None:
         except OSError:
             pass
         raise
+
+
+# Back-compat alias for the pre-extraction private name. Prefer the public
+# :func:`atomic_save`; internal call sites route through it directly.
+_atomic_save = atomic_save
+
+
+def check_model_config_drift(saved: str | None, expected: str | None) -> bool:
+    """Cross-check a checkpoint's model config against the expected one.
+
+    Returns ``True`` iff drift was detected (and a WARNING carrying a
+    unified diff was emitted); ``False`` when the two configs match or when
+    either side is ``None`` (no cross-check possible). Callers decide whether
+    to warn-and-continue (today's :func:`load_into_model` behaviour) or raise
+    on the returned flag.
+
+    Adapter-wrapper unwrap: when ``expected`` is an adapter-wrapper conf (a
+    mapping nesting the real model under a ``module:`` key) and ``saved`` is a
+    bare model conf (a mapping WITHOUT a ``module`` key), the diff is taken
+    against the wrapper's ``module:`` subtree rather than the whole wrapper —
+    so a pre-refactor checkpoint loaded under a post-refactor adapter-wrapped
+    experiment produces a concise, meaningful diff (or no drift) instead of
+    all-indentation noise. Any yaml parse failure falls back to the raw
+    whole-string diff; drift-checking never crashes a load.
+    """
+    if saved is None or expected is None:
+        return False
+
+    expected = _unwrap_adapter_module(saved, expected)
+
+    if saved.strip() == expected.strip():
+        return False
+
+    diff = "\n".join(
+        difflib.unified_diff(
+            saved.splitlines(),
+            expected.splitlines(),
+            fromfile="checkpoint",
+            tofile="experiment=",
+            lineterm="",
+        )
+    )
+    log.warning(
+        "Model config drift between checkpoint and passed "
+        "experiment=. Loading state from checkpoint anyway "
+        "(parameter shapes matched). Diff:\n%s",
+        diff,
+    )
+    return True
+
+
+def _unwrap_adapter_module(saved: str, expected: str) -> str:
+    """Return ``expected`` narrowed to its ``module:`` subtree when applicable.
+
+    Heuristic: if ``expected`` parses to a mapping containing a ``module``
+    key AND ``saved`` parses to a mapping WITHOUT a ``module`` key, return the
+    yaml dump of ``expected["module"]``; otherwise return ``expected``
+    unchanged. Defensive: any parse failure returns ``expected`` unchanged so
+    drift-checking falls back to the raw whole-string diff.
+    """
+    try:
+        expected_cfg = OmegaConf.create(expected)
+        saved_cfg = OmegaConf.create(saved)
+    except Exception:
+        return expected
+    if not (
+        OmegaConf.is_dict(expected_cfg)
+        and OmegaConf.is_dict(saved_cfg)
+        and "module" in expected_cfg
+        and "module" not in saved_cfg
+    ):
+        return expected
+    try:
+        return OmegaConf.to_yaml(expected_cfg.module)
+    except Exception:
+        return expected
 
 
 @dataclass
@@ -148,9 +231,7 @@ class Checkpoint:
             rng_state={
                 "torch_cpu": torch.get_rng_state(),
                 "torch_cuda": (
-                    torch.cuda.get_rng_state_all()
-                    if torch.cuda.is_available()
-                    else []
+                    torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
                 ),
                 "numpy": np.random.get_state(),
                 "python": random.getstate(),
@@ -194,7 +275,7 @@ class Checkpoint:
         }
 
     def save(self, path: str) -> None:
-        _atomic_save(self.to_payload(), path)
+        atomic_save(self.to_payload(), path)
 
     @classmethod
     def load(cls, path: str, *, device: torch.device) -> Checkpoint:
@@ -285,23 +366,10 @@ def load_into_model(
         raise FileNotFoundError(f"Checkpoint not found: {path!r}")
     ckpt = Checkpoint.load(path, device=device)
 
-    if ckpt.model_config_yaml is not None and expected_model_config_yaml is not None:
-        if ckpt.model_config_yaml.strip() != expected_model_config_yaml.strip():
-            diff = "\n".join(
-                difflib.unified_diff(
-                    ckpt.model_config_yaml.splitlines(),
-                    expected_model_config_yaml.splitlines(),
-                    fromfile="checkpoint",
-                    tofile="experiment=",
-                    lineterm="",
-                )
-            )
-            log.warning(
-                "Model config drift between checkpoint and passed "
-                "experiment=. Loading state from checkpoint anyway "
-                "(parameter shapes matched). Diff:\n%s",
-                diff,
-            )
+    # Warn-and-continue on model-config drift (parameter shapes still hard-fail
+    # in ``load_state_dict`` below). The helper returns a bool so other callers
+    # can raise instead; here we keep today's tolerant behaviour.
+    check_model_config_drift(ckpt.model_config_yaml, expected_model_config_yaml)
 
     model.load_state_dict(ckpt.model_state, strict=strict)
 
