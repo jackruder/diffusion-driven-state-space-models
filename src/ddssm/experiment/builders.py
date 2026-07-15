@@ -78,7 +78,6 @@ from ddssm.data.datamodule import (
     GluonTSDataModule,
     SyntheticDataModule,
 )
-from ddssm.training.stages import StageTrainableConf
 from ddssm.variance.runner import ProbeCell, ProbeSpec, ProbePlotSpec, ProbeMetricSpec
 from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.model.centering.baselines import (
@@ -393,11 +392,9 @@ Null = builds(NullDataModule, populate_full_signature=True)
 
 Hparams = builds(DDSSMHyperParamsConf, populate_full_signature=True)
 
-Trainable = builds(StageTrainableConf, populate_full_signature=True)
 Training = builds(
     TrainingScalars,
     populate_full_signature=True,
-    trainable=None,
 )
 Objective = builds(ObjectiveSpec, populate_full_signature=True)
 Objectives = builds(_ObjectivesDC, populate_full_signature=True)
@@ -483,7 +480,6 @@ __all__ = [
     # Model + training
     "DDSSM",
     "Hparams",
-    "Trainable",
     "Training",
     "Objective",
     "Objectives",

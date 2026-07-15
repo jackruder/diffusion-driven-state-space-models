@@ -26,7 +26,6 @@ import torch
 from ddssm.model.dssd import DDSSM_base
 from ddssm.training.train import DDSSMTrainer
 from ddssm.data.datamodule import TimeSeriesDataModule
-from ddssm.training.stages import StageTrainableConf
 
 log = logging.getLogger(__name__)
 
@@ -45,12 +44,7 @@ def _warn_once(msg: str) -> None:
 
 @dataclass
 class TrainingScalars:
-    """Runtime knobs forwarded to :meth:`DDSSMTrainer.fit`.
-
-    ``trainable`` is applied via ``trainer._set_trainable`` before
-    ``fit``; freezing a submodule's ``requires_grad`` is what suppresses
-    its gradient contribution.
-    """
+    """Runtime knobs forwarded to :meth:`DDSSMTrainer.fit`."""
 
     steps: int = 1000
     log_every: int = 50
@@ -60,7 +54,6 @@ class TrainingScalars:
     amp: bool = True  # bf16 autocast (see train.py); project default
     profile_steps: int = 0
     resume_from: str | None = None
-    trainable: StageTrainableConf | None = None
 
     def fit_kwargs(self) -> dict[str, Any]:
         return {
@@ -426,10 +419,6 @@ class Experiment:
             trainer_kwargs["model_config_yaml"] = self.model_config_yaml
         trainer = self.build_trainer(**trainer_kwargs)
         self.trainer = trainer
-
-        if self.training.trainable is not None:
-            log.info("Applying trainable mask: %s", self.training.trainable)
-            trainer._set_trainable(self.training.trainable)
 
         # hparams.batch_size is the single source of truth for the loader
         # batch size (ADR-0004: hparams owns runtime knobs). Reconcile it
