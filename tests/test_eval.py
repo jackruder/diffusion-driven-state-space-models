@@ -19,7 +19,7 @@ from ddssm.eval.metrics import (
     eval_loss_tail,
     eval_energy_score,
 )
-from ddssm.data.datamodule import DataMetadata, DDSSMDataModule
+from ddssm.data.datamodule import DataMetadata, TimeSeriesDataModule
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
@@ -71,7 +71,7 @@ def test_evaluate_runner_writes_metrics_json(tmp_path):
     ]
     _write_csv(csv_path, rows)
 
-    class _StubData(DDSSMDataModule):
+    class _StubData(TimeSeriesDataModule):
         batch_transform = staticmethod(lambda b, d: b)
         metadata = DataMetadata(data_dim=1, forecast_split=None)
 
@@ -122,7 +122,7 @@ def test_evalspec_per_metric_kwargs_forwarded(tmp_path):
     rows = [{"split": "train", "step": str(i), "metric_a": str(0.7)} for i in range(10)]
     _write_csv(csv_path, rows)
 
-    class _StubData(DDSSMDataModule):
+    class _StubData(TimeSeriesDataModule):
         batch_transform = staticmethod(lambda b, d: b)
         metadata = DataMetadata(data_dim=1, forecast_split=None)
 
@@ -502,7 +502,7 @@ def test_eval_crps_sum_uses_ratio_of_means():
 def test_unknown_metric_raises():
     spec = EvalSpec(metrics=["nope"], split="val")
 
-    class _StubData(DDSSMDataModule):
+    class _StubData(TimeSeriesDataModule):
         batch_transform = staticmethod(lambda b, d: b)
         metadata = DataMetadata(data_dim=1, forecast_split=None)
 

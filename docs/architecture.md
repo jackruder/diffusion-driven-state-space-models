@@ -70,7 +70,7 @@ These are deliberately separate:
 {py:class}`~ddssm.experiment.experiment.Experiment` is a dataclass that owns the
 full run definition:
 
-- `data` — a {py:class}`~ddssm.data.datamodule.DDSSMDataModule`
+- `data` — a {py:class}`~ddssm.data.datamodule.TimeSeriesDataModule`
   (train/val/test loaders + a `batch_transform`).
 - `model` — the SSM ({py:class}`ddssm.model.dssd.DDSSM_base`).
 - `build_trainer` — a partial {py:class}`~ddssm.training.train.DDSSMTrainer`

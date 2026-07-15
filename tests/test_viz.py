@@ -14,7 +14,7 @@ import pytest
 
 from ddssm.viz import PLOT_REGISTRY, VizSpec, PlotSpec, PlotContext, visualize
 from ddssm.viz.plots import plot_metrics_csv
-from ddssm.data.datamodule import DataMetadata, DDSSMDataModule
+from ddssm.data.datamodule import DataMetadata, TimeSeriesDataModule
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
@@ -70,7 +70,7 @@ def test_visualize_runner_smoke(tmp_path):
         [{"step": "0", "loss/total": "1.0"}, {"step": "1", "loss/total": "0.5"}],
     )
 
-    class _StubData(DDSSMDataModule):
+    class _StubData(TimeSeriesDataModule):
         batch_transform = staticmethod(lambda b, d: b)
         metadata = DataMetadata(data_dim=1, forecast_split=None)
 
@@ -110,7 +110,7 @@ def test_visualize_runner_smoke(tmp_path):
 
 
 def test_visualize_runner_unknown_plot_raises(tmp_path):
-    class _StubData(DDSSMDataModule):
+    class _StubData(TimeSeriesDataModule):
         batch_transform = staticmethod(lambda b, d: b)
         metadata = DataMetadata(data_dim=1, forecast_split=None)
 

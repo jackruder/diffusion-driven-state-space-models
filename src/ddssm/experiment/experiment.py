@@ -1,6 +1,6 @@
 """Experiment: composition root for a DDSSM training run.
 
-An :class:`Experiment` ties together a :class:`DDSSMDataModule`, a model,
+An :class:`Experiment` ties together a :class:`TimeSeriesDataModule`, a model,
 a trainer factory, training scalars, and an objective. :meth:`Experiment.train`
 is called by :mod:`ddssm.app` after Hydra composes the config. The class is
 intentionally a thin composition layer — no construction logic lives
@@ -25,7 +25,7 @@ import torch
 
 from ddssm.model.dssd import DDSSM_base
 from ddssm.training.train import DDSSMTrainer
-from ddssm.data.datamodule import DDSSMDataModule
+from ddssm.data.datamodule import TimeSeriesDataModule
 from ddssm.training.stages import StageTrainableConf
 
 log = logging.getLogger(__name__)
@@ -355,7 +355,7 @@ class Experiment:
     are owned by :mod:`ddssm.app`.
     """
 
-    data: DDSSMDataModule
+    data: TimeSeriesDataModule
     model: DDSSM_base
     build_trainer: Callable[..., DDSSMTrainer]
     training: TrainingScalars = field(default_factory=TrainingScalars)

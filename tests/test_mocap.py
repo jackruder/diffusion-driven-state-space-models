@@ -22,7 +22,7 @@ from ddssm.data.mocap import (
     _ensure_mocap35,
 )
 from ddssm.data.dataload import parse_batch
-from ddssm.data.datamodule import DataMetadata, DDSSMDataModule
+from ddssm.data.datamodule import DataMetadata, TimeSeriesDataModule
 
 MOCAP_PATH = "data/mocap35.mat"
 _HAS_MOCAP = os.path.isfile(MOCAP_PATH) and os.path.getsize(MOCAP_PATH) > 1024
@@ -44,7 +44,7 @@ def test_mocap_module_is_datamodule_and_lazy(tmp_path):
         download=False,
         batch_size=2,
     )
-    assert isinstance(dm, DDSSMDataModule)
+    assert isinstance(dm, TimeSeriesDataModule)
     assert dm.batch_format == "sequence"
     assert dm.batch_transform is parse_batch
     assert dm._built is False

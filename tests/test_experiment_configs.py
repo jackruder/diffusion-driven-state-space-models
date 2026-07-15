@@ -25,7 +25,7 @@ from hydra_zen import store, instantiate
 from hydra.core.global_hydra import GlobalHydra
 
 from ddssm.experiment import Experiment, ObjectiveSpec, TrainingScalars
-from ddssm.data.datamodule import DDSSMDataModule
+from ddssm.data.datamodule import TimeSeriesDataModule
 from ddssm.experiment.registry import register_experiments
 
 CONF_DIR = (
@@ -80,7 +80,7 @@ def test_experiments_registered() -> None:
 def test_experiment_instantiates(name: str) -> None:
     expt = instantiate(_exp(name))
     assert isinstance(expt, Experiment)
-    assert isinstance(expt.data, DDSSMDataModule)
+    assert isinstance(expt.data, TimeSeriesDataModule)
     assert isinstance(expt.training, TrainingScalars)
     n_params = sum(p.numel() for p in expt.model.parameters())
     assert n_params > 0
