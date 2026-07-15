@@ -12,6 +12,7 @@ import torch
 import pytest
 
 from ddssm.eval import METRIC_REGISTRY, EvalSpec, EvalContext, evaluate
+from ddssm.adapters import DDSSMAdapter
 from ddssm.eval.metrics import (
     eval_mae,
     eval_rmse,
@@ -19,6 +20,7 @@ from ddssm.eval.metrics import (
     eval_loss_tail,
     eval_energy_score,
 )
+from ddssm.model.config import ModelConfig
 from ddssm.data.datamodule import DataMetadata, TimeSeriesDataModule
 
 
@@ -95,7 +97,10 @@ def test_evaluate_runner_writes_metrics_json(tmp_path):
     class _StubExpt:
         def __init__(self):
             self.data = _StubData()
-            self.model = _StubModel()
+            # ``experiment.model`` is a ModelAdapter post-refactor; the eval
+            # runner reads the raw module via ``.module``. Wrap the stub so
+            # ``prepare_model``'s ``adapter.module`` dispatch resolves.
+            self.model = DDSSMAdapter(config=ModelConfig(), module=_StubModel())
 
     spec = EvalSpec(metrics=["loss_tail"], split="val", output_filename="m.json")
     out = evaluate(
@@ -146,7 +151,10 @@ def test_evalspec_per_metric_kwargs_forwarded(tmp_path):
     class _StubExpt:
         def __init__(self):
             self.data = _StubData()
-            self.model = _StubModel()
+            # ``experiment.model`` is a ModelAdapter post-refactor; the eval
+            # runner reads the raw module via ``.module``. Wrap the stub so
+            # ``prepare_model``'s ``adapter.module`` dispatch resolves.
+            self.model = DDSSMAdapter(config=ModelConfig(), module=_StubModel())
 
     spec = EvalSpec(
         metrics=["loss_tail"],
@@ -526,7 +534,10 @@ def test_unknown_metric_raises():
     class _StubExpt:
         def __init__(self):
             self.data = _StubData()
-            self.model = _StubModel()
+            # ``experiment.model`` is a ModelAdapter post-refactor; the eval
+            # runner reads the raw module via ``.module``. Wrap the stub so
+            # ``prepare_model``'s ``adapter.module`` dispatch resolves.
+            self.model = DDSSMAdapter(config=ModelConfig(), module=_StubModel())
 
     with pytest.raises(KeyError):
         evaluate(_StubExpt(), spec, device=torch.device("cpu"), run_dir="/tmp/_nope")

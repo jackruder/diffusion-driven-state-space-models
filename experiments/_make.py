@@ -146,7 +146,6 @@ def experiment(
     return ExperimentC(
         data=data,
         model=model,
-        build_trainer=TrainerPartial(hparams=hparams),
         training=training,
         objective=objective,
         eval=eval,

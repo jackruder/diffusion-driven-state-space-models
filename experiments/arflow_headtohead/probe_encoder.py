@@ -38,7 +38,9 @@ def main() -> None:
     ):
         cfg = compose(config_name="config", overrides=[f"experiment={exp_name}"])
     exp = instantiate(cfg.experiment)
-    model = exp.model.to(device)
+    # ``exp.model`` is now a ModelAdapter; the raw ``DDSSM_base`` module lives
+    # under ``.module`` and is what ``load_into_model`` + the encoder probe act on.
+    model = exp.model.module.to(device)
     load_into_model(model, ckpt, device=device, load_ema=True, strict=False)
     model.eval()
 

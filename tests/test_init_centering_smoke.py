@@ -88,15 +88,15 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
 
     # Under the ``fixed`` tracking mode the buffer is frozen from
     # construction (σ_data² ≡ 1); ``update`` is a permanent no-op.
-    if exp.model.sigma_data.tracking_mode == "fixed":
-        assert exp.model.sigma_data.frozen is True
-        assert torch.all(exp.model.sigma_data.sigma_data2 == 1.0)
+    if exp.model.module.sigma_data.tracking_mode == "fixed":
+        assert exp.model.module.sigma_data.frozen is True
+        assert torch.all(exp.model.module.sigma_data.sigma_data2 == 1.0)
     else:
-        assert exp.model.sigma_data.frozen is False
+        assert exp.model.module.sigma_data.frozen is False
 
 
 def test_init_smoke_simple_shares_baseline_instance() -> None:
     """The transition references the same baseline instance as the model."""
     cfg = _get_experiment_cfg("init_smoke_simple")
     exp = instantiate(cfg)
-    assert exp.model.baseline is exp.model.transition.baseline
+    assert exp.model.module.baseline is exp.model.module.transition.baseline

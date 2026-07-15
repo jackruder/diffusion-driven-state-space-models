@@ -471,7 +471,7 @@ def _probe_per_step(
     # reuse it without rebuilding the experiment.
     noise_levels: list[float] | None = None
     try:
-        sigma_tilde = experiment.model.transition.sigma_tilde
+        sigma_tilde = experiment.model.module.transition.sigma_tilde
         noise_levels = [float(x) for x in sigma_tilde.detach().cpu().tolist()]
         with open(os.path.join(run_dir, "noise_levels.json"), "w") as f:
             json.dump(noise_levels, f, indent=2)

@@ -228,7 +228,7 @@ def test_sigma_data_drift_snapshot_with_init_smoke_simple(tmp_path) -> None:
     exp.train(device=torch.device("cpu"), run_dir=str(run_dir))
 
     ctx = EvalContext(
-        model=exp.model,
+        model=exp.model.module,
         loader=exp.data.val_loader(),
         device=torch.device("cpu"),
         batch_transform=exp.data.batch_transform,
@@ -284,7 +284,7 @@ def test_stage2_elbo_surrogate_with_init_smoke_simple(tmp_path) -> None:
     exp.train(device=torch.device("cpu"), run_dir=str(run_dir))
 
     ctx = EvalContext(
-        model=exp.model,
+        model=exp.model.module,
         loader=exp.data.val_loader(),
         device=torch.device("cpu"),
         batch_transform=exp.data.batch_transform,

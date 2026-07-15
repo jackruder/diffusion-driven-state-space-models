@@ -43,11 +43,11 @@ def test_force_per_k_sets_mode_per_cell_and_restores(monkeypatch) -> None:
     # Shrink the forced-k sweep: the loop bound reads ``num_steps`` off the
     # transition, while the schedule buffers stay full-size (forced indices
     # 0..1 remain valid rows), so this only trims test cost.
-    expt.model.transition.num_steps = 2
+    expt.model.module.transition.num_steps = 2
 
-    orig_mode = expt.model.transition.k_sampling_mode
-    orig_sched_mode = expt.model.transition.schedule.k_sampling_mode
-    orig_p_k = expt.model.transition.p_k
+    orig_mode = expt.model.module.transition.k_sampling_mode
+    orig_sched_mode = expt.model.module.transition.schedule.k_sampling_mode
+    orig_p_k = expt.model.module.transition.p_k
 
     modes_at_call: list[str] = []
     orig_kl = DiffusionTransition.transition_kl
@@ -73,9 +73,9 @@ def test_force_per_k_sets_mode_per_cell_and_restores(monkeypatch) -> None:
     assert modes_at_call[2:] == ["uniform", "lsgm_is", "uniform", "lsgm_is"]
 
     # The training-time configuration must be restored on the shared module.
-    assert expt.model.transition.k_sampling_mode == orig_mode
-    assert expt.model.transition.schedule.k_sampling_mode == orig_sched_mode
-    assert expt.model.transition.p_k is orig_p_k
+    assert expt.model.module.transition.k_sampling_mode == orig_mode
+    assert expt.model.module.transition.schedule.k_sampling_mode == orig_sched_mode
+    assert expt.model.module.transition.p_k is orig_p_k
 
 
 def test_variance_runner_smoke(tmp_path: Path) -> None:

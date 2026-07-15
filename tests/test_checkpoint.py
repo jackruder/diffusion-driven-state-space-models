@@ -10,7 +10,9 @@ import pytest
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
+from ddssm.adapters import DDSSMAdapter
 from ddssm.model.dssd import DDSSMHyperParamsConf
+from ddssm.model.config import ModelConfig
 from ddssm.model.losses import FullELBO
 from tests.test_trainer import make_small_model
 from ddssm.training.train import DDSSMTrainer
@@ -145,18 +147,30 @@ def test_prepare_model_defaults_to_ema(tmp_path):
     """``prepare_model`` loads EMA shadows by default; opt out for live weights."""
     path = _ema_checkpoint(tmp_path)
 
-    exp = SimpleNamespace(model=_Toy(), model_config_yaml=None)
-    m = prepare_model(exp, checkpoint_path=path, device=torch.device("cpu"))
+    # ``prepare_model`` is an adapter dispatcher: it loads through
+    # ``experiment.model.load_checkpoint`` and returns the *adapter*, whose raw
+    # module lives under ``.module``.
+    exp = SimpleNamespace(
+        model=DDSSMAdapter(config=ModelConfig(), module=_Toy()),
+        model_config_yaml=None,
+        hparams=None,
+    )
+    adapter = prepare_model(exp, checkpoint_path=path, device=torch.device("cpu"))
+    m = adapter.module
     assert torch.allclose(m.lin.weight, torch.ones_like(m.lin.weight))
     assert torch.allclose(m.transition.weight, torch.ones_like(m.transition.weight))
 
-    exp_live = SimpleNamespace(model=_Toy(), model_config_yaml=None)
+    exp_live = SimpleNamespace(
+        model=DDSSMAdapter(config=ModelConfig(), module=_Toy()),
+        model_config_yaml=None,
+        hparams=None,
+    )
     m_live = prepare_model(
         exp_live,
         checkpoint_path=path,
         device=torch.device("cpu"),
         load_ema=False,
-    )
+    ).module
     assert torch.allclose(m_live.lin.weight, torch.zeros_like(m_live.lin.weight))
     assert torch.allclose(
         m_live.transition.weight, torch.zeros_like(m_live.transition.weight)

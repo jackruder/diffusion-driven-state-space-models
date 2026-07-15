@@ -82,7 +82,7 @@ def test_experiment_instantiates(name: str) -> None:
     assert isinstance(expt, Experiment)
     assert isinstance(expt.data, TimeSeriesDataModule)
     assert isinstance(expt.training, TrainingScalars)
-    n_params = sum(p.numel() for p in expt.model.parameters())
+    n_params = sum(p.numel() for p in expt.model.module.parameters())
     assert n_params > 0
 
 

@@ -109,7 +109,9 @@ def main() -> None:
     exp = instantiate(cfg.experiment)
     ckpt = args.checkpoint if os.path.isabs(args.checkpoint) else os.path.join(
         _REPO, args.checkpoint)
-    model = exp.model.to(device)
+    # ``exp.model`` is now a ModelAdapter; the raw ``DDSSM_base`` module lives
+    # under ``.module`` and is what ``load_into_model`` + ``forecast`` act on.
+    model = exp.model.module.to(device)
     # strict=False: the checkpoint carries training-only ``baseline_anchor.*``
     # (centering-handoff anchor for R_sigma_p/R_mu_p), absent from a fresh
     # eval model and unused by forecast.

@@ -13,7 +13,9 @@ import torch
 import pytest
 
 from ddssm.viz import PLOT_REGISTRY, VizSpec, PlotSpec, PlotContext, visualize
+from ddssm.adapters import DDSSMAdapter
 from ddssm.viz.plots import plot_metrics_csv
+from ddssm.model.config import ModelConfig
 from ddssm.data.datamodule import DataMetadata, TimeSeriesDataModule
 
 
@@ -85,7 +87,10 @@ def test_visualize_runner_smoke(tmp_path):
 
     class _StubExpt:
         data = _StubData()
-        model = torch.nn.Linear(1, 1)
+        # ``experiment.model`` is a ModelAdapter post-refactor; the runner reads
+        # the raw module via ``.module``. Wrap the stub so ``prepare_model``'s
+        # ``adapter.module`` dispatch resolves.
+        model = DDSSMAdapter(config=ModelConfig(), module=torch.nn.Linear(1, 1))
 
     spec = VizSpec(
         plots=[
@@ -125,7 +130,10 @@ def test_visualize_runner_unknown_plot_raises(tmp_path):
 
     class _StubExpt:
         data = _StubData()
-        model = torch.nn.Linear(1, 1)
+        # ``experiment.model`` is a ModelAdapter post-refactor; the runner reads
+        # the raw module via ``.module``. Wrap the stub so ``prepare_model``'s
+        # ``adapter.module`` dispatch resolves.
+        model = DDSSMAdapter(config=ModelConfig(), module=torch.nn.Linear(1, 1))
 
     spec = VizSpec(plots=[PlotSpec(name="nope")], split="train")
     with pytest.raises(KeyError):

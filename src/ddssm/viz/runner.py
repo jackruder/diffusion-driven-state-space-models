@@ -89,11 +89,14 @@ def visualize(
     """
     from ddssm.training.checkpoint import prepare_model
 
+    # ``prepare_model`` returns the ModelAdapter; the plot code operates on
+    # the raw ``DDSSM_base`` module (``.forecast`` plus raw attrs), so pull
+    # the loaded module out here.
     model = prepare_model(
         experiment,
         checkpoint_path=checkpoint_path,
         device=device,
-    )
+    ).module
 
     loader = experiment.data.loader(spec.split)
     T_split = experiment.data.metadata.forecast_split_or(spec.T_split)

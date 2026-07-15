@@ -94,11 +94,14 @@ def evaluate(
     """
     from ddssm.training.checkpoint import prepare_model
 
+    # ``prepare_model`` returns the ModelAdapter; the eval metrics operate on
+    # the raw ``DDSSM_base`` module (both ``.forecast`` and raw attrs), so pull
+    # the loaded module out here.
     model = prepare_model(
         experiment,
         checkpoint_path=checkpoint_path,
         device=device,
-    )
+    ).module
 
     loader = experiment.data.loader(spec.split)
     metadata = experiment.data.metadata

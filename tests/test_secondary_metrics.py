@@ -117,7 +117,7 @@ def test_log_sigma_p2_collapse_runs_on_smoke_model() -> None:
     exp = instantiate(cfg)
     val_loader = exp.data.val_loader()
     ctx = EvalContext(
-        model=exp.model,
+        model=exp.model.module,
         loader=val_loader,
         device=torch.device("cpu"),
         batch_transform=exp.data.batch_transform,
@@ -126,7 +126,7 @@ def test_log_sigma_p2_collapse_runs_on_smoke_model() -> None:
     assert out["log_sigma_p2_collapse_available"] is True
     assert len(out["log_sigma_p2_per_t_per_d"]) == len(out["log_sigma_p2_t_indices"])
     if out["log_sigma_p2_t_indices"]:
-        assert len(out["log_sigma_p2_per_t_per_d"][0]) == int(exp.model.latent_dim)
+        assert len(out["log_sigma_p2_per_t_per_d"][0]) == int(exp.model.module.latent_dim)
     import math
 
     assert math.isfinite(out["log_sigma_p2_mean"])

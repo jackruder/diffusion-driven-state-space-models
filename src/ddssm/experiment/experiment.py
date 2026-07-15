@@ -18,13 +18,12 @@ import random
 from typing import Any, Literal
 import logging
 from dataclasses import field, dataclass
-from collections.abc import Callable
 
 import numpy as np
 import torch
 
-from ddssm.model.dssd import DDSSM_base
-from ddssm.training.train import DDSSMTrainer
+from ddssm.adapters import ModelAdapter
+from ddssm.model.config import ModelConfig
 from ddssm.data.datamodule import TimeSeriesDataModule
 
 log = logging.getLogger(__name__)
@@ -216,6 +215,15 @@ class ObjectiveSpec:
         except OSError:
             return float("inf")
         if not values:
+            # A ``split="val"`` filter that matches zero rows is the common
+            # footgun (validation never ran / no val split logged): surface it
+            # so a silent +inf objective is debuggable. Return value unchanged.
+            if self.split == "val":
+                _warn_once(
+                    f"ObjectiveSpec split='val' matched zero rows in {csv_path} "
+                    f"for metric {self.metric!r}; returning +inf. Did validation "
+                    f"run (validate_every > 0) and log a 'val' split?"
+                )
             return float("inf")
         tail_n = max(1, int(len(values) * float(self.tail_frac)))
         tail = values[-tail_n:]
@@ -349,8 +357,11 @@ class Experiment:
     """
 
     data: TimeSeriesDataModule
-    model: DDSSM_base
-    build_trainer: Callable[..., DDSSMTrainer]
+    # The model family behind the adapter seam. ``Experiment`` drives it only
+    # through the adapter surface (fit / forecast / checkpoint); the raw
+    # ``nn.Module`` lives at ``model.module``. The ``build_trainer`` partial
+    # now rides inside the adapter (a ``DDSSMAdapter``), not on the experiment.
+    model: ModelAdapter
     training: TrainingScalars = field(default_factory=TrainingScalars)
     objective: ObjectiveSpec | Objectives | None = None
     eval: Any = (
@@ -360,11 +371,13 @@ class Experiment:
     variance: Any = None  # ddssm.variance.ProbeSpec | None -- typed lazily
     seed: int | None = 0
     wandb_config: dict | None = None
-    # Single source of truth for optimiser-side hparams. Trainer reads
-    # this directly per ADR-0004 (no longer routed through
-    # ``model.config.hyperparams``). Exposed here so callers can
-    # ``exp.hparams.enc_lr=...`` or ``tweak(exp, hparams__lr=1e-3)``.
-    hparams: Any = None
+    # Single source of truth for optimiser-side hparams (a ``ModelConfig`` /
+    # subclass). Forwarded into ``model.fit`` per ADR-0004 (no longer routed
+    # through ``model.config.hyperparams``). Exposed here so callers can
+    # ``exp.hparams.enc_lr=...`` or ``tweak(exp, hparams__lr=1e-3)``. Typed
+    # permissively (``| None``) — a strict OmegaConf validator would reject
+    # ``ModelConfig`` subclass instances (CSDIConfig et al.).
+    hparams: ModelConfig | None = None
     # Slurm resource request, consumed by ``python -m experiments
     # sbatch``. Purely metadata at training time.
     sbatch: SBatch | None = None
@@ -379,9 +392,12 @@ class Experiment:
     def train(self, *, device: torch.device, run_dir: str) -> None:
         """Run training only. Eval, viz, and objective reads are separate stages.
 
-        Stores the constructed trainer on ``self.trainer`` so
-        :meth:`objective_value` can save a final checkpoint and trigger
-        a json-source evaluate without rebuilding anything.
+        Delegates the trainer construction + fit loop to ``self.model`` (the
+        :class:`~ddssm.adapters.base.ModelAdapter`); the loggers / checkpoint
+        lifecycle live inside :meth:`ModelAdapter.fit`. After ``fit`` returns
+        the adapter's trainer (if any) is stored on ``self.trainer`` so
+        :meth:`objective_value` can drive a json-source evaluate without
+        rebuilding anything (``None`` for non-DDSSM families).
         """
         _seed_everything(self.seed)
 
@@ -394,37 +410,23 @@ class Experiment:
         # next to the invocation CWD rather than the run.
         checkpoint_dir = os.path.join(run_dir, "checkpoints")
 
-        log.info(
-            "Model: %d parameters", sum(p.numel() for p in self.model.parameters())
-        )
+        # Param-count log is best-effort: an adapter's ``module`` may be None
+        # (or raise) pre-fit for re-vendored families that build lazily. Skip
+        # it then rather than crash the run.
+        module = self._model_module_or_none()
+        if module is not None:
+            log.info(
+                "Model: %d parameters", sum(p.numel() for p in module.parameters())
+            )
+
         wandb_kwargs = self._wandb_kwargs(run_dir)
-        # Per ADR-0004: caller-supplied ``exp.hparams`` is the single
-        # source of truth at training time. Pass it through to the
-        # trainer so ``tweak(exp, hparams__lr=...)`` reaches optim.
-        # When ``build_trainer`` is the canonical ``TrainerPartial``
-        # built by :func:`experiments._make.experiment`, ``hparams``
-        # is already curried in; this ``hparams=`` override wins so
-        # post-instantiation tweaks take effect.
-        trainer_kwargs: dict[str, Any] = dict(
-            model=self.model,
-            device=device,
-            csv_log_path=csv_log_path,
-            tensorboard_dir=tensorboard_dir,
-            checkpoint_dir=checkpoint_dir,
-            wandb_config=wandb_kwargs,
-        )
-        if self.hparams is not None:
-            trainer_kwargs["hparams"] = self.hparams
-        if self.model_config_yaml is not None:
-            trainer_kwargs["model_config_yaml"] = self.model_config_yaml
-        trainer = self.build_trainer(**trainer_kwargs)
-        self.trainer = trainer
 
         # hparams.batch_size is the single source of truth for the loader
         # batch size (ADR-0004: hparams owns runtime knobs). Reconcile it
-        # onto the data module before building loaders so a CLI override of
-        # experiment.hparams.batch_size actually takes effect — the data
+        # onto the data module before ``fit`` builds loaders so a CLI override
+        # of experiment.hparams.batch_size actually takes effect — the data
         # preset's own batch_size is otherwise what the DataLoader would use.
+        # ``getattr(..., "batch_size", None)`` works for any ``ModelConfig``.
         hp_bs = getattr(self.hparams, "batch_size", None)
         if hp_bs is not None and hasattr(self.data, "batch_size"):
             if self.data.batch_size != hp_bs:
@@ -436,35 +438,33 @@ class Experiment:
                 )
             self.data.batch_size = hp_bs
 
-        train_loader = self.data.train_loader()
-        if train_loader is None:
-            log.info("No data attached. Skipping fit().")
-            return
-
-        val_loader = (
-            self.data.val_loader() if self.training.validate_every > 0 else None
+        log.info(
+            "Starting fit (steps=%d, log_every=%d, validate_every=%d, amp=%s)",
+            self.training.steps,
+            self.training.log_every,
+            self.training.validate_every,
+            self.training.amp,
         )
-
-        try:
-            log.info(
-                "Starting fit (steps=%d, log_every=%d, validate_every=%d, amp=%s)",
-                self.training.steps,
-                self.training.log_every,
-                self.training.validate_every,
-                self.training.amp,
-            )
-            trainer.fit(
-                train_loader=train_loader,
-                val_loader=val_loader,
-                batch_transform=self.data.batch_transform,
-                **self.training.fit_kwargs(),
-            )
-        finally:
-            # Logger lifecycle is owned by the run, not by fit(). Close the
-            # CSV/TB/W&B sinks exactly once, after fit (or on the exception
-            # path — W&B's close uploads the final checkpoint artifact
-            # best-effort).
-            trainer.metrics.close()
+        # Per ADR-0004: caller-supplied ``exp.hparams`` is the single source of
+        # truth at training time — forwarded into the adapter's ``fit`` so
+        # ``tweak(exp, hparams__lr=...)`` reaches the optimizer. The adapter
+        # owns the trainer construction, the loader / val gating, the logger
+        # lifecycle, and the NullDataModule no-op.
+        self.model.fit(
+            data=self.data,
+            training=self.training,
+            device=device,
+            csv_log_path=csv_log_path,
+            tensorboard_dir=tensorboard_dir,
+            checkpoint_dir=checkpoint_dir,
+            hparams=self.hparams,
+            wandb_config=wandb_kwargs,
+            model_config_yaml=self.model_config_yaml,
+        )
+        # Back-compat: expose the adapter's trainer (``None`` for families that
+        # don't build a ``DDSSMTrainer``). ``objective_value``'s json branch no
+        # longer reads it, but downstream callers / tests may.
+        self.trainer = getattr(self.model, "trainer", None)
 
         # Emit run_summary.json so the run is self-describing (final loss,
         # λ-warmup state, σ_data² drift, val loss, non-finite count).
@@ -474,6 +474,18 @@ class Experiment:
             write_run_summary(run_dir)
         except Exception as e:  # never let summary-writing fail a finished run
             log.warning("Could not write run_summary.json: %s", e)
+
+    def _model_module_or_none(self) -> torch.nn.Module | None:
+        """The adapter's raw module, or ``None`` when it isn't built yet.
+
+        ``ModelAdapter.module`` may raise (CSDI builds lazily) or return
+        ``None`` before ``fit`` for re-vendored families; callers that only
+        want a best-effort param count / device move tolerate the miss.
+        """
+        try:
+            return self.model.module
+        except Exception:
+            return None
 
     def objective_value(
         self,
@@ -522,19 +534,14 @@ class Experiment:
                 )
                 penalty_vals = [float("inf")] * len(objectives)
                 return penalty_vals if is_multi else penalty_vals[0]
-            trainer = getattr(self, "trainer", None)
-            if trainer is None:
-                raise RuntimeError(
-                    "Experiment.objective_value: json-source objective "
-                    "requires that .train() ran first to populate "
-                    "self.trainer."
-                )
             final_ckpt = os.path.join(
                 run_dir,
                 "checkpoints",
                 "ckpt_final.pth",
             )
-            trainer.save_checkpoint(final_ckpt)
+            # The "``.train()`` ran first" precondition now lives in the
+            # adapter's ``save_checkpoint`` (same ``RuntimeError`` surface).
+            self.model.save_checkpoint(final_ckpt)
             log.info("Saved final checkpoint to %s", final_ckpt)
             self.evaluate(
                 device=device,

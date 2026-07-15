@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import pickle
 import random
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import difflib
 import logging
 import tempfile
@@ -31,6 +31,9 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from omegaconf import OmegaConf
+
+if TYPE_CHECKING:  # annotation-only — checkpoint is imported *by* the adapters
+    from ddssm.adapters.base import ModelAdapter
 
 log = logging.getLogger(__name__)
 
@@ -391,20 +394,25 @@ def prepare_model(
     device: torch.device,
     train: bool = False,
     load_ema: bool = True,
-) -> torch.nn.Module:
-    """Build + load the experiment's model for a standalone stage.
+) -> ModelAdapter:
+    """Load the experiment's model adapter for a standalone stage.
 
-    Moves the model to ``device``, loads ``checkpoint_path`` with the
-    model-config cross-check (so no stage can forget it), and sets eval
-    mode — or train mode when ``train=True`` (e.g. a counterfactual
-    runner needing train-mode layers).
+    Dispatches to the :class:`~ddssm.adapters.base.ModelAdapter` on
+    ``experiment.model``: loads ``checkpoint_path`` through the adapter's own
+    ``load_checkpoint`` (with the model-config cross-check, so no stage can
+    forget it), moves the raw module to ``device``, and sets eval mode — or
+    train mode when ``train=True`` (e.g. a counterfactual runner needing
+    train-mode layers).
 
     ``load_ema`` defaults to ``True``: inference loads the model's EMA
     shadows — the (full-model) weights the sampling path used at training
     time (ADR-0005). Pass ``load_ema=False`` for the rare case that wants
     the raw live weights.
+
+    Returns the *adapter* (callers use ``.forecast`` / ``.log_prob`` /
+    ``.module``).
     """
-    model = experiment.model.to(device)
+    adapter = experiment.model
     if checkpoint_path is None:
         log.warning("No checkpoint provided; using randomly-initialised weights.")
     else:
@@ -412,10 +420,10 @@ def prepare_model(
         # that a freshly-built eval model lacks. Shape mismatches still
         # hard-fail inside load_state_dict; this only tolerates such missing/
         # extra leaf buffers (matches the eval_baselines / probe loaders).
-        load_into_model(
-            model,
+        adapter.load_checkpoint(
             checkpoint_path,
             device=device,
+            hparams=getattr(experiment, "hparams", None),
             expected_model_config_yaml=getattr(
                 experiment,
                 "model_config_yaml",
@@ -425,5 +433,6 @@ def prepare_model(
             strict=False,
         )
         log.info("Loaded checkpoint from %s", checkpoint_path)
-    model.train() if train else model.eval()
-    return model
+    adapter.module.to(device)
+    adapter.module.train() if train else adapter.module.eval()
+    return adapter

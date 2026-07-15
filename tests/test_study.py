@@ -136,7 +136,7 @@ def test_init_variants() -> None:
 
 def test_one_point_forward_backward_is_finite_with_grads() -> None:
     exp = instantiate(INIT_CENTERING_STUDY.point("init_zero_fixed__1d").config)
-    model = exp.model
+    model = exp.model.module
     B, D, T = 2, model.data_dim, 8
     torch.manual_seed(0)
     components, _m, _ = model(

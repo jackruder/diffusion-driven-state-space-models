@@ -277,10 +277,12 @@ def run_probe(
 
     # ``prepare_model`` defaults to ``load_ema=True`` — the probe measures
     # the sampling-path EMA shadows, matching training-time sampling
-    # (ADR-0005).
+    # (ADR-0005). It returns the ModelAdapter; the probe operates on the raw
+    # ``DDSSM_base`` module (``.transition``/``.sigma_data`` plus raw attrs),
+    # so pull the loaded module out here.
     model = prepare_model(
         experiment, checkpoint_path=checkpoint_path, device=device,
-    )
+    ).module
     _freeze_model(model, list(spec.freeze))
 
     # The probe measures score-net gradient/loss variance at fixed model
