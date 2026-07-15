@@ -15,7 +15,7 @@ from ddssm.experiment.stores import sweep_store
 from ddssm.experiment.builders import Hparams
 from experiments.gluonts_forecast.model import GluonModel
 
-_model = SweepSpace(target=GluonModel, prefix="experiment.model")
+_model = SweepSpace(target=GluonModel, prefix="experiment.model.module")
 _model.raw("latent_dim", "choice(16, 32, 64, 128, 256, 512)")
 
 _hparams = SweepSpace(target=Hparams, prefix="experiment.hparams")
@@ -33,7 +33,7 @@ GluonLeanSweep = make_config(
 sweep_store(GluonLeanSweep, name="gluonts_lean")
 
 
-_pilot_model = SweepSpace(target=GluonModel, prefix="experiment.model")
+_pilot_model = SweepSpace(target=GluonModel, prefix="experiment.model.module")
 _pilot_model.raw("latent_dim", "choice(16, 32, 64, 128, 256)")
 _pilot_hparams = SweepSpace(target=Hparams, prefix="experiment.hparams")
 _pilot_hparams.log("enc_lr", 1e-4, 2e-3)

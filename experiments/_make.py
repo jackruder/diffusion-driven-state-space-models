@@ -71,12 +71,25 @@ import logging
 import dataclasses
 
 import torch
-from hydra_zen import to_yaml as _zen_to_yaml, instantiate
+from hydra_zen import to_yaml as _zen_to_yaml, get_target, instantiate
 from omegaconf import OmegaConf
 
-from ddssm.experiment.builders import ExperimentC, TrainerPartial
+from ddssm.adapters import ModelAdapter
+from ddssm.experiment.builders import ExperimentC, DDSSMAdapterC, TrainerPartial
 
 log = logging.getLogger(__name__)
+
+
+def _targets_adapter(model_conf: Any) -> bool:
+    """True iff ``model_conf`` already targets a :class:`ModelAdapter` subclass.
+
+    Existing DDSSM presets target *functions* (``_build_init_centering_model`` /
+    ``build_gluonts_model``), so ``get_target`` returns a function — a bare
+    ``issubclass(t, ModelAdapter)`` would raise ``TypeError`` on it. The
+    ``isinstance(t, type)`` guard is therefore mandatory before ``issubclass``.
+    """
+    t = get_target(model_conf)
+    return isinstance(t, type) and issubclass(t, ModelAdapter)
 
 
 def experiment(
@@ -92,13 +105,22 @@ def experiment(
     wandb_config: Any | None = None,
     sbatch: Any | None = None,
     seed: int | None = 0,
+    wrap: bool = True,
 ) -> Any:
     """Bind a model + dataset + training into an :class:`ExperimentC` config.
 
-    ``hparams`` is curried onto the ``build_trainer`` partial so the
-    trainer reads it directly (per ADR-0004 the model no longer
-    carries a ``hyperparams`` field). It is also stored on the
-    experiment so callers can introspect or ``tweak`` it.
+    ``hparams`` is curried onto the model's ``ModelAdapter`` wrapper (its
+    ``build_trainer`` ``TrainerPartial`` + ``config``) so the trainer reads it
+    directly (per ADR-0004 the model no longer carries a ``hyperparams``
+    field). It is also stored on the experiment so callers can introspect or
+    ``tweak`` it.
+
+    ``model`` is wrapped in a :class:`DDSSMAdapter` conf (via
+    :data:`DDSSMAdapterC`) unless it already targets a
+    :class:`~ddssm.adapters.base.ModelAdapter` subclass — in which case
+    ``config=hparams`` is curried onto the existing adapter conf instead of
+    double-wrapping (future CSDI presets). Pass ``wrap=False`` to skip wrapping
+    entirely (escape hatch for callers assembling their own adapter).
 
     ``sbatch`` is purely metadata at training time; it is read by
     ``python -m experiments sbatch <name>`` when emitting a Slurm
@@ -106,6 +128,21 @@ def experiment(
     :mod:`ddssm.cluster.sbatch`. (Study launches read resources from each
     point's ``PointLaunch.resources`` instead — see ADR-0008.)
     """
+    if wrap:
+        if _targets_adapter(model):
+            # Already an adapter conf (e.g. a future CSDI preset): curry the
+            # winning config onto it rather than re-wrapping. ``model`` is a
+            # builds() *instance* (a dataclass), so use ``dataclasses.replace``
+            # rather than calling it.
+            model = dataclasses.replace(model, config=hparams)
+        else:
+            # Bare DDSSM model conf: wrap in a DDSSMAdapter so Experiment.model
+            # is a ModelAdapter. The TrainerPartial now lives INSIDE the wrapper.
+            model = DDSSMAdapterC(
+                module=model,
+                config=hparams,
+                build_trainer=TrainerPartial(hparams=hparams),
+            )
     return ExperimentC(
         data=data,
         model=model,
@@ -143,7 +180,7 @@ def override(obj: Any, *overrides: Any) -> Any:
           override(
               exp,
               {
-                  "model.transition.unet": MLPUnet(
+                  "model.module.transition.unet": MLPUnet(
                       channels=64
                   )
               },
@@ -157,7 +194,7 @@ def override(obj: Any, *overrides: Any) -> Any:
         B = override(
             A,
             "training.steps=200",
-            "model.transition.schedule.sigma_min=0.001",
+            "model.module.transition.schedule.sigma_min=0.001",
         )
 
         for mode in [

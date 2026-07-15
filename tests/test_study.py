@@ -119,8 +119,8 @@ def test_init_points_bake_real_dataset_and_dims() -> None:
         mode, data_dim, latent = expect[p.tags["dataset"]]
         assert p.config.data.mode == mode
         assert data_dim == p.config.data.D
-        assert p.config.model.data_dim == data_dim
-        assert p.config.model.latent_dim == latent
+        assert p.config.model.module.data_dim == data_dim
+        assert p.config.model.module.latent_dim == latent
 
 
 def test_init_variants() -> None:
@@ -129,8 +129,8 @@ def test_init_variants() -> None:
     p1d = INIT_CENTERING_STUDY.point("init_persistence_per_t__1d")
     pmv = INIT_CENTERING_STUDY.point("init_persistence_per_t__mv")
     assert v["tiny"](p1d) == []
-    assert v["paper"](p1d) == ["experiment.model.latent_dim=2"]
-    assert v["paper"](pmv) == ["experiment.model.latent_dim=8"]
+    assert v["paper"](p1d) == ["experiment.model.module.latent_dim=2"]
+    assert v["paper"](pmv) == ["experiment.model.module.latent_dim=8"]
     assert any("steps=5" in o for o in v["smoke"](p1d))
 
 

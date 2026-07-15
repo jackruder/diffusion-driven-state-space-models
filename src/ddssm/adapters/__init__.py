@@ -6,5 +6,6 @@ package exposes only the abstract seam; concrete adapters land in later modules.
 """
 
 from ddssm.adapters.base import ModelAdapter, MetricNotSupported
+from ddssm.adapters.ddssm import DDSSMAdapter
 
-__all__ = ["MetricNotSupported", "ModelAdapter"]
+__all__ = ["DDSSMAdapter", "MetricNotSupported", "ModelAdapter"]

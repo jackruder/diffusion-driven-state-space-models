@@ -90,7 +90,7 @@ def _smoke_overrides(point: StudyPoint) -> list[str]:
         "experiment.training.log_every=5",
         "experiment.training.validate_every=10",
         "experiment.training.checkpoint_every=100",
-        "experiment.model.latent_dim=16",
+        "experiment.model.module.latent_dim=16",
     ]
 
 

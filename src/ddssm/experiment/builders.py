@@ -34,6 +34,7 @@ from __future__ import annotations
 from hydra_zen import builds
 from omegaconf import MISSING
 
+from ddssm.adapters import DDSSMAdapter
 from ddssm.nn.futsum import GRUFutureSummary, TransformerFutureSummary
 from ddssm.data.mocap import MocapDataModule
 from ddssm.experiment import (
@@ -434,6 +435,13 @@ Probe = builds(ProbeSpec, populate_full_signature=True)
 
 ExperimentC = builds(Experiment, populate_full_signature=True)
 
+# Adapter wrapper conf. ``experiments._make.experiment`` wraps a DDSSM model
+# conf in this so ``Experiment.model`` is a ``ModelAdapter`` (not a bare
+# ``DDSSM_base``). ``module`` / ``config`` / ``build_trainer`` are curried in
+# by that factory; the import edge is one-directional (adapters never import
+# experiment at runtime), so this cannot cycle.
+DDSSMAdapterC = builds(DDSSMAdapter, populate_full_signature=True)
+
 
 __all__ = [
     # Mixer / residual-block builders (instantiate to runtime dataclasses)
@@ -495,4 +503,5 @@ __all__ = [
     "ProbePlot",
     # Experiment composer
     "ExperimentC",
+    "DDSSMAdapterC",
 ]

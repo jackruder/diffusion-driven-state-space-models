@@ -77,7 +77,9 @@ def _launch(point: StudyPoint) -> PointLaunch:
 
 
 def _paper_overrides(point: StudyPoint) -> list[str]:
-    return [f"experiment.model.latent_dim={paper_latent(point.coords['dataset'])}"]
+    return [
+        f"experiment.model.module.latent_dim={paper_latent(point.coords['dataset'])}"
+    ]
 
 
 def _smoke_overrides(point: StudyPoint) -> list[str]:

@@ -96,7 +96,9 @@ def test_experiment_cli_compose(name: str) -> None:
     # baseline / aux instances. The init-centering family uses
     # ``_build_init_centering_model``; other families (e.g. synthetic_validation)
     # supply their own factory — just assert a model + data target resolve.
-    target = cfg.experiment.model._target_
+    # The model conf is wrapped in a DDSSMAdapter; the DDSSM factory target
+    # lives under ``model.module`` after the adapter refactor.
+    target = cfg.experiment.model.module._target_
     if name.startswith("init_"):
         assert target.endswith("_build_init_centering_model"), target
     else:
@@ -126,9 +128,9 @@ def test_default_experiment_is_init_smoke_simple() -> None:
     with initialize_config_dir(config_dir=CONF_DIR, version_base="1.3"):
         cfg = compose(config_name="config")
     assert cfg.experiment.data._target_.endswith("SyntheticDataModule")
-    assert cfg.experiment.model._target_.endswith("_build_init_centering_model")
-    assert cfg.experiment.model.baseline_form == "zero"
-    assert cfg.experiment.model.tracking_mode == "fixed"
+    assert cfg.experiment.model.module._target_.endswith("_build_init_centering_model")
+    assert cfg.experiment.model.module.baseline_form == "zero"
+    assert cfg.experiment.model.module.tracking_mode == "fixed"
 
 
 @pytest.mark.parametrize(
@@ -143,8 +145,8 @@ def test_experiment_shape_baked_in(
 ) -> None:
     """Factory shape kwargs resolve to concrete ints, not interpolation strings."""
     exp = _exp(name)
-    assert exp.model.data_dim == expected_data_dim
-    assert exp.model.latent_dim == expected_latent
+    assert exp.model.module.data_dim == expected_data_dim
+    assert exp.model.module.latent_dim == expected_latent
 
 
 def test_objective_returns_inf_on_missing_csv(tmp_path) -> None:
