@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
+from ddssm.model.config import ModelConfig
 from ddssm.model.losses import LossComponents
 from ddssm.nn.net_utils import (
     time_embedding,
@@ -1256,7 +1257,7 @@ def _default_hyperparams():
 
 
 @dataclass
-class DDSSMHyperParamsConf:
+class DDSSMHyperParamsConf(ModelConfig):
     """Training hyperparameters for DDSSM."""
 
     S: int = 1
@@ -1266,7 +1267,6 @@ class DDSSMHyperParamsConf:
     # ``None`` falls back to ``weight_decay``.
     weight_decay: float = 1e-4
     weight_decay_psi: float | None = None
-    batch_size: int = 16
     grad_accum_steps: int = 4
     t_chunk: int = 16
     # Global grad-norm clip, applied after the non-finite-grad skip check
