@@ -1,67 +1,34 @@
-"""Tests for trainable-mask wiring through Experiment.train."""
+"""Tests for the :class:`TrainingScalars` surface after trainable-mask removal."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import dataclasses
 
-import torch
-
-from ddssm.experiment import Experiment, TrainingScalars
-from ddssm.training.stages import StageTrainableConf
+from ddssm.experiment import TrainingScalars
 
 
-def test_trainable_modules_defaults_all_true():
-    t = StageTrainableConf()
-    assert t.encoder and t.decoder and t.transition
+def test_training_scalars_has_no_trainable_field():
+    """The ``trainable`` field was removed along with staged training."""
+    field_names = {f.name for f in dataclasses.fields(TrainingScalars)}
+    assert "trainable" not in field_names
 
 
-def test_recon_only_freezes_transition():
-    t = StageTrainableConf(encoder=True, decoder=True, transition=False)
-    assert not t.transition
-    assert t.encoder and t.decoder
+def test_fit_kwargs_keys():
+    """``fit_kwargs`` returns exactly the runtime knobs forwarded to
+    :meth:`DDSSMTrainer.fit`."""
+    expected = {
+        "total_steps",
+        "log_every",
+        "validate_every",
+        "checkpoint_every",
+        "checkpoint_prefix",
+        "amp",
+        "profile_steps",
+        "resume_from",
+    }
+    assert set(TrainingScalars().fit_kwargs().keys()) == expected
 
 
-def test_train_calls_set_trainable_when_specified():
-    """Experiment.train invokes trainer._set_trainable iff training.trainable is set."""
-    expt = Experiment.__new__(Experiment)
-    expt.seed = None
-    expt.wandb_config = None
-    expt.objective = None
-    expt.training = TrainingScalars(
-        steps=0,
-        log_every=1,
-        trainable=StageTrainableConf(encoder=True, decoder=True, transition=False),
-    )
-
-    fake_data = MagicMock()
-    fake_data.train_loader.return_value = None  # short-circuit fit
-    expt.data = fake_data
-
-    fake_model = MagicMock()
-    fake_model.parameters.return_value = []
-    expt.model = fake_model
-
-    fake_trainer = MagicMock()
-    expt.build_trainer = MagicMock(return_value=fake_trainer)
-
-    expt.train(device=torch.device("cpu"), run_dir="/tmp/_set_trainable_test")
-    assert expt.trainer is fake_trainer
-    fake_trainer._set_trainable.assert_called_once_with(expt.training.trainable)
-
-
-def test_train_skips_set_trainable_when_none():
-    expt = Experiment.__new__(Experiment)
-    expt.seed = None
-    expt.wandb_config = None
-    expt.objective = None
-    expt.training = TrainingScalars(steps=0, log_every=1, trainable=None)
-
-    fake_data = MagicMock()
-    fake_data.train_loader.return_value = None
-    expt.data = fake_data
-    expt.model = MagicMock(parameters=MagicMock(return_value=[]))
-    fake_trainer = MagicMock()
-    expt.build_trainer = MagicMock(return_value=fake_trainer)
-
-    expt.train(device=torch.device("cpu"), run_dir="/tmp/_set_trainable_none")
-    fake_trainer._set_trainable.assert_not_called()
+def test_fit_kwargs_forwards_steps_as_total_steps():
+    """``steps`` on the dataclass maps to ``total_steps`` in the fit kwargs."""
+    assert TrainingScalars(steps=7).fit_kwargs()["total_steps"] == 7
