@@ -1,41 +1,45 @@
 # `ddssm.training`
 
-The training stack for `DDSSM_base`: the core training loop, multi-stage
-orchestration, the checkpoint payload schema, and the metric-logging
-helpers. It owns everything between an assembled `Experiment` and the
-artifacts written to a run directory (`metrics.csv`, `tb_logs/`,
-checkpoints). The forward pass always computes the full ELBO; this layer
-decides *what trains*, *for how long*, and *what gets recorded*.
+The training stack for `DDSSM_base`: the core training loop, the LR/λ
+schedule config, the checkpoint payload schema, and the metric-logging
+helpers. It owns everything between a `DDSSMAdapter` (which drives this
+stack — see `src/ddssm/adapters/`) and the artifacts written to a run
+directory (`metrics.csv`, `tb_logs/`, checkpoints). The forward pass
+always computes the full ELBO; this layer decides *for how long* to train
+and *what gets recorded*.
 
 ## Files
 
-- **`train.py`** — `DDSSMTrainer`, the training harness. Owns per-submodule
-  AdamW optimizers (separate LRs for encoder / decoder / z_init / transition),
-  optional bf16 AMP, gradient accumulation, EMA tracking (`EMA`), the λ-warmup
-  schedule, and step-level logging to CSV / TensorBoard / W&B. `fit(...)` runs
-  the loop (step-counted validation, checkpointing, profiling, ELBO-plateau
-  early stop) and raises `PreemptError` on a caught preempt signal after saving
-  a resume checkpoint. `_set_trainable(...)` toggles `requires_grad` per
-  submodule — the single mechanism for stage-aware gradient suppression:
-  frozen submodules still run forward but accumulate no gradients.
-- **`stages.py`** — `StageOrchestrator` plus its config dataclasses
-  (`StagesConf`, `StageSpecConf`, `StageTrainableConf`, `StageLrsConf`,
-  `StageSchedulerConf`, `LambdaRampConf`, `EarlyStopSpec`). Runs sequential
-  phases (e.g. recon-only → trans-only → joint) in `stages.run` order; for each
-  stage it flips `model.stage_selector`, applies the per-stage trainable mask
-  and LRs (rebuilding the optimizer, or deferring to a `centering_handoff`
-  hook), sets the λ-ramp, and drives `trainer.fit` for the stage's step budget.
-  `make_lambda_cosine(...)` builds the cosine λ schedule.
+- **`train.py`** — `DDSSMTrainer`, the training harness (owned by
+  `DDSSMAdapter`). Owns per-submodule AdamW optimizers (separate LRs for
+  encoder / decoder / z_init / transition), optional bf16 AMP, gradient
+  accumulation, EMA tracking (`EMA`), the λ-warmup schedule, and step-level
+  logging to CSV / TensorBoard / W&B. `fit(...)` runs the loop (step-counted
+  validation, checkpointing, profiling, ELBO-plateau early stop) and raises
+  `PreemptError` on a caught preempt signal after saving a resume checkpoint.
+  (`_set_trainable(...)` — the former per-submodule `requires_grad` mask — is
+  now dead code; staged training has been removed.)
+- **`stages.py`** — LR-schedule and λ-ramp config dataclasses (`StageLrsConf`,
+  `LrScheduleConf`, `LrScheduleGroupConf`, `LambdaRampConf`, `EarlyStopSpec`, …)
+  plus their resolvers: `make_lr_lambda(...)` /
+  `resolve_lr_schedule_defaults(...)` build the per-component LR lambdas and
+  `make_lambda_cosine(...)` the cosine λ schedule — consumed by `train.py` and
+  `dssd.py`. The sequential `StageOrchestrator` has been removed; the
+  `Stage*Conf` dataclasses that remain are the leftover schedule pieces still
+  read by the trainer.
 - **`train_utils.py`** — optimizer-construction helpers.
   `param_groups_for_adamw(...)` builds per-component AdamW param groups with
   selective weight decay (norm/bias/embedding/log-var params get zero decay)
   and de-duplicates shared submodules; `make_warmup_cosine(...)` builds a
   linear-warmup + cosine-decay `LambdaLR`.
-- **`checkpoint.py`** — the single owner of the `.pth` payload schema. The
-  `Checkpoint` dataclass captures model/optimizer/EMA/scaler/scheduler state,
-  step counter, and `stage_prefix`; `save`/`load_into_model`/`prepare_model`
-  handle atomic writes, format-version tolerance, a model-config cross-check
-  (warns on drift), and optional EMA-shadow loading for inference.
+- **`checkpoint.py`** — owner of the DDSSM (`ddssm_ckpt_v3`) `.pth` payload
+  schema. The `Checkpoint` dataclass captures model/optimizer/EMA/scaler/
+  scheduler state and step counter; `save`/`load_into_model` handle atomic
+  writes (via the shared `atomic_save`), a model-config cross-check (via
+  `check_model_config_drift`, which unwraps adapter-wrapper yaml before
+  diffing), and optional EMA-shadow loading for inference. `prepare_model` is
+  now an adapter dispatcher: it forwards to `adapter.load_checkpoint(...)` so
+  each family loads its own format (the CSDI adapter owns `csdi_ckpt_v1`).
 - **`loggers.py`** — metric aggregation and sinks. `MetricStore` fans flushed
   rows out to `ConsoleLogger`, `CSVLogger`, `TensorBoardLogger`, and
   `WandbLogger`; `MetricSpec` selects per-key meter kinds
@@ -43,9 +47,8 @@ decides *what trains*, *for how long*, and *what gets recorded*.
 
 ## How it fits
 
-An `Experiment` (see `src/ddssm/experiment.py`) supplies a `build_trainer`
-partial that constructs the `DDSSMTrainer`; single-stage runs call `fit`
-directly while multi-stage presets wrap it in a `StageOrchestrator`. The
-per-stage trainable mask — applied through `DDSSMTrainer._set_trainable` — is
-the only gradient-suppression mechanism, so stage behavior is fully declarative
-in `StagesConf`. Modules use absolute imports (`from ddssm.training... import`).
+`DDSSMAdapter` (see `src/ddssm/adapters/ddssm.py`) constructs the
+`DDSSMTrainer` and calls `fit(...)` — `Experiment.train` delegates to the
+adapter rather than building a trainer itself. The adapter forwards the
+`ModelConfig` (`Experiment.hparams`) so optimizer/LR knobs resolve there. Modules
+use absolute imports (`from ddssm.training... import`).

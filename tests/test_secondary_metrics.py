@@ -126,7 +126,9 @@ def test_log_sigma_p2_collapse_runs_on_smoke_model() -> None:
     assert out["log_sigma_p2_collapse_available"] is True
     assert len(out["log_sigma_p2_per_t_per_d"]) == len(out["log_sigma_p2_t_indices"])
     if out["log_sigma_p2_t_indices"]:
-        assert len(out["log_sigma_p2_per_t_per_d"][0]) == int(exp.model.module.latent_dim)
+        assert len(out["log_sigma_p2_per_t_per_d"][0]) == int(
+            exp.model.module.latent_dim
+        )
     import math
 
     assert math.isfinite(out["log_sigma_p2_mean"])

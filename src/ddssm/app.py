@@ -8,13 +8,12 @@ Usage::
     # Pick a different registered preset (see ``python -m experiments list``).
     python -m ddssm.app experiment=init_smoke_high_surface
 
-    # Override any field at any depth via dot-notation. The shipped presets
-    # are multi-stage, so the step budget lives under ``training.stages.*``
-    # (here the factory args n_pretrain / n_stage2) — ``training.steps`` is
-    # only read by the single-fit (no-stages) path.
+    # Override any field at any depth via dot-notation. The step budget lives
+    # under ``training.steps``; adapter-owned knobs live under
+    # ``experiment.hparams.*`` (the family's ``ModelConfig``).
     python -m ddssm.app experiment=init_smoke_simple \\
-        experiment.training.stages.n_pretrain=200 \\
-        experiment.training.stages.n_stage2=400
+        experiment.training.steps=400 \\
+        experiment.hparams.lr=1e-3
 
     # Swap the dataset baked into a preset (data store is packaged at
     # experiment.data; use +data= to append).

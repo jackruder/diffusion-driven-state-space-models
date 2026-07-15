@@ -1,7 +1,7 @@
 # `ddssm.experiment` — the composition layer
 
 This package is the single composition point of DDSSM. `Experiment` ties a data
-module, model, trainer factory, training scalars, optional eval/viz/variance
+module, a model adapter, training scalars, optional eval/viz/variance
 specs, and an Optuna objective into one dataclass that Hydra instantiates and
 runs. The surrounding modules supply the hydra-zen config surface (`builders`),
 the store→ConfigStore bridge (`stores`, `registry`), and re-exports so callers
@@ -11,24 +11,25 @@ Hydra wires the config; this class orchestrates.
 ## Files
 
 - **`experiment.py`** — the `Experiment` dataclass, the central composition point.
-  It owns `data` (`TimeSeriesDataModule`), `model` (`DDSSM_base`), `build_trainer` (a
-  partial `DDSSMTrainer` factory, constructed lazily in `train` since it needs the
-  device + run dir), `training` (`TrainingScalars`, including the per-module
-  `trainable` mask applied via `trainer._set_trainable` to freeze submodule
-  gradients per stage, and the multi-stage `stages` spec), `objective`
-  (`ObjectiveSpec` / `Objectives` / `None`), and the `eval` / `viz` / `variance`
-  specs, plus `hparams`, `seed`, `wandb_config`, `sbatch`, and
-  `model_config_yaml`. `train`, `evaluate`, `visualize`, and `variance_probe` are
-  independent entry methods — eval/viz/variance load a checkpoint and don't
-  trigger training. Also defines `TrainingScalars`, `ObjectiveSpec` (CSV/JSON
-  objective reader with `penalty` fallback), `Objectives` (multi-objective
-  wrapper), and `SBatch` (Slurm resource metadata).
+  It owns `data` (`TimeSeriesDataModule`), `model` (a `ModelAdapter` — the raw
+  `nn.Module` lives at `model.module`; `DDSSMAdapter` owns the `DDSSMTrainer`
+  internally), `training` (`TrainingScalars`), `objective` (`ObjectiveSpec` /
+  `Objectives` / `None`), and the `eval` / `viz` / `variance` specs, plus
+  `hparams` (a `ModelConfig`, the single source of truth forwarded into
+  `model.fit(...)`), `seed`, `wandb_config`, `sbatch`, and `model_config_yaml`.
+  `train` delegates fit + checkpointing to the adapter; `evaluate`, `visualize`,
+  and `variance_probe` are independent entry methods that load a checkpoint and
+  don't trigger training. Also defines `TrainingScalars`, `ObjectiveSpec`
+  (CSV/JSON objective reader with `penalty` fallback), `Objectives`
+  (multi-objective wrapper), and `SBatch` (Slurm resource metadata).
 - **`builders.py`** — a convenience surface of hydra-zen `builds(...)` configs
   (encoders, decoders, transitions, U-Nets, baselines, heads, data modules,
-  `Training`, `Objective`, `SBatch`, `DDSSM`, `TrainerPartial`, eval/viz/probe
-  specs, etc.) for assembling an `Experiment` ad hoc in a notebook, org src block,
-  or script. The shipped `init_centering` family does **not** route through this —
-  it composes the model from runtime classes directly.
+  `Training`, `Objective`, `SBatch`, `DDSSM`, `TrainerPartial`, `DDSSMAdapterC`
+  (the `builds(DDSSMAdapter)` used by `_make.experiment` to wrap a bare model
+  conf), eval/viz/probe specs, etc.) for assembling an `Experiment` ad hoc in a
+  notebook, org src block, or script. The shipped `init_centering` family does
+  **not** route through this — it composes the model from runtime classes
+  directly.
 - **`stores.py`** — pre-grouped partials of the hydra-zen `store` singleton, one
   per populated axis: `model_store` (`model`), `data_store` (`data`,
   packaged at `experiment.data` so `+data=NAME` overrides the preset's baked
