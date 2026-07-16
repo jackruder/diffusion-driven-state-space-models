@@ -1260,6 +1260,9 @@ def _default_hyperparams():
 class DDSSMHyperParamsConf(ModelConfig):
     """Training hyperparameters for DDSSM."""
 
+    # DataLoader batch size. ``Experiment`` reads this and syncs it onto
+    # the data module before ``fit`` starts.
+    batch_size: int = 16
     S: int = 1
     ema_decay: float = 0.999
     # AdamW weight decay for the single optimizer / φθ side. The ψ side

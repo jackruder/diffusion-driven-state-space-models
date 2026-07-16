@@ -16,14 +16,16 @@ from ddssm.model.config import ModelConfig
 from ddssm.model.dssd import DDSSMHyperParamsConf
 
 
-def test_model_config_is_dataclass_with_batch_size_default():
-    """The base is a dataclass exposing ``batch_size=16`` by default."""
+def test_model_config_is_empty_marker_dataclass():
+    """The base is a marker dataclass — no field is universally required.
+
+    Not every model family batches; ``batch_size`` lives on subclasses that
+    need it (e.g. ``DDSSMHyperParamsConf``). ``Experiment`` reaches for
+    optional knobs via ``getattr(hparams, "field", None)``.
+    """
     assert is_dataclass(ModelConfig)
-    cfg = ModelConfig()
-    assert cfg.batch_size == 16
-    # The one universally-required knob lives at the base.
-    field_names = {f.name for f in fields(ModelConfig)}
-    assert "batch_size" in field_names
+    ModelConfig()  # zero-arg instantiable
+    assert {f.name for f in fields(ModelConfig)} == set()
 
 
 def test_ddssm_hyperparams_subclasses_model_config():

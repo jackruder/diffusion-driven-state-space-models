@@ -7,12 +7,12 @@ from dataclasses import dataclass
 
 @dataclass
 class ModelConfig:
-    """Uniform config currency held on ``Experiment.hparams``.
+    """Marker base for each family's ``Experiment.hparams`` config.
 
-    Every model family (DDSSM, CSDI baseline, future adapters, …)
-    subclasses this and adds its own fields. Only knobs the ``Experiment``
-    composition root needs uniformly live here — presently just
-    ``batch_size``, which ``Experiment`` syncs onto the data module.
+    Deliberately empty: no field is universally required across every model
+    family (e.g. not every family batches). Families subclass this and add
+    their own fields — ``DDSSMHyperParamsConf`` for DDSSM, and one per
+    baseline. ``Experiment`` reaches for optional knobs (``batch_size``,
+    …) via ``getattr(hparams, "field", None)`` so families that don't
+    carry them just skip that machinery.
     """
-
-    batch_size: int = 16
