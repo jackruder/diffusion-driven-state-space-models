@@ -281,13 +281,29 @@ class Checkpoint:
         atomic_save(self.to_payload(), path)
 
     @classmethod
-    def load(cls, path: str, *, device: torch.device) -> Checkpoint:
+    def load(
+        cls,
+        path: str,
+        *,
+        device: torch.device,
+        strict_format: bool = False,
+    ) -> Checkpoint:
         """Parse a ``.pth`` payload into a :class:`Checkpoint`.
 
         Tolerates legacy raw ``state_dict`` payloads (no ``model_state`` key)
         and v1 payloads (missing ``scaler_state`` / ``scheduler_state``, which
-        default to ``None``); an unknown ``_format`` is loaded best-effort
-        with a warning.
+        default to ``None``).
+
+        By default an unknown ``_format`` is loaded best-effort with a warning
+        (preserves the pre-adapter tolerance for downstream callers).
+        ``strict_format=True`` (used by the adapter) instead raises
+        :class:`ValueError` on:
+
+        * a payload dict carrying a ``_format`` tag not in
+          :data:`_SUPPORTED_FORMATS` (a versioned foreign format), or
+        * a payload dict with neither ``_format`` nor ``model_state`` whose
+          values aren't all tensors (an unrecognised mapping — some other
+          framework's dump).
 
         Read-time failures (missing file, truncated pickle, corrupt zip)
         are translated into :class:`NoUsableCheckpointError` so callers can
@@ -303,10 +319,24 @@ class Checkpoint:
                 f"failed to read checkpoint {path!r}: {type(e).__name__}: {e}"
             ) from e
         if not isinstance(payload, dict) or "model_state" not in payload:
-            # Legacy raw state_dict (pre-payload checkpoints).
+            # Legacy raw state_dict (pre-payload checkpoints). Strict mode
+            # additionally rejects non-tensor-only dicts (foreign dumps).
+            if strict_format and isinstance(payload, dict) and any(
+                not isinstance(v, torch.Tensor) for v in payload.values()
+            ):
+                raise ValueError(
+                    f"Cannot load checkpoint {path!r}: payload is neither a DDSSM "
+                    f"checkpoint (no '_format'/'model_state') nor a bare tensor "
+                    f"state_dict."
+                )
             return cls(model_state=payload)
         fmt = payload.get("_format")
         if fmt is not None and fmt not in _SUPPORTED_FORMATS:
+            if strict_format:
+                raise ValueError(
+                    f"Cannot load checkpoint {path!r}: foreign _format={fmt!r} "
+                    f"(DDSSM accepts {sorted(_SUPPORTED_FORMATS)})."
+                )
             log.warning(
                 "Unknown checkpoint _format=%r (supported: %s); loading best-effort.",
                 fmt,
@@ -349,6 +379,7 @@ def load_into_model(
     expected_model_config_yaml: str | None = None,
     load_ema: bool = False,
     strict: bool = True,
+    strict_format: bool = False,
 ) -> Checkpoint:
     """Load ``path`` into ``model``, cross-checking the saved model config.
 
@@ -362,12 +393,17 @@ def load_into_model(
     EMA shadows after loading — the (full-model) weights the sampling
     path used at training time.
 
+    ``strict_format`` (default ``False``) forwards to :meth:`Checkpoint.load`
+    and raises :class:`ValueError` on a foreign payload instead of
+    best-effort loading with a warning. The adapter passes ``True`` so a
+    foreign checkpoint never silently partial-loads into a DDSSM module.
+
     Returns the parsed :class:`Checkpoint` so callers (the resume path)
     can also read optimiser / EMA / step state.
     """
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Checkpoint not found: {path!r}")
-    ckpt = Checkpoint.load(path, device=device)
+    ckpt = Checkpoint.load(path, device=device, strict_format=strict_format)
 
     # Warn-and-continue on model-config drift (parameter shapes still hard-fail
     # in ``load_state_dict`` below). The helper returns a bool so other callers

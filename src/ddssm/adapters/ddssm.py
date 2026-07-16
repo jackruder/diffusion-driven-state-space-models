@@ -233,11 +233,10 @@ class DDSSMAdapter(ModelAdapter):
         ``hparams`` can be a :class:`DDSSMModelConfig` — if it is and the
         module hasn't been built yet, that config wins over ``self.config``
         for topology construction. Otherwise ``self.config.build_module()``.
-        A cross-format payload raises ``ValueError`` —
-        :func:`ddssm.training.checkpoint.load_into_model` only *warns* on
-        an unknown ``_format``.
+        Passes ``strict_format=True`` to ``load_into_model`` so a foreign
+        payload raises :class:`ValueError` on the single ``torch.load``
+        (rather than best-effort warn-and-continue).
         """
-        self._reject_foreign_format(path, device=device)
         from ddssm.training.checkpoint import load_into_model
 
         if self._module is None:
@@ -257,49 +256,6 @@ class DDSSMAdapter(ModelAdapter):
             expected_model_config_yaml=expected_model_config_yaml,
             load_ema=load_ema,
             strict=strict,
+            strict_format=True,
         )
 
-    @staticmethod
-    def _reject_foreign_format(path: str, *, device: torch.device) -> None:
-        """Raise ``ValueError`` when ``path`` is not a DDSSM checkpoint payload.
-
-        The DDSSM checkpoint loader tolerates an unknown ``_format`` (warn +
-        best-effort load) and treats any dict lacking ``model_state`` as a
-        legacy raw ``state_dict``; the adapter contract instead requires a hard
-        ``ValueError`` so a foreign payload never silently partial-loads. Two
-        cases are rejected:
-
-        * a payload dict carrying a ``_format`` tag not in
-          :data:`_SUPPORTED_FORMATS` (a versioned foreign format), and
-        * a payload dict with neither a ``_format`` tag nor a ``model_state``
-          key (an unrecognized mapping — e.g. some other framework's dump).
-
-        A legacy pre-payload DDSSM checkpoint is a bare ``state_dict`` whose
-        values are all tensors and whose keys are module parameter names — it
-        carries neither ``_format`` nor ``model_state`` but IS loadable, so we
-        only reject the no-tag/no-model_state case when the mapping doesn't look
-        like a tensor state_dict (i.e. it has at least one non-tensor value).
-        """
-        from ddssm.training.checkpoint import _SUPPORTED_FORMATS
-
-        payload = torch.load(path, map_location=device, weights_only=False)
-        if not isinstance(payload, dict):
-            return
-        fmt = payload.get("_format")
-        if fmt is not None:
-            if fmt not in _SUPPORTED_FORMATS:
-                raise ValueError(
-                    f"Cannot load checkpoint {path!r}: foreign _format={fmt!r} "
-                    f"(DDSSMAdapter accepts {sorted(_SUPPORTED_FORMATS)})."
-                )
-            return
-        if "model_state" in payload:
-            return
-        # No _format, no model_state: only a bare tensor state_dict is a valid
-        # legacy DDSSM payload. Any non-tensor value marks it as foreign.
-        if any(not isinstance(v, torch.Tensor) for v in payload.values()):
-            raise ValueError(
-                f"Cannot load checkpoint {path!r}: payload is neither a DDSSM "
-                f"checkpoint (no '_format'/'model_state') nor a bare tensor "
-                f"state_dict."
-            )
