@@ -27,6 +27,35 @@ from ddssm.eval.metrics import (
     eval_wallclock_to_target,
     eval_stage2_elbo_surrogate,
 )
+from ddssm.adapters.ddssm import DDSSMAdapter
+from ddssm.model.config import ModelConfig
+from ddssm.model.dssd import DDSSM_base
+
+
+def _stub_ddssm_adapter(module) -> DDSSMAdapter:
+    """Wrap a stub ``DDSSM_base`` in a ``DDSSMAdapter`` for unit tests.
+
+    Same escape hatch as ``tests/test_checkpoint.py::_toy_adapter`` — sets
+    ``_module`` post-hoc so ``ctx.require_module(DDSSM_base)`` inside the
+    metric resolves without going through ``config.build_module()``.
+    """
+    adapter = DDSSMAdapter(config=ModelConfig())
+    adapter._module = module
+    return adapter
+
+
+class _FakeLogProbModel(DDSSM_base):
+    """Minimal ``DDSSM_base`` subclass for ``eval_nll`` unit tests.
+
+    Skips ``DDSSM_base.__init__`` (encoder / decoder / … are irrelevant for
+    the metric-body forwarding test) but keeps the isinstance identity so
+    ``require_module(DDSSM_base)`` returns it. Subclasses override
+    ``log_prob``; the ``_FakeLogProbModel.__init__`` shortcut just sets up
+    ``nn.Module`` bookkeeping.
+    """
+
+    def __init__(self) -> None:  # noqa: D401 — minimal test stub
+        torch.nn.Module.__init__(self)
 
 # ---------------------------------------------------------------------------
 # wallclock_to_target — CSV-derived, no model needed
@@ -330,7 +359,7 @@ def test_nll_propagates_knobs_to_log_prob_and_aggregates() -> None:
     """``eval_nll`` forwards its knobs to ``model.log_prob`` and averages."""
     captured: list[dict] = []
 
-    class _FakeModel:
+    class _RecordingLogProb(_FakeLogProbModel):
         def log_prob(
             self,
             observed_data,
@@ -373,7 +402,7 @@ def test_nll_propagates_knobs_to_log_prob_and_aggregates() -> None:
         }
 
     ctx = EvalContext(
-        model=_FakeModel(),
+        model=_stub_ddssm_adapter(_RecordingLogProb()),
         loader=_loader(),
         device=torch.device("cpu"),
     )
@@ -411,7 +440,7 @@ def test_nll_hutchinson_probes_ignored_under_exact_divergence() -> None:
     """In exact mode, ``num_hutchinson_probes`` collapses to a single call."""
     call_count = {"n": 0}
 
-    class _FakeModel:
+    class _CountingLogProb(_FakeLogProbModel):
         def log_prob(self, *args, **kwargs):
             call_count["n"] += 1
             return torch.zeros(args[0].shape[0])
@@ -424,7 +453,7 @@ def test_nll_hutchinson_probes_ignored_under_exact_divergence() -> None:
         }
 
     ctx = EvalContext(
-        model=_FakeModel(),
+        model=_stub_ddssm_adapter(_CountingLogProb()),
         loader=_loader(),
         device=torch.device("cpu"),
     )
