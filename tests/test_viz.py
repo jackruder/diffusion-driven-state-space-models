@@ -20,6 +20,18 @@ from ddssm.model.config import ModelConfig
 from ddssm.data.datamodule import DataMetadata, TimeSeriesDataModule
 
 
+def _stub_adapter(module) -> DDSSMAdapter:
+    """A DDSSMAdapter pre-filled with an arbitrary stub module for viz tests.
+
+    The runner reads the raw module via ``adapter.module``; these tests use
+    non-``DDSSM_base`` stubs, so we bypass the config-driven lazy build by
+    setting ``_module`` post-hoc (same escape hatch as ``tests/test_checkpoint.py``).
+    """
+    adapter = DDSSMAdapter(config=ModelConfig())
+    adapter._module = module
+    return adapter
+
+
 def _write_csv(path: Path, rows: list[dict]) -> None:
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -91,7 +103,7 @@ def test_visualize_runner_smoke(tmp_path):
         # ``experiment.model`` is a ModelAdapter post-refactor; the runner reads
         # the raw module via ``.module``. Wrap the stub so ``prepare_model``'s
         # ``adapter.module`` dispatch resolves.
-        model = DDSSMAdapter(config=ModelConfig(), module=torch.nn.Linear(1, 1))
+        model = _stub_adapter(torch.nn.Linear(1, 1))
 
     spec = VizSpec(
         plots=[
@@ -134,7 +146,7 @@ def test_visualize_runner_unknown_plot_raises(tmp_path):
         # ``experiment.model`` is a ModelAdapter post-refactor; the runner reads
         # the raw module via ``.module``. Wrap the stub so ``prepare_model``'s
         # ``adapter.module`` dispatch resolves.
-        model = DDSSMAdapter(config=ModelConfig(), module=torch.nn.Linear(1, 1))
+        model = _stub_adapter(torch.nn.Linear(1, 1))
 
     spec = VizSpec(plots=[PlotSpec(name="nope")], split="train")
     with pytest.raises(KeyError):
@@ -207,7 +219,7 @@ def test_forecast_distribution_writes_png(tmp_path):
     # PlotContext.model is a ModelAdapter post-refactor; wrap the DDSSM-family
     # stub so ``require_module(DDSSM_base)`` inside the recon path resolves.
     ctx = PlotContext(
-        model=DDSSMAdapter(config=ModelConfig(), module=_StubReconForecastModel()),
+        model=_stub_adapter(_StubReconForecastModel()),
         loader=loader,
         device=torch.device("cpu"),
         T_split=T // 2,

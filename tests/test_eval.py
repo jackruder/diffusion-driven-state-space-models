@@ -24,6 +24,18 @@ from ddssm.model.config import ModelConfig
 from ddssm.data.datamodule import DataMetadata, TimeSeriesDataModule
 
 
+def _stub_adapter(module) -> DDSSMAdapter:
+    """A DDSSMAdapter pre-filled with an arbitrary stub module for eval tests.
+
+    The runner reads the raw module via ``adapter.module``; these tests use
+    non-``DDSSM_base`` stubs, so we bypass the config-driven lazy build by
+    setting ``_module`` post-hoc (same escape hatch as ``tests/test_checkpoint.py``).
+    """
+    adapter = DDSSMAdapter(config=ModelConfig())
+    adapter._module = module
+    return adapter
+
+
 def _write_csv(path: Path, rows: list[dict]) -> None:
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -100,7 +112,7 @@ def test_evaluate_runner_writes_metrics_json(tmp_path):
             # ``experiment.model`` is a ModelAdapter post-refactor; the eval
             # runner reads the raw module via ``.module``. Wrap the stub so
             # ``prepare_model``'s ``adapter.module`` dispatch resolves.
-            self.model = DDSSMAdapter(config=ModelConfig(), module=_StubModel())
+            self.model = _stub_adapter(_StubModel())
 
     spec = EvalSpec(metrics=["loss_tail"], split="val", output_filename="m.json")
     out = evaluate(
@@ -154,7 +166,7 @@ def test_evalspec_per_metric_kwargs_forwarded(tmp_path):
             # ``experiment.model`` is a ModelAdapter post-refactor; the eval
             # runner reads the raw module via ``.module``. Wrap the stub so
             # ``prepare_model``'s ``adapter.module`` dispatch resolves.
-            self.model = DDSSMAdapter(config=ModelConfig(), module=_StubModel())
+            self.model = _stub_adapter(_StubModel())
 
     spec = EvalSpec(
         metrics=["loss_tail"],
@@ -537,7 +549,7 @@ def test_unknown_metric_raises():
             # ``experiment.model`` is a ModelAdapter post-refactor; the eval
             # runner reads the raw module via ``.module``. Wrap the stub so
             # ``prepare_model``'s ``adapter.module`` dispatch resolves.
-            self.model = DDSSMAdapter(config=ModelConfig(), module=_StubModel())
+            self.model = _stub_adapter(_StubModel())
 
     with pytest.raises(KeyError):
         evaluate(_StubExpt(), spec, device=torch.device("cpu"), run_dir="/tmp/_nope")
