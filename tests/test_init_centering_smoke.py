@@ -48,9 +48,10 @@ def test_init_smoke_simple_end_to_end(tmp_path: Path) -> None:
     exp.training.validate_every = 0
     exp.training.checkpoint_every = 100
 
-    # hparams.batch_size is the source of truth: a distinct value (≠ the
-    # dataset preset's 32, ≠ the SmokeHparams 16) must reach the loader.
-    exp.hparams.batch_size = 8
+    # model.config.training.batch_size is the source of truth: a distinct
+    # value (≠ the dataset preset's 32, ≠ the SmokeHparams 16) must reach
+    # the loader.
+    exp.model.config.training.batch_size = 8
 
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)

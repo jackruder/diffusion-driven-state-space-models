@@ -378,12 +378,11 @@ class Experiment:
     variance: Any = None  # ddssm.variance.ProbeSpec | None -- typed lazily
     seed: int | None = 0
     wandb_config: dict | None = None
-    # Single source of truth for optimiser-side hparams (a ``ModelConfig`` /
-    # subclass). Forwarded into ``model.fit`` per ADR-0004 (no longer routed
-    # through ``model.config.hyperparams``). Exposed here so callers can
-    # ``exp.hparams.enc_lr=...`` or ``tweak(exp, hparams__lr=1e-3)``. Typed
-    # permissively (``| None``) — a strict OmegaConf validator would reject
-    # ``ModelConfig`` subclass instances.
+    # DEPRECATED. Training hparams now live inside ``model.config`` (the
+    # adapter's single source of truth). The field is kept as a no-op slot
+    # for one release so pickled/YAML-serialised experiments still load;
+    # ``Experiment.train`` no longer reads it, and ``_make.experiment`` no
+    # longer populates it. Sweeps target ``experiment.model.config.training.*``.
     hparams: ModelConfig | None = None
     # Slurm resource request, consumed by ``python -m experiments
     # sbatch``. Purely metadata at training time.
@@ -428,18 +427,21 @@ class Experiment:
 
         wandb_kwargs = self._wandb_kwargs(run_dir)
 
-        # hparams.batch_size is the single source of truth for the loader
-        # batch size (ADR-0004: hparams owns runtime knobs). Reconcile it
-        # onto the data module before ``fit`` builds loaders so a CLI override
-        # of experiment.hparams.batch_size actually takes effect — the data
-        # preset's own batch_size is otherwise what the DataLoader would use.
-        # ``getattr(..., "batch_size", None)`` works for any ``ModelConfig``.
-        hp_bs = getattr(self.hparams, "batch_size", None)
+        # The adapter's config is the single source of truth (contains both
+        # model params and training hparams). Sync batch_size onto the data
+        # module BEFORE fit so a CLI override of
+        # ``experiment.model.config.training.batch_size`` (or ``.batch_size``
+        # for a flat baseline config) actually takes effect. DDSSMModelConfig
+        # exposes a ``batch_size`` property that delegates to
+        # ``.training.batch_size``; flat baseline configs have ``batch_size``
+        # directly. Either way, ``getattr(..., "batch_size", None)`` works.
+        adapter_cfg = getattr(self.model, "config", None)
+        hp_bs = getattr(adapter_cfg, "batch_size", None)
         if hp_bs is not None and hasattr(self.data, "batch_size"):
             if self.data.batch_size != hp_bs:
                 log.info(
-                    "DataLoader batch_size := hparams.batch_size (%d); data "
-                    "module configured %s, overridden.",
+                    "DataLoader batch_size := model.config.batch_size (%d); "
+                    "data module configured %s, overridden.",
                     hp_bs,
                     self.data.batch_size,
                 )
@@ -452,11 +454,10 @@ class Experiment:
             self.training.validate_every,
             self.training.amp,
         )
-        # Per ADR-0004: caller-supplied ``exp.hparams`` is the single source of
-        # truth at training time — forwarded into the adapter's ``fit`` so
-        # ``tweak(exp, hparams__lr=...)`` reaches the optimizer. The adapter
-        # owns the trainer construction, the loader / val gating, the logger
-        # lifecycle, and the NullDataModule no-op.
+        # Adapter reads training hparams from ``self.config.training`` (single
+        # source of truth). No more forwarding of the deprecated
+        # ``Experiment.hparams`` — sweeps now target
+        # ``experiment.model.config.training.*`` directly.
         self.model.fit(
             data=self.data,
             training=self.training,
@@ -464,7 +465,6 @@ class Experiment:
             csv_log_path=csv_log_path,
             tensorboard_dir=tensorboard_dir,
             checkpoint_dir=checkpoint_dir,
-            hparams=self.hparams,
             wandb_config=wandb_kwargs,
             model_config_yaml=self.model_config_yaml,
         )

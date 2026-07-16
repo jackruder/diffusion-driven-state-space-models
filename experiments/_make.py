@@ -126,9 +126,9 @@ def experiment(
       a DDSSM convenience only.
     - ``wrap=False`` skips wrapping entirely (escape hatch).
 
-    ``hparams`` is also stored on the experiment for sweep addressability
-    (``experiment.hparams.enc_lr=…``); ``Experiment.train`` still forwards
-    it into ``adapter.fit`` as a fit-time override per ADR-0004.
+    ``Experiment.hparams`` is deprecated and no longer populated:
+    sweep addressability moves to ``experiment.model.config.training.*``
+    (the actual source the adapter reads at fit time).
 
     ``sbatch`` is purely metadata at training time; it is read by
     ``python -m experiments sbatch <name>`` when emitting a Slurm
@@ -164,7 +164,9 @@ def experiment(
         variance=variance,
         seed=seed,
         wandb_config=wandb_config,
-        hparams=hparams,
+        # ``Experiment.hparams`` is deprecated: hparams live inside
+        # ``model.config`` (the single source of truth). Leaving the field
+        # None keeps ExperimentC's shape unchanged for serialisation compat.
         sbatch=sbatch,
     )
 
