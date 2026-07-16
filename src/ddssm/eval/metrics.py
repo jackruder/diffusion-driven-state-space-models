@@ -1224,8 +1224,10 @@ def eval_nll(
 
     if ctx.model is None or ctx.loader is None:
         return {"nll": float("nan")}
-    model = ctx.require_module(DDSSM_base)
 
+    # Validate arguments before touching the module — tests pass ``model=object()``
+    # as a placeholder to check that ``ValueError`` fires on bad knobs without
+    # requiring a real adapter.
     if divergence_mode not in {"exact", "hutchinson"}:
         raise ValueError(
             f"divergence_mode must be 'exact' or 'hutchinson'; got {divergence_mode!r}"
@@ -1234,6 +1236,8 @@ def eval_nll(
         raise ValueError(
             f"num_hutchinson_probes must be >= 1; got {num_hutchinson_probes}"
         )
+
+    model = ctx.require_module(DDSSM_base)
 
     n_probes = num_hutchinson_probes if divergence_mode == "hutchinson" else 1
     generator = (
