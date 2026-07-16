@@ -225,10 +225,27 @@ class DDSSM_base(nn.Module):
             transition.kl_extra_keys(encoder.is_gaussian_family)
         )
 
+        # Compile install is deferred to the first _forward_core call so
+        # the auto-detect sees the post-``.to(device)`` param placement.
+        # Extracted into a helper so ``__deepcopy__`` can reinstall the
+        # trampoline on the copy (the closure captures ``self`` and would
+        # otherwise keep pointing at the original after deepcopy, running
+        # every forward on the ORIGINAL's parameters — graph-disconnecting
+        # the copy).
+        self._install_forward_core_trampoline()
+
+    def _install_forward_core_trampoline(self) -> None:
+        """Install the compile-once trampoline on ``self._forward_core``.
+
+        Called from ``__init__`` and again from ``__deepcopy__`` so a
+        copied instance gets a FRESH closure that captures the COPY as
+        ``self`` (rather than dispatching to the original).
+        """
         from ddssm.nn.torch_compile import maybe_compile_fn as _mcf
-        _compile_mode_outer = os.environ.get(
-            "DDSSM_TORCH_COMPILE_MODE", ""
-        ).strip() or None
+
+        _compile_mode_outer = (
+            os.environ.get("DDSSM_TORCH_COMPILE_MODE", "").strip() or None
+        )
         # reduce-overhead / max-autotune capture CUDA graphs, which need
         # static shapes — force dynamic=False for them.
         _dynamic = _compile_mode_outer not in {"reduce-overhead", "max-autotune"}
@@ -238,8 +255,9 @@ class DDSSM_base(nn.Module):
         _fullgraph_env = os.environ.get(
             "DDSSM_TORCH_COMPILE_FULLGRAPH", "auto"
         ).strip().lower()
-        # Compile install is deferred to the first _forward_core call so
-        # the auto-detect sees the post-``.to(device)`` param placement.
+        # Save the class-method-bound-to-self ``_forward_core`` under
+        # ``_forward_core_raw`` so the trampoline can call it, then replace
+        # the instance attribute with the trampoline closure below.
         self._forward_core_raw = self._forward_core
         _compile_cfg = dict(
             dynamic=_dynamic,
@@ -273,6 +291,30 @@ class DDSSM_base(nn.Module):
             return compiled(*args, **kwargs)
 
         self._forward_core = _install_compiled_core
+
+    def __deepcopy__(self, memo):
+        """Deepcopy that rebinds the compile trampoline to the new instance.
+
+        The default deepcopy would copy ``self._forward_core`` (the closure
+        stashed by ``_install_forward_core_trampoline``) verbatim — but the
+        closure captures ``self`` from the ORIGINAL instance, so every
+        subsequent ``new._forward_core(...)`` call would run on the original's
+        parameters (graph-disconnecting the copy). Skip the two trampoline
+        attributes during the default copy, then reinstall a fresh trampoline
+        on the copy that captures ``new`` as its ``self``.
+        """
+        import copy as _copy
+
+        cls = self.__class__
+        new = cls.__new__(cls)
+        memo[id(self)] = new
+        _skip = {"_forward_core", "_forward_core_raw"}
+        for k, v in self.__dict__.items():
+            if k in _skip:
+                continue
+            new.__dict__[k] = _copy.deepcopy(v, memo)
+        new._install_forward_core_trampoline()
+        return new
 
     def _encode_latents(
         self,
