@@ -1,10 +1,16 @@
 """``DDSSMAdapter`` — the native DDSSM family behind the ``ModelAdapter`` seam.
 
-Wraps a *pre-composed* :class:`~ddssm.model.dssd.DDSSM_base` (built externally
-by the ``SmokeModel`` factory & co — the module is never rebuilt here) and
-exposes it through the uniform fit / forecast / checkpoint surface. The ``fit``
-body is the trainer-construction + fit-call block lifted verbatim from
-:meth:`ddssm.experiment.experiment.Experiment.train` (plus the optional
+Two construction paths (both supported during the refactor):
+
+- **Config path (preferred):** ``DDSSMAdapter(config=DDSSMModelConfig(...))``.
+  The adapter builds a :class:`~ddssm.model.dssd.DDSSM_base` lazily via
+  ``config.build_module()`` on first ``.module`` access (or at ``fit``).
+- **Legacy path:** ``DDSSMAdapter(config=<training-hparams>, module=<pre-built>)``.
+  Family factories used to return a pre-composed ``DDSSM_base``; this path
+  keeps working until commit 4 finishes the migration.
+
+The ``fit`` body is the trainer-construction + fit-call block lifted verbatim
+from :meth:`ddssm.experiment.experiment.Experiment.train` (plus the optional
 ``TrainingScalars.trainable`` freeze-mask application) so the native path keeps
 bit-for-bit parity with today.
 """
@@ -18,6 +24,7 @@ import torch
 
 from ddssm.adapters.base import ModelAdapter
 from ddssm.training.train import DDSSMTrainer
+from ddssm.model.ddssm_config import DDSSMModelConfig
 
 if TYPE_CHECKING:  # annotation-only — keep this module cycle-safe / import-light
     from ddssm.model.dssd import DDSSM_base
@@ -40,19 +47,54 @@ class DDSSMAdapter(ModelAdapter):
     def __init__(
         self,
         config: ModelConfig,
-        module: DDSSM_base,
+        module: DDSSM_base | None = None,
         build_trainer: Callable[..., DDSSMTrainer] | None = None,
     ) -> None:
-        """Store the pre-composed module + (optional) curried trainer factory."""
+        """Store the config + optional pre-built module + trainer factory.
+
+        Config path: pass a :class:`DDSSMModelConfig`; leave ``module=None``
+        and the module is built lazily on first ``.module`` access.
+        Legacy path: pass a training-hparams ``config`` plus a pre-built
+        ``module``; the config carries only optimiser/loss hparams.
+        """
         super().__init__(config)
-        self._module = module  # composed externally — DDSSM_base untouched
+        # May be None: config path builds lazily via the ``module`` property.
+        self._module: DDSSM_base | None = module
         self._build_trainer = build_trainer or DDSSMTrainer
         self.trainer: DDSSMTrainer | None = None
 
     @property
     def module(self) -> DDSSM_base:
-        """The raw, checkpointable ``DDSSM_base`` this adapter owns."""
+        """The raw, checkpointable ``DDSSM_base`` this adapter owns.
+
+        Builds lazily from ``self.config.build_module()`` when the module was
+        not pre-supplied AND ``self.config`` is a :class:`DDSSMModelConfig`.
+        Legacy path (module pre-supplied at ``__init__``) skips the build.
+        """
+        if self._module is None:
+            if not isinstance(self.config, DDSSMModelConfig):
+                raise TypeError(
+                    "DDSSMAdapter.module accessed before build, but "
+                    "self.config is not a DDSSMModelConfig (legacy path "
+                    f"expects module=... at __init__; got config type "
+                    f"{type(self.config).__name__})."
+                )
+            self._module = self.config.build_module()
         return self._module
+
+    @staticmethod
+    def _resolve_training_hparams(hp):
+        """Extract a trainer-facing hparams object from the fit ``hparams=`` arg.
+
+        Accepts a whole :class:`DDSSMModelConfig` (returns ``hp.training``),
+        a training slice (:class:`DDSSMTrainingHparams` / legacy
+        :class:`DDSSMHyperParamsConf`; returned as-is), or ``None``.
+        """
+        if hp is None:
+            return None
+        if isinstance(hp, DDSSMModelConfig):
+            return hp.training
+        return hp
 
     def fit(
         self,
@@ -85,17 +127,22 @@ class DDSSMAdapter(ModelAdapter):
             # NullDataModule: no data attached — no-op (no trainer, no CSV).
             return
 
-        # ``hparams=hparams or self.config`` as a keyword so it supersedes the
-        # TrainerPartial's curried hparams (ADR-0004). Surface parity with
-        # Experiment.train: do NOT expose the trainer's optimizer/quiet params.
+        # Resolve hparams to a trainer-facing slice. ``hparams`` (from
+        # ``Experiment.hparams``) wins over ``self.config`` — a
+        # ``DDSSMModelConfig`` on either side gets unwrapped to its ``training``
+        # slot (the trainer wants flat enc_lr/dec_lr/... to ``getattr`` from).
+        training_hparams = self._resolve_training_hparams(hparams)
+        if training_hparams is None:
+            training_hparams = self._resolve_training_hparams(self.config)
+
         trainer_kwargs: dict = dict(
-            model=self._module,
+            model=self.module,  # triggers lazy build on the config path
             device=device,
             csv_log_path=csv_log_path,
             tensorboard_dir=tensorboard_dir,
             checkpoint_dir=checkpoint_dir,
             wandb_config=wandb_config,
-            hparams=hparams or self.config,
+            hparams=training_hparams,
         )
         if model_config_yaml is not None:
             trainer_kwargs["model_config_yaml"] = model_config_yaml
@@ -142,7 +189,7 @@ class DDSSMAdapter(ModelAdapter):
         controls (``use_vp_init`` / ``s_churn`` / ``s_noise`` / ``s_tmin`` /
         ``s_tmax``); eval passes only ``num_samples`` but the surface stays open.
         """
-        return self._module.forecast(
+        return self.module.forecast(
             x_hist=x_hist,
             x_mask=x_mask,
             past_time=past_time,
@@ -156,7 +203,7 @@ class DDSSMAdapter(ModelAdapter):
 
     def log_prob(self, *args: object, **kwargs: object) -> torch.Tensor:
         """Delegate to ``DDSSM_base.log_prob`` (overrides the base ABC raise)."""
-        return self._module.log_prob(*args, **kwargs)
+        return self.module.log_prob(*args, **kwargs)
 
     def save_checkpoint(self, path: str) -> None:
         """Serialize via the trainer's public ``save_checkpoint`` (v3 schema).
@@ -177,23 +224,35 @@ class DDSSMAdapter(ModelAdapter):
         path: str,
         *,
         device: torch.device,
-        hparams: ModelConfig | None = None,  # unused: DDSSM module is pre-composed
+        hparams: ModelConfig | None = None,
         load_ema: bool = True,
         expected_model_config_yaml: str | None = None,
         strict: bool = False,
     ) -> None:
-        """Restore state into the pre-composed module (trainer-free).
+        """Restore state into the module (building it lazily if needed).
 
-        ``hparams`` is unused — the DDSSM module is already built, so there is
-        no topology to (re)construct on load; old checkpoints load
-        bit-identically. A cross-format payload raises ``ValueError``:
-        :func:`ddssm.training.checkpoint.load_into_model` only *warns* on an
-        unknown ``_format`` (and would then silently partial-load into the
-        module), so we pre-read the payload's ``_format`` tag and reject any
-        non-DDSSM format explicitly before delegating.
+        ``hparams`` is consulted only when the module isn't built yet: a
+        :class:`DDSSMModelConfig` on ``hparams`` (or on ``self.config``)
+        rebuilds the topology. Legacy path (module pre-supplied at
+        ``__init__``): ``hparams`` is ignored and old checkpoints load
+        bit-identically. A cross-format payload raises ``ValueError`` —
+        :func:`ddssm.training.checkpoint.load_into_model` only *warns* on
+        an unknown ``_format``.
         """
         self._reject_foreign_format(path, device=device)
         from ddssm.training.checkpoint import load_into_model
+
+        # Lazy build for the config path: if we don't have a module yet, use
+        # the winning config (hparams > self.config) to construct one.
+        if self._module is None:
+            build_cfg = hparams if isinstance(hparams, DDSSMModelConfig) else self.config
+            if not isinstance(build_cfg, DDSSMModelConfig):
+                raise TypeError(
+                    "DDSSMAdapter.load_checkpoint has no module to load into "
+                    "and no DDSSMModelConfig to build from; pass hparams=<config> "
+                    "or construct the adapter with a config that can build a module."
+                )
+            self._module = build_cfg.build_module()
 
         load_into_model(
             self._module,

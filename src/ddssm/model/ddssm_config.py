@@ -159,7 +159,9 @@ class DDSSMModelConfig(ModelConfig):
         """
         # Local imports so this leaf module doesn't force torch import on
         # anyone touching the config schema.
-        from hydra_zen import instantiate
+        from inspect import signature
+
+        from hydra_zen import instantiate, get_target
 
         from ddssm.model.dssd import DDSSM_base
 
@@ -170,12 +172,15 @@ class DDSSMModelConfig(ModelConfig):
         )
         encoder = instantiate(self.encoder)
         decoder = instantiate(self.decoder)
-        # If the transition slot carries a `baseline` field, thread the shared
-        # instance in. Slots that don't reference a baseline (e.g.
-        # GaussianTransition) are unaffected.
-        try:
+        # Thread the shared baseline instance into the transition IFF the
+        # target's constructor takes ``baseline`` (DiffusionTransition does;
+        # GaussianTransition doesn't). Introspect the target — catching a
+        # TypeError from instantiate doesn't work because hydra-zen wraps it
+        # in an InstantiationException.
+        trans_target = get_target(self.transition)
+        if "baseline" in signature(trans_target).parameters:
             transition = instantiate(self.transition, baseline=baseline)
-        except TypeError:
+        else:
             transition = instantiate(self.transition)
 
         shape = self.shape
