@@ -151,37 +151,56 @@ class DDSSMModelConfig(ModelConfig):
     def build_module(self):
         """Instantiate a ``DDSSM_base`` from this config.
 
-        Uses :func:`hydra_zen.instantiate` to walk the submodule slots.
-        Baseline is built FIRST so its instance can be threaded into the
-        transition (which takes ``baseline`` as a pre-instantiated arg —
-        see ``DiffusionTransition.__init__``; the DDSSM_base and transition
-        must share the same baseline instance by reference).
+        Each submodule slot may hold EITHER a hydra-zen ``builds()`` conf
+        (walked via :func:`hydra_zen.instantiate`) OR an already-instantiated
+        runtime ``nn.Module`` (used as-is). Family factories that build
+        submodules eagerly land in the second bucket; presets assembled from
+        builders in the first. Baseline is resolved FIRST so its instance can
+        be threaded into the transition (which takes ``baseline`` as a
+        pre-instantiated arg — see ``DiffusionTransition.__init__``; DDSSM_base
+        and the transition must share the same baseline instance by reference).
         """
         # Local imports so this leaf module doesn't force torch import on
         # anyone touching the config schema.
         from inspect import signature
 
+        import torch.nn as nn
+
         from hydra_zen import instantiate, get_target
 
         from ddssm.model.dssd import DDSSM_base
 
-        baseline = instantiate(self.baseline) if self.baseline is not None else None
-        aux_posterior = instantiate(self.aux_posterior)
-        sigma_data = (
-            instantiate(self.sigma_data) if self.sigma_data is not None else None
-        )
-        encoder = instantiate(self.encoder)
-        decoder = instantiate(self.decoder)
-        # Thread the shared baseline instance into the transition IFF the
-        # target's constructor takes ``baseline`` (DiffusionTransition does;
-        # GaussianTransition doesn't). Introspect the target — catching a
-        # TypeError from instantiate doesn't work because hydra-zen wraps it
-        # in an InstantiationException.
-        trans_target = get_target(self.transition)
-        if "baseline" in signature(trans_target).parameters:
-            transition = instantiate(self.transition, baseline=baseline)
+        def _resolve(slot, **overrides):
+            """Build a runtime object from a slot value. Returns as-is if
+            already an ``nn.Module`` or a dataclass instance that isn't a
+            hydra-zen builds() conf; instantiates otherwise."""
+            if slot is None:
+                return None
+            if isinstance(slot, nn.Module):
+                if overrides:
+                    raise TypeError(
+                        f"Cannot pass overrides ({list(overrides)}) to a "
+                        f"pre-instantiated {type(slot).__name__}."
+                    )
+                return slot
+            return instantiate(slot, **overrides)
+
+        baseline = _resolve(self.baseline)
+        aux_posterior = _resolve(self.aux_posterior)
+        sigma_data = _resolve(self.sigma_data)
+        encoder = _resolve(self.encoder)
+        decoder = _resolve(self.decoder)
+        # Thread the shared baseline into the transition IFF the target
+        # constructor takes ``baseline``. Runtime instances are used as-is;
+        # for builds() confs we introspect the target's signature.
+        if isinstance(self.transition, nn.Module):
+            transition = self.transition
         else:
-            transition = instantiate(self.transition)
+            trans_target = get_target(self.transition)
+            if "baseline" in signature(trans_target).parameters:
+                transition = instantiate(self.transition, baseline=baseline)
+            else:
+                transition = instantiate(self.transition)
 
         shape = self.shape
         knobs = self.model_knobs

@@ -28,7 +28,8 @@ from ddssm.nn.futsum import (
     IdentityFutureSummary,
     TransformerFutureSummary,
 )
-from ddssm.model.dssd import DDSSM_base
+from ddssm.model.dssd import DDSSM_base  # kept for backcompat
+from ddssm.model.ddssm_config import DDSSMModelConfig, DDSSMModelKnobs, DDSSMShape
 from ddssm.nn.diffnets import (
     CSDIUnet,
     ContextProducer,
@@ -344,23 +345,28 @@ def build_gluonts_model(
             ),
         )
 
-    return DDSSM_base(
+    return DDSSMModelConfig(
+        shape=DDSSMShape(
+            j=j,
+            data_dim=data_dim,
+            latent_dim=latent_dim,
+            emb_time_dim=emb_time_dim,
+            use_observation_mask=False,
+            T_max=T_max,
+        ),
         encoder=encoder,
         decoder=decoder,
         transition=stage2_transition,
-        j=j,
-        data_dim=data_dim,
-        latent_dim=latent_dim,
-        emb_time_dim=emb_time_dim,
-        use_observation_mask=False,
         aux_posterior=aux_posterior,
         baseline=baseline,
         sigma_data=sigma_data,
         # Decode the T-window in time chunks (batched, checkpointed) instead of a
         # 192× Python loop — the recon loop is the other launch-bound half of the
         # per-step cost. Same chunk knob as the diffusion ESM loss.
-        recon_time_chunk=time_chunk,
-        recon_grad_checkpoint=grad_checkpoint,
+        model_knobs=DDSSMModelKnobs(
+            recon_time_chunk=time_chunk,
+            recon_grad_checkpoint=grad_checkpoint,
+        ),
     )
 
 

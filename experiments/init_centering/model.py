@@ -21,7 +21,8 @@ from functools import partial
 
 from hydra_zen import builds
 
-from ddssm.model.dssd import DDSSM_base
+from ddssm.model.dssd import DDSSM_base  # kept for backcompat; DDSSMModelConfig is preferred
+from ddssm.model.ddssm_config import DDSSMModelConfig, DDSSMModelKnobs, DDSSMShape
 from ddssm.nn.diffnets import (
     CSDIUnet,
     FeatureMixerConfig,
@@ -155,18 +156,22 @@ def _build_init_centering_model(
         hidden_dim=decoder_hidden_dim,
     )
 
-    return DDSSM_base(
+    return DDSSMModelConfig(
+        shape=DDSSMShape(
+            j=j,
+            data_dim=data_dim,
+            latent_dim=latent_dim,
+            emb_time_dim=emb_time_dim,
+            use_observation_mask=False,
+            T_max=T_max,
+        ),
         encoder=encoder,
         decoder=decoder,
         transition=transition,
-        j=j,
-        data_dim=data_dim,
-        latent_dim=latent_dim,
-        emb_time_dim=emb_time_dim,
-        use_observation_mask=False,
         aux_posterior=aux_posterior,
         baseline=baseline,
         sigma_data=sigma_data,
+        model_knobs=DDSSMModelKnobs(),
     )
 
 

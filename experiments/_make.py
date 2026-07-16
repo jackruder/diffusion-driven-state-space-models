@@ -136,11 +136,14 @@ def experiment(
             # than calling it.
             model = dataclasses.replace(model, config=hparams)
         else:
-            # Bare DDSSM model conf: wrap in a DDSSMAdapter so Experiment.model
-            # is a ModelAdapter. The TrainerPartial now lives INSIDE the wrapper.
+            # Bare DDSSM factory conf. Its Python target now returns a
+            # ``DDSSMModelConfig`` (as of the model-config refactor); the
+            # adapter takes it as ``config=`` and builds the module lazily
+            # from it. The outer ``hparams`` (from _make.experiment) still
+            # rides via TrainerPartial and wins over the config's ``.training``
+            # slice at fit time (see DDSSMAdapter._resolve_training_hparams).
             model = DDSSMAdapterC(
-                module=model,
-                config=hparams,
+                config=model,
                 build_trainer=TrainerPartial(hparams=hparams),
             )
     return ExperimentC(

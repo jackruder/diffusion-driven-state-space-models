@@ -23,7 +23,8 @@ from functools import partial
 
 from hydra_zen import builds
 
-from ddssm.model.dssd import DDSSM_base
+from ddssm.model.dssd import DDSSM_base  # kept for backcompat
+from ddssm.model.ddssm_config import DDSSMModelConfig, DDSSMModelKnobs, DDSSMShape
 from ddssm.nn.diffnets import CSDIUnet, FeatureMixerConfig, DiffResidualBlockConfig
 from ddssm.model.decoder import GaussianDecoder
 from ddssm.model.encoder import GaussianEncoder
@@ -117,19 +118,22 @@ def build_synthval_model(
         hidden_dim=hidden_dim,
     )
 
-    return DDSSM_base(
+    return DDSSMModelConfig(
+        shape=DDSSMShape(
+            j=j,
+            data_dim=data_dim,
+            latent_dim=latent_dim,
+            emb_time_dim=emb_time_dim,
+            use_observation_mask=False,
+            T_max=T_max,
+        ),
         encoder=encoder,
         decoder=decoder,
         transition=transition,
-        j=j,
-        data_dim=data_dim,
-        latent_dim=latent_dim,
-        emb_time_dim=emb_time_dim,
-        use_observation_mask=False,
         aux_posterior=aux_posterior,
         baseline=baseline,
         sigma_data=sigma_data,
-        recon_time_chunk=recon_time_chunk,
+        model_knobs=DDSSMModelKnobs(recon_time_chunk=recon_time_chunk),
     )
 
 
