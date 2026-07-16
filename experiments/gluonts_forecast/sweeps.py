@@ -18,7 +18,7 @@ from experiments.gluonts_forecast.model import GluonModel
 _model = SweepSpace(target=GluonModel, prefix="experiment.model.config")
 _model.raw("latent_dim", "choice(16, 32, 64, 128, 256, 512)")
 
-_hparams = SweepSpace(target=Hparams, prefix="experiment.hparams")
+_hparams = SweepSpace(target=Hparams, prefix="experiment.model.config.training")
 _hparams.log("enc_lr", 1e-4, 2e-3)
 _hparams.log("dec_lr", 1e-4, 2e-3)
 _hparams.log("trans_lr", 1e-4, 2e-3)
@@ -35,7 +35,7 @@ sweep_store(GluonLeanSweep, name="gluonts_lean")
 
 _pilot_model = SweepSpace(target=GluonModel, prefix="experiment.model.config")
 _pilot_model.raw("latent_dim", "choice(16, 32, 64, 128, 256)")
-_pilot_hparams = SweepSpace(target=Hparams, prefix="experiment.hparams")
+_pilot_hparams = SweepSpace(target=Hparams, prefix="experiment.model.config.training")
 _pilot_hparams.log("enc_lr", 1e-4, 2e-3)
 _pilot_hparams.log("dec_lr", 1e-4, 2e-3)
 _pilot_hparams.log("trans_lr", 1e-4, 2e-3)

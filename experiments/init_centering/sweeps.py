@@ -22,7 +22,7 @@ from ddssm.experiment.builders import Hparams
 from experiments.init_centering.evals import PilotMOObjective
 
 
-_ablation = SweepSpace(target=Hparams, prefix="experiment.hparams")
+_ablation = SweepSpace(target=Hparams, prefix="experiment.model.config.training")
 _ablation.log("enc_lr", 1e-4, 1e-3)
 _ablation.log("dec_lr", 5e-5, 5e-3)
 _ablation.log("trans_lr", 5e-5, 5e-3)

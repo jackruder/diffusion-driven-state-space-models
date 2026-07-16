@@ -20,7 +20,7 @@ from ddssm.experiment.stores import sweep_store
 from ddssm.experiment.builders import Hparams
 from experiments.synthetic_validation.model import SynthValModel
 
-_hparams = SweepSpace(target=Hparams, prefix="experiment.hparams")
+_hparams = SweepSpace(target=Hparams, prefix="experiment.model.config.training")
 _hparams.log("enc_lr", 1e-4, 3e-3)
 _hparams.log("dec_lr", 1e-4, 3e-3)
 _hparams.log("trans_lr", 1e-4, 3e-3)
