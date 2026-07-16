@@ -60,8 +60,8 @@ from ddssm.nn.diffnets import (
 )
 from ddssm.nn.combiners import CompoundCombiner
 from ddssm.nn.gaussians import GaussianHead
-from ddssm.model.decoder import GaussianDecoder
-from ddssm.model.encoder import GaussianEncoder
+from ddssm.model.decoder import GaussianDecoder, IdentityDecoder
+from ddssm.model.encoder import ARFlowEncoder, GaussianEncoder, IdentityEncoder
 from ddssm.nn.dist_heads import GaussianDistHead
 
 # Runtime classes — actual constructors targeted by ``builds()``.
@@ -319,12 +319,36 @@ Encoder = builds(
     fut_summary=GRUFutSum(),
 )
 
+# ARFlow encoder — the parallel AR-flow-on-noise drop-in. fwd_summary stays
+# optional (Callable | None); the encoder itself gates on ``forward_message``.
+ARFlowEncoderB = builds(
+    ARFlowEncoder,
+    populate_full_signature=True,
+    **_SHAPE_ENC,
+    fut_summary=GRUFutSum(),
+    fwd_summary=None,
+)
+
+# Identity encoder — parameter-free; ``fixed_logvar`` is the only real knob.
+IdentityEncoderB = builds(
+    IdentityEncoder,
+    populate_full_signature=True,
+    **_SHAPE_ENC,
+)
+
 Decoder = builds(
     GaussianDecoder,
     populate_full_signature=True,
     **_SHAPE_DEC,
     context=Context(),
     gaussian_head=Head(),
+)
+
+# Identity decoder — parameter-free; requires latent_dim == data_dim.
+IdentityDecoderB = builds(
+    IdentityDecoder,
+    populate_full_signature=True,
+    **_SHAPE_DEC,
 )
 
 GaussTransition = builds(
@@ -476,7 +500,10 @@ __all__ = [
     "GaussianDistHeadB",
     # Module-slot builders
     "Encoder",
+    "ARFlowEncoderB",
+    "IdentityEncoderB",
     "Decoder",
+    "IdentityDecoderB",
     "GaussTransition",
     # Model-v2 baseline-centering builders
     "ZeroBaselineB",

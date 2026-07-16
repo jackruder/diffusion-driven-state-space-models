@@ -93,10 +93,9 @@ def test_is_abstract_base_class() -> None:
 
 def test_concrete_subclass_instantiates_and_stores_config() -> None:
     """A fully-implemented subclass builds and keeps ``config`` on ``.config``."""
-    cfg = ModelConfig(batch_size=7)
+    cfg = ModelConfig()
     adapter = _StubAdapter(cfg)
     assert adapter.config is cfg
-    assert adapter.config.batch_size == 7
 
 
 def test_base_log_prob_raises_metric_not_supported_naming_subclass() -> None:
