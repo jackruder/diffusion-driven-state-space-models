@@ -88,14 +88,16 @@ def test_registered_ddssm_preset_wraps_in_adapter() -> None:
     register_experiments()
     node = store["experiment"]["experiment", "init_smoke_simple"]
     assert get_target(node.model) is DDSSMAdapter
-    # The DDSSM factory now lives one hop down, under ``model.module``.
-    assert get_target(node.model.module).__name__.endswith(
+    # The DDSSM factory now lives one hop down, under ``model.config``
+    # (post-refactor: adapter takes a DDSSMModelConfig; the factory returns
+    # one and is curried into that slot by ``_make.experiment``).
+    assert get_target(node.model.config).__name__.endswith(
         "_build_init_centering_model"
     )
 
 
-def test_wrap_curries_module_config_and_build_trainer() -> None:
-    """The wrapper carries ``module`` / ``config`` / ``build_trainer`` slots."""
+def test_wrap_curries_config_and_build_trainer() -> None:
+    """The wrapper carries ``config`` / ``build_trainer`` slots."""
     hp = _hparams()
     exp = experiment(
         data=NonlinBimodalLift1D,
@@ -104,10 +106,10 @@ def test_wrap_curries_module_config_and_build_trainer() -> None:
         training=Training(steps=5, log_every=1),
     )
     assert get_target(exp.model) is DDSSMAdapter
-    # module is the wrapped DDSSM factory conf.
-    assert get_target(exp.model.module).__name__.endswith("_build_init_centering_model")
-    # config is the same hparams instance curried in.
-    assert exp.model.config is hp
+    # config now holds the wrapped DDSSM factory conf (which resolves to a
+    # DDSSMModelConfig at instantiate time); training hparams reach the
+    # trainer via ``build_trainer=TrainerPartial(hparams=hp)`` below.
+    assert get_target(exp.model.config).__name__.endswith("_build_init_centering_model")
     # build_trainer is a curried TrainerPartial (a DDSSMTrainer partial conf).
     assert exp.model.build_trainer is not None
     assert get_target(exp.model.build_trainer).__name__.endswith("DDSSMTrainer")
@@ -133,7 +135,7 @@ def test_function_target_conf_wraps_without_typeerror() -> None:
 
 def test_adapter_target_conf_curries_config_not_rewrapped() -> None:
     """An adapter-target model conf gets ``config`` curried, not re-wrapped."""
-    cfg = hydra_zen.builds(_StubConfig, populate_full_signature=True)(batch_size=16)
+    cfg = hydra_zen.builds(_StubConfig, populate_full_signature=True)()
     adapter_conf = hydra_zen.builds(_StubAdapter, populate_full_signature=True)(
         config=cfg
     )
