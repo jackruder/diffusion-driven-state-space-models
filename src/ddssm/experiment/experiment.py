@@ -25,6 +25,7 @@ import torch
 from ddssm.adapters import ModelAdapter
 from ddssm.model.config import ModelConfig
 from ddssm.data.datamodule import TimeSeriesDataModule
+from ddssm.training.stages import TrainableConf
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +54,12 @@ class TrainingScalars:
     amp: bool = True  # bf16 autocast (see train.py); project default
     profile_steps: int = 0
     resume_from: str | None = None
+    # Optional per-submodule ``requires_grad`` mask (freeze/unfreeze
+    # ablation knob). Applied once at the start of ``fit`` via
+    # ``DDSSMTrainer._set_trainable``. ``None`` leaves every submodule
+    # trainable (today's default). Adapters other than ``DDSSMAdapter``
+    # ignore it.
+    trainable: TrainableConf | None = None
 
     def fit_kwargs(self) -> dict[str, Any]:
         return {

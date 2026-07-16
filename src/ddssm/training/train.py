@@ -491,16 +491,18 @@ class DDSSMTrainer:
         self._preempt_pending = True
 
     def _set_trainable(self, t):
-        """Toggle ``requires_grad`` per submodule from a stage trainable mask.
+        """Toggle ``requires_grad`` per submodule from a trainable mask.
 
-        This is the single gradient-suppression mechanism: the forward pass
-        always computes every ELBO term, but frozen submodules accumulate no
-        gradients. ``static_embeddings`` and ``aux_posterior`` are part of the
-        encoder family and share ``t.encoder``.
+        Applied once at the start of ``fit`` when ``TrainingScalars.trainable``
+        is set. The forward pass always computes every ELBO term; frozen
+        submodules just accumulate no gradients. ``static_embeddings`` and
+        ``aux_posterior`` are part of the encoder family and share
+        ``t.encoder``.
 
         Args:
-            t: A ``StageTrainable``-like object with ``encoder`` / ``decoder``
-                / ``transition`` boolean flags.
+            t: A :class:`~ddssm.training.stages.TrainableConf` (or duck-typed
+                object with ``encoder`` / ``decoder`` / ``transition`` bool
+                flags).
         """
 
         def maybe_flag(mod, flag: bool):

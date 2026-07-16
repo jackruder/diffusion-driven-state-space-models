@@ -253,7 +253,7 @@ def test_log_train_step_records_optimized_loss_not_unweighted_elbo(
 
 # The ``_make_model_with_baseline`` fixture and the tests below relied on
 # parametric baselines (MLPBaseline) + ``BaselineGaussianTransition`` +
-# ``StageTrainableConf.baseline`` — all removed when the parametric
+# ``TrainableConf.baseline`` — all removed when the parametric
 # baselines were retired. The remaining trainable/rebuild-optimizer coverage
 # lives in tests/test_training/test_param_split.py.
 
@@ -268,7 +268,7 @@ def test_rebuild_optimizer_keeps_frozen_params_in_groups(tmp_path):
     Group membership must be mask-independent; ``requires_grad`` alone
     suppresses updates (AdamW skips grad-None params).
     """
-    from ddssm.training.stages import StageLrsConf, StageTrainableConf
+    from ddssm.training.stages import StageLrsConf, TrainableConf
 
     model = make_small_model()
     trainer = DDSSMTrainer(
@@ -278,7 +278,7 @@ def test_rebuild_optimizer_keeps_frozen_params_in_groups(tmp_path):
         quiet=True,
     )
     # Freeze the encoder BEFORE the rebuild — the old filter dropped it here.
-    trainer._set_trainable(StageTrainableConf(encoder=False))
+    trainer._set_trainable(TrainableConf(encoder=False))
     trainer._rebuild_optimizer(StageLrsConf())
 
     encoder_param_ids = {id(p) for p in model.encoder.parameters()}

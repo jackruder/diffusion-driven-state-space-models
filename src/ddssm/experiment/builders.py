@@ -73,6 +73,7 @@ from ddssm.nn.aggregators import (
     ContextProducerAggregator,
 )
 from ddssm.training.train import DDSSMTrainer
+from ddssm.training.stages import TrainableConf
 from ddssm.data.datamodule import (
     KDDDataModule,
     NullDataModule,
@@ -413,6 +414,9 @@ DDSSM = builds(
 # logging paths at run time.
 TrainerPartial = builds(DDSSMTrainer, populate_full_signature=True, zen_partial=True)
 
+# Optional freeze/unfreeze mask, plugged into ``Training(trainable=Trainable(...))``.
+Trainable = builds(TrainableConf, populate_full_signature=True)
+
 
 # ---------------------------------------------------------------------------
 # Eval / viz / variance specs.
@@ -493,6 +497,7 @@ __all__ = [
     "Objectives",
     "SBatch",
     "TrainerPartial",
+    "Trainable",
     # Eval / viz / variance
     "Eval",
     "Plot",

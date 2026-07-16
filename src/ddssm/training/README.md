@@ -17,16 +17,17 @@ and *what gets recorded*.
   logging to CSV / TensorBoard / W&B. `fit(...)` runs the loop (step-counted
   validation, checkpointing, profiling, ELBO-plateau early stop) and raises
   `PreemptError` on a caught preempt signal after saving a resume checkpoint.
-  (`_set_trainable(...)` — the former per-submodule `requires_grad` mask — is
-  now dead code; staged training has been removed.)
-- **`stages.py`** — LR-schedule and λ-ramp config dataclasses (`StageLrsConf`,
-  `LrScheduleConf`, `LrScheduleGroupConf`, `LambdaRampConf`, `EarlyStopSpec`, …)
-  plus their resolvers: `make_lr_lambda(...)` /
+  `_set_trainable(t)` flips `requires_grad` per submodule from a
+  `TrainableConf`; the adapter applies it once at the start of ``fit`` when
+  `TrainingScalars.trainable` is set (freeze/unfreeze ablations).
+- **`stages.py`** — LR-schedule / λ-ramp config dataclasses (`StageLrsConf`,
+  `LrScheduleConf`, `LrScheduleGroupConf`, `LambdaRampConf`, `EarlyStopSpec`,
+  …) plus their resolvers: `make_lr_lambda(...)` /
   `resolve_lr_schedule_defaults(...)` build the per-component LR lambdas and
   `make_lambda_cosine(...)` the cosine λ schedule — consumed by `train.py` and
-  `dssd.py`. The sequential `StageOrchestrator` has been removed; the
-  `Stage*Conf` dataclasses that remain are the leftover schedule pieces still
-  read by the trainer.
+  `dssd.py`. Also holds `TrainableConf` (the freeze mask consumed via
+  `TrainingScalars.trainable`). The sequential `StageOrchestrator` has been
+  removed.
 - **`train_utils.py`** — optimizer-construction helpers.
   `param_groups_for_adamw(...)` builds per-component AdamW param groups with
   selective weight decay (norm/bias/embedding/log-var params get zero decay)

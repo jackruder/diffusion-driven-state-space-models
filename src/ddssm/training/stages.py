@@ -24,13 +24,14 @@ class StageLrsConf:
 
 
 @dataclass
-class StageTrainableConf:
+class TrainableConf:
     """Per-module ``requires_grad`` mask.
 
-    Matches the slot names used by :meth:`DDSSMTrainer._set_trainable`
-    (encoder / decoder / transition).  The aux posterior is part of the
-    *encoder* family (via DDSSM_base's ``aux_posterior`` slot) and shares
-    the encoder flag.
+    A freeze/unfreeze ablation knob applied once at the start of ``fit``
+    (via :meth:`DDSSMTrainer._set_trainable`). The forward pass always
+    computes every ELBO term; frozen submodules simply accumulate no
+    gradients. The aux posterior is part of the *encoder* family (via
+    ``DDSSM_base.aux_posterior``) and shares the encoder flag.
     """
 
     encoder: bool = True

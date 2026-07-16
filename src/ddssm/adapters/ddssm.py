@@ -4,9 +4,9 @@ Wraps a *pre-composed* :class:`~ddssm.model.dssd.DDSSM_base` (built externally
 by the ``SmokeModel`` factory & co — the module is never rebuilt here) and
 exposes it through the uniform fit / forecast / checkpoint surface. The ``fit``
 body is the trainer-construction + fit-call block lifted verbatim from
-:meth:`ddssm.experiment.experiment.Experiment.train` (post module-3, with the
-trainable-mask handling already removed) so the native path keeps bit-for-bit
-parity with today.
+:meth:`ddssm.experiment.experiment.Experiment.train` (plus the optional
+``TrainingScalars.trainable`` freeze-mask application) so the native path keeps
+bit-for-bit parity with today.
 """
 
 from __future__ import annotations
@@ -75,7 +75,8 @@ class DDSSMAdapter(ModelAdapter):
         ``self.trainer``, drives ``trainer.fit`` with a val loader iff
         ``validate_every > 0``, and closes the metric sinks in ``finally``.
         ``resume_from`` needs no code here — it rides ``fit_kwargs()`` into
-        ``trainer.fit``. No trainable-mask handling. When
+        ``trainer.fit``. If ``training.trainable`` is set the freeze mask is
+        applied once via ``trainer._set_trainable`` before ``fit``. When
         ``data.train_loader()`` is ``None`` (``NullDataModule``) this no-ops
         WITHOUT building a trainer or writing a CSV.
         """
@@ -100,6 +101,12 @@ class DDSSMAdapter(ModelAdapter):
             trainer_kwargs["model_config_yaml"] = model_config_yaml
         trainer = self._build_trainer(**trainer_kwargs)
         self.trainer = trainer
+
+        # Optional freeze/unfreeze mask (a `TrainableConf`). Applied once
+        # here — the forward pass still computes every ELBO term, so this
+        # only zeroes gradient flow for the flagged submodules.
+        if training.trainable is not None:
+            trainer._set_trainable(training.trainable)
 
         val_loader = data.val_loader() if training.validate_every > 0 else None
 

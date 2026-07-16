@@ -66,8 +66,10 @@ worked-example) presets are multi-stage.
 {py:meth}`DDSSMTrainer._set_trainable <ddssm.training.train.DDSSMTrainer>` flips
 `requires_grad` per submodule (`encoder` / `decoder` / `transition` /
 `baseline`). The forward pass always computes every ELBO term; frozen submodules
-simply don't accumulate gradients. This `StageTrainableConf` mask is the single
-mechanism for stage-aware freezing (e.g. pinning the baseline in stage 2).
+simply don't accumulate gradients. Set it via
+`TrainingScalars(trainable=TrainableConf(encoder=False, ...))` — the DDSSM
+adapter applies it once, at the start of ``fit``. Use it for freeze/unfreeze
+ablations (encoder-frozen probes, decoder-only, …).
 
 ## Multi-stage — `StagesConf`
 
@@ -76,7 +78,7 @@ mechanism for stage-aware freezing (e.g. pinning the baseline in stage 2).
 `StageSpecConf` owns:
 
 - `steps` — this stage's budget.
-- `trainable` (`StageTrainableConf`) — the per-module freeze mask.
+- `trainable` (`TrainableConf`) — the per-module freeze mask.
 - `lrs` (`StageLrsConf`) — per-submodule LRs for the stage.
 - `lambda_ramp` (`LambdaRampConf`) — cosine ramp of the rate-λ (`start`, `end`,
   `steps`, `delay`) via `make_lambda_cosine`.
