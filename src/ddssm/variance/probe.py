@@ -433,6 +433,15 @@ def run_probe(
             forced_eps = torch.randn(combined_bs, d, sk, device=device)
             for cell in spec.cells:
                 trans = transitions[cell.k_sampling_mode]
+                # Mirror the mode-flip done in the main replica loop above:
+                # ``transition_kl`` reads ``self.k_sampling_mode`` (and the
+                # schedule's copy) even under ``mc_override``, and the shared
+                # transition still carries whatever mode the last cell of the
+                # previous loop set. Without this the mode leaks between cells
+                # here and the test spy would see the wrong values.
+                trans.p_k = p_k_by_mode[cell.k_sampling_mode]
+                trans.k_sampling_mode = cell.k_sampling_mode
+                trans.schedule.k_sampling_mode = cell.k_sampling_mode
                 trans.zero_grad(set_to_none=True)
                 out = trans.transition_kl(
                     **combined.as_kwargs(),
