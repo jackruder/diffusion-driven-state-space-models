@@ -329,7 +329,7 @@ def test_end_to_end_arflow_elbo_and_sigma_data() -> None:
         grad_checkpoint=False,
         sigma_data_ema_decay=0.0,  # one update lands exactly on the batch estimate
         encoder_type="arflow",
-    )
+    ).build_module()
     assert isinstance(model.encoder, ARFlowEncoder)
     model.train()  # σ_data updates are training-only
 

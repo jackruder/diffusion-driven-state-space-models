@@ -18,20 +18,20 @@ from experiments.gluonts_forecast.datasets import GLUONTS_BY_LABEL, GLUONTS_DATA
 
 def test_width_rule_is_two_times_latent() -> None:
     latent = 64
-    m = build_gluonts_model(data_dim=137, latent_dim=latent, T_max=192)
+    m = build_gluonts_model(data_dim=137, latent_dim=latent, T_max=192).build_module()
     assert m.encoder.summary_dim == 2 * latent
     assert m.encoder.hidden_dim == 2 * latent
     assert m.decoder.hidden_dim == 2 * latent
 
 
 def test_transformer_future_summary_and_additive_frame() -> None:
-    m = build_gluonts_model(data_dim=137, latent_dim=32, T_max=192)
+    m = build_gluonts_model(data_dim=137, latent_dim=32, T_max=192).build_module()
     assert isinstance(m.encoder.fut_sum_module, TransformerFutureSummary)
     assert m.encoder.mu_mode == "additive"
 
 
 def test_persistence_pinned_and_checkpointing() -> None:
-    m = build_gluonts_model(data_dim=137, latent_dim=32, T_max=192)
+    m = build_gluonts_model(data_dim=137, latent_dim=32, T_max=192).build_module()
     assert isinstance(m.baseline, PersistenceBaseline)
     assert m.encoder.grad_checkpoint is True
     assert m.transition.grad_checkpoint is True
@@ -46,7 +46,7 @@ def test_persistence_pinned_and_checkpointing() -> None:
 
 
 def test_score_net_csdi_dims_and_dropout_free() -> None:
-    m = build_gluonts_model(data_dim=137, latent_dim=32, T_max=192)
+    m = build_gluonts_model(data_dim=137, latent_dim=32, T_max=192).build_module()
     unet = m.transition.diffmodel
     assert unet.channels == 64
     assert unet.n_layers == 4

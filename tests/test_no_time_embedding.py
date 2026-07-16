@@ -34,7 +34,10 @@ def test_no_time_embedding_forward_and_forecast(
     """Forward, backward, and forecast all run with ``emb_time_dim=0``."""
     monkeypatch.setenv("DDSSM_TORCH_COMPILE", compile_flag)
 
-    model = _build_init_centering_model(use_time_embedding=False, data_dim=1)
+    # Factory now returns a DDSSMModelConfig; instantiate to the runtime module.
+    model = _build_init_centering_model(
+        use_time_embedding=False, data_dim=1
+    ).build_module()
     assert model.emb_time_dim == 0
     assert model.transition.emb_time_dim == 0
 
@@ -73,6 +76,6 @@ def test_use_time_embedding_true_round_trip() -> None:
     """``use_time_embedding=True`` restores the original ``emb_time_dim``."""
     model = _build_init_centering_model(
         use_time_embedding=True, emb_time_dim=16, data_dim=1
-    )
+    ).build_module()
     assert model.emb_time_dim == 16
     assert model.transition.emb_time_dim == 16

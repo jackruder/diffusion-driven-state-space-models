@@ -83,11 +83,13 @@ def bench_encoder() -> None:
 
 
 def _full_model(encoder_type: str, T: int):
+    # ``build_gluonts_model`` returns a DDSSMModelConfig; build the runtime
+    # nn.Module before calling `.to()` / `.train()`.
     return build_gluonts_model(
         data_dim=D, latent_dim=LATENT, j=1, T_max=T, channels=CH, nheads=NHEADS,
         summary_layers=1, diffusion_layers=2, num_steps=64, grad_checkpoint=False,
         encoder_type=encoder_type,
-    ).to(DEVICE).train()
+    ).build_module().to(DEVICE).train()
 
 
 def _full_batch(T: int):

@@ -132,7 +132,7 @@ def test_recon_chunk_invariance_and_grad_checkpoint() -> None:
         time_chunk=2,
         grad_checkpoint=True,
         nheads=1,
-    )
+    ).build_module()
     m.train()
     Bb, Ss, dd, Tt, Dd = 3, 1, 4, 8, 5
     torch.manual_seed(1)
