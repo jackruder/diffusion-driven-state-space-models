@@ -29,7 +29,12 @@ from ddssm.nn.futsum import (
     TransformerFutureSummary,
 )
 from ddssm.model.dssd import DDSSM_base  # kept for backcompat
-from ddssm.model.ddssm_config import DDSSMModelConfig, DDSSMModelKnobs, DDSSMShape
+from ddssm.model.ddssm_config import (
+    DDSSMModelConfig,
+    DDSSMModelKnobs,
+    DDSSMShape,
+    DDSSMTrainingHparams,
+)
 from ddssm.nn.diffnets import (
     CSDIUnet,
     ContextProducer,
@@ -143,7 +148,9 @@ def build_gluonts_model(
     # GRU is sequential (per-t recurrence) but cheap per step.
     fut_summary_type: str = "transformer",
     fut_summary_gru_layers: int = 1,
-) -> DDSSM_base:
+    # Training slice curried by ``_make.experiment`` (single source of truth).
+    training: DDSSMTrainingHparams | None = None,
+) -> DDSSMModelConfig:
     """Build a gluonts-forecast DDSSM (persistence-pinned, additive encoder)."""
     # Single width rule: 2×latent for summary + encoder + decoder hidden.
     width = 2 * latent_dim
@@ -367,6 +374,7 @@ def build_gluonts_model(
             recon_time_chunk=time_chunk,
             recon_grad_checkpoint=grad_checkpoint,
         ),
+        training=training if training is not None else DDSSMTrainingHparams(),
     )
 
 

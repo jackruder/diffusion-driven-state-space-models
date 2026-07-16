@@ -22,7 +22,12 @@ from functools import partial
 from hydra_zen import builds
 
 from ddssm.model.dssd import DDSSM_base  # kept for backcompat; DDSSMModelConfig is preferred
-from ddssm.model.ddssm_config import DDSSMModelConfig, DDSSMModelKnobs, DDSSMShape
+from ddssm.model.ddssm_config import (
+    DDSSMModelConfig,
+    DDSSMModelKnobs,
+    DDSSMShape,
+    DDSSMTrainingHparams,
+)
 from ddssm.nn.diffnets import (
     CSDIUnet,
     FeatureMixerConfig,
@@ -84,7 +89,12 @@ def _build_init_centering_model(
     diffusion_k_chunk: int = 1,
     diffusion_num_steps: int = 128,
     diffusion_layers: int = 2,
-) -> DDSSM_base:
+    # --- Training slice (folded into the returned config's `.training`).
+    # ``None`` uses DDSSMTrainingHparams()'s defaults; ``_make.experiment``
+    # curries the caller-supplied hparams in here so the returned config
+    # carries the winning training hparams (single source of truth at fit).
+    training: DDSSMTrainingHparams | None = None,
+) -> DDSSMModelConfig:
     """Construct an init-centering DDSSM model parametric over the ablation grid."""
     if not use_time_embedding:
         emb_time_dim = 0
@@ -172,6 +182,7 @@ def _build_init_centering_model(
         baseline=baseline,
         sigma_data=sigma_data,
         model_knobs=DDSSMModelKnobs(),
+        training=training if training is not None else DDSSMTrainingHparams(),
     )
 
 

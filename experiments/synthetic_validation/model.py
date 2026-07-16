@@ -24,7 +24,12 @@ from functools import partial
 from hydra_zen import builds
 
 from ddssm.model.dssd import DDSSM_base  # kept for backcompat
-from ddssm.model.ddssm_config import DDSSMModelConfig, DDSSMModelKnobs, DDSSMShape
+from ddssm.model.ddssm_config import (
+    DDSSMModelConfig,
+    DDSSMModelKnobs,
+    DDSSMShape,
+    DDSSMTrainingHparams,
+)
 from ddssm.nn.diffnets import CSDIUnet, FeatureMixerConfig, DiffResidualBlockConfig
 from ddssm.model.decoder import GaussianDecoder
 from ddssm.model.encoder import GaussianEncoder
@@ -68,7 +73,9 @@ def build_synthval_model(
     diffusion_time_chunk_size: int | None = None,
     recon_time_chunk: int | None = None,
     baseline_form: Literal["zero", "persistence"] = "persistence",
-) -> DDSSM_base:
+    # Training slice curried by ``_make.experiment`` (single source of truth).
+    training: DDSSMTrainingHparams | None = None,
+) -> DDSSMModelConfig:
     """Compose a minimal DDSSM model from runtime parts."""
     if not use_time_embedding:
         emb_time_dim = 0
@@ -134,6 +141,7 @@ def build_synthval_model(
         baseline=baseline,
         sigma_data=sigma_data,
         model_knobs=DDSSMModelKnobs(recon_time_chunk=recon_time_chunk),
+        training=training if training is not None else DDSSMTrainingHparams(),
     )
 
 
