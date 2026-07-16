@@ -48,7 +48,6 @@ from ddssm.model.transitions.diffusion import (
     DiffusionScheduleConfig,
 )
 from ddssm.model.transitions.transitions import GaussianTransition
-from ddssm.model.transitions.csdi_transition import CSDITransition
 
 
 def build_gluonts_model(
@@ -72,18 +71,7 @@ def build_gluonts_model(
     # Stage-2 transition type: "diffusion" (default, our CSDI-style denoiser),
     # "gaussian" (BaselineGaussianTransition — unimodal per-step prior; a JSD/CRPS
     # calibration baseline for the diffusion transition's expressive value), or
-    # "csdi" (the *literal* vendored ermongroup CSDI dropped into the transition
-    # slot — DDPM ε-MSE + ancestral sampler + masked conditioning; pairs with
-    # encoder_type="identity" + j==HIST to reproduce the 58% standalone baseline
-    # inside the DDSSM pipeline → a clean indictment/exoneration of our own code).
     transition_type: str = "diffusion",
-    # "csdi"-transition capacity knobs (default = the 58% standalone nlblmv config:
-    # 64ch / 4 layers / 8 heads / 50 ancestral steps). Independent of the model's
-    # `channels`/`diffusion_layers`/`nheads`, which size the "diffusion" branch.
-    csdi_channels: int = 64,
-    csdi_layers: int = 4,
-    csdi_nheads: int = 8,
-    csdi_num_steps: int = 50,
     # "gaussian" = the settled sequential encoder (smoothing q(z_t|x_{t:T}) via a
     # Transformer future-summary); "gaussian_local" = same sequential encoder but a
     # LOCAL future-summary (h_t = Linear(x_t), identity time-mixer) → filtering
@@ -139,9 +127,6 @@ def build_gluonts_model(
     edm_s_churn: float = 16.0,
     edm_s_noise: float = 1.0,
     edm_rho: float = 7.0,
-    # "csdi"-transition time embedding width (the vendored ermongroup CSDI). 0 turns
-    # CSDI's time-conditioning OFF to match our emb_time_dim==0 (embedding parity).
-    csdi_timeemb: int = 128,
     # Overrides the encoder-side width (fut_summary + encoder body). None → keep
     # the 2×latent single-width rule. Decoder hidden stays at 2×latent regardless
     # so the transition-input dim is unchanged. Use to grow encoder capacity when
@@ -237,24 +222,9 @@ def build_gluonts_model(
             emb_time_dim=emb_time_dim,
             covariate_dim=0,
         )
-    elif transition_type == "csdi":
-        # Literal ermongroup CSDI in the transition slot (its own capacity, its own
-        # quad β-schedule + ancestral sampler). Ignores the persistence baseline /
-        # σ_data buffer — it is a self-contained conditional diffusion model.
-        stage2_transition = CSDITransition(
-            latent_dim=latent_dim,
-            j=j,
-            emb_time_dim=emb_time_dim,
-            T_max=T_max,
-            channels=csdi_channels,
-            layers=csdi_layers,
-            nheads=csdi_nheads,
-            num_steps=csdi_num_steps,
-            timeemb=csdi_timeemb,
-        )
     else:
         raise ValueError(
-            "transition_type must be 'diffusion', 'gaussian', or 'csdi'; got "
+            "transition_type must be 'diffusion' or 'gaussian'; got "
             f"{transition_type!r}"
         )
 

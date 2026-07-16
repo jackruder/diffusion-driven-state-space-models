@@ -376,7 +376,7 @@ class Experiment:
     # through ``model.config.hyperparams``). Exposed here so callers can
     # ``exp.hparams.enc_lr=...`` or ``tweak(exp, hparams__lr=1e-3)``. Typed
     # permissively (``| None``) — a strict OmegaConf validator would reject
-    # ``ModelConfig`` subclass instances (CSDIConfig et al.).
+    # ``ModelConfig`` subclass instances.
     hparams: ModelConfig | None = None
     # Slurm resource request, consumed by ``python -m experiments
     # sbatch``. Purely metadata at training time.

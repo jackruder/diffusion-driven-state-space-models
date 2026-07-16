@@ -1,6 +1,6 @@
 """Model-family adapters: one class per family behind a uniform surface.
 
-Each adapter integrates a model family (DDSSM, re-vendored CSDI, …) with the
+Each adapter integrates a model family (DDSSM, baseline forecasters, …) with the
 single :class:`~ddssm.experiment.experiment.Experiment` orchestrator. This
 package exposes only the abstract seam; concrete adapters land in later modules.
 """

@@ -1,6 +1,6 @@
 """``ModelAdapter`` ABC + ``MetricNotSupported`` — the model-family seam.
 
-An adapter integrates one model family (DDSSM, re-vendored CSDI, …) with the
+An adapter integrates one model family (DDSSM, baseline forecasters, …) with the
 single :class:`~ddssm.experiment.experiment.Experiment` orchestrator. The
 adapter OWNS a plain :class:`torch.nn.Module`; the ``Experiment`` never touches
 that module directly, only the adapter's fit / forecast / checkpoint surface.

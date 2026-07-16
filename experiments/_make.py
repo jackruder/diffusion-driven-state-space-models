@@ -119,8 +119,8 @@ def experiment(
     :data:`DDSSMAdapterC`) unless it already targets a
     :class:`~ddssm.adapters.base.ModelAdapter` subclass — in which case
     ``config=hparams`` is curried onto the existing adapter conf instead of
-    double-wrapping (future CSDI presets). Pass ``wrap=False`` to skip wrapping
-    entirely (escape hatch for callers assembling their own adapter).
+    double-wrapping (the baseline-adapter path). Pass ``wrap=False`` to skip
+    wrapping entirely (escape hatch for callers assembling their own adapter).
 
     ``sbatch`` is purely metadata at training time; it is read by
     ``python -m experiments sbatch <name>`` when emitting a Slurm
@@ -130,10 +130,10 @@ def experiment(
     """
     if wrap:
         if _targets_adapter(model):
-            # Already an adapter conf (e.g. a future CSDI preset): curry the
-            # winning config onto it rather than re-wrapping. ``model`` is a
-            # builds() *instance* (a dataclass), so use ``dataclasses.replace``
-            # rather than calling it.
+            # Already an adapter conf (a baseline family): curry the winning
+            # config onto it rather than re-wrapping. ``model`` is a builds()
+            # *instance* (a dataclass), so use ``dataclasses.replace`` rather
+            # than calling it.
             model = dataclasses.replace(model, config=hparams)
         else:
             # Bare DDSSM model conf: wrap in a DDSSMAdapter so Experiment.model

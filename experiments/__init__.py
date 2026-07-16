@@ -8,7 +8,6 @@ is imported first; ``init_centering`` is the live model-v2 family;
 """
 
 from . import (
-    csdi,
     datasets,
     init_centering,
     gluonts_forecast,
@@ -19,7 +18,6 @@ from ._make import run, to_yaml, override, from_yaml, save_yaml, experiment
 
 __all__ = [
     "arflow_headtohead",
-    "csdi",
     "datasets",
     "experiment",
     "from_yaml",

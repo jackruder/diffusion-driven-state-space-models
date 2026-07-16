@@ -106,17 +106,9 @@ _ENCODERS = {
     # bottleneck: if this hits ~CSDI (58%), the encoder frame is the problem; if it
     # stays ~gaussian (26%), the transition/training is.
     "identity": dict(encoder_type="identity"),
-    # identity enc/dec + the LITERAL vendored ermongroup CSDI in the transition
-    # slot (transition_type="csdi"). With j==HIST this reproduces the 58% standalone
-    # CSDI forecaster INSIDE the DDSSM ELBO pipeline → decisively indicts (≈58%) or
-    # exonerates (≈22%) our own transition code, since the latent frame is already
-    # cleared by the plain `identity` cell stalling at ~22%.
-    "identity_csdi": dict(encoder_type="identity", transition_type="csdi"),
-    # LEARNED gaussian frame (latent_dim=8) + the literal CSDI transition. Pairs
-    # with identity_csdi (66%): if this also lands ~66% the learned frame is fine
-    # for a correct transition; if it drops toward gaussian's ~26% the learned
-    # frame is a real secondary bottleneck (co-evolution / amortization gap).
-    "gaussian_csdi": dict(encoder_type="gaussian", transition_type="csdi"),
+    # ``identity_csdi`` / ``gaussian_csdi`` cells (literal ermongroup CSDI in the
+    # transition slot) were removed alongside the CSDI vendor + adapter — pending
+    # a fresh re-vendor with a thin adapter.
     # "KITCHEN-SINK" identity + OUR DiffusionTransition made CSDI-LIKE on every axis
     # found to differ from the literal CSDI (the 24%->66% gap on the identity frame):
     #   - k_sampling_mode=uniform     (CSDI samples noise levels uniformly)
@@ -588,26 +580,11 @@ for _enc in (
     experiment_store(_phase2_cell(_enc, "nlblmv", j=2), name=f"h2h__{_enc}__nlblmv__j2")
 
 # Faithful-CSDI control: identity enc/dec + the literal vendored CSDI transition at
-# j=10 (== CSDI HIST=10, SEQ=11). Reproduces the 58% standalone forecaster inside
-# the DDSSM pipeline; pass/stall cleanly indicts/exonerates our transition code.
-experiment_store(
-    _phase2_cell("identity_csdi", "nlblmv", j=10), name="h2h__csdi__nlblmv__j10"
-)
-
-# identity enc/dec + OUR DiffusionTransition at j=10 — the 4th cell of the 2x2
-# {identity,gaussian} x {ours,CSDI}. Single-variable swap from the faithful CSDI run
-# (only the transition differs): does our transition trail CSDI in obs-space too?
+# identity enc/dec + OUR DiffusionTransition at j=10 — one arm of the former
+# 2x2 {identity,gaussian} x {ours,CSDI}; the CSDI-transition arms were removed
+# with the CSDI vendor + adapter.
 experiment_store(
     _phase2_cell("identity", "nlblmv", j=10), name="h2h__identity__nlblmv__j10"
-)
-
-# LEARNED gaussian frame (latent_dim=8) + literal CSDI transition at j=10. Pairs with
-# the faithful identity+CSDI run (66%): ≈66% => the learned frame is fine for a correct
-# transition; drop toward gaussian-our-transition (~26%) => the learned frame is a real
-# secondary bottleneck (co-evolution / amortization gap).
-experiment_store(
-    _phase2_cell("gaussian_csdi", "nlblmv", j=10),
-    name="h2h__gaussian_csdi__nlblmv__j10",
 )
 
 # Kitchen-sink CSDI-like identity + OUR transition at j=10: every axis that differed
@@ -654,7 +631,6 @@ for _j in (6, 4, 2, 1):
         "identity_csdilike_ais",
         "identity_csdilike_ais_persist",
         "identity_csdilike",
-        "identity_csdi",
     ):
         experiment_store(
             _phase2_cell(_enc, "nlblmv", j=_j),
@@ -827,36 +803,6 @@ for _split_variant in (False, True):
     )
 
 
-# Same low+slow λ recipe (1e-7 → 1.0 over 15K) + gaussian encoder, but the
-# transition slot is the LITERAL vendored ermongroup CSDI (transition_type
-# = "csdi") instead of our DiffusionTransition. Reads: does the frame-JSD
-# gap survive a decisively-good obs-space transition, or was our transition
-# the bottleneck? j=4 (matches Trial 4 for controlled comparison); memory
-# note that ``j == HIST`` reproduces standalone CSDI, so this is NOT the
-# faithful-CSDI comparison — it's the transition-swap comparison.
-experiment_store(
-    experiment(
-        data=NonlinBimodalLiftMV,
-        model=_model("gaussian_csdi", 8, j=4),
-        hparams=dataclasses.replace(
-            GluonHparams,
-            batch_size=32,
-            enc_lr=8e-4, dec_lr=8e-4, trans_lr=8e-4,
-            lambda_ramp=_GAUSSIAN_BIG_JSD_LOWSLOW_LAMBDA_RAMP,
-            use_split_loss=False,
-        ),
-        training=_training(steps=20000, checkpoint_every=4000),
-        eval=Eval(
-            metrics=["obs_space_jsd", "crps_sum"], split="val",
-            num_samples=100, T_split=_T_SPLIT,
-            output_filename="metrics.json",
-        ),
-        objective=Objective(metric="obs_space_jsd_mean", source="json"),
-    ),
-    name="h2h__gaussian_csdi_20k_gjsd_lowslow__nlblmv__j4",
-)
-
-
 # Wide-encoder sibling of gaussian_csdilike_ais_big_20k_gjsd: same fast λ ramp
 # (1e-5 → 1.0 over 5K, matches the best gaussian cell so far), same transition,
 # same LRs/batch. Only the encoder is bigger: encoder_hidden_dim=64 → encoder
@@ -975,61 +921,6 @@ for _arflow_variant in ("det", "o1_flow", "fb_mf", "fb_flow"):
             f"gjsd_lrsched_split__nlblmv__j4"
         ),
     )
-
-
-# Raw CSDI, fair-configured: identity encoder + literal ermongroup CSDI in
-# the transition slot at CSDI's native defaults (channels=64, layers=4,
-# nheads=8, num_steps=50). j=T_SPLIT=24 so CSDI sees the full history it
-# expects (memory: "with j == HIST this reproduces the 58% standalone
-# CSDI"). Data pipeline is ours (nlblmv, our eval). No split/lrsched —
-# identity encoder has 0 params so φθ optimizer would be empty. Same fast
-# λ ramp for compute-budget parity with other cells.
-experiment_store(
-    experiment(
-        data=NonlinBimodalLiftMV,
-        model=_model("identity_csdi", 8, j=_T_SPLIT),
-        hparams=dataclasses.replace(
-            GluonHparams,
-            batch_size=32,
-            enc_lr=8e-4, dec_lr=8e-4, trans_lr=8e-4,
-            lambda_ramp=_GAUSSIAN_BIG_JSD_LAMBDA_RAMP_FAST,
-        ),
-        training=_training(steps=20000, checkpoint_every=4000),
-        eval=Eval(
-            metrics=["obs_space_jsd", "crps_sum"], split="val",
-            num_samples=100, T_split=_T_SPLIT,
-            output_filename="metrics.json",
-        ),
-        objective=Objective(metric="obs_space_jsd_mean", source="json"),
-    ),
-    name="h2h__identity_csdi_raw_20k_gjsd__nlblmv__j24",
-)
-
-
-# CSDI transition within a learned gaussian encoder. Same setup as
-# gaussian_matched (0.1814) but transition swapped: DiffusionTransition →
-# CSDITransition. Plain (17K) gaussian encoder; no split/lrsched. j=4 to
-# stay comparable with the wideenc row.
-experiment_store(
-    experiment(
-        data=NonlinBimodalLiftMV,
-        model=_model("gaussian_csdi", 8, j=4),
-        hparams=dataclasses.replace(
-            GluonHparams,
-            batch_size=32,
-            enc_lr=8e-4, dec_lr=8e-4, trans_lr=8e-4,
-            lambda_ramp=_GAUSSIAN_BIG_JSD_LAMBDA_RAMP_FAST,
-        ),
-        training=_training(steps=20000, checkpoint_every=4000),
-        eval=Eval(
-            metrics=["obs_space_jsd", "crps_sum"], split="val",
-            num_samples=100, T_split=_T_SPLIT,
-            output_filename="metrics.json",
-        ),
-        objective=Objective(metric="obs_space_jsd_mean", source="json"),
-    ),
-    name="h2h__gaussian_csdi_20k_gjsd__nlblmv__j4",
-)
 
 
 # fb_mf at 8× encoder capacity (944K vs 118K). Isolates whether arflow's

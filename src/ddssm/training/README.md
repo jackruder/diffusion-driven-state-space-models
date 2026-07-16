@@ -39,7 +39,7 @@ and *what gets recorded*.
   `check_model_config_drift`, which unwraps adapter-wrapper yaml before
   diffing), and optional EMA-shadow loading for inference. `prepare_model` is
   now an adapter dispatcher: it forwards to `adapter.load_checkpoint(...)` so
-  each family loads its own format (the CSDI adapter owns `csdi_ckpt_v1`).
+  each family loads its own format.
 - **`loggers.py`** — metric aggregation and sinks. `MetricStore` fans flushed
   rows out to `ConsoleLogger`, `CSVLogger`, `TensorBoardLogger`, and
   `WandbLogger`; `MetricSpec` selects per-key meter kinds

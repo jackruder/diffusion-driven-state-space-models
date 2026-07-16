@@ -11,22 +11,58 @@ These are config-level (no training): they assert the *shape* of the composed
 * a *function*-target model conf wraps WITHOUT ``TypeError`` (the
   ``isinstance(t, type)`` guard before ``issubclass``);
 * an *adapter*-target model conf gets ``config`` curried rather than
-  re-wrapped (the future CSDI-preset path).
+  re-wrapped (the future baseline-adapter path — exercised via a stub
+  ``ModelAdapter`` subclass so this test doesn't depend on any live
+  baseline family).
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import pytest
 import hydra_zen
 from hydra_zen import store, get_target
 
 from ddssm.adapters import DDSSMAdapter, ModelAdapter
+from ddssm.model.config import ModelConfig
 from experiments._make import experiment
 from ddssm.data.presets import NonlinBimodalLift1D
-from ddssm.adapters.csdi import CSDIConfig, CSDIAdapter
 from ddssm.experiment.builders import Hparams, Training
 from ddssm.experiment.registry import register_experiments
 from experiments.init_centering.model import SmokeModel
+
+
+@dataclass
+class _StubConfig(ModelConfig):
+    """Minimal ``ModelConfig`` subclass — just enough for wrap-detection tests."""
+
+
+class _StubAdapter(ModelAdapter):
+    """Minimal ``ModelAdapter`` — stubs every abstract method; never runs.
+
+    Only its class identity matters here (the wrap path checks
+    ``issubclass(target, ModelAdapter)`` to decide curry-vs-wrap).
+    """
+
+    def __init__(self, config: _StubConfig) -> None:
+        super().__init__(config)
+
+    @property
+    def module(self):  # pragma: no cover - not exercised by these tests
+        raise NotImplementedError
+
+    def fit(self, **kw):  # pragma: no cover
+        raise NotImplementedError
+
+    def forecast(self, *a, **kw):  # pragma: no cover
+        raise NotImplementedError
+
+    def save_checkpoint(self, path):  # pragma: no cover
+        raise NotImplementedError
+
+    def load_checkpoint(self, path, **kw):  # pragma: no cover
+        raise NotImplementedError
 
 
 def _smoke_model():
@@ -97,8 +133,8 @@ def test_function_target_conf_wraps_without_typeerror() -> None:
 
 def test_adapter_target_conf_curries_config_not_rewrapped() -> None:
     """An adapter-target model conf gets ``config`` curried, not re-wrapped."""
-    cfg = hydra_zen.builds(CSDIConfig, populate_full_signature=True)(batch_size=16)
-    adapter_conf = hydra_zen.builds(CSDIAdapter, populate_full_signature=True)(
+    cfg = hydra_zen.builds(_StubConfig, populate_full_signature=True)(batch_size=16)
+    adapter_conf = hydra_zen.builds(_StubAdapter, populate_full_signature=True)(
         config=cfg
     )
     exp = experiment(
@@ -107,8 +143,8 @@ def test_adapter_target_conf_curries_config_not_rewrapped() -> None:
         hparams=cfg,
         training=Training(steps=5, log_every=1),
     )
-    # Still a CSDIAdapter (NOT re-wrapped in a DDSSMAdapter).
-    assert get_target(exp.model) is CSDIAdapter
+    # Still a _StubAdapter (NOT re-wrapped in a DDSSMAdapter).
+    assert get_target(exp.model) is _StubAdapter
     # ``config`` curried onto the existing adapter conf.
     assert exp.model.config is cfg
 
