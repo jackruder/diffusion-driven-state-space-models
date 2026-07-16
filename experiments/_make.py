@@ -108,18 +108,27 @@ def experiment(
 ) -> Any:
     """Bind a model + dataset + training into an :class:`ExperimentC` config.
 
-    ``hparams`` is curried onto the model's ``ModelAdapter`` wrapper (its
-    ``build_trainer`` ``TrainerPartial`` + ``config``) so the trainer reads it
-    directly (per ADR-0004 the model no longer carries a ``hyperparams``
-    field). It is also stored on the experiment so callers can introspect or
-    ``tweak`` it.
+    Every family's config is a single object carrying BOTH model params AND
+    training hparams; the internal split (``.shape`` / ``.encoder`` / … vs
+    ``.training``) is a DDSSM-specific organisation detail. ``hparams`` is
+    folded into that one config so the adapter's ``self.config`` is the sole
+    source of truth at fit time (no separate hparams path).
 
-    ``model`` is wrapped in a :class:`DDSSMAdapter` conf (via
-    :data:`DDSSMAdapterC`) unless it already targets a
-    :class:`~ddssm.adapters.base.ModelAdapter` subclass — in which case
-    ``config=hparams`` is curried onto the existing adapter conf instead of
-    double-wrapping (the baseline-adapter path). Pass ``wrap=False`` to skip
-    wrapping entirely (escape hatch for callers assembling their own adapter).
+    ``model`` wrapping:
+    - **Bare DDSSM factory conf**: the factory's ``training=`` kwarg (see
+      ``_build_init_centering_model`` / ``build_gluonts_model`` /
+      ``build_synthval_model``) is curried with ``hparams`` via
+      ``dataclasses.replace(model, training=hparams)``, then wrapped in a
+      :class:`DDSSMAdapterC`.
+    - **Baseline-adapter conf** (already targets a
+      :class:`~ddssm.adapters.base.ModelAdapter`): the config slot IS the
+      full family config and is left untouched — the ``hparams=`` kwarg is
+      a DDSSM convenience only.
+    - ``wrap=False`` skips wrapping entirely (escape hatch).
+
+    ``hparams`` is also stored on the experiment for sweep addressability
+    (``experiment.hparams.enc_lr=…``); ``Experiment.train`` still forwards
+    it into ``adapter.fit`` as a fit-time override per ADR-0004.
 
     ``sbatch`` is purely metadata at training time; it is read by
     ``python -m experiments sbatch <name>`` when emitting a Slurm
@@ -129,21 +138,21 @@ def experiment(
     """
     if wrap:
         if _targets_adapter(model):
-            # Already an adapter conf (a baseline family): curry the winning
-            # config onto it rather than re-wrapping. ``model`` is a builds()
-            # *instance* (a dataclass), so use ``dataclasses.replace`` rather
-            # than calling it.
-            model = dataclasses.replace(model, config=hparams)
+            # Already an adapter conf (a baseline family): the ``config`` slot
+            # is the full family config (self-contained model + hparams). Do
+            # NOT clobber it with ``hparams`` — that was the old
+            # DDSSM-specific hack and it discards every model-side field.
+            # The outer ``hparams`` is a DDSSM convenience; baseline families
+            # own their own config end-to-end.
+            pass
         else:
-            # Bare DDSSM factory conf. Its Python target now returns a
-            # ``DDSSMModelConfig`` (as of the model-config refactor); the
-            # adapter takes it as ``config=`` and builds the module lazily
-            # from it. The outer ``hparams`` (from _make.experiment) still
-            # rides via TrainerPartial and wins over the config's ``.training``
-            # slice at fit time (see DDSSMAdapter._resolve_training_hparams).
+            # Bare DDSSM factory conf. Fold caller-supplied hparams into the
+            # factory's ``training`` slot so the returned DDSSMModelConfig's
+            # ``.training`` is the winning source. TrainerPartial no longer
+            # carries an hparams override — the adapter reads its own config.
             model = DDSSMAdapterC(
-                config=model,
-                build_trainer=TrainerPartial(hparams=hparams),
+                config=dataclasses.replace(model, training=hparams),
+                build_trainer=TrainerPartial(),
             )
     return ExperimentC(
         data=data,
