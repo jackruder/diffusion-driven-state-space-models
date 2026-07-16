@@ -117,7 +117,7 @@ def test_log_sigma_p2_collapse_runs_on_smoke_model() -> None:
     exp = instantiate(cfg)
     val_loader = exp.data.val_loader()
     ctx = EvalContext(
-        model=exp.model.module,
+        model=exp.model,
         loader=val_loader,
         device=torch.device("cpu"),
         batch_transform=exp.data.batch_transform,
