@@ -418,6 +418,8 @@ def test_recon_mse_metric_runs_on_real_model(model):
     metrics, stats)``.
     """
     from ddssm.eval.metrics import EvalContext, eval_recon_mse
+    from ddssm.adapters.ddssm import DDSSMAdapter
+    from ddssm.model.config import ModelConfig
 
     B, T = 2, 6
     batch = {
@@ -425,8 +427,12 @@ def test_recon_mse_metric_runs_on_real_model(model):
         "observation_mask": torch.ones(B, DATA_DIM, T),
         "timepoints": torch.arange(T).unsqueeze(0).expand(B, -1),
     }
+    # ``ctx.model`` is a ModelAdapter post-refactor; wrap the raw DDSSM_base
+    # so ``ctx.require_module(DDSSM_base)`` inside eval_recon_mse resolves.
+    adapter = DDSSMAdapter(config=ModelConfig())
+    adapter._module = model
     ctx = EvalContext(
-        model=model,
+        model=adapter,
         loader=[batch],
         device=torch.device("cpu"),
     )
