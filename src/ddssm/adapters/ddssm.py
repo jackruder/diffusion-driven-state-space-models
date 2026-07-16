@@ -1,8 +1,17 @@
 """``DDSSMAdapter`` — the native DDSSM family behind the ``ModelAdapter`` seam.
 
-``DDSSMAdapter(config=DDSSMModelConfig(...))``. The adapter builds a
+``DDSSMAdapter(config=DDSSMModelConfig(...))``. The config is the SINGLE
+source of truth: it carries BOTH the model params (shape / knobs /
+encoder / decoder / transition / …) AND the training hparams
+(``config.training``). The adapter builds a
 :class:`~ddssm.model.dssd.DDSSM_base` lazily from
-``config.build_module()`` on first ``.module`` access (or at ``fit``).
+``config.build_module()`` on first ``.module`` access (or at ``fit``);
+the trainer reads its hparams from ``config.training``. ``fit`` also
+accepts an ``hparams=`` kwarg as a legacy fit-time override — when set,
+it wins over ``config.training`` (ADR-0004 precedence, kept so
+``experiment.hparams.enc_lr=…`` sweep syntax stays reachable through
+``Experiment.train``'s forwarding).
+
 The ``fit`` body is the trainer-construction + fit-call block lifted
 from :meth:`ddssm.experiment.experiment.Experiment.train` (plus the
 optional ``TrainingScalars.trainable`` freeze-mask application).
@@ -69,11 +78,14 @@ class DDSSMAdapter(ModelAdapter):
 
     @staticmethod
     def _resolve_training_hparams(hp):
-        """Extract a trainer-facing hparams object from the fit ``hparams=`` arg.
+        """Extract a trainer-facing hparams object.
 
         Accepts a whole :class:`DDSSMModelConfig` (returns ``hp.training``),
         a training slice (:class:`DDSSMTrainingHparams`; returned as-is), or
-        ``None``.
+        ``None``. Used by :meth:`fit` twice: once on the fit-time ``hparams=``
+        override arg (wins if non-None) and once as a fallback on
+        ``self.config`` (which is always a ``DDSSMModelConfig`` post-refactor,
+        so this returns ``self.config.training`` — the single source of truth).
         """
         if hp is None:
             return None
@@ -90,7 +102,7 @@ class DDSSMAdapter(ModelAdapter):
         csv_log_path: str,
         tensorboard_dir: str,
         checkpoint_dir: str,
-        hparams: ModelConfig | None = None,  # Experiment.hparams; wins over self.config
+        hparams: ModelConfig | None = None,  # legacy fit-time override; wins over self.config.training when set
         wandb_config: dict | None = None,
         model_config_yaml: str | None = None,
     ) -> None:
@@ -112,10 +124,12 @@ class DDSSMAdapter(ModelAdapter):
             # NullDataModule: no data attached — no-op (no trainer, no CSV).
             return
 
-        # Resolve hparams to a trainer-facing slice. ``hparams`` (from
-        # ``Experiment.hparams``) wins over ``self.config`` — a
-        # ``DDSSMModelConfig`` on either side gets unwrapped to its ``training``
-        # slot (the trainer wants flat enc_lr/dec_lr/... to ``getattr`` from).
+        # Primary source: ``self.config.training`` (the config carries both
+        # model params AND training hparams as of the model-config refactor).
+        # Legacy fit-time override: ``hparams=`` (from
+        # ``Experiment.hparams`` via ``Experiment.train``) wins when set —
+        # keeps ``experiment.hparams.enc_lr=…`` sweep syntax working.
+        # ``DDSSMModelConfig`` on either side unwraps to its ``training`` slot.
         training_hparams = self._resolve_training_hparams(hparams)
         if training_hparams is None:
             training_hparams = self._resolve_training_hparams(self.config)
