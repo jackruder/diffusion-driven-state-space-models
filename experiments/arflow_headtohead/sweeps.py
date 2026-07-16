@@ -47,9 +47,9 @@ _arch_lr_lambda_params = {
     "experiment.hparams.lambda_ramp.start": "tag(log, interval(1e-7, 1e-3))",
     "experiment.hparams.lambda_ramp.steps": "range(300, 1500)",
     # Architecture size (score-net + encoder width)
-    "experiment.model.module.channels": "choice(48, 64, 96, 128)",
-    "experiment.model.module.diffusion_layers": "choice(3, 4, 5, 6)",
-    "experiment.model.module.encoder_hidden_dim": "choice(32, 64, 96, 128)",
+    "experiment.model.config.channels": "choice(48, 64, 96, 128)",
+    "experiment.model.config.diffusion_layers": "choice(3, 4, 5, 6)",
+    "experiment.model.config.encoder_hidden_dim": "choice(32, 64, 96, 128)",
 }
 
 H2HArchLrLambdaSweep = make_config(
@@ -77,9 +77,9 @@ _arch_lr_lambda_v2_params = {
     "experiment.hparams.dec_lr": r"${experiment.hparams.enc_lr}",
     "experiment.hparams.lambda_ramp.start": "tag(log, interval(1e-7, 1e-3))",
     "experiment.hparams.lambda_ramp.steps": "range(300, 1500)",
-    "experiment.model.module.diffusion_layers": "choice(2, 3, 4)",
-    "experiment.model.module.encoder_hidden_dim": "choice(32, 64, 96, 128)",
-    "experiment.model.module.summary_layers": "choice(2, 3, 4)",
+    "experiment.model.config.diffusion_layers": "choice(2, 3, 4)",
+    "experiment.model.config.encoder_hidden_dim": "choice(32, 64, 96, 128)",
+    "experiment.model.config.summary_layers": "choice(2, 3, 4)",
 }
 
 H2HArchLrLambdaV2Sweep = make_config(

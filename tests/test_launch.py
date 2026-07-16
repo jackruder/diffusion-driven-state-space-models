@@ -264,7 +264,7 @@ def test_render_bakes_data_and_wires_sweep() -> None:
     assert "experiment=init_persistence_per_t__1d" in text
     assert "+sweep=init_ablation_moo" in text
     assert "experiment.data.mode=" not in text  # data baked into the preset
-    assert "experiment.model.module.latent_dim=" not in text  # tiny size: no override
+    assert "experiment.model.config.latent_dim=" not in text  # tiny size: no override
 
 
 def test_render_paper_size_doubles_latent() -> None:
@@ -274,8 +274,8 @@ def test_render_paper_size_doubles_latent() -> None:
             INIT_CENTERING_STUDY.select(cell="init_persistence_per_t"), size="paper"
         )
     )
-    assert "experiment.model.module.latent_dim=2" in text
-    assert "experiment.model.module.latent_dim=8" in text
+    assert "experiment.model.config.latent_dim=2" in text
+    assert "experiment.model.config.latent_dim=8" in text
 
 
 def test_render_seed_replication() -> None:

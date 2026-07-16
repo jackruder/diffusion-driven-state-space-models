@@ -78,7 +78,7 @@ def _launch(point: StudyPoint) -> PointLaunch:
 
 def _paper_overrides(point: StudyPoint) -> list[str]:
     return [
-        f"experiment.model.module.latent_dim={paper_latent(point.coords['dataset'])}"
+        f"experiment.model.config.latent_dim={paper_latent(point.coords['dataset'])}"
     ]
 
 
