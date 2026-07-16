@@ -13,7 +13,6 @@ BASE_LR = 5e-4
 
 
 GluonHparams = Hparams(
-    S=1,
     batch_size=64,
     grad_accum_steps=1,
     ema_decay=0.999,

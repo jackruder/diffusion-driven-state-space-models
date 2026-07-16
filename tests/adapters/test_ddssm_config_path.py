@@ -161,22 +161,11 @@ def test_config_path_lazy_module_build() -> None:
     assert adapter.module is m
 
 
-def test_legacy_path_still_works() -> None:
-    """Pre-built ``module=...`` on __init__ bypasses lazy build."""
-    from tests.test_trainer import make_small_model
-    from ddssm.model.dssd import DDSSMHyperParamsConf
+def test_module_property_raises_without_ddssm_model_config() -> None:
+    """The lazy-build path requires ``self.config`` to be a DDSSMModelConfig."""
+    from ddssm.model.config import ModelConfig
 
-    m = make_small_model()
-    adapter = DDSSMAdapter(config=DDSSMHyperParamsConf(batch_size=4), module=m)
-    assert adapter._module is m
-    assert adapter.module is m
-
-
-def test_module_property_raises_without_buildable_config() -> None:
-    """Lazy-build path requires ``self.config`` to be a DDSSMModelConfig."""
-    from ddssm.model.dssd import DDSSMHyperParamsConf
-
-    adapter = DDSSMAdapter(config=DDSSMHyperParamsConf())
+    adapter = DDSSMAdapter(config=ModelConfig())
     import pytest
 
     with pytest.raises(TypeError, match="DDSSMModelConfig"):

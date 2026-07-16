@@ -20,11 +20,45 @@ from typing import TYPE_CHECKING
 import torch
 import pytest
 
-from ddssm.model.dssd import DDSSMHyperParamsConf
-from tests.test_trainer import DATA_DIM, make_small_model
+from ddssm.model.ddssm_config import (
+    DDSSMModelConfig,
+    DDSSMModelKnobs,
+    DDSSMShape,
+    DDSSMTrainingHparams,
+)
+from tests.test_trainer import DATA_DIM, EMB_TIME, J, LATENT_DIM, make_small_model
 from ddssm.adapters.ddssm import DDSSMAdapter
 from ddssm.data.datamodule import SyntheticDataModule
 from tests.adapters.contract import ModelAdapterContract
+
+
+def _small_ddssm_config() -> DDSSMModelConfig:
+    """Decompose ``make_small_model()`` into a :class:`DDSSMModelConfig`.
+
+    Under the config-path adapter, tests must hand the adapter a config that
+    can build a module — not a pre-built module. We keep reusing the tiny
+    ``make_small_model`` sub-modules by lifting them out and re-wrapping in
+    the config's slots (the config accepts runtime ``nn.Module`` instances
+    just as well as ``builds()`` confs — family factories rely on this).
+    """
+    m = make_small_model()
+    return DDSSMModelConfig(
+        shape=DDSSMShape(
+            j=J,
+            data_dim=DATA_DIM,
+            latent_dim=LATENT_DIM,
+            emb_time_dim=EMB_TIME,
+            T_max=16,
+        ),
+        encoder=m.encoder,
+        decoder=m.decoder,
+        transition=m.transition,
+        aux_posterior=m.aux_posterior,
+        baseline=getattr(m, "baseline", None),
+        sigma_data=getattr(m, "sigma_data", None),
+        model_knobs=DDSSMModelKnobs(),
+        training=DDSSMTrainingHparams(batch_size=4),
+    )
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -44,9 +78,8 @@ class TestDDSSMAdapterContract(ModelAdapterContract):
     """Run the shared ABC contract against a real tiny ``DDSSMAdapter``."""
 
     def make_adapter(self) -> DDSSMAdapter:
-        """Fresh, unfitted adapter wrapping a tiny composed ``DDSSM_base``."""
-        module = make_small_model()
-        return DDSSMAdapter(config=DDSSMHyperParamsConf(batch_size=4), module=module)
+        """Fresh, unfitted adapter driven by a :class:`DDSSMModelConfig`."""
+        return DDSSMAdapter(config=_small_ddssm_config())
 
     def make_data(self) -> SyntheticDataModule:
         """Small LGSSM data module with real train/val splits (D matches model)."""
@@ -115,22 +148,24 @@ class TestDDSSMAdapterContract(ModelAdapterContract):
 
 
 def _make_adapter() -> DDSSMAdapter:
-    return DDSSMAdapter(
-        config=DDSSMHyperParamsConf(batch_size=4), module=make_small_model()
-    )
+    return DDSSMAdapter(config=_small_ddssm_config())
 
 
-def test_module_property_returns_wrapped_ddssm_base() -> None:
-    """``module`` exposes the raw pre-composed ``DDSSM_base`` untouched."""
-    module = make_small_model()
-    adapter = DDSSMAdapter(config=DDSSMHyperParamsConf(), module=module)
-    assert adapter.module is module
+def test_module_property_returns_ddssm_base() -> None:
+    """``module`` builds a ``DDSSM_base`` lazily from the config."""
+    from ddssm.model.dssd import DDSSM_base
+
+    adapter = _make_adapter()
+    m = adapter.module
+    assert isinstance(m, DDSSM_base)
+    # Cached: second access returns the same instance.
+    assert adapter.module is m
 
 
 def test_log_prob_delegates_to_module() -> None:
     """``log_prob`` forwards to the module (overriding the base ABC raise)."""
-    module = make_small_model()
-    adapter = DDSSMAdapter(config=DDSSMHyperParamsConf(), module=module)
+    adapter = _make_adapter()
+    module = adapter.module
 
     sentinel = torch.tensor([1.23, 4.56])
     calls: dict[str, object] = {}
@@ -156,8 +191,8 @@ def test_save_checkpoint_before_fit_raises_runtime_error(tmp_path: Path) -> None
 
 def test_forecast_forwards_extra_sampling_kwargs() -> None:
     """``forecast`` forwards DDSSM-only kwonly sampling knobs to the module."""
-    module = make_small_model()
-    adapter = DDSSMAdapter(config=DDSSMHyperParamsConf(), module=module)
+    adapter = _make_adapter()
+    module = adapter.module
 
     seen: dict[str, object] = {}
 

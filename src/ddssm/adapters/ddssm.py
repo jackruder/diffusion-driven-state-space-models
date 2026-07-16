@@ -1,18 +1,11 @@
 """``DDSSMAdapter`` — the native DDSSM family behind the ``ModelAdapter`` seam.
 
-Two construction paths (both supported during the refactor):
-
-- **Config path (preferred):** ``DDSSMAdapter(config=DDSSMModelConfig(...))``.
-  The adapter builds a :class:`~ddssm.model.dssd.DDSSM_base` lazily via
-  ``config.build_module()`` on first ``.module`` access (or at ``fit``).
-- **Legacy path:** ``DDSSMAdapter(config=<training-hparams>, module=<pre-built>)``.
-  Family factories used to return a pre-composed ``DDSSM_base``; this path
-  keeps working until commit 4 finishes the migration.
-
-The ``fit`` body is the trainer-construction + fit-call block lifted verbatim
-from :meth:`ddssm.experiment.experiment.Experiment.train` (plus the optional
-``TrainingScalars.trainable`` freeze-mask application) so the native path keeps
-bit-for-bit parity with today.
+``DDSSMAdapter(config=DDSSMModelConfig(...))``. The adapter builds a
+:class:`~ddssm.model.dssd.DDSSM_base` lazily from
+``config.build_module()`` on first ``.module`` access (or at ``fit``).
+The ``fit`` body is the trainer-construction + fit-call block lifted
+from :meth:`ddssm.experiment.experiment.Experiment.train` (plus the
+optional ``TrainingScalars.trainable`` freeze-mask application).
 """
 
 from __future__ import annotations
@@ -46,38 +39,30 @@ class DDSSMAdapter(ModelAdapter):
 
     def __init__(
         self,
-        config: ModelConfig,
-        module: DDSSM_base | None = None,
+        config,  # DDSSMModelConfig at runtime; typed permissively so hydra-zen
+                 # `builds(DDSSMAdapter)` accepts a builds()-target-function
+                 # conf here (OmegaConf would strict-reject a
+                 # ``DDSSMModelConfig``-typed slot filled with a foreign builds).
         build_trainer: Callable[..., DDSSMTrainer] | None = None,
     ) -> None:
-        """Store the config + optional pre-built module + trainer factory.
+        """Store the config + optional curried trainer factory.
 
-        Config path: pass a :class:`DDSSMModelConfig`; leave ``module=None``
-        and the module is built lazily on first ``.module`` access.
-        Legacy path: pass a training-hparams ``config`` plus a pre-built
-        ``module``; the config carries only optimiser/loss hparams.
+        The module is built lazily from ``config.build_module()`` on first
+        ``.module`` access (or during :meth:`fit`).
         """
         super().__init__(config)
-        # May be None: config path builds lazily via the ``module`` property.
-        self._module: DDSSM_base | None = module
+        self._module: DDSSM_base | None = None
         self._build_trainer = build_trainer or DDSSMTrainer
         self.trainer: DDSSMTrainer | None = None
 
     @property
     def module(self) -> DDSSM_base:
-        """The raw, checkpointable ``DDSSM_base`` this adapter owns.
-
-        Builds lazily from ``self.config.build_module()`` when the module was
-        not pre-supplied AND ``self.config`` is a :class:`DDSSMModelConfig`.
-        Legacy path (module pre-supplied at ``__init__``) skips the build.
-        """
+        """The raw ``DDSSM_base`` this adapter owns (built lazily)."""
         if self._module is None:
             if not isinstance(self.config, DDSSMModelConfig):
                 raise TypeError(
-                    "DDSSMAdapter.module accessed before build, but "
-                    "self.config is not a DDSSMModelConfig (legacy path "
-                    f"expects module=... at __init__; got config type "
-                    f"{type(self.config).__name__})."
+                    "DDSSMAdapter.config must be a DDSSMModelConfig; got "
+                    f"{type(self.config).__name__}."
                 )
             self._module = self.config.build_module()
         return self._module
@@ -87,8 +72,8 @@ class DDSSMAdapter(ModelAdapter):
         """Extract a trainer-facing hparams object from the fit ``hparams=`` arg.
 
         Accepts a whole :class:`DDSSMModelConfig` (returns ``hp.training``),
-        a training slice (:class:`DDSSMTrainingHparams` / legacy
-        :class:`DDSSMHyperParamsConf`; returned as-is), or ``None``.
+        a training slice (:class:`DDSSMTrainingHparams`; returned as-is), or
+        ``None``.
         """
         if hp is None:
             return None
@@ -231,26 +216,23 @@ class DDSSMAdapter(ModelAdapter):
     ) -> None:
         """Restore state into the module (building it lazily if needed).
 
-        ``hparams`` is consulted only when the module isn't built yet: a
-        :class:`DDSSMModelConfig` on ``hparams`` (or on ``self.config``)
-        rebuilds the topology. Legacy path (module pre-supplied at
-        ``__init__``): ``hparams`` is ignored and old checkpoints load
-        bit-identically. A cross-format payload raises ``ValueError`` —
+        ``hparams`` can be a :class:`DDSSMModelConfig` — if it is and the
+        module hasn't been built yet, that config wins over ``self.config``
+        for topology construction. Otherwise ``self.config.build_module()``.
+        A cross-format payload raises ``ValueError`` —
         :func:`ddssm.training.checkpoint.load_into_model` only *warns* on
         an unknown ``_format``.
         """
         self._reject_foreign_format(path, device=device)
         from ddssm.training.checkpoint import load_into_model
 
-        # Lazy build for the config path: if we don't have a module yet, use
-        # the winning config (hparams > self.config) to construct one.
         if self._module is None:
             build_cfg = hparams if isinstance(hparams, DDSSMModelConfig) else self.config
             if not isinstance(build_cfg, DDSSMModelConfig):
                 raise TypeError(
-                    "DDSSMAdapter.load_checkpoint has no module to load into "
-                    "and no DDSSMModelConfig to build from; pass hparams=<config> "
-                    "or construct the adapter with a config that can build a module."
+                    "DDSSMAdapter.load_checkpoint needs a DDSSMModelConfig to "
+                    f"build from; got config={type(self.config).__name__}, "
+                    f"hparams={type(hparams).__name__}."
                 )
             self._module = build_cfg.build_module()
 

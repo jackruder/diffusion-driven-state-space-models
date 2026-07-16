@@ -28,6 +28,18 @@ class _Toy(nn.Module):
         self.transition = nn.Linear(2, 2)
 
 
+def _toy_adapter() -> DDSSMAdapter:
+    """A ``DDSSMAdapter`` pre-filled with a ``_Toy`` module for isolation tests.
+
+    Bypasses the config-driven lazy build (``_Toy`` isn't a ``DDSSM_base``);
+    lets checkpoint-dispatch tests exercise ``prepare_model`` without
+    dragging in the real DDSSM composition graph.
+    """
+    adapter = DDSSMAdapter(config=ModelConfig())
+    adapter._module = _Toy()  # test-only injection
+    return adapter
+
+
 def _fake_trainer(model: _Toy, *, yaml: str | None = "m: 1") -> SimpleNamespace:
     """Minimal stand-in carrying the attributes Checkpoint.from_trainer reads."""
     return SimpleNamespace(
@@ -151,7 +163,7 @@ def test_prepare_model_defaults_to_ema(tmp_path):
     # ``experiment.model.load_checkpoint`` and returns the *adapter*, whose raw
     # module lives under ``.module``.
     exp = SimpleNamespace(
-        model=DDSSMAdapter(config=ModelConfig(), module=_Toy()),
+        model=_toy_adapter(),
         model_config_yaml=None,
         hparams=None,
     )
@@ -161,7 +173,7 @@ def test_prepare_model_defaults_to_ema(tmp_path):
     assert torch.allclose(m.transition.weight, torch.ones_like(m.transition.weight))
 
     exp_live = SimpleNamespace(
-        model=DDSSMAdapter(config=ModelConfig(), module=_Toy()),
+        model=_toy_adapter(),
         model_config_yaml=None,
         hparams=None,
     )

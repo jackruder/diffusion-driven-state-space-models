@@ -66,11 +66,11 @@ def test_ddssm_adapter_applies_trainable_before_fit(tmp_path):
     """
     from ddssm.adapters.ddssm import DDSSMAdapter
     from ddssm.data.datamodule import SyntheticDataModule
-    from ddssm.model.dssd import DDSSMHyperParamsConf
-    from tests.test_trainer import make_small_model, DATA_DIM
+    from tests.adapters.test_ddssm import _small_ddssm_config
+    from tests.test_trainer import DATA_DIM
 
-    module = make_small_model()
-    adapter = DDSSMAdapter(config=DDSSMHyperParamsConf(batch_size=4), module=module)
+    adapter = DDSSMAdapter(config=_small_ddssm_config())
+    module = adapter.module  # lazy-build so we can assert on its params after fit
     data = SyntheticDataModule(
         mode="lgssm", T=16, D=DATA_DIM, N_per_split=8, batch_size=4
     )

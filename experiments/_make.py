@@ -33,7 +33,6 @@ them together and curries ``hparams`` onto the trainer)::
             data_dim=1,
         ),
         hparams=Hparams(
-            S=1,
             batch_size=16,
             enc_lr=5e-4,
             dec_lr=5e-4,
@@ -173,7 +172,7 @@ def override(obj: Any, *overrides: Any) -> Any:
 
     * A CLI-style string ``"path.to.field=value"``. The value side is
       YAML-parsed, so ``"training.steps=200"``, ``"data.mode=harmonic"``,
-      ``"hparams.S=4"`` and ``"training.amp=true"`` all work.
+      ``"hparams.enc_lr=1e-3"`` and ``"training.amp=true"`` all work.
 
     * A dict ``{"path.to.field": value}``. Use this form when ``value``
       is a Python object (a builder instance, a callable, etc.) that

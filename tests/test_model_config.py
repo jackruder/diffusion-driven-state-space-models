@@ -35,12 +35,14 @@ def test_ddssm_hyperparams_subclasses_model_config():
 
 
 def test_ddssm_hyperparams_defaults_unchanged():
-    """Subclassing must not perturb existing defaults."""
+    """Subclassing must not perturb existing defaults.
+
+    ``S`` moved to :class:`DDSSMModelKnobs` (model-side) as part of the
+    nested-config refactor; this test only checks training-side defaults.
+    """
     cfg = DDSSMHyperParamsConf()
     assert cfg.batch_size == 16
-    assert cfg.S == 1
     assert cfg.weight_decay == 1e-4
-    # Additional spot-checks against silent default drift.
     assert cfg.ema_decay == 0.999
     assert cfg.grad_accum_steps == 4
     assert cfg.enc_lr == 5e-4

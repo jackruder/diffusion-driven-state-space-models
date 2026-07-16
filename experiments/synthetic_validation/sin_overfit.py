@@ -42,7 +42,6 @@ _SinOverfitData = dataclasses.replace(
 )
 
 _HPARAMS = Hparams(
-    S=1,
     batch_size=16,
     grad_accum_steps=1,
     enc_lr=5e-4,

@@ -29,7 +29,6 @@ DATASETS = {"harmonic": Harmonic, "lgssm": LGSSM, "bimodal": Bimodal}
 
 # One model shape / hparams / training spec, shared across datasets.
 _HPARAMS = Hparams(
-    S=1,
     batch_size=32,
     grad_accum_steps=1,
     enc_lr=5e-4,

@@ -22,7 +22,6 @@ from ddssm.model.decoder import BaseDecoder
 from ddssm.model.encoder import (
     BaseEncoder,
 )
-from ddssm.training.stages import LambdaRampConf, LrScheduleGroupConf
 from ddssm.nn.aux_posterior import AuxPosterior
 from ddssm.model.centering.baselines import BaseBaseline, PersistenceBaseline
 from ddssm.model.centering.sigma_data import SigmaDataBuffer
@@ -1256,45 +1255,12 @@ def _default_hyperparams():
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class DDSSMHyperParamsConf(ModelConfig):
-    """Training hyperparameters for DDSSM."""
+# Back-compat alias for the pre-refactor name. ``DDSSMHyperParamsConf`` used
+# to be the full training-hparams dataclass; it now lives at
+# :class:`ddssm.model.ddssm_config.DDSSMTrainingHparams` with the duplicate
+# model-side scalars (``S``, ``logvar_min``, ``logvar_max``, ``t_chunk``)
+# removed. Keep this alias so imports of ``DDSSMHyperParamsConf`` (tests,
+# hydra-zen ``Hparams = builds(...)``) resolve without a migration burst.
+from ddssm.model.ddssm_config import DDSSMTrainingHparams  # noqa: E402
 
-    # DataLoader batch size. ``Experiment`` reads this and syncs it onto
-    # the data module before ``fit`` starts.
-    batch_size: int = 16
-    S: int = 1
-    ema_decay: float = 0.999
-    # AdamW weight decay for the single optimizer / φθ side. The ψ side
-    # (score net) can be overridden independently via ``weight_decay_psi``;
-    # ``None`` falls back to ``weight_decay``.
-    weight_decay: float = 1e-4
-    weight_decay_psi: float | None = None
-    grad_accum_steps: int = 4
-    t_chunk: int = 16
-    # Global grad-norm clip, applied after the non-finite-grad skip check
-    # (see ``DDSSMTrainer._optimizer_step``). ``None`` disables clipping.
-    clip_grad_norm: float | None = 1.0
-    # Optional Adam betas for the score-net (ψ) param groups in single-loss
-    # mode (list, not tuple, for OmegaConf; the trainer converts at use).
-    # ``None`` (default) keeps today's optimizer topology exactly.
-    psi_betas: list[float] | None = None
-
-    enc_lr: float = 5e-4
-    dec_lr: float = 5e-4
-    trans_lr: float = 5e-4
-
-    logvar_min: float = -13.0
-    logvar_max: float = 13.0
-
-    # Optional λ-ramp for the FullELBO rate weight on the φθ-side KL terms.
-    # ``None`` (default) keeps the constant λ ≡ 1.0 behavior.
-    lambda_ramp: LambdaRampConf | None = None
-    # Optional per-role LR schedule (φθ / ψ). ``None`` keeps constant LR.
-    # Enabling requires ``lambda_ramp`` set (the resolver anchors decay
-    # windows to λ_end = lambda_ramp.delay + lambda_ramp.steps).
-    lr_schedule: LrScheduleGroupConf | None = None
-    # Enable split-loss training: the FullELBO returns a SplitLoss (φθ / ψ)
-    # so the transition (ψ) and encoder/decoder (φθ) get separate optimizers
-    # and separate objectives. Default False keeps the single-loss path.
-    use_split_loss: bool = False
+DDSSMHyperParamsConf = DDSSMTrainingHparams
