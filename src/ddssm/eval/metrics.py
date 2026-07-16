@@ -1641,7 +1641,6 @@ def eval_crps_sum_latent(
         return {"crps_sum_latent_available": False}
     from ddssm.eval.eval_metrics import _crps_sum_pinball
 
-    model = ctx.require_module(DDSSM_base)
     device = ctx.device
     transform = ctx.batch_transform
     L1 = int(ctx.T_split)
@@ -1650,6 +1649,11 @@ def eval_crps_sum_latent(
     n_batches = 0
 
     from ddssm.nn.net_utils import time_embedding
+
+    # ``require_module`` deferred until after the first batch: the
+    # "no gt_latent" path returns ``available: False`` without needing
+    # a real model (a data-shape check, not a family-support gate).
+    model: DDSSM_base | None = None
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(ctx.loader):
@@ -1665,6 +1669,8 @@ def eval_crps_sum_latent(
             gt_latent = batch.get("gt_latent")
             if gt_latent is None:
                 return {"crps_sum_latent_available": False}
+            if model is None:
+                model = ctx.require_module(DDSSM_base)
 
             T = batch["observed_data"].shape[-1]
             x_hist = batch["observed_data"][..., :L1]
